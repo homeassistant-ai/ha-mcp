@@ -2,7 +2,7 @@ name: '🤖 Issue Triage'
 
 on:
   issues:
-    types: [opened]
+    types: [opened, closed]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -20,6 +20,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: read
+  repository-projects: write
 
 jobs:
   should_run:
@@ -32,6 +33,12 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
+            // Issues closed event — handled by mark_done job, not triage
+            if (context.eventName === 'issues' && context.payload.action === 'closed') {
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
             let issue;
             let comment;
             let issueNumber;
@@ -144,7 +151,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: should_run
     if: needs.should_run.outputs.should_run == 'true'
-    timeout-minutes: 3
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -325,6 +332,265 @@ jobs:
             }
           prompt: '${{ steps.build_prompt.outputs.prompt }}'
 
+      - name: BM25 candidate retrieval
+        id: bm25
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
+          ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
+          ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
+        with:
+          script: |
+            const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
+            const issueTitle = process.env.ISSUE_TITLE || '';
+            const issueBody = (process.env.ISSUE_BODY || '').substring(0, 2000);
+
+            // Fetch up to 500 recent issues (open + closed), excluding PRs and current issue
+            const allIssues = [];
+            for (let page = 1; page <= 5; page++) {
+              const resp = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'all',
+                per_page: 100,
+                page: page,
+                sort: 'created',
+                direction: 'desc',
+              });
+              if (resp.data.length === 0) break;
+              allIssues.push(...resp.data.filter(i => !i.pull_request && i.number !== issueNumber));
+              if (resp.data.length < 100) break;
+            }
+
+            core.info(`BM25 corpus: ${allIssues.length} issues`);
+            if (allIssues.length === 0) {
+              core.setOutput('candidates', '');
+              return;
+            }
+
+            // Inline BM25 (Robertson & Zaragoza, k1=1.5, b=0.75)
+            function tokenize(text) {
+              return (text || '').toLowerCase()
+                .replace(/[^\w\s]/g, ' ')
+                .split(/\s+/)
+                .filter(t => t.length > 2);
+            }
+
+            const corpus = allIssues.map(i => tokenize(i.title + ' ' + (i.body || '')));
+            const N = corpus.length;
+            const avgDocLen = corpus.reduce((s, d) => s + d.length, 0) / N;
+            const queryTokens = tokenize(issueTitle + ' ' + issueBody);
+            const queryTerms = [...new Set(queryTokens)];
+
+            const idfMap = {};
+            for (const term of queryTerms) {
+              const df = corpus.filter(doc => doc.includes(term)).length;
+              idfMap[term] = Math.log((N - df + 0.5) / (df + 0.5) + 1);
+            }
+
+            const k1 = 1.5, b = 0.75;
+            const scored = allIssues.map((issue, i) => {
+              const doc = corpus[i];
+              let score = 0;
+              for (const term of queryTerms) {
+                const tf = doc.filter(t => t === term).length;
+                if (tf === 0) continue;
+                const idf = idfMap[term] || 0;
+                score += idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * doc.length / avgDocLen));
+              }
+              return { issue, score };
+            });
+
+            const THRESHOLD = 1.5;
+            const candidates = scored
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 8)
+              .filter(x => x.score >= THRESHOLD);
+
+            if (candidates.length === 0) {
+              core.info('No BM25 candidates above threshold — skipping duplicate check');
+              core.setOutput('candidates', '');
+              return;
+            }
+
+            const formatted = candidates.map(c =>
+              '#' + c.issue.number + ' [' + c.issue.state + ']: ' + c.issue.title + '\n' +
+              (c.issue.body || '').substring(0, 300)
+            ).join('\n\n---\n\n');
+
+            core.info('BM25 found ' + candidates.length + ' candidates: ' + candidates.map(c => '#' + c.issue.number).join(', '));
+            core.setOutput('candidates', formatted);
+
+      - name: Gemini duplicate verification
+        id: check_duplicate
+        if: steps.bm25.outputs.candidates != ''
+        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ''
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
+        with:
+          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
+          gemini_model: 'gemini-3.5-flash'
+          settings: |
+            {
+              "model": {
+                "maxSessionTurns": 2,
+                "temperature": 0
+              },
+              "tools": {
+                "core": []
+              }
+            }
+          prompt: |
+            You are checking if a GitHub issue is a duplicate of existing issues.
+            Do NOT use any tools. Base your evaluation ONLY on the text below.
+
+            Current issue #${{ steps.issue_number.outputs.number }}: ${{ steps.issue_data.outputs.issue_title }}
+            ${{ steps.issue_data.outputs.issue_body }}
+
+            Candidate issues (BM25 search results):
+            ${{ steps.bm25.outputs.candidates }}
+
+            For each candidate decide: DUPLICATE, RELATED, or UNRELATED.
+            Stop as soon as you find a DUPLICATE with high confidence.
+
+            Respond with ONLY this JSON (no prose, no markdown code block):
+            {"duplicate_of": <issue number or null>, "confidence": "high|medium|low", "related": [<numbers>], "reasoning": "<one sentence>"}
+
+      - name: Fetch changelogs
+        id: changelogs
+        if: steps.evaluate.outcome == 'success' && !cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PROD_REPO="homeassistant-ai/ha-mcp"
+
+          # Get the 3 most recent stable tags (vX.Y.Z pattern)
+          TAGS=$(gh api "repos/${PROD_REPO}/tags" --jq '[.[].name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | .[0:3][]' 2>/dev/null || true)
+
+          CHANGELOG_CONTEXT=""
+
+          # Unreleased changes (main/master)
+          UNRELEASED=$(gh api "repos/${PROD_REPO}/contents/CHANGELOG.md?ref=master" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | head -60 || true)
+          if [ -n "$UNRELEASED" ]; then
+            CHANGELOG_CONTEXT="## Unreleased (main)\n${UNRELEASED}\n\n"
+          fi
+
+          for TAG in $TAGS; do
+            SECTION=$(gh api "repos/${PROD_REPO}/contents/CHANGELOG.md?ref=${TAG}" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | head -50 || true)
+            if [ -n "$SECTION" ]; then
+              CHANGELOG_CONTEXT="${CHANGELOG_CONTEXT}## Changes in ${TAG}\n${SECTION}\n\n"
+            fi
+          done
+
+          {
+            echo "changelog_context<<EOF"
+            printf '%b' "$CHANGELOG_CONTEXT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build priority/size prompt
+        id: build_priority_prompt
+        if: steps.evaluate.outcome == 'success' && !cancelled()
+        uses: actions/github-script@v9
+        env:
+          COMPLETENESS_RESULT: ${{ steps.evaluate.outputs.summary }}
+          DUPLICATE_RESULT: ${{ steps.check_duplicate.outputs.summary }}
+          ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
+          ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
+          CHANGELOG_CONTEXT: ${{ steps.changelogs.outputs.changelog_context }}
+        with:
+          script: |
+            const completenessResult = (process.env.COMPLETENESS_RESULT || '').trim();
+            const isComplete = completenessResult.toUpperCase().startsWith('COMPLETE');
+
+            // Parse classification from completeness result
+            const classMatch = completenessResult.match(/^COMPLETE:(\w+)$/i);
+            const classification = classMatch ? classMatch[1].toLowerCase() : 'unknown';
+
+            // Check if high-confidence duplicate detected
+            let isDuplicate = false;
+            const dupRaw = process.env.DUPLICATE_RESULT || '';
+            if (dupRaw) {
+              try {
+                const cleanJson = dupRaw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                const dup = JSON.parse(cleanJson);
+                isDuplicate = dup.duplicate_of !== null && dup.confidence === 'high';
+              } catch (e) {
+                core.warning('Could not parse duplicate result: ' + e.message);
+              }
+            }
+
+            // Only run priority/size for complete, non-duplicate bugs and enhancements
+            if (!isComplete || isDuplicate || !['bug', 'enhancement'].includes(classification)) {
+              core.setOutput('skip', 'true');
+              return;
+            }
+
+            const issueNumber = ${{ steps.issue_number.outputs.number }};
+            const issueTitle = process.env.ISSUE_TITLE || '';
+            const issueBody = (process.env.ISSUE_BODY || '').substring(0, 800);
+            const changelog = process.env.CHANGELOG_CONTEXT || 'No changelog available.';
+
+            const P0_FEATURES = 'P0 main features (if a bug blocks any of these, it is at minimum P1; if a regression, P0):\n' +
+              '- HA connection / authentication (server fails to start, token rejected, cannot connect)\n' +
+              '- Service calls / device control (ha_call_service, ha_bulk_control, lights/switches/covers)\n' +
+              '- Entity state access (ha_get_state, ha_search_entities, ha_deep_search)\n' +
+              '- Automation management (create/edit/delete/enable/disable automations)\n' +
+              '- Script management (create/execute scripts)\n' +
+              '- Dashboard management (create/modify Lovelace dashboards)\n' +
+              '- Template evaluation (ha_eval_template)\n' +
+              '- Automation / script tracing (ha_get_automation_traces)';
+
+            const bugRules = 'Priority rules for bugs:\n' +
+              P0_FEATURES + '\n\n' +
+              'P0: Regression (introduced in a recent release per changelog) AND blocks a P0 main feature, OR affects multiple P0 features simultaneously\n' +
+              'P1: Partial outage — one tool broken but workaround exists, or affects a subset of users (specific install method or HA version)\n' +
+              'P2: Small bug — cosmetic issue, minor edge case, wrong error message, rarely-hit path';
+
+            const enhancementRules = 'Size rules for enhancements:\n' +
+              'S: Clearly scoped to one tool, one parameter, or one setting — likely touches 1 file\n' +
+              'M: New tool or significant change to existing tool, touches multiple files\n' +
+              'L: New subsystem, new integration pattern, or architectural change';
+
+            const prompt = 'You are classifying a GitHub issue for the ha-mcp project (Home Assistant MCP Server — 92+ tools for AI assistants to control Home Assistant).\n\n' +
+              'Issue #' + issueNumber + ' [' + classification + ']: ' + issueTitle + '\n\n' +
+              'Issue body:\n' + issueBody + '\n\n' +
+              'Recent changelog context:\n' + changelog + '\n\n' +
+              (classification === 'bug' ? bugRules : enhancementRules) + '\n\n' +
+              'good_first_issue: set to true if P2 bug OR S enhancement (well-scoped, good for new contributors)\n\n' +
+              'Respond with ONLY this JSON (no prose, no markdown code block):\n' +
+              '{"priority": ' + (classification === 'bug' ? '"P0"|"P1"|"P2"' : 'null') + ', ' +
+              '"size": ' + (classification === 'enhancement' ? '"S"|"M"|"L"' : 'null') + ', ' +
+              '"reasoning": "<one sentence>", "good_first_issue": true|false, "regression_likely": true|false}';
+
+            core.setOutput('skip', 'false');
+            core.setOutput('prompt', prompt);
+
+      - name: Evaluate priority/size
+        id: evaluate_priority
+        if: steps.build_priority_prompt.outputs.skip == 'false' && !cancelled()
+        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ''
+          GEMINI_CLI_TRUST_WORKSPACE: 'true'
+        with:
+          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
+          gemini_model: 'gemini-3.5-flash'
+          settings: |
+            {
+              "model": {
+                "maxSessionTurns": 2,
+                "temperature": 0.2
+              },
+              "tools": {
+                "core": []
+              }
+            }
+          prompt: '${{ steps.build_priority_prompt.outputs.prompt }}'
+
       # Skip on cancellation — superseded runs from concurrency.cancel-in-progress
       # should not post stale results.
       - name: Post result and apply labels
@@ -333,14 +599,26 @@ jobs:
         env:
           EVALUATE_RESULT: ${{ steps.evaluate.outputs.summary }}
           EVALUATE_OUTCOME: ${{ steps.evaluate.outcome }}
+          DUPLICATE_RESULT: ${{ steps.check_duplicate.outputs.summary }}
+          PRIORITY_RESULT: ${{ steps.evaluate_priority.outputs.summary }}
+          ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
         with:
           script: |
             const evaluateResult = process.env.EVALUATE_RESULT || '';
             const evaluateOutcome = process.env.EVALUATE_OUTCOME || '';
+            const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
+
+            // Project board constants (homeassistant-ai, project #2)
+            const PROJECT_ID = 'PVT_kwDODdb5sM4BPM6N';
+            const STATUS_FIELD_ID = 'PVTSSF_lADODdb5sM4BPM6Nzg9rf-Q';
+            const PRIORITY_FIELD_ID = 'PVTSSF_lADODdb5sM4BPM6Nzg9rgC0';
+            const SIZE_FIELD_ID = 'PVTSSF_lADODdb5sM4BPM6Nzg9rgC4';
+            const STATUS_TO_TRIAGE = 'f971fb55';
+            const STATUS_BACKLOG = 'f75ad846';
+            const PRIORITY_OPTIONS = { P0: '79628723', P1: '0a877460', P2: 'da944a9c' };
+            const SIZE_OPTIONS = { S: '203d27bd', M: '3da4ca48', L: '8d0cdae9' };
 
             const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nYour issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
-
-            const issueNumber = ${{ steps.issue_number.outputs.number }};
 
             const addLabels = async (labels) => {
               await github.rest.issues.addLabels({
@@ -371,7 +649,50 @@ jobs:
               }
             };
 
-            // Evaluate step had non-success outcome — post generic notice and circuit-break
+            // Set a project board single-select field. Silently skips if issue is not in the project.
+            const setProjectField = async (fieldId, optionId) => {
+              try {
+                const issueData = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                });
+                const issueNodeId = issueData.data.node_id;
+
+                const result = await github.graphql(`
+                  query($id: ID!) {
+                    node(id: $id) {
+                      ... on Issue {
+                        projectItems(first: 10) {
+                          nodes { id project { id } }
+                        }
+                      }
+                    }
+                  }
+                `, { id: issueNodeId });
+
+                const item = result.node.projectItems.nodes.find(n => n.project.id === PROJECT_ID);
+                if (!item) {
+                  core.info('Issue not in project board — skipping field update');
+                  return;
+                }
+
+                await github.graphql(`
+                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                    updateProjectV2ItemFieldValue(input: {
+                      projectId: $projectId
+                      itemId: $itemId
+                      fieldId: $fieldId
+                      value: { singleSelectOptionId: $optionId }
+                    }) { projectV2Item { id } }
+                  }
+                `, { projectId: PROJECT_ID, itemId: item.id, fieldId: fieldId, optionId: optionId });
+              } catch (err) {
+                core.warning('Failed to set project field (fieldId=' + fieldId + '): ' + err.message);
+              }
+            };
+
+            // --- Handle evaluate step failure ---
             if (evaluateOutcome && evaluateOutcome !== 'success' && evaluateOutcome !== 'skipped') {
               core.error(`Evaluate step failed (outcome=${evaluateOutcome}); posting generic notice.`);
               await postComment(GENERIC_FAILURE_BODY);
@@ -389,16 +710,84 @@ jobs:
               return VALID_CLASSIFICATIONS.includes(label) ? label : null;
             };
 
-            // COMPLETE path — issue has enough info; add triaged + classification label silently
-            if (trimmed.toUpperCase().startsWith('COMPLETE')) {
+            // --- Parse duplicate result ---
+            let isDuplicate = false;
+            let duplicateNumber = null;
+            let relatedNumbers = [];
+            const dupRaw = process.env.DUPLICATE_RESULT || '';
+            if (dupRaw) {
+              try {
+                const cleanJson = dupRaw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                const dup = JSON.parse(cleanJson);
+                if (dup.duplicate_of !== null && dup.confidence === 'high') {
+                  isDuplicate = true;
+                  duplicateNumber = dup.duplicate_of;
+                }
+                relatedNumbers = Array.isArray(dup.related) ? dup.related : [];
+              } catch (e) {
+                core.warning('Could not parse duplicate result: ' + e.message);
+              }
+            }
+
+            // --- Parse priority/size result ---
+            let priority = null;
+            let issueSize = null;
+            let goodFirstIssue = false;
+            const priorityRaw = process.env.PRIORITY_RESULT || '';
+            if (priorityRaw) {
+              try {
+                const cleanJson = priorityRaw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+                const ps = JSON.parse(cleanJson);
+                priority = ps.priority || null;
+                issueSize = ps.size || null;
+                goodFirstIssue = ps.good_first_issue || false;
+              } catch (e) {
+                core.warning('Could not parse priority/size result: ' + e.message);
+              }
+            }
+
+            // === FLOW DECISION ===
+
+            // (A) High-confidence duplicate — flag for maintainer review
+            if (isDuplicate) {
               const classification = parseClassification(trimmed);
-              const labels = ['triaged', ...(classification ? [classification] : [])];
-              core.info(`Issue is complete; adding labels: ${labels.join(', ')}`);
+              const body = '## 🔄 Possible Duplicate\n\n' +
+                'This issue looks like a duplicate of #' + duplicateNumber + '.\n\n' +
+                'A maintainer will verify and close if confirmed. If this is **not** a duplicate, ' +
+                'please comment to explain the difference.\n\n' +
+                '*🤖 Automated triage by Issue Bot*';
+              await postComment(body);
+              const labels = ['needs-info', 'duplicate'];
+              if (classification) labels.push(classification);
               await addLabels(labels);
               await removeLabel('triage-failed');
+              await setProjectField(STATUS_FIELD_ID, STATUS_TO_TRIAGE);
+              core.info('Issue flagged as likely duplicate of #' + duplicateNumber);
               return;
             }
 
+            // (B) Complete — issue has enough info
+            if (trimmed.toUpperCase().startsWith('COMPLETE')) {
+              const classification = parseClassification(trimmed);
+              const labels = ['triaged', ...(classification ? [classification] : [])];
+              if (goodFirstIssue) labels.push('good first issue');
+              core.info('Issue is complete; adding labels: ' + labels.join(', '));
+              await addLabels(labels);
+              await removeLabel('triage-failed');
+              await removeLabel('needs-info');
+              await setProjectField(STATUS_FIELD_ID, STATUS_BACKLOG);
+              if (priority && PRIORITY_OPTIONS[priority]) {
+                await setProjectField(PRIORITY_FIELD_ID, PRIORITY_OPTIONS[priority]);
+                core.info('Set Priority = ' + priority);
+              }
+              if (issueSize && SIZE_OPTIONS[issueSize]) {
+                await setProjectField(SIZE_FIELD_ID, SIZE_OPTIONS[issueSize]);
+                core.info('Set Size = ' + issueSize);
+              }
+              return;
+            }
+
+            // Empty output guard
             if (!trimmed) {
               core.error('Evaluate produced empty output; posting generic notice.');
               await postComment(GENERIC_FAILURE_BODY);
@@ -434,7 +823,7 @@ jobs:
               return;
             }
 
-            // Missing-info path — post "Information Needed" comment
+            // (C) Missing info — post Information Needed comment
             const classification = parseClassification(trimmed);
             const visibleText = trimmed.replace(/\n?<!--\s*CLASSIFY:\w+\s*-->\s*$/i, '').trimEnd();
 
@@ -447,13 +836,77 @@ jobs:
               core.warning(`Evaluate output didn't match expected list shape (length=${visibleText.length}); posting verbatim.`);
             }
 
-            const body = `## ℹ️ Information Needed\n\n${visibleText}\n\n---\n\n💡 **Please reply to this issue** with the requested information.\n\n*🤖 Automated triage by Issue Bot*`;
+            // Append related issues if found
+            const relatedText = relatedNumbers.length > 0
+              ? '\n\n🔗 **Related issues**: ' + relatedNumbers.map(n => '#' + n).join(', ')
+              : '';
+
+            const body = '## ℹ️ Information Needed\n\n' + visibleText + relatedText +
+              '\n\n---\n\n💡 **Please reply to this issue** with the requested information.\n\n' +
+              '*🤖 Automated triage by Issue Bot*';
             await postComment(body);
             if (classification) await addLabels([classification]);
+            await addLabels(['needs-info']);
             await removeLabel('triage-failed');
+            await setProjectField(STATUS_FIELD_ID, STATUS_TO_TRIAGE);
 
       - name: Fail job if evaluate step failed
         if: ${{ !cancelled() && steps.evaluate.outcome != 'success' && steps.evaluate.outcome != 'skipped' }}
         run: |
           echo "::error::Evaluate step did not succeed (outcome=${{ steps.evaluate.outcome }}). Check the step logs above for the underlying CLI error."
           exit 1
+
+  mark_done:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && github.event.action == 'closed' && !github.event.issue.pull_request
+    steps:
+      - name: Set project Status to Done
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const PROJECT_ID = 'PVT_kwDODdb5sM4BPM6N';
+            const STATUS_FIELD_ID = 'PVTSSF_lADODdb5sM4BPM6Nzg9rf-Q';
+            const STATUS_DONE_ID = '98236657';
+
+            const issueNodeId = context.payload.issue.node_id;
+            const issueNumber = context.payload.issue.number;
+
+            try {
+              const result = await github.graphql(`
+                query($id: ID!) {
+                  node(id: $id) {
+                    ... on Issue {
+                      projectItems(first: 10) {
+                        nodes { id project { id } }
+                      }
+                    }
+                  }
+                }
+              `, { id: issueNodeId });
+
+              const item = result.node.projectItems.nodes.find(n => n.project.id === PROJECT_ID);
+              if (!item) {
+                core.info('Issue #' + issueNumber + ' not found in project board — skipping.');
+                return;
+              }
+
+              await github.graphql(`
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: $projectId
+                    itemId: $itemId
+                    fieldId: $fieldId
+                    value: { singleSelectOptionId: $optionId }
+                  }) { projectV2Item { id } }
+                }
+              `, {
+                projectId: PROJECT_ID,
+                itemId: item.id,
+                fieldId: STATUS_FIELD_ID,
+                optionId: STATUS_DONE_ID,
+              });
+
+              core.info('Set issue #' + issueNumber + ' project Status = Done');
+            } catch (err) {
+              core.warning('Failed to set project Status to Done: ' + err.message);
+            }
