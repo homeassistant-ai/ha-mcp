@@ -65,7 +65,11 @@ class SystemTools:
     @tool(
         name="ha_check_config",
         tags={"System"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Check Configuration"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Check Configuration",
+        },
     )
     @log_tool_usage
     async def ha_check_config(self) -> dict[str, Any]:
@@ -142,22 +146,24 @@ class SystemTools:
         instead, which reloads specific components without a full restart.
         """
         # Coerce boolean parameter that may come as string from XML-style calls
-        confirm_bool = coerce_bool_param(confirm, "confirm", default=False) or False
+        confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
 
         if not confirm_bool:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Restart not confirmed",
-                details=(
-                    "You must set confirm=True to restart Home Assistant. "
-                    "This is a safety measure to prevent accidental restarts."
-                ),
-                suggestions=[
-                    "Run ha_check_config() first to validate configuration",
-                    "Call ha_restart(confirm=True) to proceed with restart",
-                    "Consider using ha_reload_core() for config-only changes",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Restart not confirmed",
+                    details=(
+                        "You must set confirm=True to restart Home Assistant. "
+                        "This is a safety measure to prevent accidental restarts."
+                    ),
+                    suggestions=[
+                        "Run ha_check_config() first to validate configuration",
+                        "Call ha_restart(confirm=True) to proceed with restart",
+                        "Consider using ha_reload_core() for config-only changes",
+                    ],
+                )
+            )
 
         restart_initiated = False
         try:
@@ -165,15 +171,17 @@ class SystemTools:
             config_result = await self._client.check_config()
             if config_result.get("result") != "valid":
                 errors = config_result.get("errors") or []
-                raise_tool_error(create_error_response(
-                    ErrorCode.CONFIG_INVALID,
-                    "Configuration is invalid - restart aborted",
-                    details=(
-                        "Home Assistant configuration has errors. "
-                        "Fix the errors before restarting."
-                    ),
-                    context={"config_errors": errors},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.CONFIG_INVALID,
+                        "Configuration is invalid - restart aborted",
+                        details=(
+                            "Home Assistant configuration has errors. "
+                            "Fix the errors before restarting."
+                        ),
+                        context={"config_errors": errors},
+                    )
+                )
 
             # Call the restart service - mark as initiated before the call
             # as the connection may be closed before we get a response
@@ -199,8 +207,7 @@ class SystemTools:
             # Connection errors after restart initiated are expected
             # (HA closes connections during restart)
             if restart_initiated and any(
-                pattern in error_msg.lower()
-                for pattern in ("connect", "closed", "504")
+                pattern in error_msg.lower() for pattern in ("connect", "closed", "504")
             ):
                 return {
                     "success": True,
@@ -272,12 +279,17 @@ class SystemTools:
         target = target.lower().strip()
 
         if target not in RELOAD_TARGETS:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Invalid reload target: {target}",
-                context={"target": target, "valid_targets": list(RELOAD_TARGETS.keys())},
-                suggestions=[f"Use one of: {', '.join(RELOAD_TARGETS.keys())}"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid reload target: {target}",
+                    context={
+                        "target": target,
+                        "valid_targets": list(RELOAD_TARGETS.keys()),
+                    },
+                    suggestions=[f"Use one of: {', '.join(RELOAD_TARGETS.keys())}"],
+                )
+            )
 
         try:
             if target == "all":
@@ -313,11 +325,13 @@ class SystemTools:
                 service_info = RELOAD_TARGETS[target]
                 if service_info is None:
                     # This shouldn't happen as we check for "all" above
-                    raise_tool_error(create_error_response(
-                        ErrorCode.INTERNAL_ERROR,
-                        f"Invalid target configuration for: {target}",
-                        context={"target": target},
-                    ))
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            f"Invalid target configuration for: {target}",
+                            context={"target": target},
+                        )
+                    )
                 domain, service = service_info
                 await self._client.call_service(domain, service, {})
 
@@ -343,7 +357,11 @@ class SystemTools:
     @tool(
         name="ha_get_system_health",
         tags={"System", "Zigbee", "Z-Wave", "Integrations"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
+        },
     )
     @log_tool_usage
     async def ha_get_system_health(
@@ -474,9 +492,7 @@ class SystemTools:
                     ("zha_network", self._fetch_zha_network(ws_client, full=zha_full))
                 )
             if want_zwave:
-                sections.append(
-                    ("zwave_network", self._fetch_zwave_network(ws_client))
-                )
+                sections.append(("zwave_network", self._fetch_zwave_network(ws_client)))
 
             if sections:
                 gathered = await asyncio.gather(
@@ -641,25 +657,32 @@ class SystemTools:
             verify_ssl=self._client.verify_ssl,
         )
         if error or ws_client is None:
-            raise_tool_error(error or create_error_response(
-                ErrorCode.CONNECTION_FAILED,
-                "Failed to connect to Home Assistant WebSocket",
-            ))
+            raise_tool_error(
+                error
+                or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket",
+                )
+            )
 
         try:
             _, event_response = await ws_client.send_command_with_event(
                 "system_health/info", wait_timeout=10.0
             )
         except TimeoutError:
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Timeout waiting for system health data",
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Timeout waiting for system health data",
+                )
+            )
         except Exception as e:
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                str(e),
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(e),
+                )
+            )
 
         health_info = event_response.get("event", {})
         component_count = len(health_info) if isinstance(health_info, dict) else 0
@@ -672,7 +695,6 @@ class SystemTools:
         }
 
         return ws_client, result
-
 
     @staticmethod
     async def _fetch_repairs(
@@ -703,9 +725,7 @@ class SystemTools:
             else:
                 err = repairs_result.get("error") or {}
                 err_msg = (
-                    err.get("message")
-                    if isinstance(err, dict)
-                    else str(err)
+                    err.get("message") if isinstance(err, dict) else str(err)
                 ) or "unknown error"
                 logger.warning(
                     "repairs/list_issues returned success=false: %s", err_msg
@@ -717,9 +737,7 @@ class SystemTools:
         return repairs
 
     @staticmethod
-    async def _fetch_zha_network(
-        ws_client: Any, *, full: bool
-    ) -> dict[str, Any]:
+    async def _fetch_zha_network(ws_client: Any, *, full: bool) -> dict[str, Any]:
         """Fetch ZHA Zigbee network device data."""
         ZHA_SUMMARY_LIMIT = 50
         ZHA_FULL_LIMIT = 25
