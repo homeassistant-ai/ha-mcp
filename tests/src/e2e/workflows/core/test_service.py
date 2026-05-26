@@ -422,3 +422,76 @@ async def test_call_service_input_boolean_toggle(mcp_client, cleanup_tracker):
         "ha_remove_helpers_integrations",
         {"helper_type": "input_boolean", "target": entity_id, "confirm": True},
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.core
+class TestCallServiceResultProjection:
+    """Result projection params (issue #1446) — verbose, fields, attribute_keys."""
+
+    async def test_default_compacts_result(self, mcp_client, test_light_entity):
+        """Default behavior strips context/last_* metadata from result records.
+
+        Issue #1446: agents were burning tokens on propagated state + heavy
+        attribute lists. Default trims metadata that's never used for "did
+        the call work" confirmation.
+        """
+        result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "light",
+                "service": "turn_on",
+                "entity_id": test_light_entity,
+            },
+        )
+        data = assert_mcp_success(result, "compact-default light.turn_on")
+        records = data.get("result") or []
+        # Records may be empty on some test backends; only assert structure
+        # when HA actually returned propagation states.
+        for record in records:
+            assert isinstance(record, dict)
+            assert "context" not in record
+            assert "last_changed" not in record
+            assert "last_reported" not in record
+            assert "last_updated" not in record
+
+    async def test_verbose_preserves_raw_metadata(self, mcp_client, test_light_entity):
+        """verbose=True is the escape hatch — return HA's raw response."""
+        result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "light",
+                "service": "turn_on",
+                "entity_id": test_light_entity,
+                "verbose": True,
+            },
+        )
+        data = assert_mcp_success(result, "verbose light.turn_on")
+        records = data.get("result") or []
+        # If HA returned propagation records, verbose must include the raw
+        # metadata keys the compact path strips.
+        if records:
+            first = records[0]
+            assert isinstance(first, dict)
+            assert "context" in first or "last_updated" in first, (
+                f"verbose should preserve raw metadata; got keys {list(first.keys())}"
+            )
+
+    async def test_result_fields_projects_per_record(
+        self, mcp_client, test_light_entity
+    ):
+        """result_fields=['entity_id','state'] drops attributes/metadata."""
+        result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "light",
+                "service": "turn_on",
+                "entity_id": test_light_entity,
+                "result_fields": ["entity_id", "state"],
+            },
+        )
+        data = assert_mcp_success(result, "result_fields projection")
+        for record in data.get("result") or []:
+            assert set(record.keys()).issubset({"entity_id", "state"}), (
+                f"unexpected keys after projection: {record.keys()}"
+            )

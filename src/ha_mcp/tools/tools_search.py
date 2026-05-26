@@ -24,12 +24,17 @@ from .util_helpers import (
     coerce_int_param,
     filter_active_repairs,
     parse_string_list_param,
+    project_entity_record,
     project_fields,
     project_records,
     project_repair_fields,
     public_fields,
     result_fields_warning,
 )
+
+# Backwards-compatible alias — _project_entity used to live here; moved to
+# util_helpers.py so ha_call_service can reuse it.
+_project_entity = project_entity_record
 
 logger = logging.getLogger(__name__)
 
@@ -164,85 +169,6 @@ async def _exact_match_search(
         "results": paginated,
         "search_type": "exact_match",
     }
-
-
-def _project_entity(
-    record: dict[str, Any],
-    fields: list[str] | None,
-    attribute_keys: list[str] | None,
-) -> tuple[dict[str, Any], str | None]:
-    """Apply optional field projection to a HA entity record.
-
-    ``fields`` filters which top-level keys to keep (e.g. ["state", "attributes"]).
-    ``attribute_keys`` further filters the ``attributes`` sub-dict.
-    Both default None = full payload (no-op).
-
-    Returns ``(projected_record, warning_string | None)``.  *warning_string* is
-    non-None when ``attribute_keys`` was specified, the original ``attributes``
-    dict was non-empty, and the filter produced an empty result — i.e. the caller
-    supplied only unknown attribute keys (typo guard).  Callers should append the
-    warning to the response ``warnings`` list so the user receives a diagnostic
-    rather than a silently empty ``attributes: {}``.
-
-    Both parameters are already parsed into ``list[str] | None`` — string/CSV inputs
-    must be normalised at the call site via ``parse_string_list_param`` (see
-    ``ha_get_state`` which parses once before the bulk loop to avoid re-parsing per
-    entity record).
-
-    Unlike ``project_fields``, this helper does not auto-retain ``success`` — entity
-    records have no ``success`` field, so the asymmetry is intentional.
-
-    Non-dict ``attributes`` handling: when ``attribute_keys`` is set but the
-    record's ``attributes`` value is not a dict (``None``, a string, a list —
-    rare from HA's state API but possible from malformed records, partial
-    error payloads, or mocked fixtures), the key-set filter cannot be
-    applied and the ``attributes`` value is returned unchanged. A
-    ``warning``-level log line records the short-circuit so it is visible
-    at default log levels. The bulk path shares this helper, so
-    both single- and bulk-entity calls behave identically here. This is
-    deliberately silent (no caller-facing warning) because malformed
-    ``attributes`` is rare and the call still produces a usable record.
-    """
-    if not isinstance(record, dict):
-        return (
-            record,
-            None,
-        )  # non-dict (e.g. error path returning None) — skip projection
-    if fields is not None:
-        keep = set(fields)
-        record = {k: v for k, v in record.items() if k in keep}
-    attr_warn: str | None = None
-    if attribute_keys is not None:
-        attrs = record.get("attributes")
-        if isinstance(attrs, dict):
-            attr_keep = set(attribute_keys)
-            filtered_attrs = {k: v for k, v in attrs.items() if k in attr_keep}
-            # Typo guard: if the original had keys AND the caller specified at least
-            # one key AND the filter yielded nothing, the caller likely mistyped an
-            # attribute name.  Return a diagnostic so the agent gets
-            # "attributes came out empty — available: [...]" instead of silently
-            # receiving ``attributes: {}``.
-            # Exclude the attribute_keys=[] case — an empty list is an explicit
-            # "keep nothing" request, not a typo.
-            if attrs and attribute_keys and not filtered_attrs:
-                available = sorted(attrs.keys())
-                attr_warn = (
-                    f"attribute_keys {sorted(attribute_keys)!r} matched no attribute "
-                    f"keys — attributes came out empty. "
-                    f"Available keys: {available!r}"
-                )
-            record = {**record, "attributes": filtered_attrs}
-        elif "attributes" in record:
-            # ``attributes`` is present but not a dict — filter cannot apply.
-            # Log at warning so the no-op is visible at default log levels
-            # (this branch is exercised rarely; see docstring for rationale).
-            logger.warning(
-                "_project_entity: attribute_keys filter skipped — "
-                "'attributes' is %s (expected dict) for record keys=%r",
-                type(attrs).__name__,
-                list(record.keys()),
-            )
-    return record, attr_warn
 
 
 def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

@@ -23,7 +23,14 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import coerce_bool_param, parse_json_param, wait_for_state_change
+from .util_helpers import (
+    coerce_bool_param,
+    compact_service_result,
+    parse_json_param,
+    parse_string_list_param,
+    project_entity_record,
+    wait_for_state_change,
+)
 
 
 def _parse_json_dict_param(
@@ -215,6 +222,48 @@ class ServiceTools:
                 f"Service executed but state verification failed: {e}"
             )
 
+    @staticmethod
+    def _project_service_result(
+        result: Any,
+        *,
+        entity_id: str | None,
+        verbose: bool,
+        fields: list[str] | None,
+        attribute_keys: list[str] | None,
+    ) -> tuple[Any, list[str]]:
+        """Apply compact / explicit projection to a service-call ``result``.
+
+        Issue #1446. Precedence:
+
+        - ``verbose=True``: bypass every transformation; return ``result`` as-is.
+        - Explicit ``fields`` or ``attribute_keys``: apply per-record projection
+          via ``project_entity_record`` to every record. No compaction; this is
+          the power-user path.
+        - Default: apply ``compact_service_result`` (filter to ``entity_id``
+          record when single string, drop top-level metadata + heavy lists).
+
+        Returns ``(projected, warnings)``. ``warnings`` collects per-record
+        typo-guard diagnostics from ``project_entity_record`` (e.g. all-empty
+        ``attribute_keys`` filter) — deduplicated so an N-record list with the
+        same typo doesn't emit N copies of the same warning.
+        """
+        if verbose:
+            return result, []
+        if fields is None and attribute_keys is None:
+            return compact_service_result(result, entity_id), []
+        if not isinstance(result, list):
+            return result, []
+        projected: list[Any] = []
+        seen_warnings: set[str] = set()
+        warnings: list[str] = []
+        for record in result:
+            new_record, warn = project_entity_record(record, fields, attribute_keys)
+            projected.append(new_record)
+            if warn and warn not in seen_warnings:
+                seen_warnings.add(warn)
+                warnings.append(warn)
+        return projected, warnings
+
     @tool(
         name="ha_call_service",
         tags={"Service & Device Control"},
@@ -229,6 +278,9 @@ class ServiceTools:
         data: str | dict[str, Any] | None = None,
         return_response: bool | str = False,
         wait: bool | str = True,
+        verbose: bool | str = False,
+        result_fields: str | list[str] | None = None,
+        result_attribute_keys: str | list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Execute Home Assistant services to control entities and trigger automations.
@@ -261,6 +313,16 @@ class ServiceTools:
         - **wait**: Wait for the entity state to change after the service call (default: True).
           Only applies to state-changing services on a single entity. Set to False for
           fire-and-forget calls, bulk operations, or services without observable state changes.
+        - **verbose**: Return the raw HA service response unchanged (default: False).
+          By default ``result`` is compacted — filtered to the called entity's record
+          when ``entity_id`` is a single string (drops parent-group propagation),
+          and stripped of ``context``/``last_*`` metadata and known-heavy attribute
+          lists like ``effect_list``. Set ``verbose=True`` to get the full propagation
+          chain and unaltered attribute payload (escape hatch for inspection / debug).
+        - **result_fields**: Project each record in ``result`` to these top-level
+          keys (e.g. ``["entity_id", "state"]``). Mirrors ``ha_get_state``'s ``fields``.
+        - **result_attribute_keys**: Project each record's ``attributes`` dict to
+          these keys. Mirrors ``ha_get_state``'s ``attribute_keys``.
 
         **For detailed service documentation, use ha_get_skill_guide.**
 
@@ -276,6 +338,13 @@ class ServiceTools:
                 or False
             )
             wait_bool = coerce_bool_param(wait, "wait", default=True)
+            verbose_bool = coerce_bool_param(verbose, "verbose", default=False) or False
+            parsed_result_fields = parse_string_list_param(
+                result_fields, "result_fields", allow_csv=True
+            )
+            parsed_result_attribute_keys = parse_string_list_param(
+                result_attribute_keys, "result_attribute_keys", allow_csv=True
+            )
 
             # Determine if we should wait for state change:
             # Only for state-changing services on a single entity, not for
@@ -296,15 +365,25 @@ class ServiceTools:
                 domain, service, service_data, return_response=return_response_bool
             )
 
+            projected_result, projection_warnings = self._project_service_result(
+                result,
+                entity_id=entity_id,
+                verbose=verbose_bool,
+                fields=parsed_result_fields,
+                attribute_keys=parsed_result_attribute_keys,
+            )
+
             response: dict[str, Any] = {
                 "success": True,
                 "domain": domain,
                 "service": service,
                 "entity_id": entity_id,
                 "parameters": data,
-                "result": result,
+                "result": projected_result,
                 "message": f"Successfully executed {domain}.{service}",
             }
+            if projection_warnings:
+                response.setdefault("warnings", []).extend(projection_warnings)
 
             # If return_response was requested, include the service_response key prominently
             if return_response_bool and isinstance(result, dict):
