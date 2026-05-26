@@ -60,12 +60,22 @@ jobs:
             }
 
             // Skip maintainer-created issues in production (not in the dev/test repo)
-            const MAINTAINERS = ['julienld', 'sergeykad', 'Patch76', 'kingpanther13'];
             const isDevRepo = context.repo.repo === 'ha-mcp-workflows-dev';
-            if (!isDevRepo && MAINTAINERS.includes(issue.user.login) && context.eventName !== 'workflow_dispatch') {
-              core.info(`Skipping: Issue created by maintainer (${issue.user.login})`);
-              core.setOutput('should_run', 'false');
-              return;
+            if (!isDevRepo && context.eventName !== 'workflow_dispatch') {
+              let isMaintainer = false;
+              try {
+                await github.rest.teams.getMembershipForUserInOrg({
+                  org: context.repo.owner,
+                  team_slug: 'maintainers',
+                  username: issue.user.login,
+                });
+                isMaintainer = true;
+              } catch (_) {}
+              if (isMaintainer) {
+                core.info(`Skipping: Issue created by maintainer (${issue.user.login})`);
+                core.setOutput('should_run', 'false');
+                return;
+              }
             }
 
             // Check if already triaged (has triaged label)

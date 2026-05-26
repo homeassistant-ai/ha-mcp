@@ -16,7 +16,6 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            const EXEMPT_LABELS = ['blocked', 'wontfix', 'issue-analyzed'];
             const BOT_COMMENT_MARKER = '## ℹ️ Information Needed';
             const DUPLICATE_COMMENT_MARKER = '## 🔄 Possible Duplicate';
             const BOT_LOGIN = 'github-actions[bot]';
@@ -36,13 +35,6 @@ jobs:
             for (const issue of issues) {
               const issueNumber = issue.number;
               core.info(`Checking issue #${issueNumber}: ${issue.title}`);
-
-              // Skip exempt issues
-              const issueLabels = issue.labels.map(l => l.name);
-              if (EXEMPT_LABELS.some(l => issueLabels.includes(l))) {
-                core.info(`  Skipping: has exempt label`);
-                continue;
-              }
 
               const comments = await github.paginate(github.rest.issues.listComments, {
                 owner: context.repo.owner,
@@ -97,7 +89,7 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issueNumber,
-                  body: `Hi @${issue.user.login} — closing this issue as we haven't received the requested information after ${DAYS_BEFORE_CLOSE} days.\n\nFeel free to reopen (or open a new issue) once you have the details ready.\n\n*🤖 Automated by Issue Bot*`,
+                  body: `Hi @${issue.user.login} — closing this issue as we haven't received the requested information after ${DAYS_BEFORE_CLOSE} days.\n\nFeel free to open a new issue once you have the details ready.\n\n*🤖 Automated by Issue Bot*`,
                 });
 
                 try {

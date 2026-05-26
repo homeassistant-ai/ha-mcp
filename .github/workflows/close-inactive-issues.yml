@@ -22,5 +22,4 @@ jobs:
           days-before-pr-stale: -1
           days-before-pr-close: -1
           exempt-all-assignees: true
-          exempt-issue-labels: 'needs-info,blocked,wontfix,issue-analyzed'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
