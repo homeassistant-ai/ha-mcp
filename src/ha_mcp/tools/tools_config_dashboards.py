@@ -936,112 +936,27 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant dashboard.
+        """Create or update a Home Assistant dashboard.
 
-        Creates a new dashboard or updates an existing one with the provided configuration.
-        Supports two modes: full config replacement OR Python transformation.
+        Two modes: full ``config`` replacement, or surgical
+        ``python_transform`` on an existing dashboard (requires
+        ``config_hash`` from ha_config_get_dashboard; recommended for
+        edits). Use ``url_path='default'`` or ``'lovelace'`` to target
+        the built-in dashboard. New dashboards need a hyphenated
+        ``url_path`` (e.g., ``'my-dashboard'``).
 
-        Use 'default' or 'lovelace' to target the built-in default dashboard.
-        New dashboards require a hyphenated url_path (e.g., 'my-dashboard').
+        IMPORTANT: indices shift after delete/add ops — subsequent
+        ``python_transform`` calls need a fresh ``config_hash``. Chain
+        multiple ops in one expression where possible.
 
-        WHEN TO USE WHICH MODE:
-        - python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.
-        - config: New dashboards only, or full restructure. Replaces everything.
+        Strategy dashboards cannot be converted to custom via this tool
+        (use the "Take Control" UI flow).
 
-        IMPORTANT: After delete/add operations, indices shift! Subsequent python_transform calls
-        must use fresh config_hash from ha_config_get_dashboard()
-        to get updated structure. Chain multiple ops in ONE expression when possible.
-
-        TIP: Use ha_config_get_dashboard(entity_id=...) to get the path for any card.
-
-        PYTHON TRANSFORM EXAMPLES (RECOMMENDED):
-        - Update card icon: 'config["views"][0]["cards"][0]["icon"] = "mdi:thermometer"'
-        - Add card: 'config["views"][0]["cards"].append({"type": "button", "entity": "light.bedroom"})'
-        - Delete card: 'del config["views"][0]["cards"][2]'
-        - Pattern-based update: 'for card in config["views"][0]["cards"]: if "light" in card.get("entity", ""): card["icon"] = "mdi:lightbulb"'
-        - Multi-operation: 'config["views"][0]["cards"][0]["icon"] = "mdi:a"; config["views"][0]["cards"][1]["icon"] = "mdi:b"'
-
-        MODERN DASHBOARD BEST PRACTICES (2024+):
-        - Use "sections" view type (default) with grid-based layouts
-        - Use "tile" cards as primary card type (replaces legacy entity/light/climate cards)
-        - Use "grid" cards for multi-column layouts within sections
-        - Create multiple views with navigation paths (avoid single-view endless scrolling)
-        - Use "area" cards with navigation for hierarchical organization
-
-        DISCOVERING ENTITY IDs FOR DASHBOARDS:
-        Do NOT guess entity IDs - use these tools to find exact entity IDs:
-        1. ha_get_overview(include_entity_id=True) - Get all entities organized by domain/area
-        2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities
-        3. ha_deep_search(query) - Comprehensive search across entities, areas, automations
-
-        If unsure about entity IDs, ALWAYS use one of these tools first.
-
-        DASHBOARD DOCUMENTATION (via MCP skills):
-        - skill://home-assistant-best-practices/references/dashboard-guide.md — comprehensive guide
-        - skill://home-assistant-best-practices/references/dashboard-cards.md — card types list
-        - ha_get_skill_guide — guidance on card types and configuration
-
-        EXAMPLES:
-
-        Create empty dashboard:
-        ha_config_set_dashboard(
-            url_path="mobile-dashboard",
-            title="Mobile View",
-            icon="mdi:cellphone"
-        )
-
-        Create dashboard with modern sections view:
-        ha_config_set_dashboard(
-            url_path="home-dashboard",
-            title="Home Overview",
-            config={
-                "views": [{
-                    "title": "Home",
-                    "type": "sections",
-                    "sections": [{
-                        "title": "Climate",
-                        "cards": [{
-                            "type": "tile",
-                            "entity": "climate.living_room",
-                            "features": [{"type": "target-temperature"}]
-                        }]
-                    }]
-                }]
-            }
-        )
-
-        Create strategy-based dashboard (auto-generated):
-        ha_config_set_dashboard(
-            url_path="my-home",
-            title="My Home",
-            config={
-                "strategy": {
-                    "type": "home",
-                    "favorite_entities": ["light.bedroom"]
-                }
-            }
-        )
-
-        Note: Strategy dashboards cannot be converted to custom dashboards via this tool.
-        Use the "Take Control" feature in the Home Assistant interface to convert them.
-
-        Update existing dashboard config:
-        ha_config_set_dashboard(
-            url_path="existing-dashboard",
-            config={
-                "views": [{
-                    "title": "Updated View",
-                    "type": "sections",
-                    "sections": [{
-                        "cards": [{"type": "markdown", "content": "Updated!"}]
-                    }]
-                }]
-            }
-        )
-
-        Note: When updating an existing dashboard, title/icon/require_admin/show_in_sidebar
-        are also updated if explicitly provided alongside (or instead of) a config change.
+        ``dashboard-guide.md`` and ``dashboard-cards.md`` ship in this
+        response under ``skill_content`` by default (see ``include_skill``)
+        — layout patterns, card-type taxonomy, and worked examples.
+        Discover entity ids via ha_get_overview / ha_search_entities /
+        ha_deep_search rather than guessing.
         """
         try:
             # ``url_path`` is required (always non-None). Reject empty/
