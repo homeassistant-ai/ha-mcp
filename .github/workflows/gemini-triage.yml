@@ -560,31 +560,46 @@ jobs:
 
             core.setOutput('prompt', prompt);
 
-      # Approach A (active): project context pre-injected into prompt (tool list + changelog).
-      # Tools are disabled — 1 model call, deterministic output.
-      # Approach B (tested, not used): file tools enabled ("core": ["read_file", "read_many_files", "glob"]),
-      # no pre-injected context. Result: same quality, 2-3x slower (55s vs 22s), unpredictable cost.
       - name: Evaluate
         id: evaluate
-        uses: google-github-actions/run-gemini-cli@f77273f4c914e4bf38440cf36a0369cb64a37489 # v0.1.22
         continue-on-error: true
+        uses: actions/github-script@v9
         env:
-          GITHUB_TOKEN: ''
-          GEMINI_CLI_TRUST_WORKSPACE: 'true'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT: ${{ steps.build_prompt.outputs.prompt }}
         with:
-          gemini_api_key: '${{ secrets.GEMINI_API_KEY }}'
-          gemini_model: 'gemini-3.5-flash'
-          settings: |
-            {
-              "model": {
-                "maxSessionTurns": -1,
-                "temperature": 0
-              },
-              "tools": {
-                "core": []
-              }
+          script: |
+            const token = process.env.GH_TOKEN;
+            const prompt = process.env.PROMPT;
+
+            const call = async (model) => {
+              const resp = await fetch('https://models.github.ai/inference/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  model,
+                  messages: [{ role: 'user', content: prompt }],
+                  max_tokens: 800,
+                  temperature: 0,
+                }),
+              });
+              const text = await resp.text();
+              let data;
+              try { data = JSON.parse(text); } catch { data = { error: text }; }
+              return { status: resp.status, data };
+            };
+
+            let result = await call('openai/gpt-4.1');
+            if (result.status === 429) {
+              core.warning('gpt-4.1 rate limited, falling back to gpt-4.1-mini');
+              result = await call('openai/gpt-4.1-mini');
             }
-          prompt: '${{ steps.build_prompt.outputs.prompt }}'
+            if (result.status !== 200) {
+              core.setFailed(`Model call failed: HTTP ${result.status} — ${JSON.stringify(result.data)}`);
+              return;
+            }
+            const text = result.data.choices[0].message.content;
+            core.setOutput('summary', text);
 
       # Skip on cancellation — superseded runs from concurrency.cancel-in-progress
       # should not post stale results.
