@@ -42,7 +42,9 @@ _DASHBOARD_SKILL_FILES: tuple[str, ...] = (
 )
 
 
-def _attach_dashboard_skill(response: dict[str, Any], include_skill: bool) -> None:
+def _attach_dashboard_skill(
+    response: dict[str, Any], attach_skill_payload: bool
+) -> None:
     """In-place attach skill_content to a dashboard response when applicable.
 
     Delegates to the shared :func:`attach_skill_content` so the
@@ -50,7 +52,7 @@ def _attach_dashboard_skill(response: dict[str, Any], include_skill: bool) -> No
     """
     attach_skill_content(
         response,
-        include_skill=include_skill,
+        attach_skill_payload=attach_skill_payload,
         canonical_files=_DASHBOARD_SKILL_FILES,
         referenced_files=None,
     )
@@ -856,7 +858,6 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     @mcp.tool(
         tags={"Dashboards"},
         annotations={"destructiveHint": True, "title": "Create or Update Dashboard"},
-        exclude_args=["include_skill"],
     )
     @with_auto_backup(domain="dashboard", id_param="url_path", client=client)
     @log_tool_usage
@@ -925,19 +926,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "For existing dashboards, only updated when explicitly provided."
             ),
         ] = None,
-        include_skill: Annotated[
+        attach_skill_payload: Annotated[
             bool,
-            Field(
-                description=(
-                    "When True (default), the response includes the canonical "
-                    "Home Assistant dashboard reference files "
-                    "(dashboard-guide.md + dashboard-cards.md) under a "
-                    "'skill_content' field — layout patterns and card-type "
-                    "taxonomy. Set False on subsequent calls in the same "
-                    "session if you've already read them."
-                ),
-                default=True,
-            ),
+            Field(default=True),
         ] = True,
     ) -> dict[str, Any]:
         """
@@ -1284,7 +1275,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 }
                 if pre_resolved_from is not None:
                     transform_result["resolved_from"] = pre_resolved_from
-                _attach_dashboard_skill(transform_result, include_skill)
+                _attach_dashboard_skill(transform_result, attach_skill_payload)
                 return transform_result
 
             # Check if dashboard exists. When the pre-resolver fired
@@ -1523,7 +1514,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # an existing dashboard was updated instead.
                 result_dict["resolved_from"] = pre_resolved_from
 
-            _attach_dashboard_skill(result_dict, include_skill)
+            _attach_dashboard_skill(result_dict, attach_skill_payload)
             return result_dict
 
         except ToolError:

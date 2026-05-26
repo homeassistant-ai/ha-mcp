@@ -1,7 +1,7 @@
 """Load skill reference files from the bundled skills-vendor directory.
 
 Shared helper for the consolidated ``ha_get_skill_guide`` tool and the
-write-tool ``include_skill`` parameter. Mirrors the symlink + path-traversal
+write-tool ``attach_skill_payload`` parameter. Mirrors the symlink + path-traversal
 guards in ``server.py::_handle_skill_guide_call`` so any caller that needs to
 read a ``(skill, file)`` pair gets the same safety contract.
 

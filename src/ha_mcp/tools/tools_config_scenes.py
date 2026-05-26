@@ -424,7 +424,6 @@ class ConfigSceneTools:
             "destructiveHint": True,
             "title": "Create or Update Scene",
         },
-        exclude_args=["include_skill"],
     )
     @with_auto_backup(domain="scene", id_param="scene_id")
     @log_tool_usage
@@ -491,20 +490,9 @@ class ConfigSceneTools:
                 default=True,
             ),
         ] = True,
-        include_skill: Annotated[
+        attach_skill_payload: Annotated[
             bool,
-            Field(
-                description=(
-                    "When True (default), the response includes the top-level "
-                    "Home Assistant best-practice SKILL.md under a "
-                    "'skill_content' field. No scene-specific reference file "
-                    "exists; SKILL.md covers entity-naming, safe-refactoring, "
-                    "and helper-vs-template trade-offs that intersect with "
-                    "scene authoring. Set False on subsequent calls in the "
-                    "same session if you've already read it."
-                ),
-                default=True,
-            ),
+            Field(default=True),
         ] = True,
     ) -> dict[str, Any]:
         """
@@ -797,7 +785,7 @@ class ConfigSceneTools:
                 }
                 attach_skill_content(
                     response,
-                    include_skill=include_skill,
+                    attach_skill_payload=attach_skill_payload,
                     canonical_files=_SCENE_SKILL_FILES,
                     referenced_files=None,
                 )
@@ -909,7 +897,7 @@ class ConfigSceneTools:
 
             attach_skill_content(
                 result,
-                include_skill=include_skill,
+                attach_skill_payload=attach_skill_payload,
                 canonical_files=_SCENE_SKILL_FILES,
                 referenced_files=None,
             )

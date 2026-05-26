@@ -4,8 +4,8 @@ The PR review surfaced three bugs in the same class — a write-tool method
 had multiple success-return paths, and the per-tool ``attach_skill_content``
 (or its predecessor ``_attach_helper_skill`` / ``_attach_dashboard_skill``
 wrapper) was called on some paths but not others. The bugs silently
-violated each tool's docstring promise that ``include_skill=True`` would
-ship ``skill_content`` in the response.
+violated each tool's contract that ``attach_skill_payload=True`` (the
+default) would ship ``skill_content`` in the response.
 
 These tests address that bug class without trying to spin up the full
 fastmcp stack (which Termux can't do without uv):
@@ -37,8 +37,8 @@ from ha_mcp.utils import skill_loader
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TOOLS_DIR = REPO_ROOT / "src" / "ha_mcp" / "tools"
 
-# The six write tools that gained include_skill in PR #1182, with the
-# public method name pytest-parameterizes over.
+# The six write tools that gained attach_skill_payload in PR #1182,
+# with the public method name pytest-parameterizes over.
 WRITE_TOOLS: tuple[tuple[str, str], ...] = (
     ("tools_config_automations.py", "ha_config_set_automation"),
     ("tools_config_scripts.py", "ha_config_set_script"),
@@ -92,78 +92,132 @@ def _count_attach_calls(tree: ast.AST) -> int:
     return count
 
 
-def _decorator_excludes_include_skill(
+def _attach_skill_payload_field(
     tree: ast.AST, tool_name: str
-) -> tuple[bool, str]:
-    """Find ``tool_name``'s @tool / @mcp.tool decorator and report whether
-    it carries ``exclude_args=["include_skill"]``.
+) -> tuple[ast.Call | None, str]:
+    """Find the ``Field(...)`` call wrapping the function's
+    ``attach_skill_payload`` parameter and return the Call node.
 
-    Returns ``(found, reason)`` — ``found`` is True iff the literal kwarg
-    list contains ``"include_skill"``; ``reason`` is empty on success or
-    explains the failure mode for the assertion message.
+    Returns ``(call_node, reason)`` — ``call_node`` is the ast.Call for
+    the Field(...) wrapping the param, or None when the structure
+    doesn't match. ``reason`` carries the failure description for the
+    assertion message.
     """
     fn = _find_function_by_name(tree, tool_name)
     if fn is None:
-        return False, f"{tool_name} not found"
-    if not fn.decorator_list:
-        return False, f"{tool_name} has no decorators"
-    # The @tool / @mcp.tool decorator is the outermost (last in source order
-    # but first in fn.decorator_list per Python decorator semantics).
+        return None, f"{tool_name} not found"
+    all_args = (
+        list(fn.args.args)
+        + list(fn.args.kwonlyargs)
+        + list(getattr(fn.args, "posonlyargs", []))
+    )
+    for arg in all_args:
+        if arg.arg != "attach_skill_payload":
+            continue
+        anno = arg.annotation
+        # Annotated[bool, Field(...)] shape — subscript with a Tuple slice.
+        if (
+            not isinstance(anno, ast.Subscript)
+            or not isinstance(anno.slice, ast.Tuple)
+            or len(anno.slice.elts) < 2
+        ):
+            return None, f"{tool_name}.attach_skill_payload is not Annotated[...]"
+        field_call = anno.slice.elts[1]
+        if not (
+            isinstance(field_call, ast.Call)
+            and isinstance(field_call.func, ast.Name)
+            and field_call.func.id == "Field"
+        ):
+            return None, (
+                f"{tool_name}.attach_skill_payload's second Annotated arg is "
+                "not a Field(...) call"
+            )
+        return field_call, ""
+    return None, f"{tool_name} has no attach_skill_payload parameter"
+
+
+def _decorator_kwarg_literals(
+    tree: ast.AST, tool_name: str, kwarg_name: str
+) -> list[str] | None:
+    """Return the string-literal list passed to ``kwarg_name`` on
+    ``tool_name``'s @tool / @mcp.tool decorator, or None when the kwarg
+    is absent."""
+    fn = _find_function_by_name(tree, tool_name)
+    if fn is None or not fn.decorator_list:
+        return None
     for deco in fn.decorator_list:
         if not isinstance(deco, ast.Call):
             continue
         target = deco.func
-        # Match either @tool(...) (Name) or @mcp.tool(...) (Attribute .attr=tool).
         is_tool_call = (isinstance(target, ast.Name) and target.id == "tool") or (
             isinstance(target, ast.Attribute) and target.attr == "tool"
         )
         if not is_tool_call:
             continue
         for kw in deco.keywords:
-            if kw.arg != "exclude_args":
-                continue
-            if not isinstance(kw.value, (ast.List, ast.Tuple)):
-                return False, "exclude_args value is not a list/tuple literal"
-            literals = [
-                elt.value
-                for elt in kw.value.elts
-                if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-            ]
-            if "include_skill" in literals:
-                return True, ""
-            return (
-                False,
-                f"exclude_args={literals!r} does not contain 'include_skill'",
-            )
-        return False, "@tool/@mcp.tool decorator has no exclude_args kwarg"
-    return False, "no @tool or @mcp.tool decorator found"
+            if kw.arg == kwarg_name and isinstance(kw.value, (ast.List, ast.Tuple)):
+                return [
+                    elt.value
+                    for elt in kw.value.elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                ]
+        return None
+    return None
 
 
 @pytest.mark.parametrize(("module_file", "tool_name"), WRITE_TOOLS)
-def test_include_skill_is_hidden_from_tool_catalog(
+def test_attach_skill_payload_is_visible_in_tool_catalog(
     module_file: str, tool_name: str
 ) -> None:
-    """Every write tool must hide ``include_skill`` from the MCP schema.
+    """The param must remain visible in the MCP schema — opacity comes
+    from naming + missing description, NOT from exclude_args.
 
-    BAT testing on PR #1448 showed every LLM (across vendors and sizes)
-    proactively turned the default-on parameter OFF when it appeared in
-    the tool catalog — defeating the design. The fix is to publish the
-    parameter via FastMCP's ``exclude_args=["include_skill"]`` on the
-    ``@tool`` / ``@mcp.tool`` decorator: the schema doesn't list it (so
-    LLMs can't see it), but the runtime still accepts it when passed
-    explicitly (taught via the opt-out hint that ships with delivered
-    skill_content). This test pins that decorator kwarg structurally so
-    a future refactor can't quietly re-expose the param.
-    """
+    BAT history (#1448):
+      1. Visible as ``include_skill`` with description → Opus reflex-disabled.
+      2. Hidden via exclude_args + trailing hint → no model ever found
+         the hint to opt out (Opus needed 5 tries; Sonnet/Haiku never).
+      3. Visible as ``attach_skill_payload`` with no Field description,
+         no docstring mention, top-of-response imperative hint → current
+         design. This test pins that the decorator does NOT exclude the
+         param so the schema still publishes it, allowing the LLM to
+         act on the hint when it appears."""
     module_path = TOOLS_DIR / module_file
     tree = ast.parse(module_path.read_text())
-    ok, reason = _decorator_excludes_include_skill(tree, tool_name)
-    assert ok, (
-        f"{tool_name} in {module_file} must hide include_skill via "
-        f"exclude_args=['include_skill'] on its @tool / @mcp.tool "
-        f"decorator. Detected: {reason}. Without this, the LLM sees the "
-        f"param in the schema and BAT-confirmed behaviour is to turn it "
-        f"off proactively — defeating the default-on design."
+    excluded = _decorator_kwarg_literals(tree, tool_name, "exclude_args") or []
+    assert "attach_skill_payload" not in excluded, (
+        f"{tool_name} in {module_file} has exclude_args={excluded!r} which "
+        f"hides attach_skill_payload from the schema. The current design "
+        f"keeps the param visible — opacity comes from the empty Field "
+        f"description and absence of docstring mentions, not from hiding. "
+        f"Drop the exclude_args entry; the opt-out hint relies on the "
+        f"param being callable by name from the schema."
+    )
+
+
+@pytest.mark.parametrize(("module_file", "tool_name"), WRITE_TOOLS)
+def test_attach_skill_payload_has_no_field_description(
+    module_file: str, tool_name: str
+) -> None:
+    """The Field on attach_skill_payload must carry no ``description``
+    keyword. The schema then publishes a bare default-True boolean with
+    no semantic signal pointing at "this is the skill toggle, flip
+    it" — which the first attempt's verbose description did, prompting
+    reflex-disable. Pinned structurally so a well-meaning future PR
+    can't quietly re-add a description that defeats the opacity."""
+    module_path = TOOLS_DIR / module_file
+    tree = ast.parse(module_path.read_text())
+    field_call, reason = _attach_skill_payload_field(tree, tool_name)
+    assert field_call is not None, reason
+    described = next(
+        (kw for kw in field_call.keywords if kw.arg == "description"), None
+    )
+    assert described is None, (
+        f"{tool_name} in {module_file} declares a Field description on "
+        f"attach_skill_payload. The current design keeps the param "
+        f"undescribed so a model scanning the schema sees a bare bool "
+        f"with no toggle-this semantic. Drop the description; the "
+        f"opt-out hint shipped with delivered skill_content is the only "
+        f"place the param's purpose is stated."
     )
 
 
@@ -211,14 +265,14 @@ def test_write_tool_attaches_skill_content_somewhere(
     # the helper it's about to return through).
     assert total_attaches >= 1, (
         f"{tool_name} in {module_file} has no attach_skill_content / "
-        f"_attach_*_skill calls anywhere in the module — include_skill "
-        f"parameter is silently no-op for this tool."
+        f"_attach_*_skill calls anywhere in the module — "
+        f"attach_skill_payload is silently no-op for this tool."
     )
     assert total_attaches >= success_returns, (
         f"{tool_name} in {module_file} has {success_returns} success-return "
         f"paths but only {total_attaches} attach-helper calls in the module. "
         f"At least one return path is missing its attach call — this is the "
-        f"PR #1448 bug class (silently broken include_skill on one branch)."
+        f"PR #1448 bug class (silently broken attach_skill_payload on one branch)."
     )
 
 

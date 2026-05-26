@@ -103,7 +103,6 @@ class YamlConfigTools:
             "idempotentHint": False,
             "title": "Raw YAML Config Edit",
         },
-        exclude_args=["include_skill"],
     )
     @log_tool_usage
     async def ha_config_set_yaml(
@@ -164,20 +163,9 @@ class YamlConfigTools:
                 ),
             ),
         ] = True,
-        include_skill: Annotated[
+        attach_skill_payload: Annotated[
             bool,
-            Field(
-                description=(
-                    "When True (default), the response includes the Home "
-                    "Assistant template-guidelines.md reference under a "
-                    "'skill_content' field. YAML packages frequently include "
-                    "template sensors, command_line entities, and mqtt "
-                    "templates, which is exactly where template misuse "
-                    "causes the most subtle bugs. Set False on subsequent "
-                    "calls in the same session if you've already read it."
-                ),
-                default=True,
-            ),
+            Field(default=True),
         ] = True,
     ) -> dict[str, Any]:
         """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
@@ -274,7 +262,7 @@ class YamlConfigTools:
                     raise_tool_error(result)
                 attach_skill_content(
                     result,
-                    include_skill=include_skill,
+                    attach_skill_payload=attach_skill_payload,
                     canonical_files=_YAML_SKILL_FILES,
                     referenced_files=None,
                 )

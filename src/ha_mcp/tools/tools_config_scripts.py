@@ -384,7 +384,6 @@ class ConfigScriptTools:
             "destructiveHint": True,
             "title": "Create or Update Script",
         },
-        exclude_args=["include_skill"],
     )
     @with_auto_backup(domain="script", id_param="script_id")
     @log_tool_usage
@@ -441,21 +440,9 @@ class ConfigScriptTools:
                 default=True,
             ),
         ] = True,
-        include_skill: Annotated[
+        attach_skill_payload: Annotated[
             bool,
-            Field(
-                description=(
-                    "When True (default), the response includes the canonical "
-                    "Home Assistant best-practice skill files for scripts "
-                    "(automation-patterns.md + template-guidelines.md) under a "
-                    "top-level 'skill_content' field. Set False on subsequent "
-                    "calls in the same session if you've already read them — "
-                    "best-practice warnings will still auto-embed their "
-                    "referenced files regardless of this setting, so you always "
-                    "get relevant guidance on errors."
-                ),
-                default=True,
-            ),
+            Field(default=True),
         ] = True,
     ) -> dict[str, Any]:
         """
@@ -715,7 +702,7 @@ class ConfigScriptTools:
                     response["best_practice_warnings"] = list(bp_warnings)
                 attach_skill_content(
                     response,
-                    include_skill=include_skill,
+                    attach_skill_payload=attach_skill_payload,
                     canonical_files=_SCRIPT_SKILL_FILES,
                     referenced_files=bp_warnings.referenced_files,
                 )
@@ -792,7 +779,7 @@ class ConfigScriptTools:
 
             attach_skill_content(
                 result,
-                include_skill=include_skill,
+                attach_skill_payload=attach_skill_payload,
                 canonical_files=_SCRIPT_SKILL_FILES,
                 referenced_files=bp_warnings.referenced_files,
             )

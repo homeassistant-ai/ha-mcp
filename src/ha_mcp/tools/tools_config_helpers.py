@@ -45,18 +45,18 @@ from .util_helpers import (
 _HELPER_SKILL_FILES: tuple[str, ...] = ("references/helper-selection.md",)
 
 
-def _attach_helper_skill(response: dict[str, Any], include_skill: bool) -> None:
+def _attach_helper_skill(response: dict[str, Any], attach_skill_payload: bool) -> None:
     """In-place attach skill_content to a helper response when applicable.
 
     Helper tool has no best-practice checker integration, so
     ``referenced_files`` is always None — embedding is driven purely by
-    the ``include_skill`` flag. Delegates to the shared
+    the ``attach_skill_payload`` flag. Delegates to the shared
     :func:`attach_skill_content` so the missing-vendor-warning path is
     consistent across every write tool.
     """
     attach_skill_content(
         response,
-        include_skill=include_skill,
+        attach_skill_payload=attach_skill_payload,
         canonical_files=_HELPER_SKILL_FILES,
         referenced_files=None,
     )
@@ -2001,7 +2001,6 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(
         tags={"Helper Entities"},
         annotations={"destructiveHint": True, "title": "Create or Update Helper"},
-        exclude_args=["include_skill"],
     )
     @with_auto_backup(
         domain_fn=lambda kw: f"helper_{kw.get('helper_type', 'unknown')}",
@@ -2359,20 +2358,9 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
-        include_skill: Annotated[
+        attach_skill_payload: Annotated[
             bool,
-            Field(
-                description=(
-                    "When True (default), the response includes the Home "
-                    "Assistant helper-selection.md reference under a "
-                    "'skill_content' field — a decision matrix for picking "
-                    "the right helper type (input_*, counter, timer, template, "
-                    "group, utility_meter, derivative, statistics, etc.). Set "
-                    "False on subsequent calls in the same session if you've "
-                    "already read it."
-                ),
-                default=True,
-            ),
+            Field(default=True),
         ] = True,
     ) -> dict[str, Any]:
         """
@@ -2534,7 +2522,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         default=False,
                     ),
                 )
-                _attach_helper_skill(subentry_response, include_skill)
+                _attach_helper_skill(subentry_response, attach_skill_payload)
                 return subentry_response
 
             # Determine if this is a create or update — set early so the
@@ -2721,7 +2709,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     wait=wait,
                     action=action,
                 )
-                _attach_helper_skill(flow_response, include_skill)
+                _attach_helper_skill(flow_response, attach_skill_payload)
                 return flow_response
 
             # Parse JSON list parameters if provided as strings
@@ -3102,7 +3090,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message=f"Successfully created {helper_type}: {name}",
                         warnings=warnings,
                     )
-                    _attach_helper_skill(create_response, include_skill)
+                    _attach_helper_skill(create_response, attach_skill_payload)
                     return create_response
                 else:
                     raise_tool_error(
@@ -3205,7 +3193,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message=f"Successfully updated {helper_type}: {entity_id}",
                         warnings=warnings,
                     )
-                    _attach_helper_skill(update_response, include_skill)
+                    _attach_helper_skill(update_response, attach_skill_payload)
                     return update_response
 
                 elif helper_type in config_store_types:
@@ -3796,7 +3784,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     message=f"Successfully updated {helper_type}: {entity_id}",
                     warnings=warnings,
                 )
-                _attach_helper_skill(config_update_response, include_skill)
+                _attach_helper_skill(config_update_response, attach_skill_payload)
                 return config_update_response
 
             # This should never be reached since action is either "create" or "update"

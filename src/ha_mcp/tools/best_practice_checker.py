@@ -13,11 +13,13 @@ LLM-discoverable way to pull the relevant skill content:
    works on every MCP client regardless of resource-fetch support.
 
 The write tools also auto-embed the matching section into the next
-response via ``referenced_files``, and accept a hidden ``include_skill``
+response via ``referenced_files``, and accept an ``attach_skill_payload``
 parameter for opting out — neither is advertised here because the
-parameter is excluded from the tool catalog (LLMs can't discover it
-from the schema, only from the opt-out hint that ships with the
-delivered content).
+parameter carries no description in its Pydantic Field and the tool
+docstrings never reference it, so a model inspecting the schema sees
+only a bare default-True boolean with no semantic toggle signal. The
+opt-out hint that ships alongside delivered content is the only place
+the param name appears.
 
 The ``skill_prefix`` kwarg lets callers pass any URL prefix (e.g., a
 GitHub mirror) when ``skill://`` isn't reachable, or ``None`` to omit
@@ -276,11 +278,12 @@ def _skill_route_suffix(skill_prefix: str | None, file_ref: str) -> str:
        works on every MCP client. Anchor stripped (the tool reads the
        whole file).
 
-    The write tools' own ``include_skill`` parameter is hidden from the
-    tool catalog (via FastMCP ``exclude_args``) so the LLM cannot
-    discover it from the schema — it is therefore not advertised here.
-    Auto-embed of the matching section still happens in the next write's
-    response unconditionally, driven by ``referenced_files``.
+    The write tools' own ``attach_skill_payload`` parameter is visible in
+    the catalog but undescribed (no Pydantic Field description, no
+    docstring mention) so the LLM has no semantic toggle signal pointing
+    at it — it is therefore not advertised here either. Auto-embed of
+    the matching section still happens in the next write's response
+    unconditionally, driven by ``referenced_files``.
     """
     if not skill_prefix:
         # Skills feature is disabled server-wide; none of the routes work.

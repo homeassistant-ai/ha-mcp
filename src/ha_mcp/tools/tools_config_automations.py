@@ -61,8 +61,8 @@ logger = logging.getLogger(__name__)
 
 
 # Skill files attached to ha_config_set_automation responses when
-# include_skill=True (default), plus auto-attached on best-practice
-# warning hits regardless of include_skill. Paths are relative to the
+# attach_skill_payload=True (default), plus auto-attached on best-practice
+# warning hits regardless of attach_skill_payload. Paths are relative to the
 # home-assistant-best-practices skill directory.
 _AUTOMATION_SKILL_FILES: tuple[str, ...] = (
     "references/automation-patterns.md",
@@ -410,7 +410,6 @@ class AutomationConfigTools:
             "destructiveHint": True,
             "title": "Create or Update Automation",
         },
-        exclude_args=["include_skill"],
     )
     @with_auto_backup(domain="automation", id_fn=automation_backup_target)
     @log_tool_usage
@@ -469,21 +468,9 @@ class AutomationConfigTools:
                 default=True,
             ),
         ] = True,
-        include_skill: Annotated[
+        attach_skill_payload: Annotated[
             bool,
-            Field(
-                description=(
-                    "When True (default), the response includes the canonical "
-                    "Home Assistant best-practice skill files for automations "
-                    "(automation-patterns.md + template-guidelines.md) under a "
-                    "top-level 'skill_content' field. Set False on subsequent "
-                    "calls in the same session if you've already read them — "
-                    "best-practice warnings will still auto-embed their "
-                    "referenced files regardless of this setting, so you always "
-                    "get relevant guidance on errors."
-                ),
-                default=True,
-            ),
+            Field(default=True),
         ] = True,
     ) -> dict[str, Any]:
         """
@@ -701,7 +688,7 @@ class AutomationConfigTools:
                     config_hash,
                     python_transform,
                     category,
-                    include_skill,
+                    attach_skill_payload,
                 )
                 return response
 
@@ -745,7 +732,7 @@ class AutomationConfigTools:
                 wait,
                 bp_warnings,
                 validation_meta,
-                include_skill,
+                attach_skill_payload,
             )
 
         except ToolError:
@@ -782,7 +769,7 @@ class AutomationConfigTools:
         config_hash: str | None,
         python_transform: str,
         category: str | None,
-        include_skill: bool,
+        attach_skill_payload: bool,
     ) -> tuple[dict[str, Any], BestPracticeCheckResult]:
         """Execute python_transform mode and return (response, bp_warnings)."""
         if not identifier:
@@ -867,7 +854,7 @@ class AutomationConfigTools:
             response["best_practice_warnings"] = list(bp_warnings)
         attach_skill_content(
             response,
-            include_skill=include_skill,
+            attach_skill_payload=attach_skill_payload,
             canonical_files=_AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
@@ -881,7 +868,7 @@ class AutomationConfigTools:
         wait: bool | str,
         bp_warnings: BestPracticeCheckResult,
         validation_meta: dict[str, Any],
-        include_skill: bool,
+        attach_skill_payload: bool,
     ) -> dict[str, Any]:
         """Execute config-replacement mode and return the tool response."""
         result = await self._client.upsert_automation_config(config_dict, identifier)
@@ -931,7 +918,7 @@ class AutomationConfigTools:
 
         attach_skill_content(
             result,
-            include_skill=include_skill,
+            attach_skill_payload=attach_skill_payload,
             canonical_files=_AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
