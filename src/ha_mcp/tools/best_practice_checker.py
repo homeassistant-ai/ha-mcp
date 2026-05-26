@@ -16,8 +16,10 @@ way the LLM can pull the relevant skill content:
 
 The ``skill_prefix`` kwarg lets callers pass any URL prefix (e.g., a
 GitHub mirror) when ``skill://`` isn't reachable, or ``None`` to omit
-the URI route entirely. The tool and parameter routes always appear so
-guidance is reachable even when the resource layer is disabled.
+the suffix entirely — ``None`` signals skills are disabled server-wide,
+in which case none of the three routes can resolve (the URI fails, the
+tool isn't registered, and ``include_skill`` reads an empty skills dir),
+so naming them would mislead.
 
 Each warning carries the native alternative inline (a concrete example
 or short explanation) before the routes, so even clients that ignore all
@@ -150,10 +152,9 @@ def check_automation_config(
         config: The automation configuration dict.
         skill_prefix: Base URI for skill references (e.g.
             ``"skill://home-assistant-best-practices/references"``).
-            Pass ``None`` when skills are disabled — warnings still fire
-            but the ``skill://`` URI route is omitted from the suffix
-            (the ``ha_get_skill_guide`` tool route and the
-            ``include_skill=True`` parameter route are still mentioned).
+            Pass ``None`` when skills are disabled server-wide — warnings
+            still fire but the entire ' See ...' suffix is suppressed
+            (none of the three routes resolve when skills are off).
     """
     if "use_blueprint" in config:
         return BestPracticeCheckResult()
