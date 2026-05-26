@@ -309,10 +309,12 @@ def project_entity_record(
     records have no ``success`` field, so the asymmetry is intentional.
 
     Non-dict ``attributes`` handling: when ``attribute_keys`` is set but the
-    record's ``attributes`` value is not a dict, the key-set filter cannot be
-    applied and the ``attributes`` value is returned unchanged. A
-    ``warning``-level log line records the short-circuit so it is visible at
-    default log levels.
+    record's ``attributes`` value is not a dict (``None``, scalar, list — rare
+    from HA's state API but possible from malformed records, partial error
+    payloads, or mocked fixtures), the key-set filter cannot be applied. A
+    ``warning``-level log line records the short-circuit AND a caller-facing
+    warning is returned via ``attr_warn`` so the agent (MCP consumer) sees that
+    its filter was skipped rather than just an operator tailing logs.
     """
     if not isinstance(record, dict):
         return record, None
@@ -340,14 +342,25 @@ def project_entity_record(
                 type(attrs).__name__,
                 list(record.keys()),
             )
+            attr_warn = (
+                f"attribute_keys filter skipped — record 'attributes' is "
+                f"{type(attrs).__name__} (expected dict)"
+            )
     return record, attr_warn
 
 
-# Default compact-result projection for ha_call_service. Drops timestamp/context
-# metadata at the top level and known-heavy enum-style attribute lists (issue
-# #1446: a single WLED light's effect_list can be ~250 entries, emitted on
-# every propagated state). Kept deliberately minimal — domain-specific trimming
-# belongs in ha_get_state via explicit attribute_keys, not here.
+# Default compact-result projection for ha_call_service (issue #1446). A single
+# WLED light's `effect_list` can be ~250 entries, emitted on every propagated
+# group state — `light.turn_on` on a nested group returned 16 state objects
+# with that list carried four times. Drops timestamp/context metadata at the
+# top level and known-heavy enum-style attribute lists.
+#
+# Extension policy: add a key here only when (a) it's universally heavy across
+# installations (not just an unusual config), (b) it carries no signal callers
+# would act on for service-call confirmation, and (c) callers who do want it
+# can opt in via `result_fields` / `verbose=True`. Domain-specific or
+# install-specific trimming belongs in `ha_get_state` via explicit
+# `attribute_keys`, not here.
 _COMPACT_RESULT_DROP_TOP_LEVEL: frozenset[str] = frozenset(
     {"context", "last_changed", "last_reported", "last_updated"}
 )
@@ -360,20 +373,15 @@ def compact_service_result(
     result: Any,
     target_entity_id: str | None,
 ) -> Any:
-    """Trim a ha_call_service ``result`` list to the compact default.
-
-    Issue #1446: HA returns a state record for every entity affected by a
-    service call. With nested HA-native groups (group → group → group) and
-    WLED-style entities carrying ~250-entry ``effect_list`` attributes, this
-    list blows up token usage with no corresponding signal — agents only need
-    confirmation that the targeted entity reached its new state.
+    """Trim a ha_call_service ``result`` list to the compact default (issue #1446).
 
     Compact rules:
 
-    1. When ``target_entity_id`` is a single string, filter the list to records
-       whose ``entity_id`` matches — drops the propagation chain (parent groups).
-       Falls back to the full list if no record matches (e.g. HA returned
-       only parent states).
+    1. When ``target_entity_id`` is a single entity ID string OR a
+       comma-separated list of entity IDs (HA accepts both as a service-call
+       target), filter the list to records whose ``entity_id`` is in that set
+       — drops the propagation chain (parent groups). Falls back to the full
+       list if no record matches (e.g. HA returned only parent states).
     2. Drop top-level metadata keys (``context``, ``last_*``) from every record.
     3. Drop known-heavy attribute keys (``effect_list``, ``hue_scenes``) from
        every record's ``attributes`` dict.
@@ -386,13 +394,15 @@ def compact_service_result(
 
     records: list[Any] = result
     if isinstance(target_entity_id, str) and target_entity_id:
-        matched = [
-            r
-            for r in records
-            if isinstance(r, dict) and r.get("entity_id") == target_entity_id
-        ]
-        if matched:
-            records = matched
+        targets = {t.strip() for t in target_entity_id.split(",") if t.strip()}
+        if targets:
+            matched = [
+                r
+                for r in records
+                if isinstance(r, dict) and r.get("entity_id") in targets
+            ]
+            if matched:
+                records = matched
 
     compacted: list[Any] = []
     for record in records:

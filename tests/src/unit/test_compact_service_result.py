@@ -72,6 +72,32 @@ class TestCompactServiceResult:
         assert attrs["brightness"] == 51
         assert attrs["rgb_color"] == [255, 121, 0]
 
+    def test_strips_hue_scenes_from_attributes(self):
+        """Hue rooms emit a `hue_scenes` list on every state report — drop it too."""
+        record = _make_record("light.living_room")
+        record["attributes"]["hue_scenes"] = ["Energize", "Concentrate", "Relax"]
+        compacted = compact_service_result([record], "light.living_room")
+        assert "hue_scenes" not in compacted[0]["attributes"]
+        assert compacted[0]["attributes"]["brightness"] == 51
+
+    def test_comma_separated_entity_ids_filter_to_set(self):
+        """HA accepts entity_id="light.a,light.b" — filter to that target set."""
+        result = [
+            _make_record("light.a"),
+            _make_record("light.b"),
+            _make_record("light.parent_group"),  # propagation noise
+            _make_record("light.c"),  # unrelated
+        ]
+        compacted = compact_service_result(result, "light.a,light.b")
+        kept = {r["entity_id"] for r in compacted}
+        assert kept == {"light.a", "light.b"}
+
+    def test_comma_separated_handles_whitespace_and_empties(self):
+        """`"light.a, light.b ,,"` → {`light.a`, `light.b`}; nothing else kept."""
+        result = [_make_record("light.a"), _make_record("light.b")]
+        compacted = compact_service_result(result, "light.a, light.b ,,")
+        assert {r["entity_id"] for r in compacted} == {"light.a", "light.b"}
+
     def test_keeps_full_list_when_target_unmatched(self):
         """If HA only returned propagated parents, keep them all (don't return [])."""
         result = [
@@ -195,3 +221,94 @@ class TestProjectServiceResult:
         )
         assert projected is result
         assert warnings == []
+
+    def test_explicit_attribute_keys_happy_path(self):
+        """``attribute_keys`` filters successfully — record kept, no warnings."""
+        result = [_make_record("light.target", effect_list_size=10)]
+        projected, warnings = ServiceTools._project_service_result(
+            result,
+            entity_id="light.target",
+            verbose=False,
+            fields=None,
+            attribute_keys=["brightness", "rgb_color"],
+        )
+        assert len(projected) == 1
+        assert projected[0]["attributes"] == {
+            "brightness": 51,
+            "rgb_color": [255, 121, 0],
+        }
+        assert warnings == []
+
+    def test_explicit_fields_and_attribute_keys_combined(self):
+        """``fields`` + ``attribute_keys`` together: both filters apply in order."""
+        result = [_make_record("light.target")]
+        projected, warnings = ServiceTools._project_service_result(
+            result,
+            entity_id="light.target",
+            verbose=False,
+            fields=["entity_id", "attributes"],
+            attribute_keys=["brightness"],
+        )
+        assert len(projected) == 1
+        assert set(projected[0].keys()) == {"entity_id", "attributes"}
+        assert projected[0]["attributes"] == {"brightness": 51}
+        assert warnings == []
+
+    def test_attribute_keys_without_attributes_in_fields_warns(self):
+        """``attribute_keys`` ignored when ``fields`` excludes ``attributes``.
+
+        Mirrors ``ha_get_state``'s ``attribute_keys_no_effect`` warning.
+        """
+        result = [_make_record("light.target")]
+        projected, warnings = ServiceTools._project_service_result(
+            result,
+            entity_id="light.target",
+            verbose=False,
+            fields=["entity_id", "state"],
+            attribute_keys=["brightness"],
+        )
+        assert len(projected) == 1
+        assert "attributes" not in projected[0]
+        # Single no-effect warning surfaced
+        assert any("result_attribute_keys was ignored" in w for w in warnings), (
+            f"expected no-effect warning, got: {warnings}"
+        )
+
+    def test_verbose_overrides_explicit_fields(self):
+        """``verbose=True`` wins over explicit projection — escape hatch is absolute."""
+        result = [_make_record("light.target", effect_list_size=250)]
+        projected, warnings = ServiceTools._project_service_result(
+            result,
+            entity_id="light.target",
+            verbose=True,
+            fields=["entity_id", "state"],  # would normally drop attributes
+            attribute_keys=["brightness"],  # would normally trim further
+        )
+        # Raw — fields/attribute_keys ignored
+        assert projected is result
+        assert "context" in projected[0]
+        assert len(projected[0]["attributes"]["effect_list"]) == 250
+        assert warnings == []
+
+    def test_non_dict_attributes_surfaces_caller_warning(self):
+        """When record has non-dict ``attributes``, agent gets a warning string.
+
+        Previously logged at warning level only; now surfaced via ``attr_warn``
+        so MCP consumers see the skip (issue #1446 review feedback).
+        """
+        record = {
+            "entity_id": "light.weird",
+            "state": "on",
+            "attributes": "not_a_dict",  # malformed payload
+        }
+        projected, warnings = ServiceTools._project_service_result(
+            [record],
+            entity_id="light.weird",
+            verbose=False,
+            fields=None,
+            attribute_keys=["brightness"],
+        )
+        assert len(projected) == 1
+        assert any("filter skipped" in w for w in warnings), (
+            f"expected non-dict-attributes warning, got: {warnings}"
+        )

@@ -253,9 +253,23 @@ class ServiceTools:
             return compact_service_result(result, entity_id), []
         if not isinstance(result, list):
             return result, []
+        warnings: list[str] = []
+        # ``result_attribute_keys`` only takes effect when ``attributes`` is in
+        # the projected ``result_fields`` (or ``result_fields`` is None). Surface
+        # a warning rather than silently ignoring the parameter — mirrors
+        # ha_get_state's attribute_keys_no_effect handling.
+        if (
+            attribute_keys is not None
+            and fields is not None
+            and "attributes" not in fields
+        ):
+            warnings.append(
+                "result_attribute_keys was ignored because 'attributes' is not "
+                "in result_fields. Add 'attributes' to result_fields (or omit "
+                "result_fields) to apply result_attribute_keys."
+            )
         projected: list[Any] = []
         seen_warnings: set[str] = set()
-        warnings: list[str] = []
         for record in result:
             new_record, warn = project_entity_record(record, fields, attribute_keys)
             projected.append(new_record)
@@ -278,9 +292,43 @@ class ServiceTools:
         data: str | dict[str, Any] | None = None,
         return_response: bool | str = False,
         wait: bool | str = True,
-        verbose: bool | str = False,
-        result_fields: str | list[str] | None = None,
-        result_attribute_keys: str | list[str] | None = None,
+        verbose: Annotated[
+            bool | str,
+            Field(
+                description=(
+                    "Return HA's raw service response unchanged (default: False). "
+                    "Use as an escape hatch when you need the full propagation "
+                    "chain or raw attribute payload (debug / inspection). "
+                    "WARNING: brings back token-bloat for nested-group targets — "
+                    "prefer result_fields / result_attribute_keys for targeted control."
+                ),
+            ),
+        ] = False,
+        result_fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project each record in 'result' to only these top-level keys "
+                    "(e.g. ['entity_id', 'state']). Mirrors ha_get_state's fields=. "
+                    "Setting this DISABLES default compaction — no entity-id filter, "
+                    "no metadata strip — and applies the explicit projection instead."
+                ),
+            ),
+        ] = None,
+        result_attribute_keys: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project each record's 'attributes' dict to only these keys "
+                    "(e.g. ['brightness', 'rgb_color']). Mirrors ha_get_state's "
+                    "attribute_keys=. Setting this DISABLES default compaction. "
+                    "Requires 'attributes' to be present in result_fields (or "
+                    "result_fields=None)."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Execute Home Assistant services to control entities and trigger automations.
@@ -304,25 +352,15 @@ class ServiceTools:
         ha_call_service("homeassistant", "toggle", entity_id="switch.porch_light")
         ```
 
-        **Parameters:**
-        - **domain**: Service domain (light, climate, automation, etc.)
-        - **service**: Service name (turn_on, set_temperature, trigger, etc.)
-        - **entity_id**: Optional target entity. For some services (e.g., light.turn_off), omitting this targets all entities in the domain
-        - **data**: Optional dict of service-specific parameters
-        - **return_response**: Set to True for services that return data
-        - **wait**: Wait for the entity state to change after the service call (default: True).
-          Only applies to state-changing services on a single entity. Set to False for
-          fire-and-forget calls, bulk operations, or services without observable state changes.
-        - **verbose**: Return the raw HA service response unchanged (default: False).
-          By default ``result`` is compacted — filtered to the called entity's record
-          when ``entity_id`` is a single string (drops parent-group propagation),
-          and stripped of ``context``/``last_*`` metadata and known-heavy attribute
-          lists like ``effect_list``. Set ``verbose=True`` to get the full propagation
-          chain and unaltered attribute payload (escape hatch for inspection / debug).
-        - **result_fields**: Project each record in ``result`` to these top-level
-          keys (e.g. ``["entity_id", "state"]``). Mirrors ``ha_get_state``'s ``fields``.
-        - **result_attribute_keys**: Project each record's ``attributes`` dict to
-          these keys. Mirrors ``ha_get_state``'s ``attribute_keys``.
+        **Key behavior:**
+        - **wait** (default True): wait for the entity state to change before
+          returning. Only applies to state-changing services on a single entity.
+        - **Result compaction (issue #1446, default ON)**: ``result`` is trimmed
+          to the targeted entity's record (drops parent-group propagation) and
+          stripped of ``context`` / ``last_*`` metadata and heavy attribute
+          lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``
+          for the raw HA response, or ``result_fields`` / ``result_attribute_keys``
+          for explicit per-record projection (mirrors ``ha_get_state``).
 
         **For detailed service documentation, use ha_get_skill_guide.**
 
@@ -338,13 +376,28 @@ class ServiceTools:
                 or False
             )
             wait_bool = coerce_bool_param(wait, "wait", default=True)
-            verbose_bool = coerce_bool_param(verbose, "verbose", default=False) or False
-            parsed_result_fields = parse_string_list_param(
-                result_fields, "result_fields", allow_csv=True
-            )
-            parsed_result_attribute_keys = parse_string_list_param(
-                result_attribute_keys, "result_attribute_keys", allow_csv=True
-            )
+            try:
+                verbose_bool = (
+                    coerce_bool_param(verbose, "verbose", default=False) or False
+                )
+            except ValueError as e:
+                raise_tool_error(create_validation_error(str(e), parameter="verbose"))
+            try:
+                parsed_result_fields = parse_string_list_param(
+                    result_fields, "result_fields", allow_csv=True
+                )
+            except ValueError as e:
+                raise_tool_error(
+                    create_validation_error(str(e), parameter="result_fields")
+                )
+            try:
+                parsed_result_attribute_keys = parse_string_list_param(
+                    result_attribute_keys, "result_attribute_keys", allow_csv=True
+                )
+            except ValueError as e:
+                raise_tool_error(
+                    create_validation_error(str(e), parameter="result_attribute_keys")
+                )
 
             # Determine if we should wait for state change:
             # Only for state-changing services on a single entity, not for

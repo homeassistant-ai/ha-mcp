@@ -24,17 +24,15 @@ from .util_helpers import (
     coerce_int_param,
     filter_active_repairs,
     parse_string_list_param,
-    project_entity_record,
     project_fields,
     project_records,
     project_repair_fields,
     public_fields,
     result_fields_warning,
 )
-
-# Backwards-compatible alias — _project_entity used to live here; moved to
-# util_helpers.py so ha_call_service can reuse it.
-_project_entity = project_entity_record
+from .util_helpers import (
+    project_entity_record as _project_entity,
+)
 
 logger = logging.getLogger(__name__)
 

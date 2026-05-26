@@ -495,3 +495,31 @@ class TestCallServiceResultProjection:
             assert set(record.keys()).issubset({"entity_id", "state"}), (
                 f"unexpected keys after projection: {record.keys()}"
             )
+
+    async def test_result_attribute_keys_filters_attributes(
+        self, mcp_client, test_light_entity
+    ):
+        """result_attribute_keys=['brightness'] trims attributes; record keeps just that key.
+
+        Asymmetry guard: if the test backend doesn't propagate state, the
+        `if records:` block won't run — that's acceptable cross-backend
+        coverage rather than a strict assertion.
+        """
+        result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "light",
+                "service": "turn_on",
+                "entity_id": test_light_entity,
+                "data": {"brightness_pct": 50},
+                "result_attribute_keys": ["brightness"],
+            },
+        )
+        data = assert_mcp_success(result, "result_attribute_keys projection")
+        for record in data.get("result") or []:
+            attrs = record.get("attributes")
+            # When attributes are present, they should be filtered to brightness only.
+            if isinstance(attrs, dict) and attrs:
+                assert set(attrs.keys()) == {"brightness"}, (
+                    f"unexpected attribute keys after projection: {attrs.keys()}"
+                )
