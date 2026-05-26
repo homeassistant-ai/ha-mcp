@@ -31,13 +31,16 @@ logger = logging.getLogger(__name__)
 
 
 def _skills_dir_at(root: Path) -> Path | None:
-    """Return ``root`` if it contains at least one skill directory, else None."""
-    if not root.is_dir():
-        return None
-    for entry in root.iterdir():
-        if entry.is_dir() and (entry / "SKILL.md").is_file():
-            return root
-    return None
+    """Return ``root`` if the directory exists, else None.
+
+    Matches the historical behaviour of ``server._get_skills_dir`` — a
+    bare existence check is enough because the vendored submodule either
+    checks out cleanly with all skills present, or doesn't check out at
+    all. There's no intermediate "empty submodule" state to defend
+    against here; the path-traversal guards in
+    :func:`resolve_skill_files` are the real safety layer.
+    """
+    return root if root.exists() else None
 
 
 def get_skills_dir() -> Path | None:

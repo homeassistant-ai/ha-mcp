@@ -29,12 +29,12 @@ def fake_skills_dir(tmp_path: Path) -> Path:
 
 
 def test_skills_dir_at_returns_none_when_missing(tmp_path: Path) -> None:
-    """_skills_dir_at returns None when no skill subdir with SKILL.md exists."""
-    assert skill_loader._skills_dir_at(tmp_path) is None
+    """_skills_dir_at returns None when the directory doesn't exist."""
+    assert skill_loader._skills_dir_at(tmp_path / "does-not-exist") is None
 
 
 def test_skills_dir_at_returns_path_when_present(fake_skills_dir: Path) -> None:
-    """_skills_dir_at returns the directory when at least one skill is present."""
+    """_skills_dir_at returns the directory when it exists."""
     assert skill_loader._skills_dir_at(fake_skills_dir) == fake_skills_dir
 
 

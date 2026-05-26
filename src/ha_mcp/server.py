@@ -200,10 +200,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         Skills are vendored via a git submodule at resources/skills-vendor/.
         The actual skill directories live under the skills/ subdirectory
-        within that repo.
+        within that repo. Delegates to
+        :func:`ha_mcp.utils.skill_loader.get_skills_dir` so the write-tool
+        ``include_skill`` parameter resolves the same path.
         """
-        skills_dir = Path(__file__).parent / "resources" / "skills-vendor" / "skills"
-        return skills_dir if skills_dir.exists() else None
+        from .utils.skill_loader import get_skills_dir
+
+        return get_skills_dir()
 
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.
