@@ -103,6 +103,7 @@ class YamlConfigTools:
             "idempotentHint": False,
             "title": "Raw YAML Config Edit",
         },
+        exclude_args=["include_skill"],
     )
     @log_tool_usage
     async def ha_config_set_yaml(
@@ -204,7 +205,7 @@ class YamlConfigTools:
         ``replace`` swaps the subtree as-is.
 
         ``template-guidelines.md`` ships in this response under ``skill_content``
-        by default (see ``include_skill``) — YAML packages frequently include
+        by default — YAML packages frequently include
         template sensors / command_line entities / mqtt templates, exactly where
         template misuse causes the subtlest bugs. For deeper routing guidance
         beyond what ships here, use ha_get_skill_guide.

@@ -2001,6 +2001,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @mcp.tool(
         tags={"Helper Entities"},
         annotations={"destructiveHint": True, "title": "Create or Update Helper"},
+        exclude_args=["include_skill"],
     )
     @with_auto_backup(
         domain_fn=lambda kw: f"helper_{kw.get('helper_type', 'unknown')}",
@@ -2435,7 +2436,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 config={"name": "Local agent", "model": "gemma3:27b"})
 
         ``helper-selection.md`` ships in this response under
-        ``skill_content`` by default (see ``include_skill``) — decision
+        ``skill_content`` by default — decision
         matrix for picking the right helper type plus worked examples
         and per-type field tables. For deeper helper-design guidance
         beyond what ships here, call ha_get_skill_guide.

@@ -410,6 +410,7 @@ class AutomationConfigTools:
             "destructiveHint": True,
             "title": "Create or Update Automation",
         },
+        exclude_args=["include_skill"],
     )
     @with_auto_backup(domain="automation", id_fn=automation_backup_target)
     @log_tool_usage
@@ -509,7 +510,7 @@ class AutomationConfigTools:
         `best_practice_warnings` field on the response and fix before re-submitting.
         The relevant skill section is auto-embedded under `skill_content` on warnings,
         and the full `automation-patterns.md` + `template-guidelines.md` references
-        ship under `skill_content` proactively (see `include_skill`). For comprehensive
+        ship under `skill_content` proactively by default. For comprehensive
         guidance beyond that, call `ha_get_skill_guide`.
 
         The returned `automation_id` is the resolved entity_id (canonical

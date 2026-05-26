@@ -5,25 +5,29 @@ Stateless payload inspection. Returns a :class:`BestPracticeCheckResult`
 files those warnings reference. Zero overhead on clean configs — the
 returned result is empty and ``referenced_files`` is the empty set.
 
-Each warning ends with a 3-route ' See ...' suffix naming every available
-way the LLM can pull the relevant skill content:
+Each warning ends with a 2-route ' See ...' suffix naming every
+LLM-discoverable way to pull the relevant skill content:
 
 1. ``skill://`` resource URI — for clients that auto-fetch resource URIs.
 2. ``ha_get_skill_guide(skill=..., file=...)`` — explicit tool call,
    works on every MCP client regardless of resource-fetch support.
-3. ``include_skill=True`` parameter — on the calling write tool itself,
-   so the file body rides along in the next response.
+
+The write tools also auto-embed the matching section into the next
+response via ``referenced_files``, and accept a hidden ``include_skill``
+parameter for opting out — neither is advertised here because the
+parameter is excluded from the tool catalog (LLMs can't discover it
+from the schema, only from the opt-out hint that ships with the
+delivered content).
 
 The ``skill_prefix`` kwarg lets callers pass any URL prefix (e.g., a
 GitHub mirror) when ``skill://`` isn't reachable, or ``None`` to omit
 the suffix entirely — ``None`` signals skills are disabled server-wide,
-in which case none of the three routes can resolve (the URI fails, the
-tool isn't registered, and ``include_skill`` reads an empty skills dir),
-so naming them would mislead.
+in which case neither route can resolve (the URI fails and the
+tool isn't registered), so naming them would mislead.
 
 Each warning carries the native alternative inline (a concrete example
-or short explanation) before the routes, so even clients that ignore all
-three routes still receive actionable guidance.
+or short explanation) before the routes, so even clients that ignore
+both routes still receive actionable guidance.
 
 The checker covers two layers:
 
@@ -184,7 +188,7 @@ def check_automation_config(
             ``"skill://home-assistant-best-practices/references"``).
             Pass ``None`` when skills are disabled server-wide — warnings
             still fire but the entire ' See ...' suffix is suppressed
-            (none of the three routes resolve when skills are off).
+            (neither route resolves when skills are off).
     """
     if "use_blueprint" in config:
         return BestPracticeCheckResult()
@@ -237,7 +241,7 @@ def _emit(
     skill_prefix: str | None,
     file_ref: str,
 ) -> None:
-    """Append a warning with the 3-route ' See ...' suffix and track the file.
+    """Append a warning with the 2-route ' See ...' suffix and track the file.
 
     Args:
         warnings: Accumulator (also holds ``referenced_files``).
@@ -254,26 +258,29 @@ def _emit(
             ships only the matching markdown section instead of the
             whole 10-20 KB reference file.
     """
-    warnings.append(message + _three_route_suffix(skill_prefix, file_ref))
+    warnings.append(message + _skill_route_suffix(skill_prefix, file_ref))
     warnings.referenced_files.add(f"references/{file_ref}")
 
 
-def _three_route_suffix(skill_prefix: str | None, file_ref: str) -> str:
-    """Build the ' See ...' suffix naming all available skill access routes.
+def _skill_route_suffix(skill_prefix: str | None, file_ref: str) -> str:
+    """Build the ' See ...' suffix naming the available skill access routes.
 
     When ``skill_prefix`` is ``None`` the entire suffix is suppressed —
-    skills are off server-wide, so none of the three routes resolve.
-    Otherwise the suffix names all three so the LLM has a working path
-    regardless of which mechanism its client supports:
+    skills are off server-wide, so neither route resolves. Otherwise the
+    suffix names both so the LLM has a working path regardless of which
+    mechanism its client supports:
 
     1. ``skill://`` URI — for clients that auto-fetch resource URIs.
        Anchor preserved.
     2. ``ha_get_skill_guide(skill=..., file=...)`` — explicit tool call,
        works on every MCP client. Anchor stripped (the tool reads the
        whole file).
-    3. ``include_skill=True`` parameter hint — points back to the calling
-       write tool's own affordance for fetching the file in the next
-       response.
+
+    The write tools' own ``include_skill`` parameter is hidden from the
+    tool catalog (via FastMCP ``exclude_args``) so the LLM cannot
+    discover it from the schema — it is therefore not advertised here.
+    Auto-embed of the matching section still happens in the next write's
+    response unconditionally, driven by ``referenced_files``.
     """
     if not skill_prefix:
         # Skills feature is disabled server-wide; none of the routes work.
@@ -283,8 +290,6 @@ def _three_route_suffix(skill_prefix: str | None, file_ref: str) -> str:
     routes = [
         f"{skill_prefix}/{file_ref}",
         f"call ha_get_skill_guide(skill={_SKILL_NAME!r}, file={bare_file!r})",
-        "or pass include_skill=True on this tool to receive the file in the "
-        "next response automatically",
     ]
     return " See " + " | ".join(routes)
 

@@ -92,6 +92,81 @@ def _count_attach_calls(tree: ast.AST) -> int:
     return count
 
 
+def _decorator_excludes_include_skill(
+    tree: ast.AST, tool_name: str
+) -> tuple[bool, str]:
+    """Find ``tool_name``'s @tool / @mcp.tool decorator and report whether
+    it carries ``exclude_args=["include_skill"]``.
+
+    Returns ``(found, reason)`` — ``found`` is True iff the literal kwarg
+    list contains ``"include_skill"``; ``reason`` is empty on success or
+    explains the failure mode for the assertion message.
+    """
+    fn = _find_function_by_name(tree, tool_name)
+    if fn is None:
+        return False, f"{tool_name} not found"
+    if not fn.decorator_list:
+        return False, f"{tool_name} has no decorators"
+    # The @tool / @mcp.tool decorator is the outermost (last in source order
+    # but first in fn.decorator_list per Python decorator semantics).
+    for deco in fn.decorator_list:
+        if not isinstance(deco, ast.Call):
+            continue
+        target = deco.func
+        # Match either @tool(...) (Name) or @mcp.tool(...) (Attribute .attr=tool).
+        is_tool_call = (isinstance(target, ast.Name) and target.id == "tool") or (
+            isinstance(target, ast.Attribute) and target.attr == "tool"
+        )
+        if not is_tool_call:
+            continue
+        for kw in deco.keywords:
+            if kw.arg != "exclude_args":
+                continue
+            if not isinstance(kw.value, (ast.List, ast.Tuple)):
+                return False, "exclude_args value is not a list/tuple literal"
+            literals = [
+                elt.value
+                for elt in kw.value.elts
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+            ]
+            if "include_skill" in literals:
+                return True, ""
+            return (
+                False,
+                f"exclude_args={literals!r} does not contain 'include_skill'",
+            )
+        return False, "@tool/@mcp.tool decorator has no exclude_args kwarg"
+    return False, "no @tool or @mcp.tool decorator found"
+
+
+@pytest.mark.parametrize(("module_file", "tool_name"), WRITE_TOOLS)
+def test_include_skill_is_hidden_from_tool_catalog(
+    module_file: str, tool_name: str
+) -> None:
+    """Every write tool must hide ``include_skill`` from the MCP schema.
+
+    BAT testing on PR #1448 showed every LLM (across vendors and sizes)
+    proactively turned the default-on parameter OFF when it appeared in
+    the tool catalog — defeating the design. The fix is to publish the
+    parameter via FastMCP's ``exclude_args=["include_skill"]`` on the
+    ``@tool`` / ``@mcp.tool`` decorator: the schema doesn't list it (so
+    LLMs can't see it), but the runtime still accepts it when passed
+    explicitly (taught via the opt-out hint that ships with delivered
+    skill_content). This test pins that decorator kwarg structurally so
+    a future refactor can't quietly re-expose the param.
+    """
+    module_path = TOOLS_DIR / module_file
+    tree = ast.parse(module_path.read_text())
+    ok, reason = _decorator_excludes_include_skill(tree, tool_name)
+    assert ok, (
+        f"{tool_name} in {module_file} must hide include_skill via "
+        f"exclude_args=['include_skill'] on its @tool / @mcp.tool "
+        f"decorator. Detected: {reason}. Without this, the LLM sees the "
+        f"param in the schema and BAT-confirmed behaviour is to turn it "
+        f"off proactively — defeating the default-on design."
+    )
+
+
 @pytest.mark.parametrize(("module_file", "tool_name"), WRITE_TOOLS)
 def test_write_tool_attaches_skill_content_somewhere(
     module_file: str, tool_name: str

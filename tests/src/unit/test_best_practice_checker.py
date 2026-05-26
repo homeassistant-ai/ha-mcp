@@ -1592,7 +1592,7 @@ class TestSkillPrefixNoneNewDetectors:
 
 
 # ---------------------------------------------------------------------------
-# BestPracticeCheckResult shape + 3-route warning text (issue #1182)
+# BestPracticeCheckResult shape + 2-route warning text (issue #1182)
 # ---------------------------------------------------------------------------
 
 
@@ -1685,9 +1685,13 @@ class TestBestPracticeCheckResultShape:
 
 
 class TestThreeRouteWarningSuffix:
-    """Each warning names all 3 access routes for the referenced skill file
-    (issue #1182). Clients that can't resolve skill:// URIs still have the
-    ha_get_skill_guide tool route and the include_skill parameter route."""
+    """Each warning names the LLM-discoverable access routes for the
+    referenced skill file (issue #1182). The skill:// URI works in clients
+    that auto-fetch resources; ha_get_skill_guide works everywhere else.
+    The include_skill parameter is intentionally NOT mentioned because it
+    is hidden from the tool catalog (FastMCP exclude_args) — the LLM
+    cannot discover it from the schema, only from the opt-out hint that
+    ships alongside delivered skill_content."""
 
     @staticmethod
     def _first_warning(prefix=None):
@@ -1724,17 +1728,21 @@ class TestThreeRouteWarningSuffix:
         assert "ha_get_skill_guide(skill='home-assistant-best-practices'" in msg
         assert "file='references/automation-patterns.md'" in msg
 
-    def test_default_warning_names_include_skill_route(self):
+    def test_warning_does_not_mention_include_skill_param(self):
+        """The hidden include_skill param must NOT appear in warnings —
+        it isn't visible in the tool catalog, so naming it would mislead
+        the LLM into trying to set a param it can't see in the schema."""
         msg = self._first_warning()
-        assert "include_skill=True" in msg
+        assert "include_skill" not in msg
 
-    def test_custom_prefix_replaces_skill_uri_keeps_other_routes(self):
+    def test_custom_prefix_replaces_skill_uri_keeps_tool_route(self):
         msg = self._first_warning(prefix="https://example.com/refs")
         assert "https://example.com/refs/automation-patterns.md" in msg
         assert "skill://" not in msg
-        # Tool + param routes always present when skills are on
+        # Tool route always present when skills are on
         assert "ha_get_skill_guide" in msg
-        assert "include_skill" in msg
+        # include_skill remains hidden from the LLM
+        assert "include_skill" not in msg
 
     def test_anchor_preserved_in_uri_stripped_in_tool_route(self):
         """The skill:// URI keeps the #anchor (links scroll to section);

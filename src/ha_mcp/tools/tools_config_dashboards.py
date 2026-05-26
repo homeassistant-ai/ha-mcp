@@ -856,6 +856,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
     @mcp.tool(
         tags={"Dashboards"},
         annotations={"destructiveHint": True, "title": "Create or Update Dashboard"},
+        exclude_args=["include_skill"],
     )
     @with_auto_backup(domain="dashboard", id_param="url_path", client=client)
     @log_tool_usage
@@ -982,8 +983,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         DASHBOARD DOCUMENTATION:
         - dashboard-guide.md and dashboard-cards.md ship in this response
-          under ``skill_content`` by default (see ``include_skill``) — layout
-          patterns, card-type taxonomy, and worked examples.
+          under ``skill_content`` by default — layout patterns,
+          card-type taxonomy, and worked examples.
         - ha_get_skill_guide — deeper card-type and configuration guidance.
 
         EXAMPLES:

@@ -384,6 +384,7 @@ class ConfigScriptTools:
             "destructiveHint": True,
             "title": "Create or Update Script",
         },
+        exclude_args=["include_skill"],
     )
     @with_auto_backup(domain="script", id_param="script_id")
     @log_tool_usage
@@ -473,7 +474,7 @@ class ConfigScriptTools:
         `best_practice_warnings` field on the response and fix before re-submitting.
         The relevant skill section is auto-embedded under `skill_content` on warnings,
         and the full `automation-patterns.md` + `template-guidelines.md` references
-        ship under `skill_content` proactively (see `include_skill`). For comprehensive
+        ship under `skill_content` proactively by default. For comprehensive
         guidance beyond that, call `ha_get_skill_guide`.
 
         Supports two modes: full config replacement OR Python transformation.

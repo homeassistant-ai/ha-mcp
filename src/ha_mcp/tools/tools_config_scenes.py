@@ -424,6 +424,7 @@ class ConfigSceneTools:
             "destructiveHint": True,
             "title": "Create or Update Scene",
         },
+        exclude_args=["include_skill"],
     )
     @with_auto_backup(domain="scene", id_param="scene_id")
     @log_tool_usage
@@ -543,8 +544,8 @@ class ConfigSceneTools:
         })
 
         The top-level ``SKILL.md`` for home-assistant-best-practices ships in
-        this response under ``skill_content`` by default (see ``include_skill``)
-        — generic best-practice index covering entity-naming and
+        this response under ``skill_content`` by default — generic
+        best-practice index covering entity-naming and
         safe-refactoring patterns that intersect with scene authoring. For
         detailed scene configuration help beyond that, use ha_get_skill_guide.
         """

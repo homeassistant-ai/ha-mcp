@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from ha_mcp.tools.util_helpers import (
+    _SKILL_CONTENT_OPTOUT_HINT,
     _SKILLS_VENDOR_MISSING_WARNING,
     attach_skill_content,
     build_skill_content,
@@ -262,6 +263,9 @@ class TestAttachSkillContent:
             referenced_files=None,
         )
         assert "skill_content" in response
+        # The hint teaches the LLM about the (hidden) opt-out path —
+        # it must accompany every delivered skill_content payload.
+        assert response.get("skill_content_hint") == _SKILL_CONTENT_OPTOUT_HINT
         assert "warnings" not in response
 
     def test_nothing_requested_is_silent(self, patched_get_skills_dir):
@@ -274,6 +278,9 @@ class TestAttachSkillContent:
             referenced_files=None,
         )
         assert "skill_content" not in response
+        # No content delivered → no hint either; the LLM only learns about
+        # the opt-out param after it has received content to opt out of.
+        assert "skill_content_hint" not in response
         assert "warnings" not in response
 
     def test_vendor_missing_with_include_skill_warns(self):

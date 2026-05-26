@@ -2026,6 +2026,17 @@ _SKILLS_VENDOR_MISSING_WARNING = (
     "Run `git submodule update --init` on the server install."
 )
 
+# Opt-out hint shipped alongside delivered skill_content. The
+# include_skill parameter is hidden from the tool catalog via FastMCP
+# exclude_args, so the LLM cannot see it in the schema. This hint is
+# how it learns the param exists — only after content has been
+# delivered, so the default-on behaviour can't be pre-emptively
+# disabled by a model that reflexively turns optional flags off.
+_SKILL_CONTENT_OPTOUT_HINT = (
+    "If this content was already provided earlier in this session, "
+    "pass include_skill=false on the next call to this tool to skip it."
+)
+
 
 def attach_skill_content(
     response: dict[str, Any],
@@ -2063,6 +2074,7 @@ def attach_skill_content(
     )
     if content:
         response["skill_content"] = content
+        response["skill_content_hint"] = _SKILL_CONTENT_OPTOUT_HINT
         return
 
     # Empty content has two distinct causes:
