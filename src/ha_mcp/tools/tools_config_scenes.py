@@ -211,21 +211,11 @@ class ConfigSceneTools:
             str, Field(description="Scene identifier (e.g., 'movie_night')")
         ],
     ) -> dict[str, Any]:
-        """
-        Retrieve Home Assistant scene configuration.
+        """Get a Home Assistant scene configuration by scene_id.
 
-        Returns the complete configuration for a scene, including the ``entities``
-        dict and other settings (``name``, ``icon``, ``id``).
-
-        EXAMPLES:
-        - Get scene: ha_config_get_scene("movie_night")
-        - Get scene: ha_config_get_scene("bedroom_dim")
-
-        RELATED TOOLS:
-        - ha_config_set_scene — pass the returned ``config_hash`` for
-          ``python_transform`` updates.
-
-        For detailed scene configuration help, use ha_get_skill_guide.
+        Returns the full config (``entities``, ``name``, ``icon``, ``id``)
+        plus a stable ``config_hash`` for use with ``python_transform``
+        on ha_config_set_scene.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` previously
@@ -504,43 +494,25 @@ class ConfigSceneTools:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant scene.
+        """Create or update a Home Assistant scene.
 
-        Supports two modes: full config replacement (``config``) or
-        Python transformation of an existing scene (``python_transform``).
-        See the field descriptions for ``python_transform`` examples and
-        the ``config`` shape contract.
+        When NOT to use:
+        - To activate a scene at runtime, use
+          ha_call_service(domain="scene", service="turn_on", target=...)
+          — this tool manages scene CONFIG only.
+        - To list/look up scenes, use ha_search_entities(domain_filter="scene")
+          or ha_deep_search.
 
-        WHEN TO USE:
-        - ``python_transform``: surgical edits to an existing scene
-          (add/remove/update a single entity entry). Requires ``config_hash``
-          from ha_config_get_scene() for optimistic locking.
-        - ``config``: creating a new scene, or wholesale replacement.
+        Two modes: full ``config`` replacement, or surgical
+        ``python_transform`` on an existing scene (requires
+        ``config_hash`` from ha_config_get_scene). ``entities`` is a dict
+        keyed by entity_id (NOT a list — scenes capture state, automations
+        execute actions).
 
-        WHEN NOT TO USE:
-        - To activate a scene at runtime, use ha_call_service(domain="scene",
-          service="turn_on", target=...) — this tool only manages scene
-          *configuration*, not the runtime turn-on/off side.
-        - To list or look up existing scenes, use
-          ha_search_entities(domain_filter="scene") or ha_deep_search.
-
-        SCENE SHAPE: ``entities`` is a dict keyed by entity_id (e.g.,
-        ``{'light.kitchen': {'state': 'on', 'brightness': 200}}``), NOT a
-        list. Automations use a list of actions; scenes capture a snapshot
-        of states as a dict.
-
-        EXAMPLE:
-
-        ha_config_set_scene(scene_id="movie_night", config={
-            "name": "Movie Night",
-            "entities": {
-                "light.living_room": {"state": "on", "brightness": 50},
-            },
-            "icon": "mdi:movie",
-        })
-
-        For detailed scene configuration help, use ha_get_skill_guide.
+        Top-level ``SKILL.md`` ships in this response under ``skill_content``
+        by default (see ``include_skill``); it links out to the relevant
+        references for action/condition design that scenes share with
+        automations/scripts.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
