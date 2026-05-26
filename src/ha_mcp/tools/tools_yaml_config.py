@@ -108,7 +108,7 @@ class YamlConfigTools:
                     "For YAML-mode dashboards, "
                     "use the dotted form 'lovelace.dashboards.<url_path>' where "
                     "<url_path> is lowercase, hyphenated, and not a reserved HA "
-                    "route. No other dotted paths are supported. "
+                    "route. No other multi-segment paths are supported. "
                     "'automation', 'script', and 'scene' are accepted only when "
                     "file is under packages/*.yaml; in configuration.yaml use "
                     "the dedicated ha_config_set_automation/script/scene tools "

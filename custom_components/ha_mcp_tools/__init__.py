@@ -663,10 +663,11 @@ def _parse_and_validate_yaml_path(
             return "single", parts, None
         if is_package and key in PACKAGES_ONLY_YAML_KEYS:
             return "single", parts, None
-        # Build a context-appropriate error message: in a package file the
-        # caller can use the union of both sets; in configuration.yaml only
-        # ALLOWED_YAML_KEYS is in scope, and PACKAGES_ONLY_YAML_KEYS keys
-        # need to be moved to a package file.
+        # Reaching here means the key was not accepted. If it is a
+        # PACKAGES_ONLY key, we know is_package=False (otherwise the
+        # preceding branch would have returned) — emit the targeted
+        # "move it to a package file" guidance instead of the generic
+        # allowlist dump below.
         if key in PACKAGES_ONLY_YAML_KEYS:
             return (
                 "",

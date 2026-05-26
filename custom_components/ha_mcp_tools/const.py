@@ -16,7 +16,10 @@ ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]
 # (configuration.yaml or packages/*.yaml).
 # ONLY keys that have no UI/API alternative belong here.
 # Keys manageable via ha_config_set_helper (input_*, counter, timer, schedule)
-# are intentionally excluded.
+# are intentionally excluded. automation/script/scene live in
+# PACKAGES_ONLY_YAML_KEYS below — they have storage-mode equivalents
+# (ha_config_set_automation/script/scene) but are still exposed in
+# packages/*.yaml for the YAML-packages workflow.
 ALLOWED_YAML_KEYS = frozenset(
     {
         "template",

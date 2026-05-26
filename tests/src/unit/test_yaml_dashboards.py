@@ -42,17 +42,17 @@ class TestDashboardUrlPathPattern:
     @pytest.mark.parametrize(
         "url_path",
         [
-            "",                     # empty
-            "no_underscore",        # underscores not allowed
-            "NoUpper",              # uppercase not allowed
-            "single",               # must contain a hyphen
-            "-leading-hyphen",      # cannot start with hyphen
-            "trailing-hyphen-",     # cannot end with hyphen
-            "double--hyphen",       # no consecutive hyphens
-            "has space",            # no spaces
-            "has/slash",            # no slashes
-            "has.dot",              # no dots
-            "..",                   # path traversal-ish
+            "",  # empty
+            "no_underscore",  # underscores not allowed
+            "NoUpper",  # uppercase not allowed
+            "single",  # must contain a hyphen
+            "-leading-hyphen",  # cannot start with hyphen
+            "trailing-hyphen-",  # cannot end with hyphen
+            "double--hyphen",  # no consecutive hyphens
+            "has space",  # no spaces
+            "has/slash",  # no slashes
+            "has.dot",  # no dots
+            "..",  # path traversal-ish
         ],
     )
     def test_rejects_invalid_url_paths(self, url_path):
@@ -91,6 +91,7 @@ class TestValidateDashboardFilename:
     @pytest.fixture(scope="class")
     def validate(self):
         from custom_components.ha_mcp_tools import _validate_dashboard_filename
+
         return _validate_dashboard_filename
 
     @pytest.mark.parametrize(
@@ -111,12 +112,12 @@ class TestValidateDashboardFilename:
             "../secrets.yaml",
             "/etc/passwd",
             "dashboards/../secrets.yaml",
-            "dashboards/main.yml",       # wrong extension
-            "main.yaml",                 # not under dashboards/
-            "www/dashboard.yaml",        # other allowlist dir, not dashboards
+            "dashboards/main.yml",  # wrong extension
+            "main.yaml",  # not under dashboards/
+            "www/dashboard.yaml",  # other allowlist dir, not dashboards
             "",
             "dashboards/",
-            "dashboards/main",           # no extension
+            "dashboards/main",  # no extension
         ],
     )
     def test_rejects_invalid_filenames(self, validate, filename):
@@ -132,6 +133,7 @@ class TestParseYamlPath:
     @pytest.fixture(scope="class")
     def parse(self):
         from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
+
         return _parse_and_validate_yaml_path
 
     def test_accepts_single_allowed_key(self, parse):
@@ -182,6 +184,97 @@ class TestParseYamlPath:
         assert err is not None
 
 
+class TestParseYamlPathPackagesOnly:
+    """PACKAGES_ONLY_YAML_KEYS (automation/script/scene) gating.
+
+    Accepted only when is_package=True; in configuration.yaml the rejection
+    must point at the storage-mode tools, not just dump the generic
+    allowlist.
+    """
+
+    @pytest.fixture(scope="class")
+    def parse(self):
+        from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
+
+        return _parse_and_validate_yaml_path
+
+    @pytest.mark.parametrize("key", ["automation", "script", "scene"])
+    def test_accepts_packages_only_key_when_is_package(self, parse, key):
+        kind, parts, err = parse(key, is_package=True)
+        assert err is None
+        assert kind == "single"
+        assert parts == (key,)
+
+    @pytest.mark.parametrize("key", ["automation", "script", "scene"])
+    def test_rejects_packages_only_key_in_configuration_yaml(self, parse, key):
+        _, _, err = parse(key, is_package=False)
+        assert err is not None
+        assert "packages/*.yaml" in err
+        assert "ha_config_set_automation/script/scene" in err
+
+    def test_default_is_package_false(self, parse):
+        # Omitting is_package must behave like is_package=False — no silent
+        # acceptance of PACKAGES_ONLY keys through positional callers.
+        _, _, err = parse("automation")
+        assert err is not None
+        assert "packages/*.yaml" in err
+
+    def test_union_list_in_generic_error_when_is_package(self, parse):
+        # Unknown single key inside a package file: error must enumerate both
+        # ALLOWED_YAML_KEYS and PACKAGES_ONLY_YAML_KEYS so the user sees the
+        # full surface they can pick from.
+        _, _, err = parse("frontend", is_package=True)
+        assert err is not None
+        assert "automation" in err
+        assert "script" in err
+        assert "scene" in err
+
+    def test_generic_error_excludes_packages_only_when_not_package(self, parse):
+        # Unknown single key against configuration.yaml: allowlist must NOT
+        # include PACKAGES_ONLY keys — listing them would mislead the user
+        # into thinking they can rename their key to one of those.
+        _, _, err = parse("frontend", is_package=False)
+        assert err is not None
+        assert "automation" not in err
+        assert "script" not in err
+        assert "scene" not in err
+
+
+class TestPostActionTableContract:
+    """PACKAGES_ONLY_YAML_KEYS and YAML_KEY_POST_ACTIONS must stay in sync.
+
+    If a future PR adds a key to PACKAGES_ONLY_YAML_KEYS without a matching
+    reload_service entry, callers would see the default restart_required
+    response — a regression we should catch at unit-test time.
+    """
+
+    def test_packages_only_keys_have_post_actions(self):
+        from custom_components.ha_mcp_tools.const import (
+            PACKAGES_ONLY_YAML_KEYS,
+            YAML_KEY_POST_ACTIONS,
+        )
+
+        missing = PACKAGES_ONLY_YAML_KEYS - set(YAML_KEY_POST_ACTIONS)
+        assert not missing, (
+            f"PACKAGES_ONLY_YAML_KEYS missing YAML_KEY_POST_ACTIONS entries: {missing}"
+        )
+
+    @pytest.mark.parametrize(
+        ("key", "expected_service"),
+        [
+            ("automation", "automation.reload"),
+            ("script", "script.reload"),
+            ("scene", "scene.reload"),
+        ],
+    )
+    def test_packages_only_reload_services(self, key, expected_service):
+        from custom_components.ha_mcp_tools.const import YAML_KEY_POST_ACTIONS
+
+        entry = YAML_KEY_POST_ACTIONS[key]
+        assert entry["post_action"] == "reload_available"
+        assert entry["reload_service"] == expected_service
+
+
 class TestHandleEditYamlConfigDashboards:
     """Integration of dashboard branch into handle_edit_yaml_config."""
 
@@ -191,9 +284,11 @@ class TestHandleEditYamlConfigDashboards:
         h = MM()
         h.config = MM()
         h.config.config_dir = str(tmp_path)
+
         # Run executor jobs inline so we can assert filesystem state
         async def _run(fn, *args):
             return fn(*args)
+
         h.async_add_executor_job = AsyncMock(side_effect=_run)
         # check_config service returns 'ok'
         h.services = MM()
@@ -203,10 +298,12 @@ class TestHandleEditYamlConfigDashboards:
     @pytest.fixture
     def call_factory(self):
         """Build a ServiceCall-like object."""
+
         def _make(data):
             call = MM()
             call.data = data
             return call
+
         return _make
 
     def _run(self, coro):
@@ -249,6 +346,7 @@ class TestHandleEditYamlConfigDashboards:
         # Make sure 'mode:' isn't a sibling of 'dashboards:' under 'lovelace:'
         # (i.e., lovelace key should only contain 'dashboards')
         import yaml
+
         parsed = yaml.safe_load(text)
         assert set(parsed["lovelace"].keys()) == {"dashboards"}
 
@@ -267,9 +365,7 @@ class TestHandleEditYamlConfigDashboards:
                         "action": "add",
                         "yaml_path": "lovelace.dashboards.bad-dash",
                         "content": (
-                            "mode: yaml\n"
-                            "title: Bad\n"
-                            "filename: ../secrets.yaml\n"
+                            "mode: yaml\ntitle: Bad\nfilename: ../secrets.yaml\n"
                         ),
                         "backup": False,
                     }
@@ -335,6 +431,7 @@ class TestHandleEditYamlConfigDashboards:
         )
         assert result["success"] is True
         import yaml
+
         parsed = yaml.safe_load(cfg.read_text())
         assert "energy-dash" not in parsed["lovelace"]["dashboards"]
         assert "weather-dash" in parsed["lovelace"]["dashboards"]
@@ -399,6 +496,7 @@ class TestHandleEditYamlConfigDashboards:
         )
         assert result["success"] is True, result
         import yaml
+
         parsed = yaml.safe_load(cfg.read_text())
         entry = parsed["lovelace"]["dashboards"]["energy-dash"]
         # Old keys retained, overlapping keys overwritten, new keys added
@@ -416,8 +514,10 @@ class TestHandleEditYamlConfigSingleKey:
         h = MM()
         h.config = MM()
         h.config.config_dir = str(tmp_path)
+
         async def _run(fn, *args):
             return fn(*args)
+
         h.async_add_executor_job = AsyncMock(side_effect=_run)
         h.services = MM()
         h.services.async_call = AsyncMock(return_value={"errors": None})
@@ -429,6 +529,7 @@ class TestHandleEditYamlConfigSingleKey:
             call = MM()
             call.data = data
             return call
+
         return _make
 
     def _run(self, coro):
@@ -456,6 +557,7 @@ class TestHandleEditYamlConfigSingleKey:
         )
         assert result["success"] is True, result
         import yaml
+
         parsed = yaml.safe_load(cfg.read_text())
         assert "command_line" in parsed
         assert parsed["default_config"] is None
@@ -464,10 +566,7 @@ class TestHandleEditYamlConfigSingleKey:
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
         cfg = Path(tmp_path) / "configuration.yaml"
-        cfg.write_text(
-            "shell_command:\n"
-            "  old_cmd: 'echo old'\n"
-        )
+        cfg.write_text("shell_command:\n  old_cmd: 'echo old'\n")
 
         handler = _build_edit_yaml_config_handler(hass)
         result = self._run(
@@ -485,6 +584,7 @@ class TestHandleEditYamlConfigSingleKey:
         )
         assert result["success"] is True, result
         import yaml
+
         parsed = yaml.safe_load(cfg.read_text())
         assert parsed["shell_command"] == {"new_cmd": "echo new"}
 
@@ -510,9 +610,7 @@ class TestHandleEditYamlConfigSingleKey:
         assert result["success"] is False
         assert "command_line" in result["error"]
 
-    def test_single_key_post_action_for_template(
-        self, tmp_path, hass, call_factory
-    ):
+    def test_single_key_post_action_for_template(self, tmp_path, hass, call_factory):
         """template -> reload_available; covers post-action lookup for single-key kind."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
@@ -527,11 +625,7 @@ class TestHandleEditYamlConfigSingleKey:
                         "file": "configuration.yaml",
                         "action": "add",
                         "yaml_path": "template",
-                        "content": (
-                            "- sensor:\n"
-                            "    - name: t\n"
-                            "      state: 'ok'\n"
-                        ),
+                        "content": ("- sensor:\n    - name: t\n      state: 'ok'\n"),
                         "backup": False,
                     }
                 )

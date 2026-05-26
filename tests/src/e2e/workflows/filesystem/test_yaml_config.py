@@ -339,44 +339,76 @@ class TestYamlConfigOperations:
             )
             logger.info("Successfully added knx to package file")
 
-    async def test_add_automation_to_package_file(self, mcp_client_with_yaml_config):
-        """automation is allowed in packages/*.yaml only (PACKAGES_ONLY_YAML_KEYS)."""
-
-        content = (
-            "- id: e2e_yaml_packages_only_test\n"
-            "  alias: E2E YAML Packages-Only Test\n"
-            "  trigger:\n"
-            "    - platform: sun\n"
-            "      event: sunset\n"
-            "  action:\n"
-            "    - service: persistent_notification.create\n"
-            "      data:\n"
-            "        message: hi\n"
-        )
+    @pytest.mark.parametrize(
+        ("key", "content", "reload_service"),
+        [
+            (
+                "automation",
+                (
+                    "- id: e2e_yaml_packages_only_automation\n"
+                    "  alias: E2E YAML Packages-Only Automation\n"
+                    "  trigger:\n"
+                    "    - platform: sun\n"
+                    "      event: sunset\n"
+                    "  action:\n"
+                    "    - service: persistent_notification.create\n"
+                    "      data:\n"
+                    "        message: hi\n"
+                ),
+                "automation.reload",
+            ),
+            (
+                "script",
+                (
+                    "e2e_yaml_packages_only_script:\n"
+                    "  alias: E2E YAML Packages-Only Script\n"
+                    "  sequence:\n"
+                    "    - service: persistent_notification.create\n"
+                    "      data:\n"
+                    "        message: hi\n"
+                ),
+                "script.reload",
+            ),
+            (
+                "scene",
+                (
+                    "- id: e2e_yaml_packages_only_scene\n"
+                    "  name: E2E YAML Packages-Only Scene\n"
+                    "  entities:\n"
+                    "    light.kitchen:\n"
+                    "      state: 'on'\n"
+                ),
+                "scene.reload",
+            ),
+        ],
+    )
+    async def test_add_packages_only_key_to_package_file(
+        self, mcp_client_with_yaml_config, key, content, reload_service
+    ):
+        """automation/script/scene each accepted in packages/*.yaml with native reload."""
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
             data = await mcp.call_tool_success(
                 TOOL_NAME,
                 {
-                    "yaml_path": "automation",
+                    "yaml_path": key,
                     "action": "add",
                     "content": content,
-                    "file": "packages/_e2e_test_automation.yaml",
+                    "file": f"packages/_e2e_test_{key}.yaml",
                     "backup": False,
                 },
             )
             assert data.get("success") is True, (
-                f"automation add to package should succeed: {data}"
+                f"{key} add to package should succeed: {data}"
             )
             assert data.get("action") == "add"
-            # automation has a native reload service in HA core.
             assert data.get("post_action") == "reload_available", (
-                f"automation should be reload_available: {data}"
+                f"{key} should be reload_available: {data}"
             )
-            assert data.get("reload_service") == "automation.reload", (
-                f"reload_service should be automation.reload: {data}"
+            assert data.get("reload_service") == reload_service, (
+                f"reload_service should be {reload_service}: {data}"
             )
-            logger.info("Successfully added automation to package file")
+            logger.info("Successfully added %s to package file", key)
 
     async def test_packages_only_keys_rejected_in_configuration_yaml(
         self, mcp_client_with_yaml_config
@@ -403,9 +435,19 @@ class TestYamlConfigOperations:
             assert data.get("success") is False, (
                 f"{key} in configuration.yaml should be rejected: {data}"
             )
-            msg = extract_error_message(data).lower()
-            assert "packages" in msg, (
+            msg = extract_error_message(data)
+            assert "packages" in msg.lower(), (
                 f"{key} error message should mention packages/: {data}"
+            )
+            assert "ha_config_set_automation/script/scene" in msg, (
+                f"{key} error should point at storage-mode tools: {data}"
+            )
+            # Rejected calls must not advertise reload metadata.
+            assert data.get("post_action") is None, (
+                f"{key} rejection should not include post_action: {data}"
+            )
+            assert data.get("reload_service") is None, (
+                f"{key} rejection should not include reload_service: {data}"
             )
         logger.info("automation/script/scene correctly rejected in configuration.yaml")
 
