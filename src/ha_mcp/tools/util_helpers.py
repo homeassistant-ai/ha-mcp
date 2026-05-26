@@ -78,6 +78,22 @@ def public_fields(d: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@overload
+def coerce_bool_param(
+    value: bool | str | None,
+    param_name: str = ...,
+    default: bool = ...,
+) -> bool: ...
+
+
+@overload
+def coerce_bool_param(
+    value: bool | str | None,
+    param_name: str = ...,
+    default: None = ...,
+) -> bool | None: ...
+
+
 def coerce_bool_param(
     value: bool | str | None,
     param_name: str = "parameter",
@@ -280,6 +296,147 @@ def parse_string_list_param(
         return _parse_json_to_str_list(param, param_name)
 
     raise ValueError(f"{param_name} must be string, list, or None")
+
+
+def project_entity_record(
+    record: dict[str, Any],
+    fields: list[str] | None,
+    attribute_keys: list[str] | None,
+) -> tuple[dict[str, Any], str | None]:
+    """Apply optional field projection to a HA entity record.
+
+    ``fields`` filters which top-level keys to keep (e.g. ["state", "attributes"]).
+    ``attribute_keys`` further filters the ``attributes`` sub-dict.
+    Both default None = full payload (no-op).
+
+    Returns ``(projected_record, warning_string | None)``.  *warning_string* is
+    non-None when ``attribute_keys`` was specified, the original ``attributes``
+    dict was non-empty, and the filter produced an empty result — i.e. the caller
+    supplied only unknown attribute keys (typo guard).  Callers should append the
+    warning to the response ``warnings`` list so the user receives a diagnostic
+    rather than a silently empty ``attributes: {}``.
+
+    Both parameters are already parsed into ``list[str] | None`` — string/CSV inputs
+    must be normalised at the call site via ``parse_string_list_param`` (see
+    ``ha_get_state`` which parses once before the bulk loop to avoid re-parsing per
+    entity record).
+
+    Unlike ``project_fields``, this helper does not auto-retain ``success`` — entity
+    records have no ``success`` field, so the asymmetry is intentional.
+
+    Non-dict ``attributes`` handling: when ``attribute_keys`` is set but the
+    record's ``attributes`` value is not a dict (``None``, scalar, list — rare
+    from HA's state API but possible from malformed records, partial error
+    payloads, or mocked fixtures), the key-set filter cannot be applied. A
+    ``warning``-level log line records the short-circuit AND a caller-facing
+    warning is returned via ``attr_warn`` so the agent (MCP consumer) sees that
+    its filter was skipped rather than just an operator tailing logs.
+    """
+    if not isinstance(record, dict):
+        return record, None
+    if fields is not None:
+        keep = set(fields)
+        record = {k: v for k, v in record.items() if k in keep}
+    attr_warn: str | None = None
+    if attribute_keys is not None:
+        attrs = record.get("attributes")
+        if isinstance(attrs, dict):
+            attr_keep = set(attribute_keys)
+            filtered_attrs = {k: v for k, v in attrs.items() if k in attr_keep}
+            if attrs and attribute_keys and not filtered_attrs:
+                available = sorted(attrs.keys())
+                attr_warn = (
+                    f"attribute_keys {sorted(attribute_keys)!r} matched no attribute "
+                    f"keys — attributes came out empty. "
+                    f"Available keys: {available!r}"
+                )
+            record = {**record, "attributes": filtered_attrs}
+        elif "attributes" in record:
+            logger.warning(
+                "project_entity_record: attribute_keys filter skipped — "
+                "'attributes' is %s (expected dict) for record keys=%r",
+                type(attrs).__name__,
+                list(record.keys()),
+            )
+            attr_warn = (
+                f"attribute_keys filter skipped — record 'attributes' is "
+                f"{type(attrs).__name__} (expected dict)"
+            )
+    return record, attr_warn
+
+
+# Default compact-result projection for ha_call_service (issue #1446). A single
+# WLED light's `effect_list` can be ~250 entries, emitted on every propagated
+# group state — `light.turn_on` on a nested group returned 16 state objects
+# with that list carried four times. Drops timestamp/context metadata at the
+# top level and known-heavy enum-style attribute lists.
+#
+# Extension policy: add a key here only when (a) it's universally heavy across
+# installations (not just an unusual config), (b) it carries no signal callers
+# would act on for service-call confirmation, and (c) callers who do want it
+# can opt in via `result_fields` / `verbose=True`. Domain-specific or
+# install-specific trimming belongs in `ha_get_state` via explicit
+# `attribute_keys`, not here.
+_COMPACT_RESULT_DROP_TOP_LEVEL: frozenset[str] = frozenset(
+    {"context", "last_changed", "last_reported", "last_updated"}
+)
+_COMPACT_RESULT_DROP_ATTRIBUTES: frozenset[str] = frozenset(
+    {"effect_list", "hue_scenes"}
+)
+
+
+def compact_service_result(
+    result: Any,
+    target_entity_id: str | None,
+) -> Any:
+    """Trim a ha_call_service ``result`` list to the compact default (issue #1446).
+
+    Compact rules:
+
+    1. When ``target_entity_id`` is a single entity ID string OR a
+       comma-separated list of entity IDs (HA accepts both as a service-call
+       target), filter the list to records whose ``entity_id`` is in that set
+       — drops the propagation chain (parent groups). Falls back to the full
+       list if no record matches (e.g. HA returned only parent states).
+    2. Drop top-level metadata keys (``context``, ``last_*``) from every record.
+    3. Drop known-heavy attribute keys (``effect_list``, ``hue_scenes``) from
+       every record's ``attributes`` dict.
+
+    Returns ``result`` unchanged when not a list (e.g. dict from
+    ``return_response=True`` services), or when the list is empty.
+    """
+    if not isinstance(result, list) or not result:
+        return result
+
+    records: list[Any] = result
+    if isinstance(target_entity_id, str) and target_entity_id:
+        targets = {t.strip() for t in target_entity_id.split(",") if t.strip()}
+        if targets:
+            matched = [
+                r
+                for r in records
+                if isinstance(r, dict) and r.get("entity_id") in targets
+            ]
+            if matched:
+                records = matched
+
+    compacted: list[Any] = []
+    for record in records:
+        if not isinstance(record, dict):
+            compacted.append(record)
+            continue
+        trimmed = {
+            k: v for k, v in record.items() if k not in _COMPACT_RESULT_DROP_TOP_LEVEL
+        }
+        attrs = trimmed.get("attributes")
+        if isinstance(attrs, dict):
+            trimmed["attributes"] = {
+                k: v
+                for k, v in attrs.items()
+                if k not in _COMPACT_RESULT_DROP_ATTRIBUTES
+            }
+        compacted.append(trimmed)
+    return compacted
 
 
 def project_fields(
