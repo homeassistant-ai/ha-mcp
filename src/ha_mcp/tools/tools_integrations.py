@@ -1316,8 +1316,7 @@ class IntegrationTools:
             context={"helper_type": helper_type},
         )
 
-        # default=True guarantees a non-None return; cast for mypy.
-        wait_bool = cast(bool, coerce_bool_param(wait, "wait", default=True))
+        wait_bool = coerce_bool_param(wait, "wait", default=True)
         warnings: list[str] = []
 
         # === Routing dispatch ===

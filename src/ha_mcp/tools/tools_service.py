@@ -371,15 +371,12 @@ class ServiceTools:
             service_data = self._parse_service_data(data, entity_id)
 
             # Coerce return_response boolean parameter
-            return_response_bool = (
-                coerce_bool_param(return_response, "return_response", default=False)
-                or False
+            return_response_bool = coerce_bool_param(
+                return_response, "return_response", default=False
             )
             wait_bool = coerce_bool_param(wait, "wait", default=True)
             try:
-                verbose_bool = (
-                    coerce_bool_param(verbose, "verbose", default=False) or False
-                )
+                verbose_bool = coerce_bool_param(verbose, "verbose", default=False)
             except ValueError as e:
                 raise_tool_error(create_validation_error(str(e), parameter="verbose"))
             try:

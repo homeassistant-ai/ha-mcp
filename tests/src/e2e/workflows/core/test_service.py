@@ -523,3 +523,35 @@ class TestCallServiceResultProjection:
                 assert set(attrs.keys()) == {"brightness"}, (
                     f"unexpected attribute keys after projection: {attrs.keys()}"
                 )
+
+    async def test_comma_separated_entity_id_filters_to_target_set(self, mcp_client):
+        """Comma-separated entity_id forces multi-record response and exercises filter end-to-end.
+
+        Stronger than the single-entity e2e tests above — calling turn_on with
+        two demo lights guarantees HA returns at least two state records, so
+        the compaction filter (G3: comma-separated support) is verified to
+        narrow correctly rather than silently passing on an empty list.
+        """
+        targets = "light.bed_light,light.ceiling_lights"
+        result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "light",
+                "service": "turn_on",
+                "entity_id": targets,
+            },
+        )
+        data = assert_mcp_success(result, "comma-separated entity_id compaction")
+        records = data.get("result") or []
+        if records:
+            kept = {r.get("entity_id") for r in records if isinstance(r, dict)}
+            target_set = set(targets.split(","))
+            # No record outside the target set survives compaction.
+            assert kept <= target_set, (
+                f"compaction kept records outside target set: extra={kept - target_set}"
+            )
+            # And compaction stripped the propagation metadata.
+            for record in records:
+                if isinstance(record, dict):
+                    assert "context" not in record
+                    assert "last_changed" not in record

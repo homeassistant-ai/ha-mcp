@@ -78,6 +78,22 @@ def public_fields(d: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@overload
+def coerce_bool_param(
+    value: bool | str | None,
+    param_name: str = ...,
+    default: bool = ...,
+) -> bool: ...
+
+
+@overload
+def coerce_bool_param(
+    value: bool | str | None,
+    param_name: str = ...,
+    default: None = ...,
+) -> bool | None: ...
+
+
 def coerce_bool_param(
     value: bool | str | None,
     param_name: str = "parameter",

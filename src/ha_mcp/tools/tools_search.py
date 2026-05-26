@@ -1488,8 +1488,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
-        include_config_bool = (
-            coerce_bool_param(include_config, "include_config", default=False) or False
+        include_config_bool = coerce_bool_param(
+            include_config, "include_config", default=False
         )
         exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
         try:
