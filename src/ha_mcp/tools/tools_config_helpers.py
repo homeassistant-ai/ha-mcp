@@ -1920,38 +1920,15 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(description="Type of helper entity to list"),
         ],
     ) -> dict[str, Any]:
-        """
-        List all Home Assistant helpers of a specific type with their configurations.
+        """List Home Assistant helpers of a given simple type.
 
-        Returns complete configuration for all helpers of the specified type including:
-        - ID, name, icon
-        - Type-specific settings (min/max for input_number, options for input_select, etc.)
-        - Area and label assignments
-
-        SUPPORTED HELPER TYPES:
-        - input_button: Virtual buttons for triggering automations
-        - input_boolean: Toggle switches/checkboxes
-        - input_select: Dropdown selection lists
-        - input_number: Numeric sliders/input boxes
-        - input_text: Text input fields
-        - input_datetime: Date/time pickers
-        - counter: Counters with increment/decrement/reset
-        - timer: Countdown timers with start/pause/cancel
-        - schedule: Weekly schedules with time ranges (on/off per day)
-        - zone: Geographical zones for presence detection
-        - person: Person entities linked to device trackers
-        - tag: NFC/QR tags for automation triggers
-
-        EXAMPLES:
-        - List all number helpers: ha_config_list_helpers("input_number")
-        - List all counters: ha_config_list_helpers("counter")
-        - List all zones: ha_config_list_helpers("zone")
-        - List all persons: ha_config_list_helpers("person")
-        - List all tags: ha_config_list_helpers("tag")
-
-        **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
-
-        For detailed helper documentation, use ha_get_skill_guide.
+        Returns full per-entity config (ID, name, icon, type-specific
+        settings, area, labels) for storage-based helpers only — YAML-
+        defined helpers don't appear here. Restricted to the 12 simple
+        types (the ``Literal`` on ``helper_type`` enumerates them);
+        flow-based types (template / group / utility_meter /
+        derivative / etc.) cannot be listed this way — use
+        ha_search_entities or ha_deep_search for those.
         """
         try:
             # Use the websocket list endpoint for the helper type
