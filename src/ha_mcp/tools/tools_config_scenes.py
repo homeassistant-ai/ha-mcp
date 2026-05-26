@@ -506,32 +506,48 @@ class ConfigSceneTools:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """Create or update a Home Assistant scene.
+        """
+        Create or update a Home Assistant scene.
 
-        When NOT to use:
-        - To activate a scene at runtime, use
-          ha_call_service(domain="scene", service="turn_on", target=...)
-          — this tool manages scene CONFIG only.
-        - To list/look up scenes, use ha_search_entities(domain_filter="scene")
-          or ha_deep_search.
+        Supports two modes: full config replacement (``config``) or
+        Python transformation of an existing scene (``python_transform``).
+        See the field descriptions for ``python_transform`` examples and
+        the ``config`` shape contract.
 
-        Two modes: full ``config`` replacement, or surgical
-        ``python_transform`` on an existing scene (requires
-        ``config_hash`` from ha_config_get_scene).
+        WHEN TO USE:
+        - ``python_transform``: surgical edits to an existing scene
+          (add/remove/update a single entity entry). Requires ``config_hash``
+          from ha_config_get_scene() for optimistic locking.
+        - ``config``: creating a new scene, or wholesale replacement.
 
-        Scenes are state snapshots — no triggers, conditions, or actions.
-        The ``entities`` field is a dict keyed by entity_id, each value a
-        dict of attributes to capture:
+        WHEN NOT TO USE:
+        - To activate a scene at runtime, use ha_call_service(domain="scene",
+          service="turn_on", target=...) — this tool only manages scene
+          *configuration*, not the runtime turn-on/off side.
+        - To list or look up existing scenes, use
+          ha_search_entities(domain_filter="scene") or ha_deep_search.
 
-            {"entities": {
-                "light.living_room": {"state": "on", "brightness": 200},
-                "light.kitchen": {"state": "off"},
-            }}
+        SCENE SHAPE: ``entities`` is a dict keyed by entity_id (e.g.,
+        ``{'light.kitchen': {'state': 'on', 'brightness': 200}}``), NOT a
+        list. Scenes capture a snapshot of states as a dict — no triggers,
+        no conditions, no actions. Automations use a list of actions;
+        scenes do not.
 
-        Top-level ``SKILL.md`` ships in this response under ``skill_content``
-        by default (see ``include_skill``) — generic best-practice index
-        covering entity-naming and safe-refactoring patterns that intersect
-        with scene authoring.
+        EXAMPLE:
+
+        ha_config_set_scene(scene_id="movie_night", config={
+            "name": "Movie Night",
+            "entities": {
+                "light.living_room": {"state": "on", "brightness": 50},
+            },
+            "icon": "mdi:movie",
+        })
+
+        The top-level ``SKILL.md`` for home-assistant-best-practices ships in
+        this response under ``skill_content`` by default (see ``include_skill``)
+        — generic best-practice index covering entity-naming and
+        safe-refactoring patterns that intersect with scene authoring. For
+        detailed scene configuration help beyond that, use ha_get_skill_guide.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
