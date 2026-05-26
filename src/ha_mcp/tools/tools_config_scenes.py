@@ -49,9 +49,11 @@ from .util_helpers import (
 )
 
 # No scene-specific reference file exists in home-assistant-best-practices;
-# SKILL.md is the top-level generic best-practice doc and points the agent
-# at the relevant references for action/condition design (scenes share
-# action syntax with automations/scripts).
+# SKILL.md is the top-level generic best-practice doc covering entity-naming,
+# safe-refactoring, and helper-vs-template trade-offs the agent benefits
+# from when authoring scenes. Scenes have NO actions/conditions/triggers
+# (only an ``entities`` state-snapshot dict) so the automation/script
+# reference files don't apply.
 _SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
 
 logger = logging.getLogger(__name__)
@@ -484,11 +486,11 @@ class ConfigSceneTools:
                 description=(
                     "When True (default), the response includes the top-level "
                     "Home Assistant best-practice SKILL.md under a "
-                    "'skill_content' field. There's no scene-specific reference "
-                    "file; SKILL.md links out to the relevant references for "
-                    "action/condition design (scenes share action syntax with "
-                    "automations/scripts). Set False to suppress on subsequent "
-                    "calls in the same session if you've already read it."
+                    "'skill_content' field. No scene-specific reference file "
+                    "exists; SKILL.md covers entity-naming, safe-refactoring, "
+                    "and helper-vs-template trade-offs that intersect with "
+                    "scene authoring. Set False on subsequent calls in the "
+                    "same session if you've already read it."
                 ),
                 default=True,
             ),
@@ -505,14 +507,21 @@ class ConfigSceneTools:
 
         Two modes: full ``config`` replacement, or surgical
         ``python_transform`` on an existing scene (requires
-        ``config_hash`` from ha_config_get_scene). ``entities`` is a dict
-        keyed by entity_id (NOT a list — scenes capture state, automations
-        execute actions).
+        ``config_hash`` from ha_config_get_scene).
+
+        Scenes are state snapshots — no triggers, conditions, or actions.
+        The ``entities`` field is a dict keyed by entity_id, each value a
+        dict of attributes to capture:
+
+            {"entities": {
+                "light.living_room": {"state": "on", "brightness": 200},
+                "light.kitchen": {"state": "off"},
+            }}
 
         Top-level ``SKILL.md`` ships in this response under ``skill_content``
-        by default (see ``include_skill``); it links out to the relevant
-        references for action/condition design that scenes share with
-        automations/scripts.
+        by default (see ``include_skill``) — generic best-practice index
+        covering entity-naming and safe-refactoring patterns that intersect
+        with scene authoring.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
