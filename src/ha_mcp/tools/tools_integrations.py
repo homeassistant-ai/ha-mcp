@@ -7,7 +7,7 @@ integrations (config entries) via the REST and WebSocket APIs.
 
 import asyncio
 import logging
-from typing import Annotated, Any, Literal, cast, get_args
+from typing import Annotated, Any, Literal, get_args
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -459,27 +459,18 @@ class IntegrationTools:
             include_diagnostics_bool = coerce_bool_param(
                 include_diagnostics, "include_diagnostics", default=False
             )
-            include_subentries_bool = cast(
-                bool,
-                coerce_bool_param(
-                    include_subentries, "include_subentries", default=False
-                ),
+            include_subentries_bool = coerce_bool_param(
+                include_subentries, "include_subentries", default=False
             )
-            include_subentry_schema_bool = cast(
-                bool,
-                coerce_bool_param(
-                    include_subentry_schema,
-                    "include_subentry_schema",
-                    default=False,
-                ),
+            include_subentry_schema_bool = coerce_bool_param(
+                include_subentry_schema,
+                "include_subentry_schema",
+                default=False,
             )
-            show_advanced_options_bool = cast(
-                bool,
-                coerce_bool_param(
-                    show_advanced_options,
-                    "show_advanced_options",
-                    default=False,
-                ),
+            show_advanced_options_bool = coerce_bool_param(
+                show_advanced_options,
+                "show_advanced_options",
+                default=False,
             )
             exact_match_bool = coerce_bool_param(
                 exact_match, "exact_match", default=True
