@@ -330,15 +330,27 @@ class ServiceTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Call a Home Assistant service (the universal entity-control path).
+        """
+        Execute Home Assistant services to control entities and trigger automations.
 
-        Pattern: ``domain.service`` (e.g. ``light.turn_on``,
-        ``climate.set_temperature``). Omit ``entity_id`` to target the
-        whole domain (e.g. turn all lights off). ``data`` passes
-        service-specific parameters. ``return_response=True`` for
-        services that return data. ``wait=True`` (default) blocks on
-        state change for state-changing services on a single entity
-        before returning.
+        This is the universal tool for controlling all Home Assistant entities. Services follow
+        the pattern domain.service (e.g., light.turn_on, climate.set_temperature).
+
+        **Basic Usage:**
+        ```python
+        # Turn on a light
+        ha_call_service("light", "turn_on", entity_id="light.living_room")
+
+        # Set temperature with parameters
+        ha_call_service("climate", "set_temperature",
+                      entity_id="climate.thermostat", data={"temperature": 22})
+
+        # Trigger automation
+        ha_call_service("automation", "trigger", entity_id="automation.morning_routine")
+
+        # Universal controls work with any entity
+        ha_call_service("homeassistant", "toggle", entity_id="switch.porch_light")
+        ```
 
         **Key behavior:**
         - **wait** (default True): wait for the entity state to change before
@@ -350,8 +362,10 @@ class ServiceTools:
           for the raw HA response, or ``result_fields`` / ``result_attribute_keys``
           for explicit per-record projection (mirrors ``ha_get_state``).
 
-        Use ha_search_entities to find correct entity_ids and ha_get_state to
-        inspect current values before calling.
+        **For detailed service documentation, use ha_get_skill_guide.**
+
+        Common patterns: Use ha_get_state() to check current values before making changes.
+        Use ha_search_entities() to find correct entity IDs.
         """
         try:
             service_data = self._parse_service_data(data, entity_id)
