@@ -111,20 +111,15 @@ class ConfigScriptTools:
             ),
         ],
     ) -> dict[str, Any]:
-        """
-        Retrieve Home Assistant script configuration.
+        """Get a Home Assistant script configuration by script_id or entity_id.
 
-        Returns the complete configuration for a script, including sequence, mode, fields, and other settings.
-
-        The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
-
-        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A leading `script.` prefix on the input is stripped before lookup — behavioral parity with `ha_config_get_automation` (mechanism differs: automations resolve via state lookup; scripts strip the prefix).
-
-        EXAMPLES:
-        - Get script (bare form): ha_config_get_script("morning_routine")
-        - Get script (entity_id form): ha_config_get_script("script.morning_routine")
-
-        For detailed script configuration help, use ha_get_skill_guide.
+        Returns the full config (sequence, mode, fields) plus a stable
+        ``config_hash`` for use with ``python_transform`` on
+        ha_config_set_script. Accepts both the bare storage key
+        (``morning_routine``) and the entity_id form
+        (``script.morning_routine``); the ``script.`` prefix is stripped
+        before lookup. Returned ``script_id`` is always the bare form,
+        matching what set/remove expect.
         """
         try:
             # Strip BEFORE validate so a bare ``"script."`` (empty after
