@@ -2451,7 +2451,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             context={"helper_type": helper_type, "action": action},
                         )
                     )
-                return await set_config_subentry(
+                subentry_response = await set_config_subentry(
                     client,
                     entry_id,
                     subentry_type,
@@ -2463,6 +2463,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         default=False,
                     ),
                 )
+                _attach_helper_skill(subentry_response, include_skill)
+                return subentry_response
 
             # Determine if this is a create or update — set early so the
             # outer exception handler's context dict can reference it even
