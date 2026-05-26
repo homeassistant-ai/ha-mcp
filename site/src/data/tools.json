@@ -2639,7 +2639,7 @@
   {
     "name": "ha_call_service",
     "title": "Call Service",
-    "description": "Execute Home Assistant services to control entities and trigger automations.\n\nThis is the universal tool for controlling all Home Assistant entities. Services follow\nthe pattern domain.service (e.g., light.turn_on, climate.set_temperature).\n\n**Basic Usage:**\n```python\n# Turn on a light\nha_call_service(\"light\", \"turn_on\", entity_id=\"light.living_room\")\n\n# Set temperature with parameters\nha_call_service(\"climate\", \"set_temperature\",\n              entity_id=\"climate.thermostat\", data={\"temperature\": 22})\n\n# Trigger automation\nha_call_service(\"automation\", \"trigger\", entity_id=\"automation.morning_routine\")\n\n# Universal controls work with any entity\nha_call_service(\"homeassistant\", \"toggle\", entity_id=\"switch.porch_light\")\n```\n\n**Parameters:**\n- **domain**: Service domain (light, climate, automation, etc.)\n- **service**: Service name (turn_on, set_temperature, trigger, etc.)\n- **entity_id**: Optional target entity. For some services (e.g., light.turn_off), omitting this targets all entities in the domain\n- **data**: Optional dict of service-specific parameters\n- **return_response**: Set to True for services that return data\n- **wait**: Wait for the entity state to change after the service call (default: True).\n  Only applies to state-changing services on a single entity. Set to False for\n  fire-and-forget calls, bulk operations, or services without observable state changes.\n\n**For detailed service documentation, use ha_get_skill_guide.**\n\nCommon patterns: Use ha_get_state() to check current values before making changes.\nUse ha_search_entities() to find correct entity IDs.",
+    "description": "Execute Home Assistant services to control entities and trigger automations.\n\nThis is the universal tool for controlling all Home Assistant entities. Services follow\nthe pattern domain.service (e.g., light.turn_on, climate.set_temperature).\n\n**Basic Usage:**\n```python\n# Turn on a light\nha_call_service(\"light\", \"turn_on\", entity_id=\"light.living_room\")\n\n# Set temperature with parameters\nha_call_service(\"climate\", \"set_temperature\",\n              entity_id=\"climate.thermostat\", data={\"temperature\": 22})\n\n# Trigger automation\nha_call_service(\"automation\", \"trigger\", entity_id=\"automation.morning_routine\")\n\n# Universal controls work with any entity\nha_call_service(\"homeassistant\", \"toggle\", entity_id=\"switch.porch_light\")\n```\n\n**Key behavior:**\n- **wait** (default True): wait for the entity state to change before\n  returning. Only applies to state-changing services on a single entity.\n- **Result compaction (issue #1446, default ON)**: ``result`` is trimmed\n  to the targeted entity's record (drops parent-group propagation) and\n  stripped of ``context`` / ``last_*`` metadata and heavy attribute\n  lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``\n  for the raw HA response, or ``result_fields`` / ``result_attribute_keys``\n  for explicit per-record projection (mirrors ``ha_get_state``).\n\n**For detailed service documentation, use ha_get_skill_guide.**\n\nCommon patterns: Use ha_get_state() to check current values before making changes.\nUse ha_search_entities() to find correct entity IDs.",
     "inputSchema": {
       "properties": {
         "domain": {
@@ -2663,6 +2663,18 @@
         "wait": {
           "type": "bool | str",
           "default": true
+        },
+        "verbose": {
+          "type": "Annotated[bool | str, Field(description=\"Return HA's raw service response unchanged (default: False). Use as an escape hatch when you need the full propagation chain or raw attribute payload (debug / inspection). WARNING: brings back token-bloat for nested-group targets — prefer result_fields / result_attribute_keys for targeted control.\")]",
+          "default": false
+        },
+        "result_fields": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description=\"Project each record in 'result' to only these top-level keys (e.g. ['entity_id', 'state']). Mirrors ha_get_state's fields=. Setting this DISABLES default compaction — no entity-id filter, no metadata strip — and applies the explicit projection instead.\")]",
+          "default": null
+        },
+        "result_attribute_keys": {
+          "type": "Annotated[str | list[str] | None, Field(default=None, description=\"Project each record's 'attributes' dict to only these keys (e.g. ['brightness', 'rgb_color']). Mirrors ha_get_state's attribute_keys=. Setting this DISABLES default compaction. Requires 'attributes' to be present in result_fields (or result_fields=None).\")]",
+          "default": null
         }
       },
       "required": [
