@@ -482,12 +482,6 @@ jobs:
               return;
             }
 
-            const cleanBody = t => (t || '')
-              .replace(/^###\s+.+$/gm, '')
-              .replace(/^_No response_$/gim, '')
-              .replace(/\n{3,}/g, '\n\n')
-              .trim();
-
             const formatted = candidates.map(c =>
               '#' + c.issue.number + ' [' + c.issue.state + ']: ' + c.issue.title + '\n' +
               cleanBody(c.issue.body).substring(0, 600)
