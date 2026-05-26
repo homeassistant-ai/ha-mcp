@@ -30,7 +30,11 @@ from ..utils.python_sandbox import (
     get_security_documentation,
     safe_execute,
 )
+from ..utils.skill_loader import get_skills_dir, resolve_skill_files
 from .auto_backup import automation_backup_target, with_auto_backup
+from .best_practice_checker import (
+    BestPracticeCheckResult,
+)
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
@@ -54,6 +58,49 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Skill files attached to ha_config_set_automation responses when
+# include_skill=True (default), plus auto-attached on best-practice
+# warning hits regardless of include_skill. Paths are relative to the
+# home-assistant-best-practices skill directory.
+_AUTOMATION_SKILL_FILES: tuple[str, ...] = (
+    "references/automation-patterns.md",
+    "references/template-guidelines.md",
+)
+_SKILL_NAME = "home-assistant-best-practices"
+
+
+def _build_skill_content(
+    include_skill: bool,
+    canonical_files: tuple[str, ...],
+    referenced_files: set[str] | None,
+) -> dict[str, str]:
+    """Resolve and dedupe skill files for the response's skill_content field.
+
+    Args:
+        include_skill: When True, attach the canonical files for this tool.
+        canonical_files: Tool's default skill file mapping (passed by the
+            caller so each write-tool module owns its mapping).
+        referenced_files: Files referenced by best-practice warnings — these
+            are always attached (the LLM needs them to fix the input it
+            just submitted), regardless of ``include_skill``. Pass ``None``
+            for tools without best-practice checker integration.
+
+    Returns:
+        ``{relative_path: file_body}`` for each file that resolves. Empty
+        dict when nothing to embed or the skills-vendor submodule isn't
+        present.
+    """
+    wanted: set[str] = set()
+    if include_skill:
+        wanted.update(canonical_files)
+    if referenced_files:
+        wanted.update(referenced_files)
+    if not wanted:
+        return {}
+    return resolve_skill_files(get_skills_dir(), _SKILL_NAME, sorted(wanted))
+
 
 # Distinctive prefix of the soft-failure warning emitted by
 # ``ha_config_set_automation`` when ``_poll_for_automation_entity``
@@ -453,6 +500,22 @@ class AutomationConfigTools:
                 default=True,
             ),
         ] = True,
+        include_skill: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When True (default), the response includes the canonical "
+                    "Home Assistant best-practice skill files for automations "
+                    "(automation-patterns.md + template-guidelines.md) under a "
+                    "top-level 'skill_content' field. Set False on subsequent "
+                    "calls in the same session if you've already read them — "
+                    "best-practice warnings will still auto-embed their "
+                    "referenced files regardless of this setting, so you always "
+                    "get relevant guidance on errors."
+                ),
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant automation.
@@ -624,7 +687,7 @@ class AutomationConfigTools:
         - Use ha_eval_template() to test Jinja2 templates before using in automations
         - Use ha_search_entities(domain_filter='automation') to find existing automations
         """
-        bp_warnings: list[str] = []
+        bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
             # ``identifier`` is optional (omit → create new with generated
             # unique_id; pass → update existing). When provided, reject
@@ -660,7 +723,11 @@ class AutomationConfigTools:
 
             if python_transform is not None:
                 response, bp_warnings = await self._run_python_transform(
-                    identifier, config_hash, python_transform, category
+                    identifier,
+                    config_hash,
+                    python_transform,
+                    category,
+                    include_skill,
                 )
                 return response
 
@@ -704,6 +771,7 @@ class AutomationConfigTools:
                 wait,
                 bp_warnings,
                 validation_meta,
+                include_skill,
             )
 
         except ToolError:
@@ -740,7 +808,8 @@ class AutomationConfigTools:
         config_hash: str | None,
         python_transform: str,
         category: str | None,
-    ) -> tuple[dict[str, Any], list[str]]:
+        include_skill: bool,
+    ) -> tuple[dict[str, Any], BestPracticeCheckResult]:
         """Execute python_transform mode and return (response, bp_warnings)."""
         if not identifier:
             raise_tool_error(
@@ -821,7 +890,14 @@ class AutomationConfigTools:
             **_strip_redundant_identifier_echo(result, extra_excludes=("success",)),
         }
         if bp_warnings:
-            response["best_practice_warnings"] = bp_warnings
+            response["best_practice_warnings"] = list(bp_warnings)
+        skill_content = _build_skill_content(
+            include_skill=include_skill,
+            canonical_files=_AUTOMATION_SKILL_FILES,
+            referenced_files=bp_warnings.referenced_files,
+        )
+        if skill_content:
+            response["skill_content"] = skill_content
         return response, bp_warnings
 
     async def _run_config_update(
@@ -830,8 +906,9 @@ class AutomationConfigTools:
         identifier: str | None,
         effective_category: str | None,
         wait: bool | str,
-        bp_warnings: list[str],
+        bp_warnings: BestPracticeCheckResult,
         validation_meta: dict[str, Any],
+        include_skill: bool,
     ) -> dict[str, Any]:
         """Execute config-replacement mode and return the tool response."""
         result = await self._client.upsert_automation_config(config_dict, identifier)
@@ -875,9 +952,17 @@ class AutomationConfigTools:
             )
 
         if bp_warnings:
-            result["best_practice_warnings"] = bp_warnings
+            result["best_practice_warnings"] = list(bp_warnings)
 
         merge_validation_meta(result, validation_meta)
+
+        skill_content = _build_skill_content(
+            include_skill=include_skill,
+            canonical_files=_AUTOMATION_SKILL_FILES,
+            referenced_files=bp_warnings.referenced_files,
+        )
+        if skill_content:
+            result["skill_content"] = skill_content
 
         automation_id = entity_id or identifier or result.get("unique_id")
         return {
