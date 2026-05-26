@@ -1161,6 +1161,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 }
                 if pre_resolved_from is not None:
                     transform_result["resolved_from"] = pre_resolved_from
+                _attach_dashboard_skill(transform_result, include_skill)
                 return transform_result
 
             # Check if dashboard exists. When the pre-resolver fired
