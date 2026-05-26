@@ -213,11 +213,21 @@ class ConfigSceneTools:
             str, Field(description="Scene identifier (e.g., 'movie_night')")
         ],
     ) -> dict[str, Any]:
-        """Get a Home Assistant scene configuration by scene_id.
+        """
+        Retrieve Home Assistant scene configuration.
 
-        Returns the full config (``entities``, ``name``, ``icon``, ``id``)
-        plus a stable ``config_hash`` for use with ``python_transform``
-        on ha_config_set_scene.
+        Returns the complete configuration for a scene, including the ``entities``
+        dict and other settings (``name``, ``icon``, ``id``).
+
+        EXAMPLES:
+        - Get scene: ha_config_get_scene("movie_night")
+        - Get scene: ha_config_get_scene("bedroom_dim")
+
+        RELATED TOOLS:
+        - ha_config_set_scene — pass the returned ``config_hash`` for
+          ``python_transform`` updates.
+
+        For detailed scene configuration help, use ha_get_skill_guide.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` previously

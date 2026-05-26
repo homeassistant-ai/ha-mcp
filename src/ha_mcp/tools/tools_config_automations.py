@@ -336,14 +336,22 @@ class AutomationConfigTools:
             ),
         ],
     ) -> dict[str, Any]:
-        """Get a Home Assistant automation configuration by entity_id or unique_id.
+        """
+        Retrieve Home Assistant automation configuration.
 
-        Returns the full config (trigger, condition, action, mode) plus a
-        stable ``config_hash`` for use with ``python_transform`` on
-        ha_config_set_automation. ``automation_id`` resolves to the
-        canonical entity_id (e.g. ``automation.morning_routine``) when
-        the registry lookup succeeds, falling back to the input on the
-        rare path where the lookup fails.
+        Returns the complete configuration including triggers, conditions, actions, and mode settings.
+
+        The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
+
+        The returned `automation_id` is the resolved entity_id (canonical
+        form, e.g. `automation.morning_routine`) when the registry lookup
+        succeeds, falling back to the input `identifier` otherwise.
+
+        EXAMPLES:
+        - Get automation: ha_config_get_automation("automation.morning_routine")
+        - Get by unique_id: ha_config_get_automation("my_unique_automation_id")
+
+        For comprehensive automation documentation, use ha_get_skill_guide.
         """
         try:
             # Empty/whitespace identifier would propagate to the internal
