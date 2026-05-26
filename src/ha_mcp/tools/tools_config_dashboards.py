@@ -29,9 +29,28 @@ from .helpers import (
     raise_tool_error,
     validate_identifier_not_empty,
 )
-from .util_helpers import parse_json_param
+from .util_helpers import build_skill_content, parse_json_param
 
 logger = logging.getLogger(__name__)
+
+
+# dashboard-guide.md + dashboard-cards.md cover layout patterns and the
+# card-type taxonomy — both relevant on every dashboard write.
+_DASHBOARD_SKILL_FILES: tuple[str, ...] = (
+    "references/dashboard-guide.md",
+    "references/dashboard-cards.md",
+)
+
+
+def _attach_dashboard_skill(response: dict[str, Any], include_skill: bool) -> None:
+    """In-place attach skill_content to a dashboard response when applicable."""
+    content = build_skill_content(
+        include_skill=include_skill,
+        canonical_files=_DASHBOARD_SKILL_FILES,
+        referenced_files=None,
+    )
+    if content:
+        response["skill_content"] = content
 
 
 async def _get_dashboard_config_internal(
@@ -902,6 +921,20 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "For existing dashboards, only updated when explicitly provided."
             ),
         ] = None,
+        include_skill: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When True (default), the response includes the canonical "
+                    "Home Assistant dashboard reference files "
+                    "(dashboard-guide.md + dashboard-cards.md) under a "
+                    "'skill_content' field — layout patterns and card-type "
+                    "taxonomy. Set False on subsequent calls in the same "
+                    "session if you've already read them."
+                ),
+                default=True,
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant dashboard.
@@ -1472,6 +1505,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # an existing dashboard was updated instead.
                 result_dict["resolved_from"] = pre_resolved_from
 
+            _attach_dashboard_skill(result_dict, include_skill)
             return result_dict
 
         except ToolError:
