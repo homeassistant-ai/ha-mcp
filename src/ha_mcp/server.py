@@ -202,7 +202,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         The actual skill directories live under the skills/ subdirectory
         within that repo. Delegates to
         :func:`ha_mcp.utils.skill_loader.get_skills_dir` so the write-tool
-        ``attach_skill_payload`` parameter resolves the same path.
+        ``enabled`` parameter resolves the same path.
         """
         from .utils.skill_loader import get_skills_dir
 

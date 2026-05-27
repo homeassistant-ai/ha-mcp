@@ -490,7 +490,7 @@ class ConfigSceneTools:
                 default=True,
             ),
         ] = True,
-        attach_skill_payload: Annotated[
+        enabled: Annotated[
             bool,
             Field(default=True),
         ] = True,
@@ -785,7 +785,7 @@ class ConfigSceneTools:
                 }
                 attach_skill_content(
                     response,
-                    attach_skill_payload=attach_skill_payload,
+                    enabled=enabled,
                     canonical_files=_SCENE_SKILL_FILES,
                     referenced_files=None,
                 )
@@ -897,7 +897,7 @@ class ConfigSceneTools:
 
             attach_skill_content(
                 result,
-                attach_skill_payload=attach_skill_payload,
+                enabled=enabled,
                 canonical_files=_SCENE_SKILL_FILES,
                 referenced_files=None,
             )

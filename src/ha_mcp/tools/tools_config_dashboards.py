@@ -42,9 +42,7 @@ _DASHBOARD_SKILL_FILES: tuple[str, ...] = (
 )
 
 
-def _attach_dashboard_skill(
-    response: dict[str, Any], attach_skill_payload: bool
-) -> None:
+def _attach_dashboard_skill(response: dict[str, Any], enabled: bool) -> None:
     """In-place attach skill_content to a dashboard response when applicable.
 
     Delegates to the shared :func:`attach_skill_content` so the
@@ -52,7 +50,7 @@ def _attach_dashboard_skill(
     """
     attach_skill_content(
         response,
-        attach_skill_payload=attach_skill_payload,
+        enabled=enabled,
         canonical_files=_DASHBOARD_SKILL_FILES,
         referenced_files=None,
     )
@@ -926,7 +924,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "For existing dashboards, only updated when explicitly provided."
             ),
         ] = None,
-        attach_skill_payload: Annotated[
+        enabled: Annotated[
             bool,
             Field(default=True),
         ] = True,
@@ -1275,7 +1273,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 }
                 if pre_resolved_from is not None:
                     transform_result["resolved_from"] = pre_resolved_from
-                _attach_dashboard_skill(transform_result, attach_skill_payload)
+                _attach_dashboard_skill(transform_result, enabled)
                 return transform_result
 
             # Check if dashboard exists. When the pre-resolver fired
@@ -1514,7 +1512,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # an existing dashboard was updated instead.
                 result_dict["resolved_from"] = pre_resolved_from
 
-            _attach_dashboard_skill(result_dict, attach_skill_payload)
+            _attach_dashboard_skill(result_dict, enabled)
             return result_dict
 
         except ToolError:

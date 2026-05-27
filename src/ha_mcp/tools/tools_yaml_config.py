@@ -163,7 +163,7 @@ class YamlConfigTools:
                 ),
             ),
         ] = True,
-        attach_skill_payload: Annotated[
+        enabled: Annotated[
             bool,
             Field(default=True),
         ] = True,
@@ -262,7 +262,7 @@ class YamlConfigTools:
                     raise_tool_error(result)
                 attach_skill_content(
                     result,
-                    attach_skill_payload=attach_skill_payload,
+                    enabled=enabled,
                     canonical_files=_YAML_SKILL_FILES,
                     referenced_files=None,
                 )

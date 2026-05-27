@@ -1953,20 +1953,20 @@ def _resolve_data_path(data: Any, path: str) -> tuple[Any, str | None]:
 
 
 # ---------------------------------------------------------------------------
-# Skill content assembly (write-tool attach_skill_payload parameter, issue #1182)
+# Skill content assembly (write-tool enabled parameter, issue #1182)
 # ---------------------------------------------------------------------------
 
 _HA_BEST_PRACTICES_SKILL_NAME = "home-assistant-best-practices"
 
 
 def build_skill_content(
-    attach_skill_payload: bool,
+    enabled: bool,
     canonical_files: tuple[str, ...],
     referenced_files: set[str] | None,
 ) -> dict[str, str]:
     """Resolve and dedupe skill files (or sections) for a write-tool response.
 
-    Shared helper for every write tool that exposes ``attach_skill_payload``
+    Shared helper for every write tool that exposes ``enabled``
     (ha_config_set_automation / _script / _scene / _helper / _dashboard /
     _yaml). Each tool owns its own ``canonical_files`` mapping and passes
     it in; the helper unions against ``referenced_files`` from the
@@ -1984,13 +1984,13 @@ def build_skill_content(
     the same content twice in different shapes.
 
     Args:
-        attach_skill_payload: When True, attach the canonical files for this tool.
+        enabled: When True, attach the canonical files for this tool.
         canonical_files: Tool-specific default mapping. Paths are relative
             to the home-assistant-best-practices skill directory
             (e.g. ``"references/automation-patterns.md"``).
         referenced_files: Files (optionally with ``#anchor``) cited by
             best-practice warnings — always attached, regardless of
-            ``attach_skill_payload``. Pass ``None`` for tools without
+            ``enabled``. Pass ``None`` for tools without
             best-practice checker integration.
 
     Returns:
@@ -2002,7 +2002,7 @@ def build_skill_content(
     from ..utils.skill_loader import get_skills_dir, resolve_skill_files
 
     wanted: set[str] = set()
-    if attach_skill_payload:
+    if enabled:
         wanted.update(canonical_files)
     if referenced_files:
         wanted.update(referenced_files)
@@ -2027,7 +2027,7 @@ _SKILLS_VENDOR_MISSING_WARNING = (
 )
 
 # Opt-out hint shipped alongside delivered skill_content. The
-# attach_skill_payload parameter is visible in the tool catalog but
+# enabled parameter is visible in the tool catalog but
 # carries no description in its Pydantic Field, and the tool docstrings
 # never mention it — so a model inspecting the schema sees a bare
 # default-True boolean with no semantic signal pointing at "this is the
@@ -2045,14 +2045,14 @@ _SKILLS_VENDOR_MISSING_WARNING = (
 #     toggle semantic; hint placement teaches the param name only
 #     after content has been delivered.
 _SKILL_CONTENT_OPTOUT_HINT = (
-    "Pass `attach_skill_payload=false` on subsequent calls to this tool in "
+    "Pass `enabled=false` on subsequent calls to this tool in "
     "this session to skip this content."
 )
 
 
 def attach_skill_content(
     response: dict[str, Any],
-    attach_skill_payload: bool,
+    enabled: bool,
     canonical_files: tuple[str, ...],
     referenced_files: set[str] | None,
 ) -> None:
@@ -2073,14 +2073,14 @@ def attach_skill_content(
     Args:
         response: The dict to mutate. ``skill_content`` and/or ``warnings``
             may be added.
-        attach_skill_payload: When True, attach the canonical files for this tool.
+        enabled: When True, attach the canonical files for this tool.
         canonical_files: Tool-specific default mapping.
         referenced_files: Files cited by best-practice warnings.
     """
     from ..utils.skill_loader import get_skills_dir
 
     content = build_skill_content(
-        attach_skill_payload=attach_skill_payload,
+        enabled=enabled,
         canonical_files=canonical_files,
         referenced_files=referenced_files,
     )
@@ -2101,10 +2101,10 @@ def attach_skill_content(
         return
 
     # Empty content has two distinct causes:
-    # 1. Nothing was requested (attach_skill_payload=False AND no referenced_files).
+    # 1. Nothing was requested (enabled=False AND no referenced_files).
     #    Benign — return silently.
     # 2. Something was requested but the vendor submodule is missing.
     #    Degraded — append a warning so operators notice.
-    requested_anything = attach_skill_payload or referenced_files
+    requested_anything = enabled or referenced_files
     if requested_anything and get_skills_dir() is None:
         response.setdefault("warnings", []).append(_SKILLS_VENDOR_MISSING_WARNING)

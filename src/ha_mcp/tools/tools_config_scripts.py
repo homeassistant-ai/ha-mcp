@@ -440,7 +440,7 @@ class ConfigScriptTools:
                 default=True,
             ),
         ] = True,
-        attach_skill_payload: Annotated[
+        enabled: Annotated[
             bool,
             Field(default=True),
         ] = True,
@@ -702,7 +702,7 @@ class ConfigScriptTools:
                     response["best_practice_warnings"] = list(bp_warnings)
                 attach_skill_content(
                     response,
-                    attach_skill_payload=attach_skill_payload,
+                    enabled=enabled,
                     canonical_files=_SCRIPT_SKILL_FILES,
                     referenced_files=bp_warnings.referenced_files,
                 )
@@ -779,7 +779,7 @@ class ConfigScriptTools:
 
             attach_skill_content(
                 result,
-                attach_skill_payload=attach_skill_payload,
+                enabled=enabled,
                 canonical_files=_SCRIPT_SKILL_FILES,
                 referenced_files=bp_warnings.referenced_files,
             )
