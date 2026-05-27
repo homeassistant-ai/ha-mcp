@@ -755,7 +755,11 @@ async def _find_repo_in_list_by_full_name(
     list_response = await ws_client.send_command("hacs/repositories/list")
     for repo in list_response.get("result", []):
         if repo.get("full_name", "").lower() == full_name_lower:
-            return repo
+            # ``ws_client`` is ``Any`` so mypy can't narrow the result
+            # entry. The HACS wire shape (``custom_components/hacs/
+            # websocket/repositories.py``) always emits a dict per repo,
+            # so a runtime guard would be defensive only.
+            return dict(repo)
     return None
 
 
