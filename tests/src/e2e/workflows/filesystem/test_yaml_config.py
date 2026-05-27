@@ -410,6 +410,50 @@ class TestYamlConfigOperations:
             )
             logger.info("Successfully added %s to package file", key)
 
+    async def test_add_automation_to_nested_package_path(
+        self, mcp_client_with_yaml_config
+    ):
+        """Nested ``packages/<subdir>/*.yaml`` is accepted (recursive fnmatch form).
+
+        ``is_package`` is derived from a dual fnmatch — flat
+        ``packages/*.yaml`` AND recursive ``packages/**/*.yaml`` — so
+        files like ``packages/integrations/automations.yaml`` are
+        already accepted. The parametrized happy-path above only
+        exercises the flat form; this pins the recursive branch so a
+        future cleanup that drops ``packages/**/*.yaml`` can't
+        silently break nested user configs.
+        """
+
+        content = (
+            "- id: e2e_yaml_packages_nested_test\n"
+            "  alias: E2E YAML Packages Nested Test\n"
+            "  trigger:\n"
+            "    - platform: sun\n"
+            "      event: sunset\n"
+            "  action:\n"
+            "    - service: persistent_notification.create\n"
+            "      data:\n"
+            "        message: hi\n"
+        )
+
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            data = await mcp.call_tool_success(
+                TOOL_NAME,
+                {
+                    "yaml_path": "automation",
+                    "action": "add",
+                    "content": content,
+                    "file": "packages/_e2e_nested/automations.yaml",
+                    "backup": False,
+                },
+            )
+            assert data.get("success") is True, (
+                f"automation add to nested package path should succeed: {data}"
+            )
+            assert data.get("post_action") == "reload_available"
+            assert data.get("reload_service") == "automation.reload"
+            logger.info("Successfully added automation to nested package path")
+
     async def test_packages_only_keys_rejected_in_configuration_yaml(
         self, mcp_client_with_yaml_config
     ):
@@ -436,8 +480,13 @@ class TestYamlConfigOperations:
                 f"{key} in configuration.yaml should be rejected: {data}"
             )
             msg = extract_error_message(data)
-            assert "packages" in msg.lower(), (
-                f"{key} error message should mention packages/: {data}"
+            # Pin the actionable path-form (``packages/*.yaml``) rather
+            # than a generic ``packages`` substring so a future
+            # readability-driven reword (e.g. "package files") can't
+            # silently drop the technically-specific guidance users
+            # need to act on.
+            assert "packages/*.yaml" in msg, (
+                f"{key} error message should mention packages/*.yaml: {data}"
             )
             assert "ha_config_set_automation/script/scene" in msg, (
                 f"{key} error should point at storage-mode tools: {data}"

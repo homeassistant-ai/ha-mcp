@@ -58,10 +58,9 @@ PACKAGES_ONLY_YAML_KEYS = frozenset(
 
 # Post-edit action required for each YAML key.
 # template, mqtt, group, automation, script, and scene have first-party
-# reload services in HA core (verified against
-# homeassistant/components/{automation,script,scene}/services.yaml and
-# homeassistant/components/homeassistant/__init__.py async_handle_reload_all).
-# All others require a full HA restart.
+# reload services in HA core. All others require a full HA restart.
+# ``TestPostActionTableContract`` pins the in-repo shape; the HA-core
+# side of the contract is a write-time snapshot, not a continuous check.
 YAML_KEY_POST_ACTIONS: dict[str, dict[str, str]] = {
     "template": {
         "post_action": "reload_available",

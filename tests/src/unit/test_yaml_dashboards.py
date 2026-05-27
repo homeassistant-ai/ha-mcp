@@ -259,6 +259,24 @@ class TestPostActionTableContract:
             f"PACKAGES_ONLY_YAML_KEYS missing YAML_KEY_POST_ACTIONS entries: {missing}"
         )
 
+    def test_packages_only_disjoint_from_allowed(self):
+        """ALLOWED_YAML_KEYS and PACKAGES_ONLY_YAML_KEYS must not overlap.
+
+        ``_parse_and_validate_yaml_path`` checks ``ALLOWED_YAML_KEYS``
+        first, then the ``is_package and key in PACKAGES_ONLY_YAML_KEYS``
+        branch. If a future change accidentally lands a packages-only
+        key (``automation`` / ``script`` / ``scene``) into
+        ``ALLOWED_YAML_KEYS`` as well, the gating branch becomes dead
+        code and that key would silently land in ``configuration.yaml``.
+        """
+        from custom_components.ha_mcp_tools.const import (
+            ALLOWED_YAML_KEYS,
+            PACKAGES_ONLY_YAML_KEYS,
+        )
+
+        overlap = ALLOWED_YAML_KEYS & PACKAGES_ONLY_YAML_KEYS
+        assert not overlap, f"sets must be disjoint; overlap: {overlap}"
+
     @pytest.mark.parametrize(
         ("key", "expected_service"),
         [
