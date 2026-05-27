@@ -193,30 +193,30 @@ class TestWaitForRepoRegistration:
         ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
         ws_client.unsubscribe_command = AsyncMock()
 
+        # ``backstop_poll_interval`` deliberately set LARGER than
+        # ``timeout`` so the backstop tick never fires within the
+        # wait — the only ``send_command`` calls should be the
+        # post-subscribe sample (1). Per-event re-listing on the
+        # unrelated event would push this to 2.
         repo = await wait_for_repo_registration(
-            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=0.02
+            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=10.0
         )
 
         assert repo is None
-        # 1 = post-subscribe sample. Anything more means we re-listed
-        # on the unrelated event (1 extra) or on the backstop tick
-        # (allowed — but with timeout=0.05 we may see one backstop poll
-        # and at most one final list lookup for the queue-shutdown
-        # path; cap at 3 to fail loudly on regression to per-event
-        # re-listing).
-        assert ws_client.send_command.await_count <= 3, (
+        assert ws_client.send_command.await_count == 1, (
             f"send_command should not be called per-event; saw "
             f"{ws_client.send_command.await_count} calls"
         )
 
     @pytest.mark.asyncio
     async def test_subscribe_failure_falls_back_to_single_list_lookup(self):
-        """If ``hacs/subscribe`` fails, do one list lookup as fallback."""
+        """If ``hacs/subscribe`` fails with a transport error, fall back."""
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
         from ha_mcp.tools.tools_hacs import wait_for_repo_registration
 
         ws_client = _build_ws_client(
             list_responses=[_list_response_with_repo(repo_id=42)],
-            subscribe_result=RuntimeError("HACS subscribe blew up"),
+            subscribe_result=HomeAssistantCommandError("unknown_command"),
         )
 
         repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
@@ -346,16 +346,47 @@ class TestWaitForRepoRegistration:
         ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
         ws_client.unsubscribe_command = AsyncMock()
 
+        # backstop > timeout ⇒ no backstop tick fires. Only the
+        # post-subscribe sample (1 call). Per-event re-listing on
+        # the malformed payloads would push this to 4.
         repo = await wait_for_repo_registration(
-            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=0.02
+            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=10.0
         )
 
-        # Three malformed events should each ``continue`` without a
-        # list re-check. Only the post-subscribe sample (1) and at
-        # most one backstop tick fired before timeout. Cap at 3 to
-        # guard against regression to per-event re-listing.
         assert repo is None
-        assert ws_client.send_command.await_count <= 3
+        assert ws_client.send_command.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_backstop_poll_rechecks_list_on_silent_dispatch(self):
+        """No events at all → backstop tick re-checks list and finds the repo.
+
+        Pins the belt-and-braces path: if HACS' dispatcher drops or
+        delays the REPOSITORY event for any reason, the backstop
+        timer still picks up registration via a list lookup.
+        """
+        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+
+        queue: asyncio.Queue = asyncio.Queue()  # never populated
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(
+            side_effect=[
+                _list_response_empty(),  # post-subscribe sample
+                _list_response_with_repo(repo_id=42),  # backstop tick
+            ]
+        )
+        ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
+        ws_client.unsubscribe_command = AsyncMock()
+
+        # backstop_poll_interval well within the timeout so the
+        # backstop tick fires before the wall-clock budget exhausts.
+        repo = await wait_for_repo_registration(
+            ws_client, MCP_TOOLS_REPO, timeout=1.0, backstop_poll_interval=0.05
+        )
+
+        assert repo is not None
+        assert str(repo.get("id")) == "42"
+        assert ws_client.send_command.await_count == 2
+        ws_client.unsubscribe_command.assert_awaited_once_with(7)
 
     @pytest.mark.asyncio
     async def test_matching_event_with_empty_list_continues_waiting(self):

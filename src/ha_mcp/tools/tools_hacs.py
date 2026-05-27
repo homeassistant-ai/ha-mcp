@@ -735,11 +735,19 @@ def _filter_and_score_repos(
 HACS_REPOSITORY_SIGNAL = "hacs_dispatch_repository"
 
 # Wall-clock budget for ``wait_for_repo_registration``. Generous
-# because the constraint is "HACS finishes registration"; under load
-# on small hosts that has been observed to take >10 s. We're not
-# polling on this timer (the subscription nudges us) — the budget is
-# a backstop for the case where HACS never dispatches the event.
+# because the constraint is "HACS finishes registration"; the prior
+# 10 s budget (10 attempts × 1.0 s) was exhausted on the HAOS E2E
+# channel under load, so a 3× headroom backstop avoids re-tripping
+# the same flake. The subscription nudges us, so this is a wall-
+# clock cap rather than the dominant cost.
 HACS_REPO_REGISTRATION_TIMEOUT = 30.0
+
+# Budget for the initial ``hacs/subscribe`` ack. Smaller than the
+# overall registration timeout so a slow subscribe doesn't consume
+# the whole budget before any ``queue.get()`` runs — subscribe acks
+# return in milliseconds in practice, so 10 s is generous and still
+# leaves 20 s of headroom for the queue wait.
+HACS_SUBSCRIBE_TIMEOUT = 10.0
 
 # Backstop poll cadence inside ``wait_for_repo_registration`` —
 # between dispatcher nudges we re-check ``hacs/repositories/list``
@@ -800,7 +808,9 @@ async def wait_for_repo_registration(
     # masked as "HACS subscribe blew up" and a quiet degradation.
     try:
         sub_id, queue = await ws_client.subscribe_command(
-            "hacs/subscribe", signal=HACS_REPOSITORY_SIGNAL
+            "hacs/subscribe",
+            timeout=HACS_SUBSCRIBE_TIMEOUT,
+            signal=HACS_REPOSITORY_SIGNAL,
         )
     except (
         HomeAssistantConnectionError,
@@ -829,6 +839,16 @@ async def wait_for_repo_registration(
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                # Operator-visible breadcrumb: a None return here means
+                # we subscribed successfully but the event-driven path
+                # didn't surface the repo within the budget. Different
+                # signature from "subscribe failed" or "matching event
+                # for wrong repo" — useful when diagnosing flakes.
+                logger.warning(
+                    "wait_for_repo_registration timed out for %s after %.1fs",
+                    full_name,
+                    timeout,
+                )
                 return None
 
             # Wait for HACS to nudge us; if it doesn't, fall through

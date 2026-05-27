@@ -615,3 +615,71 @@ class TestSubscribeCommand:
             m["type"] == "unsubscribe_events" and m["subscription"] == sub_id
             for m in sent
         )
+
+    @pytest.mark.asyncio
+    async def test_timeout_unregisters_queue(self, monkeypatch):
+        """Subscribe ack timeout must drop the queue (no leak)."""
+        client = self._prepare_client()
+
+        # Drop the message — never resolve the result future.
+        async def _drop(message: dict) -> None:
+            return None
+
+        client.send_json_message = _drop  # type: ignore[method-assign]
+
+        # Patch asyncio.wait_for to fire TimeoutError immediately so
+        # the test doesn't actually wait the configured budget.
+        async def _instant_timeout(_coro, timeout):
+            raise TimeoutError("test-injected timeout")
+
+        monkeypatch.setattr(
+            "ha_mcp.client.websocket_client.asyncio.wait_for", _instant_timeout
+        )
+
+        with pytest.raises(TimeoutError):
+            await client.subscribe_command("hacs/subscribe", signal="x")
+
+        # Queue must be unregistered so the next subscribe doesn't
+        # inherit a stale entry; pending-response future must be
+        # cancelled so a future result delivery doesn't try to
+        # resolve into a dropped future.
+        assert not client._state._subscription_queues
+        assert not client._state._pending_requests
+
+    @pytest.mark.asyncio
+    async def test_reset_connection_wakes_subscription_queue_awaiters(self):
+        """``reset_connection`` shuts subscription queues so blocked
+        ``await queue.get()`` calls raise ``QueueShutDown`` rather
+        than hanging when the WS disconnects mid-wait."""
+        client = self._prepare_client()
+
+        async def _resolve(message: dict) -> None:
+            future = client._state._pending_requests.pop(message["id"])
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+
+        # Start a waiter that blocks on the queue.
+        get_task = asyncio.create_task(queue.get())
+        # Yield to let the waiter start awaiting.
+        await asyncio.sleep(0)
+
+        # Drop the WS — should shut down all subscription queues.
+        client._state.reset_connection()
+
+        # The waiter must wake with QueueShutDown rather than hanging.
+        with pytest.raises(asyncio.QueueShutDown):
+            await asyncio.wait_for(get_task, timeout=1.0)
+        # The queue must be unregistered.
+        assert client._state.get_subscription_queue(sub_id) is None
