@@ -591,7 +591,7 @@ jobs:
 
             const jsonSchema = '{"completeness":"complete|incomplete","classification":"bug|enhancement|question|invalid",'
               + '"missing_info":[],"duplicate_of":null,"duplicate_confidence":"high|medium|low","related":[],'
-              + '"priority":"Urgent|High|Medium|null","effort":"Low|Medium|High|null","good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}';
+              + '"priority":"Urgent|High|Medium|Low|null","effort":"Low|Medium|High|null","good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}';
 
             const prompt = [
               'You are triaging a GitHub issue for ha-mcp.',
@@ -666,8 +666,9 @@ jobs:
               '',
               'Urgent: regression in recent release AND blocks a core feature, OR affects multiple core features',
               'High: one tool broken but workaround exists, or affects subset (specific install method / HA version)',
-              'Medium: cosmetic, minor edge case, wrong error message, rarely-hit path, or agent-behavior bug',
+              'Medium: minor edge case, wrong error message, agent-behavior bug',
               '  (agent-behavior bugs are Medium by default unless they block a core feature)',
+              'Low: cosmetic only, rarely-hit path, typo, no functional impact',
               '',
               '### 6. Effort (enhancements only; null for all others)',
               'Low: one tool/parameter/setting, ~1 file',
@@ -675,7 +676,7 @@ jobs:
               'High: new subsystem, new integration pattern, architectural change',
               '',
               '### 7. good_first_issue',
-              'true if Medium priority bug OR Low effort enhancement (well-scoped, good for new contributors)',
+              'true if Low or Medium priority bug OR Low effort enhancement (well-scoped, good for new contributors)',
               '',
               'Respond with ONLY this JSON (fill all fields; use null where not applicable):',
               jsonSchema,
@@ -742,7 +743,7 @@ jobs:
             // Native org issue fields (gh api /orgs/homeassistant-ai/issue-fields)
             const PRIORITY_FIELD_ID = 36564402;
             const EFFORT_FIELD_ID = 36564405;
-            const PRIORITY_OPTIONS = { Urgent: 63981585, High: 63981586, Medium: 63981587 };
+            const PRIORITY_OPTIONS = { Urgent: 63981585, High: 63981586, Medium: 63981587, Low: 63981588 };
             const EFFORT_OPTIONS   = { Low: 63981591, Medium: 63981590, High: 63981589 };
 
             const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nYour issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
