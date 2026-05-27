@@ -565,6 +565,65 @@ class TestSubscribeCommand:
         assert second["event"]["action"] == "install"
 
     @pytest.mark.asyncio
+    async def test_event_arriving_before_ack_lands_in_queue(self):
+        """The exact race the PR closes: event during the subscribe-ack window.
+
+        ``subscribe_command`` must register the queue BEFORE sending
+        the WS frame so an event dispatched by HACS between
+        ``send_json_message`` and the result-future resolution lands
+        in the queue rather than being lost (or routed to the
+        legacy event-type handler registry that doesn't apply to
+        HACS' anonymous dispatch shape).
+
+        If a future refactor moves ``register_subscription_queue``
+        to AFTER the ack wait, this test fails.
+        """
+        client = self._prepare_client()
+        captured_sub_id: dict[str, int] = {}
+
+        async def _send_then_inject_event_then_resolve(message: dict) -> None:
+            sub_id = message["id"]
+            captured_sub_id["id"] = sub_id
+
+            # Inject the dispatch event RIGHT NOW — before the ack
+            # future is resolved. If the queue isn't registered yet,
+            # the event has nowhere to go and gets dropped (or
+            # mis-routed to the one-shot event_responses future).
+            await client._handle_event_message(
+                {
+                    "id": sub_id,
+                    "type": "event",
+                    "event": {
+                        "action": "registration",
+                        "repository": "test/repo",
+                        "repository_id": 999,
+                    },
+                },
+                sub_id,
+            )
+
+            # Now resolve the ack.
+            future = client._state._pending_requests.get(sub_id)
+            assert future is not None
+            future.set_result(
+                {"id": sub_id, "type": "result", "success": True, "result": None}
+            )
+
+        client.send_json_message = _send_then_inject_event_then_resolve  # type: ignore[method-assign]
+
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+
+        # The event injected during the ack window must be the
+        # first item in the queue. If a regression moves queue
+        # registration to AFTER the ack wait, queue.get() blocks
+        # forever and the wait_for times out.
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event["id"] == sub_id
+        assert event["event"]["repository_id"] == 999
+
+    @pytest.mark.asyncio
     async def test_unsubscribe_command_drops_queue_and_sends_unsubscribe(self):
         """Cleanup tears down the queue and tells HA to release the subscription."""
         client = self._prepare_client()

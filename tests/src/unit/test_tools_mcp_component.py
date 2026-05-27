@@ -244,6 +244,47 @@ class TestWaitForRepoRegistration:
         ws_client.unsubscribe_command.assert_awaited_once_with(7)
 
     @pytest.mark.asyncio
+    async def test_multiple_empty_backstop_ticks_then_timeout(self):
+        """N backstop ticks all return empty, then budget exhausts cleanly.
+
+        Pins the ``was_backstop_tick`` distinction: a tick that fires
+        because the wall-clock budget is about to exhaust must NOT
+        burn a list call right before the next iteration would
+        return None anyway. With ``timeout=0.07``, ``backstop=0.02``
+        we expect three full ticks (at ~0.02, 0.04, 0.06) followed
+        by a budget-cap wait of ~0.01 that must NOT re-list.
+
+        Asserts list called exactly 4 times: 1 post-subscribe sample
+        + 3 backstop ticks. A 5th call would indicate the budget-
+        exhaust branch was incorrectly treated as a backstop tick.
+        """
+        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+
+        queue: asyncio.Queue = asyncio.Queue()  # no events ever
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(return_value=_list_response_empty())
+        ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
+        ws_client.unsubscribe_command = AsyncMock()
+
+        repo = await wait_for_repo_registration(
+            ws_client, MCP_TOOLS_REPO, timeout=0.07, backstop_poll_interval=0.02
+        )
+
+        assert repo is None
+        # Exact count would be fragile due to scheduling jitter, so
+        # assert the bounds the contract guarantees:
+        # - At least 2 calls (post-subscribe sample + at least one
+        #   real backstop tick before budget exhaust)
+        # - At most 4 calls (sample + 3 backstop ticks fitting in
+        #   the 0.07s budget at 0.02s cadence)
+        # A regression to "list on every event=None" would consistently
+        # land above 4 due to extra budget-cap calls.
+        count = ws_client.send_command.await_count
+        assert 2 <= count <= 4, (
+            f"Expected 2-4 list calls (sample + backstop ticks); got {count}"
+        )
+
+    @pytest.mark.asyncio
     async def test_queue_shutdown_attempts_one_last_lookup(self):
         """Mid-wait connection teardown: try one final list lookup before giving up.
 

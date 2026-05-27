@@ -727,11 +727,9 @@ def _filter_and_score_repos(
 
 
 # HACS' dispatcher signal that fires whenever a repository is
-# registered, installed, or otherwise mutates. The matching
-# ``HacsDispatchEvent`` enum lives in
-# ``custom_components/hacs/enums.py`` in the HACS integration source —
-# using the raw string keeps ha-mcp's runtime free of a hard import on
-# HACS internals.
+# registered, installed, or otherwise mutates. Raw string keeps
+# ha-mcp's runtime free of a hard import on HACS internals — the
+# load-bearing contract is this signal name, not where it's defined.
 HACS_REPOSITORY_SIGNAL = "hacs_dispatch_repository"
 
 # Wall-clock budget for ``wait_for_repo_registration``. Generous
@@ -824,10 +822,17 @@ async def wait_for_repo_registration(
         return await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
 
     try:
-        # Race-closer: HACS may have dispatched REPOSITORY between the
-        # caller's ``hacs/repositories/add`` returning and our
-        # subscribe landing. A single list check after subscribe
-        # catches that.
+        # Two races to close around the preceding ``hacs/repositories/add``:
+        #
+        # (A) HACS finished registration BEFORE we sent the subscribe —
+        #     no dispatch event will be delivered to us. This single
+        #     post-subscribe list check catches that.
+        # (B) HACS dispatches REPOSITORY DURING our subscribe-ack
+        #     window — closed by ``subscribe_command`` registering the
+        #     queue BEFORE calling ``send_json_message`` (so the event
+        #     lands in the queue, not nowhere). Do NOT move that
+        #     registration after the ack-wait — the sample below only
+        #     covers case (A) and would let (B) regress silently.
         repo = await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
         if repo is not None:
             logger.info(
@@ -886,9 +891,7 @@ async def wait_for_repo_registration(
                     return None
 
             if event is not None:
-                # HACS dispatch payload shape (from
-                # ``custom_components/hacs/repositories/base.py`` and
-                # ``base.py::async_register_repository``):
+                # HACS dispatch payload shape:
                 #   {"action": "registration"|"install"|"uninstall",
                 #    "repository": <full_name>, "repository_id": <id>}
                 # Older/empty dispatches may send ``{}`` or ``None``;
