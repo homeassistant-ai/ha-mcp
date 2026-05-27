@@ -5,7 +5,9 @@ This module provides tools to interact with HACS via the WebSocket API, enabling
 to discover custom integrations, Lovelace cards, themes, and more.
 """
 
+import asyncio
 import logging
+import time
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
@@ -62,9 +64,7 @@ async def _assert_hacs_available() -> None:
 
     error = response.get("error", {})
     error_code = error.get("code") if isinstance(error, dict) else None
-    error_message = (
-        error.get("message", "") if isinstance(error, dict) else str(error)
-    )
+    error_message = error.get("message", "") if isinstance(error, dict) else str(error)
 
     # "unknown_command" means HACS is not installed at all
     if error_code == "unknown_command" or "unknown command" in error_message.lower():
@@ -725,23 +725,167 @@ def _filter_and_score_repos(
     return matches
 
 
-async def _resolve_hacs_repo_id(
-    ws_client: Any, repository_id: str
-) -> tuple[str, str]:
+# HACS' dispatcher signal that fires whenever a repository is
+# registered, installed, or otherwise mutates. The matching
+# ``HacsDispatchEvent`` enum lives in
+# ``custom_components/hacs/enums.py`` in the HACS integration source —
+# using the raw string keeps ha-mcp's runtime free of a hard import on
+# HACS internals.
+HACS_REPOSITORY_SIGNAL = "hacs_dispatch_repository"
+
+# Wall-clock budget for ``wait_for_repo_registration``. Generous
+# because the constraint is "HACS finishes registration"; under load
+# on small hosts that has been observed to take >10 s. We're not
+# polling on this timer (the subscription nudges us) — the budget is
+# a backstop for the case where HACS never dispatches the event.
+HACS_REPO_REGISTRATION_TIMEOUT = 30.0
+
+# Backstop poll cadence inside ``wait_for_repo_registration`` —
+# between dispatcher nudges we re-check ``hacs/repositories/list``
+# at this cadence so we still complete if HACS' dispatch is dropped/
+# lossy for any reason. Larger than the old 1.0 s because we expect
+# the nudge to do the heavy lifting; this is belt-and-braces only.
+HACS_REPO_BACKSTOP_POLL_INTERVAL = 5.0
+
+
+async def _find_repo_in_list_by_full_name(
+    ws_client: Any, full_name_lower: str
+) -> dict[str, Any] | None:
+    """Return the HACS repo entry matching ``full_name_lower``, or None."""
+    list_response = await ws_client.send_command("hacs/repositories/list")
+    for repo in list_response.get("result", []):
+        if repo.get("full_name", "").lower() == full_name_lower:
+            return repo
+    return None
+
+
+async def wait_for_repo_registration(
+    ws_client: Any,
+    full_name: str,
+    *,
+    timeout: float = HACS_REPO_REGISTRATION_TIMEOUT,
+    backstop_poll_interval: float = HACS_REPO_BACKSTOP_POLL_INTERVAL,
+) -> dict[str, Any] | None:
+    """Wait for a HACS repo to register, using HACS' dispatch signal.
+
+    Replaces the previous fixed 10x1s blind poll of
+    ``hacs/repositories/list``. HACS dispatches
+    ``HacsDispatchEvent.REPOSITORY`` whenever a repository entry
+    registers / installs / mutates, exposed over the WebSocket via
+    ``hacs/subscribe`` with a ``signal`` field. We subscribe before
+    any wait, do a single post-subscribe sample to close the race
+    with the preceding ``hacs/repositories/add``, then wait on the
+    subscription queue with a wall-clock backstop.
+
+    Args:
+        ws_client: Connected HA WebSocket client.
+        full_name: Repository full name in ``owner/repo`` form (case-insensitive).
+        timeout: Wall-clock budget before giving up.
+        backstop_poll_interval: Between dispatch nudges, re-check the
+            list at this cadence to recover from a missed/lossy dispatch.
+
+    Returns the HACS repo dict if found, or ``None`` on timeout.
+    """
+    full_name_lower = full_name.lower()
+
+    try:
+        sub_id, queue = await ws_client.subscribe_command(
+            "hacs/subscribe", signal=HACS_REPOSITORY_SIGNAL
+        )
+    except Exception as e:
+        # Subscription path unavailable — fall back to a single
+        # post-add list lookup so we still benefit from the work the
+        # caller already did before invoking us.
+        logger.debug(
+            "hacs/subscribe failed (%s); falling back to single list lookup", e
+        )
+        return await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
+
+    try:
+        # Race-closer: HACS may have dispatched REPOSITORY between the
+        # caller's ``hacs/repositories/add`` returning and our
+        # subscribe landing. A single list check after subscribe
+        # catches that.
+        repo = await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
+        if repo is not None:
+            logger.info(
+                f"Found {full_name} -> id={repo.get('id')} (post-subscribe sample)"
+            )
+            return repo
+
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+
+            # Wait for HACS to nudge us; if it doesn't, fall through
+            # to a re-check at ``backstop_poll_interval``.
+            wait_for = min(remaining, backstop_poll_interval)
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=wait_for)
+            except TimeoutError:
+                event = None
+            except asyncio.QueueShutDown:
+                # Connection was torn down — try one last list lookup
+                # in case the repo registered before the shutdown,
+                # then give up.
+                return await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
+
+            # When the dispatch payload tells us the repo we care
+            # about just registered, skip straight to a fresh list
+            # lookup to grab the full entry (the event payload only
+            # carries id + full_name, not the rest of the fields
+            # callers may need).
+            if event is not None:
+                payload = event.get("event") or {}
+                if (
+                    isinstance(payload, dict)
+                    and payload.get("repository", "").lower() == full_name_lower
+                ):
+                    repo = await _find_repo_in_list_by_full_name(
+                        ws_client, full_name_lower
+                    )
+                    if repo is not None:
+                        logger.info(
+                            f"Found {full_name} -> id={repo.get('id')} "
+                            "(HACS dispatch event)"
+                        )
+                        return repo
+                # Unrelated repo's dispatch — fall through to the
+                # belt-and-braces list re-check below before looping.
+
+            # Either no event (poll backstop fired) or an unrelated
+            # repo's dispatch — re-check the list before looping.
+            repo = await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
+            if repo is not None:
+                logger.info(
+                    f"Found {full_name} -> id={repo.get('id')} (post-event sample)"
+                )
+                return repo
+    finally:
+        await ws_client.unsubscribe_command(sub_id)
+
+
+async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str, str]:
     """Resolve a GitHub path (owner/repo) to a HACS numeric repository ID and name.
 
     Returns (numeric_id, display_name). If repository_id is already numeric,
     returns (repository_id, repository_id).
+
+    For GitHub-path identifiers, this uses the HACS dispatch-signal
+    waiter so that a caller running immediately after
+    ``ha_hacs_add_repository`` doesn't race against HACS' internal
+    registration — the same flake class that affected
+    ``ha_install_mcp_tools``.
     """
     if "/" not in repository_id:
         return repository_id, repository_id
 
-    list_response = await ws_client.send_command("hacs/repositories/list")
-    if list_response.get("success"):
-        repos = list_response.get("result", [])
-        for repo in repos:
-            if repo.get("full_name", "").lower() == repository_id.lower():
-                return str(repo.get("id")), repo.get("name") or repository_id
+    repo = await wait_for_repo_registration(ws_client, repository_id)
+
+    if repo is not None:
+        return str(repo.get("id")), repo.get("name") or repository_id
 
     raise_tool_error(
         create_error_response(
@@ -754,4 +898,4 @@ async def _resolve_hacs_repo_id(
             ],
         )
     )
-    return repository_id  # unreachable, but satisfies type checker
+    return repository_id, repository_id  # unreachable, but satisfies type checker

@@ -4,6 +4,8 @@ These tests verify that the WebSocket client correctly constructs WebSocket URLs
 for both standard Home Assistant installations and Supervisor proxy environments.
 """
 
+import asyncio
+
 import pytest
 
 
@@ -168,7 +170,10 @@ class TestSendCommandErrorContract:
                     "id": message_id,
                     "type": "result",
                     "success": False,
-                    "error": {"code": "unknown_error", "message": "entity not available"},
+                    "error": {
+                        "code": "unknown_error",
+                        "message": "entity not available",
+                    },
                 }
             )
 
@@ -222,7 +227,10 @@ class TestSendCommandErrorContract:
                     "id": message_id,
                     "type": "result",
                     "success": False,
-                    "error": {"code": "unknown_error", "message": "system_health failure"},
+                    "error": {
+                        "code": "unknown_error",
+                        "message": "system_health failure",
+                    },
                 }
             )
 
@@ -429,4 +437,178 @@ class TestSubscribeEventsContract:
         assert not client._state._pending_requests, (
             f"Expected pending_requests to be cleaned up after timeout, "
             f"still have: {list(client._state._pending_requests)}"
+        )
+
+
+class TestSubscribeCommand:
+    """``subscribe_command``: generic subscribe path used for HACS' ``hacs/subscribe``.
+
+    Distinct from ``subscribe_events`` in two ways:
+    1. Arbitrary command type and kwargs (not just ``subscribe_events``).
+    2. Returns a queue that receives EVERY subsequent event with the
+       subscription id, not just the first one (the one-shot
+       ``_event_responses`` future can't model HACS' continuous stream).
+    """
+
+    @staticmethod
+    def _prepare_client():
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        client = HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123",
+            token="test-token",
+        )
+        client._state.mark_connected()
+        client._state.mark_authenticated()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_returns_message_id_and_queue_on_success(self):
+        """HACS-shape result reply: ``subscribe_command`` returns (id, queue)."""
+        client = self._prepare_client()
+        captured: dict[str, dict] = {}
+
+        async def _resolve(message: dict) -> None:
+            captured["msg"] = message
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+
+        assert sub_id == captured["msg"]["id"]
+        assert captured["msg"]["type"] == "hacs/subscribe"
+        assert captured["msg"]["signal"] == "hacs_dispatch_repository"
+        # Queue must be registered AND empty initially.
+        assert client._state.get_subscription_queue(sub_id) is queue
+        assert queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_failure_unregisters_queue(self):
+        """Failed result must clean up — no orphan queue, no orphan future."""
+        client = self._prepare_client()
+
+        async def _resolve(message: dict) -> None:
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": False,
+                    "error": {"code": "unknown_command", "message": "nope"},
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        from ha_mcp.client.websocket_client import HomeAssistantCommandError
+
+        with pytest.raises(HomeAssistantCommandError):
+            await client.subscribe_command("nope/subscribe")
+
+        assert not client._state._subscription_queues
+        assert not client._state._pending_requests
+
+    @pytest.mark.asyncio
+    async def test_events_for_subscription_routed_to_queue(self):
+        """``_handle_event_message`` must push events into the queue, not drop them."""
+        client = self._prepare_client()
+
+        async def _resolve(message: dict) -> None:
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+
+        # Simulate HACS pushing TWO events on the same subscription id.
+        await client._handle_event_message(
+            {"id": sub_id, "type": "event", "event": {"action": "registration"}},
+            sub_id,
+        )
+        await client._handle_event_message(
+            {"id": sub_id, "type": "event", "event": {"action": "install"}},
+            sub_id,
+        )
+
+        # Both events must be in the queue — the one-shot
+        # ``_event_responses`` future MUST NOT have captured the first one.
+        first = await asyncio.wait_for(queue.get(), timeout=1.0)
+        second = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert first["event"]["action"] == "registration"
+        assert second["event"]["action"] == "install"
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_command_drops_queue_and_sends_unsubscribe(self):
+        """Cleanup tears down the queue and tells HA to release the subscription."""
+        client = self._prepare_client()
+
+        async def _resolve_subscribe(message: dict) -> None:
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve_subscribe  # type: ignore[method-assign]
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+        assert client._state.get_subscription_queue(sub_id) is queue
+
+        # Track the unsubscribe command issued during teardown.
+        sent: list[dict] = []
+
+        async def _capture_unsub(message: dict) -> None:
+            sent.append(message)
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _capture_unsub  # type: ignore[method-assign]
+
+        await client.unsubscribe_command(sub_id)
+
+        assert client._state.get_subscription_queue(sub_id) is None
+        # Default unsubscribe command targets HA's standard endpoint —
+        # HACS' ``hacs/subscribe`` registers into
+        # ``connection.subscriptions`` so the standard release works.
+        assert any(
+            m["type"] == "unsubscribe_events" and m["subscription"] == sub_id
+            for m in sent
         )

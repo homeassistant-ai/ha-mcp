@@ -44,6 +44,13 @@ class WebSocketConnectionState:
         self._event_handlers: dict[
             str, set[Callable[[dict[str, Any]], Awaitable[None]]]
         ] = defaultdict(set)
+        # Continuous-subscription queues keyed by the subscribe command's
+        # message_id. Long-lived subscriptions (e.g. HACS' ``hacs/subscribe``)
+        # deliver many events sharing one id; the one-shot
+        # ``_event_responses`` future can't handle that. When a queue is
+        # registered for a given id, every event with that id is pushed
+        # into it instead of going to ``event_type``-keyed handlers.
+        self._subscription_queues: dict[int, asyncio.Queue[dict[str, Any]]] = {}
 
     def next_message_id(self) -> int:
         """Reserve the next available WebSocket message identifier."""
@@ -118,6 +125,14 @@ class WebSocketConnectionState:
                 future.cancel()
         self._event_responses.clear()
 
+        # Drop any subscription queues — readers wake on the close signal
+        # we push, then a ``QueueShutDown`` (3.13) tells them the source
+        # is gone. Using ``shutdown`` rather than just clearing the dict
+        # so blocked ``queue.get()`` awaiters unblock instead of hanging.
+        for queue in self._subscription_queues.values():
+            queue.shutdown(immediate=True)
+        self._subscription_queues.clear()
+
         self._auth_messages.clear()
 
     def mark_connected(self) -> None:
@@ -160,6 +175,29 @@ class WebSocketConnectionState:
         if event_type not in self._event_handlers:
             return ()
         return tuple(self._event_handlers[event_type])
+
+    def register_subscription_queue(
+        self, message_id: int
+    ) -> asyncio.Queue[dict[str, Any]]:
+        """Register a queue for continuous-subscription event delivery."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._subscription_queues[message_id] = queue
+        return queue
+
+    def get_subscription_queue(
+        self, message_id: int
+    ) -> asyncio.Queue[dict[str, Any]] | None:
+        """Return the queue for a subscription id, or None."""
+        return self._subscription_queues.get(message_id)
+
+    def unregister_subscription_queue(self, message_id: int) -> None:
+        """Drop a subscription queue and wake any blocked readers."""
+        queue = self._subscription_queues.pop(message_id, None)
+        if queue is not None:
+            # ``shutdown(immediate=True)`` raises ``QueueShutDown`` in any
+            # pending ``get()`` so a waiter doesn't deadlock when the
+            # caller decides to stop listening.
+            queue.shutdown(immediate=True)
 
 
 class HomeAssistantWebSocketClient:
@@ -388,6 +426,20 @@ class HomeAssistantWebSocketClient:
     ) -> None:
         """Handle an incoming event message."""
         if message_id is not None:
+            # Continuous subscriptions take priority: a single ``hacs/subscribe``
+            # can deliver many events sharing one id and the one-shot
+            # ``_event_responses`` future would only catch the first.
+            queue = self._state.get_subscription_queue(message_id)
+            if queue is not None:
+                try:
+                    queue.put_nowait(data)
+                except asyncio.QueueShutDown:
+                    # Caller unsubscribed between dispatch and delivery —
+                    # drop the event quietly rather than logging an
+                    # error for an expected lifecycle race.
+                    pass
+                return
+
             render_future = self._state.resolve_event_response(message_id)
             if render_future:
                 if not render_future.cancelled():
@@ -693,6 +745,104 @@ class HomeAssistantWebSocketClient:
         except HomeAssistantCommandError as e:
             logger.warning(
                 "unsubscribe_events(%s) rejected by HA: %s",
+                subscription_id,
+                e,
+            )
+
+    async def subscribe_command(
+        self,
+        command_type: str,
+        *,
+        timeout: float = 30.0,
+        **kwargs: Any,
+    ) -> tuple[int, asyncio.Queue[dict[str, Any]]]:
+        """Send a subscribe-style command and return (subscription_id, queue).
+
+        For commands that establish a long-lived stream sharing the
+        command's ``id`` for every event (HA's ``subscribe_events``,
+        HACS' ``hacs/subscribe`` with a ``signal`` field, etc.).
+        ``subscribe_events`` has its own dedicated entrypoint above
+        because it has additional callers wired to the legacy
+        event-type handler registry; use this method for everything
+        else.
+
+        Returns:
+            (subscription_id, queue) — ``await queue.get()`` yields each
+            incoming ``{"id": N, "type": "event", "event": ...}`` payload.
+            Cancel the subscription via :meth:`unsubscribe_command`.
+        """
+        if not self._state.is_ready:
+            raise HomeAssistantConnectionError("WebSocket not authenticated")
+
+        message_id = self.get_next_message_id()
+        message: dict[str, Any] = {"id": message_id, "type": command_type, **kwargs}
+
+        # Register the queue BEFORE sending so we never miss an event
+        # that arrives between the result and the first ``get()``.
+        queue = self._state.register_subscription_queue(message_id)
+        result_future = self.register_pending_response(message_id)
+
+        try:
+            await self.send_json_message(message)
+        except Exception:
+            self._state.unregister_subscription_queue(message_id)
+            self.cancel_pending_response(message_id)
+            raise
+
+        try:
+            response = await asyncio.wait_for(result_future, timeout=timeout)
+        except TimeoutError:
+            self._state.unregister_subscription_queue(message_id)
+            self.cancel_pending_response(message_id)
+            raise
+
+        if response.get("type") == "result" and response.get("success"):
+            return message_id, queue
+
+        self._state.unregister_subscription_queue(message_id)
+        error = response.get("error", {})
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
+        raise HomeAssistantCommandError(
+            f"subscribe_command({command_type!r}) failed: {error_msg}"
+        )
+
+    async def unsubscribe_command(
+        self,
+        subscription_id: int,
+        *,
+        unsubscribe_type: str = "unsubscribe_events",
+    ) -> None:
+        """Tear down a subscription opened via :meth:`subscribe_command`.
+
+        HACS' ``hacs/subscribe`` slots into HA's standard
+        ``connection.subscriptions`` map, so ``unsubscribe_events`` cancels
+        it the same way it cancels a native ``subscribe_events`` stream
+        — ``unsubscribe_type`` is exposed only for the rare case a
+        protocol introduces its own teardown command.
+        """
+        # Always drop the local queue first so any in-flight ``get()``
+        # call wakes immediately, even if the HA-side teardown errors.
+        self._state.unregister_subscription_queue(subscription_id)
+
+        if not self._state.is_ready:
+            logger.debug(
+                "unsubscribe_command(%s) skipped: WebSocket not ready",
+                subscription_id,
+            )
+            return
+        try:
+            await self.send_command(unsubscribe_type, subscription=subscription_id)
+        except OSError as e:
+            logger.debug(
+                "unsubscribe_command(%s): transport lost during cleanup: %s",
+                subscription_id,
+                e,
+            )
+        except HomeAssistantCommandError as e:
+            logger.warning(
+                "unsubscribe_command(%s) rejected by HA: %s",
                 subscription_id,
                 e,
             )
