@@ -225,6 +225,7 @@ def main() -> int:
     enable_custom_component_integration = False  # default
     enable_code_mode = False  # default
     enable_lite_docstrings = False  # default
+    enable_mandatory_bps = True  # default (issue #1182 — on by default)
     enable_auto_backup = (
         True  # default (#1288 — on by default; opt out via ENABLE_AUTO_BACKUP=false)
     )
@@ -279,6 +280,10 @@ def main() -> int:
             raw_lite_docstrings = config.get("enable_lite_docstrings", False)
             enable_lite_docstrings = (
                 raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
+            )
+            raw_mandatory_bps = config.get("enable_mandatory_bps", True)
+            enable_mandatory_bps = (
+                raw_mandatory_bps if isinstance(raw_mandatory_bps, bool) else True
             )
             raw_auto_backup = config.get("enable_auto_backup", True)
             enable_auto_backup = (
@@ -341,6 +346,7 @@ def main() -> int:
     ).lower()
     os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
     os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
+    os.environ["ENABLE_MANDATORY_BPS"] = str(enable_mandatory_bps).lower()
     os.environ["ENABLE_AUTO_BACKUP"] = str(enable_auto_backup).lower()
     os.environ["AUTO_BACKUP_THROTTLE_MINUTES"] = str(auto_backup_throttle_minutes)
     os.environ["AUTO_BACKUP_RETAIN_PER_ENTITY"] = str(auto_backup_retain_per_entity)

@@ -101,6 +101,22 @@ configuration:
       tool call and end up with less guidance than they had before).
       Best paired with a client that supports MCP resources or with
       enable_tool_search. Requires restart to take effect.
+  enable_mandatory_bps:
+    name: Attach best-practice skills on writes
+    description: >-
+      Master switch for the write-tool skill content delivery feature
+      (issue #1182). When enabled (default), the six config write tools
+      (automations, scripts, scenes, helpers, dashboards, raw YAML)
+      attach the canonical Home Assistant best-practice reference files
+      under `skill_content` on every successful write, plus auto-embed
+      any reference sections cited by best-practice warnings. Each tool
+      also exposes a per-call `MandatoryBPS` parameter the agent can
+      set to false on subsequent calls once it has the content. When
+      this master switch is off, NO skill_content goes out regardless
+      of the per-call parameter or BP warnings. Leave on if your LLM
+      benefits from inline guidance; turn off to minimise tokens when
+      using an LLM that has the best-practice files indexed via skills
+      or another retrieval path. Requires restart to take effect.
   enable_filesystem_tools:
     name: Enable filesystem tools (beta)
     description: >-

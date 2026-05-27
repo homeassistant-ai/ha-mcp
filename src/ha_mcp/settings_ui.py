@@ -1934,6 +1934,10 @@ const FEATURE_META = {
     label: "Enable lite tool docstrings (beta)",
     help: "Beta feature — disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
   },
+  enable_mandatory_bps: {
+    label: "Attach best-practice skills on writes",
+    help: "Master switch for the write-tool skill content delivery feature (issue #1182). When enabled (default), the six config write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant best-practice reference files under skill_content on every successful write, plus auto-embed any reference sections cited by best-practice warnings. Each tool also exposes a per-call MandatoryBPS parameter the agent can set to false on subsequent calls once it has the content. When this master switch is off, NO skill_content goes out regardless of the per-call parameter or BP warnings. Leave on if your LLM benefits from inline guidance; turn off to minimise tokens when using an LLM that has the best-practice files indexed via skills or another retrieval path. Requires restart to take effect.",
+  },
   enable_filesystem_tools: {
     label: "Enable filesystem tools (beta)",
     help: "Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct file access to your system. Only enable if you trust the AI assistant with file operations. Requires restart to take effect.",

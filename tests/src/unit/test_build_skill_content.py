@@ -189,6 +189,40 @@ class TestDegradedPaths:
         assert "references/automation-patterns.md" in result
         assert "references/does-not-exist.md" not in result
 
+    def test_master_switch_off_short_circuits(self, patched_get_skills_dir):
+        """ENABLE_MANDATORY_BPS=false is the server-wide master switch —
+        when off, build_skill_content returns empty regardless of the
+        per-call MandatoryBPS flag OR the presence of referenced_files
+        from BP warnings. Operator-controlled kill switch sits above the
+        per-call agent toggle."""
+        from ha_mcp import config as config_module
+
+        # Build a settings instance with the master switch flipped off.
+        # Use object.__new__ + __dict__ copy to avoid running the env-var
+        # loading pipeline; we only need the one field overridden.
+        original = config_module.get_global_settings()
+        patched_settings = original.model_copy(update={"enable_mandatory_bps": False})
+        with patch.object(
+            config_module, "get_global_settings", return_value=patched_settings
+        ):
+            # Per-call MandatoryBPS=True alone: still empty.
+            result = build_skill_content(
+                MandatoryBPS=True,
+                canonical_files=("references/automation-patterns.md",),
+                referenced_files=None,
+            )
+            assert result == {}, "master-off must override per-call True"
+
+            # BP-warning auto-embed alone: still empty.
+            result = build_skill_content(
+                MandatoryBPS=False,
+                canonical_files=(),
+                referenced_files={
+                    "references/automation-patterns.md#native-conditions"
+                },
+            )
+            assert result == {}, "master-off must override BP-warning auto-embed"
+
 
 # ---------------------------------------------------------------------------
 # Per-tool canonical mappings exist and point to files that should exist

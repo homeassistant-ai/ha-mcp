@@ -134,6 +134,18 @@ class Settings(BaseSettings):
     # env-var users see the trade-off in their logs.
     enable_lite_docstrings: bool = Field(False, alias="ENABLE_LITE_DOCSTRINGS")
 
+    # Mandatory best-practice skills — server-side master switch for the
+    # write-tool skill_content delivery feature (issue #1182). When True
+    # (default), the six write tools (automations / scripts / scenes /
+    # helpers / dashboards / yaml) attach the canonical best-practice
+    # reference files under ``skill_content`` on every successful write,
+    # plus auto-embed any sections cited by best-practice warnings. The
+    # per-call ``MandatoryBPS`` parameter on each tool controls whether
+    # the canonical files ship for that one call. This setting is the
+    # master gate above that — when False, NO skill_content goes out
+    # regardless of the per-call param or BP warnings. Default on.
+    enable_mandatory_bps: bool = Field(True, alias="ENABLE_MANDATORY_BPS")
+
     # Filesystem tools — read/write/delete/list under the HA config dir.
     # Previously gated by a direct ``os.getenv`` call in
     # ``tools/tools_filesystem.py`` so callers (and the settings UI)
@@ -331,6 +343,7 @@ FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
     ("tool_search_max_results", "TOOL_SEARCH_MAX_RESULTS", int),
     ("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
     ("enable_lite_docstrings", "ENABLE_LITE_DOCSTRINGS", bool),
+    ("enable_mandatory_bps", "ENABLE_MANDATORY_BPS", bool),
     ("enable_filesystem_tools", "HAMCP_ENABLE_FILESYSTEM_TOOLS", bool),
     (
         "enable_custom_component_integration",

@@ -1999,7 +1999,18 @@ def build_skill_content(
         callers should omit the ``skill_content`` field from the response
         when the return is empty.
     """
+    from ..config import get_global_settings
     from ..utils.skill_loader import get_skills_dir, resolve_skill_files
+
+    # Server-side master switch (issue #1182). When the operator has set
+    # ENABLE_MANDATORY_BPS=false (env var / addon config / web UI), NO
+    # skill_content goes out for any write tool — neither the per-call
+    # canonical files nor the BP-warning auto-embed nor the opt-out hint.
+    # Sits above the per-call ``MandatoryBPS`` flag because that flag
+    # controls per-call behaviour; this controls whether the feature is
+    # active at all.
+    if not get_global_settings().enable_mandatory_bps:
+        return {}
 
     wanted: set[str] = set()
     if MandatoryBPS:

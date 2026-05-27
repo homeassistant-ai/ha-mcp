@@ -33,6 +33,7 @@ options:
   backup_hint: "normal"
   enable_tool_search: false
   enable_tool_security_policies: false
+  enable_mandatory_bps: true
   enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
@@ -42,6 +43,7 @@ schema:
   secret_path: str?
   enable_tool_search: bool?
   enable_tool_security_policies: bool?
+  enable_mandatory_bps: bool?
   enable_auto_backup: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?
