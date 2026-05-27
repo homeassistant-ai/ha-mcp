@@ -609,7 +609,7 @@ jobs:
 
             const jsonSchema = '{"completeness":"complete|incomplete","classification":"bug|enhancement|question|invalid",'
               + '"missing_info":[],"duplicate_of":null,"duplicate_confidence":"high|medium|low","related":[],'
-              + '"priority":null,"size":null,"good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}';
+              + '"priority":"Urgent|High|Medium|null","effort":"Low|Medium|High|null","good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}';
 
             const prompt = [
               'You are triaging a GitHub issue for ha-mcp (Home Assistant MCP Server — 92+ tools enabling AI',
@@ -656,7 +656,7 @@ jobs:
               'it is a duplicate. related = candidates that touch the same area but are not duplicates.',
               '',
               '### 5. Priority (bugs only; null for all others)',
-              'P0 features (regression blocking any = P0; partial outage of one = P1):',
+              'Core features (regression blocking any = Urgent; partial outage of one = High):',
               '- HA connection / authentication',
               '- Service calls / device control (ha_call_service, ha_bulk_control)',
               '- Entity state access (ha_get_state, ha_search_entities, ha_deep_search)',
@@ -666,17 +666,17 @@ jobs:
               '- Template evaluation (ha_eval_template)',
               '- Automation / script tracing (ha_get_automation_traces)',
               '',
-              'P0: regression in recent release AND blocks a P0 feature, OR affects multiple P0 features',
-              'P1: one tool broken but workaround exists, or affects subset (specific install method / HA version)',
-              'P2: cosmetic, minor edge case, wrong error message, rarely-hit path',
+              'Urgent: regression in recent release AND blocks a core feature, OR affects multiple core features',
+              'High: one tool broken but workaround exists, or affects subset (specific install method / HA version)',
+              'Medium: cosmetic, minor edge case, wrong error message, rarely-hit path',
               '',
-              '### 6. Size (enhancements only; null for all others)',
-              'S: one tool/parameter/setting, ~1 file',
-              'M: new tool or significant change to existing tool, multiple files',
-              'L: new subsystem, new integration pattern, architectural change',
+              '### 6. Effort (enhancements only; null for all others)',
+              'Low: one tool/parameter/setting, ~1 file',
+              'Medium: new tool or significant change to existing tool, multiple files',
+              'High: new subsystem, new integration pattern, architectural change',
               '',
               '### 7. good_first_issue',
-              'true if P2 bug OR S enhancement (well-scoped, good for new contributors)',
+              'true if Medium priority bug OR Low effort enhancement (well-scoped, good for new contributors)',
               '',
               'Respond with ONLY this JSON (fill all fields; use null where not applicable):',
               jsonSchema,
@@ -743,8 +743,8 @@ jobs:
             // Native org issue fields (gh api /orgs/homeassistant-ai/issue-fields)
             const PRIORITY_FIELD_ID = 36564402;
             const EFFORT_FIELD_ID = 36564405;
-            const PRIORITY_OPTIONS = { P0: 63981585, P1: 63981586, P2: 63981587 };  // Urgent, High, Medium
-            const EFFORT_OPTIONS   = { S: 63981591, M: 63981590, L: 63981589 };     // Low, Medium, High
+            const PRIORITY_OPTIONS = { Urgent: 63981585, High: 63981586, Medium: 63981587 };
+            const EFFORT_OPTIONS   = { Low: 63981591, Medium: 63981590, High: 63981589 };
 
             const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nYour issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
 
@@ -829,12 +829,12 @@ jobs:
             const relatedNumbers = Array.isArray(result.related) ? result.related : [];
             const missingInfo = Array.isArray(result.missing_info) ? result.missing_info : [];
             const priority = result.priority || null;
-            const issueSize = result.size || null;
+            const effort = result.effort || null;
             const goodFirstIssue = result.good_first_issue || false;
 
             core.info('Triage result: ' + JSON.stringify({
               completeness, classification, isDuplicate,
-              duplicateNumber, priority, issueSize, goodFirstIssue
+              duplicateNumber, priority, effort, goodFirstIssue
             }));
 
             // === FLOW DECISION ===
@@ -868,9 +868,9 @@ jobs:
                 fieldUpdates.push({ field_id: PRIORITY_FIELD_ID, value: PRIORITY_OPTIONS[priority] });
                 core.info('Setting Priority = ' + priority);
               }
-              if (issueSize && EFFORT_OPTIONS[issueSize]) {
-                fieldUpdates.push({ field_id: EFFORT_FIELD_ID, value: EFFORT_OPTIONS[issueSize] });
-                core.info('Setting Effort = ' + issueSize);
+              if (effort && EFFORT_OPTIONS[effort]) {
+                fieldUpdates.push({ field_id: EFFORT_FIELD_ID, value: EFFORT_OPTIONS[effort] });
+                core.info('Setting Effort = ' + effort);
               }
               if (fieldUpdates.length) await setIssueFields(fieldUpdates);
               await postComment('✅ Thanks for the report — this issue has enough information and has been added to the backlog.\n\n*🤖 Automated triage by Issue Bot*');
