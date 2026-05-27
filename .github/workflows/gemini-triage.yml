@@ -477,8 +477,11 @@ jobs:
               return { issue, score };
             });
 
-            // With extracted keywords: use a low threshold — keywords are already specific, so any
-            // match above noise is meaningful. Full-text fallback keeps the original threshold=60.
+            // Thresholds calibrated via sub-agent testing across a sample of real ha-mcp issues:
+            // - full-text=60: typical noise floor for unrelated issues sharing common HA vocabulary
+            //   (words like "entity", "automation", "service" saturate IDF, so true matches score much higher)
+            // - keyword=1.0: extracted keywords are already specific/discriminative, so any above-noise
+            //   match is meaningful; a low threshold avoids discarding weak-but-relevant candidates
             const THRESHOLD = usingKeywords ? 1.0 : 60;
             const candidates = scored
               .sort((a, b) => b.score - a.score)
