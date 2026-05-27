@@ -47,7 +47,6 @@ RELOAD_TARGETS = {
     "input_datetimes": ("input_datetime", "reload"),
     "input_buttons": ("input_button", "reload"),
     "timers": ("timer", "reload"),
-    "counters": ("counter", "reload"),
     "templates": ("template", "reload"),
     "persons": ("person", "reload"),
     "zones": ("zone", "reload"),
@@ -251,7 +250,6 @@ class SystemTools:
           - "input_datetimes": Reload input_datetime helpers
           - "input_buttons": Reload input_button helpers
           - "timers": Reload timer helpers
-          - "counters": Reload counter helpers
           - "templates": Reload template sensors/entities
           - "persons": Reload person configurations
           - "zones": Reload zone configurations
