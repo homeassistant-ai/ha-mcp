@@ -169,7 +169,10 @@ def _unauthorized_response(service_name: str, **extra: Any) -> dict[str, Any]:
 
 def _caller_token_ok(hass: HomeAssistant, call: ServiceCall) -> bool:
     """Return True if the caller presented the configured token."""
-    expected = hass.data.get(DOMAIN, {}).get(_HASS_DATA_TOKEN_KEY)
+    domain_data = hass.data.get(DOMAIN)
+    expected = (
+        domain_data.get(_HASS_DATA_TOKEN_KEY) if isinstance(domain_data, dict) else None
+    )
     presented = call.data.get(CALLER_TOKEN_FIELD)
     # Constant-time compare: token is low-entropy enough that timing leaks
     # don't meaningfully affect the threat model, but secrets.compare_digest
@@ -1202,7 +1205,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         surface. The dangerous services (read/write/delete/edit_yaml) require
         the token to be presented; this one returns it.
         """
-        token = hass.data.get(DOMAIN, {}).get(_HASS_DATA_TOKEN_KEY)
+        domain_data = hass.data.get(DOMAIN)
+        token = (
+            domain_data.get(_HASS_DATA_TOKEN_KEY)
+            if isinstance(domain_data, dict)
+            else None
+        )
         if not isinstance(token, str) or not token:
             return {
                 "success": False,
@@ -1278,6 +1286,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Drop the cached token from hass.data so a subsequent setup_entry
     # re-reads from storage (covers the reload-after-rotate path).
-    if DOMAIN in hass.data:
-        hass.data[DOMAIN].pop(_HASS_DATA_TOKEN_KEY, None)
+    domain_data = hass.data.get(DOMAIN)
+    if isinstance(domain_data, dict):
+        domain_data.pop(_HASS_DATA_TOKEN_KEY, None)
     return True

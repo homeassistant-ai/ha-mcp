@@ -46,7 +46,8 @@ MCP_TOOLS_DOMAIN = "ha_mcp_tools"
 # subsequent call comes back unauthorized (covers token rotation).
 CALLER_TOKEN_FIELD = "_ha_mcp_token"
 CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
-_CALLER_TOKEN_CACHE: dict[str, str] = {}  # keyed by id(client) to support multi-client
+# Keyed by id(client) (int) to support multi-client setups.
+_CALLER_TOKEN_CACHE: dict[int, str] = {}
 _CALLER_TOKEN_LOCKS: dict[int, asyncio.Lock] = {}
 
 
@@ -75,13 +76,13 @@ async def _fetch_caller_token(client: Any) -> str:
             "ha_mcp_tools.get_caller_token did not return a usable token. "
             "Reload the ha_mcp_tools integration in Home Assistant."
         )
-    _CALLER_TOKEN_CACHE[str(id(client))] = token
+    _CALLER_TOKEN_CACHE[id(client)] = token
     return token
 
 
 async def _ensure_caller_token(client: Any, *, force_refresh: bool = False) -> str:
     """Return a cached or freshly-fetched caller token."""
-    key = str(id(client))
+    key = id(client)
     if not force_refresh:
         cached = _CALLER_TOKEN_CACHE.get(key)
         if cached:
@@ -142,6 +143,7 @@ def _reset_caller_token_cache() -> None:
     """Test hook: clear the module-level token cache."""
     _CALLER_TOKEN_CACHE.clear()
     _CALLER_TOKEN_LOCKS.clear()
+
 
 # Security constants - mirrors the custom component config
 READABLE_PATTERNS = [

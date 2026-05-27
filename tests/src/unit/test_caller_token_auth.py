@@ -188,7 +188,9 @@ class TestCallMcpToolsServiceInjectsToken:
         client = _make_client_with_token("server-token-B")
 
         await call_mcp_tools_service(client, "list_files", {"path": "www"})
-        await call_mcp_tools_service(client, "read_file", {"path": "configuration.yaml"})
+        await call_mcp_tools_service(
+            client, "read_file", {"path": "configuration.yaml"}
+        )
 
         # Bootstrap should fire exactly once — second call reuses cached token.
         bootstrap_calls = [
@@ -206,7 +208,12 @@ class TestCallMcpToolsServiceInjectsToken:
 
         async def fake_call_service(domain, service, payload, **kwargs):
             if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
-                return {"service_response": {"success": True, "token": state["current_token"]}}
+                return {
+                    "service_response": {
+                        "success": True,
+                        "token": state["current_token"],
+                    }
+                }
             state["downstream_calls"] += 1
             # First downstream call: simulate stale-cache rejection
             if state["downstream_calls"] == 1:
@@ -230,7 +237,8 @@ class TestCallMcpToolsServiceInjectsToken:
         # Pre-seed the cache with a stale token so the first downstream call
         # uses it, gets rejected, refetches, and retries.
         from ha_mcp.tools.tools_filesystem import _CALLER_TOKEN_CACHE
-        _CALLER_TOKEN_CACHE[str(id(client))] = "stale-token"
+
+        _CALLER_TOKEN_CACHE[id(client)] = "stale-token"
 
         result = await call_mcp_tools_service(client, "write_file", {"path": "www/x"})
 

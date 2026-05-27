@@ -13,15 +13,15 @@ from unittest.mock import MagicMock
 import pytest
 
 # Mock the Home Assistant imports before importing the module
-sys.modules['voluptuous'] = MagicMock()
-sys.modules['homeassistant'] = MagicMock()
-sys.modules['homeassistant.components'] = MagicMock()
-sys.modules['homeassistant.components.persistent_notification'] = MagicMock()
-sys.modules['homeassistant.config_entries'] = MagicMock()
-sys.modules['homeassistant.core'] = MagicMock()
-sys.modules['homeassistant.helpers'] = MagicMock()
-sys.modules['homeassistant.helpers.config_validation'] = MagicMock()
-sys.modules['homeassistant.helpers.storage'] = MagicMock()
+sys.modules["voluptuous"] = MagicMock()
+sys.modules["homeassistant"] = MagicMock()
+sys.modules["homeassistant.components"] = MagicMock()
+sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
+sys.modules["homeassistant.config_entries"] = MagicMock()
+sys.modules["homeassistant.core"] = MagicMock()
+sys.modules["homeassistant.helpers"] = MagicMock()
+sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
+sys.modules["homeassistant.helpers.storage"] = MagicMock()
 
 
 # Now we can import the functions
@@ -47,50 +47,113 @@ class TestIsPathAllowedForDir:
     def test_allows_www_directory(self, tmp_path):
         """Should allow paths in www/ directory."""
         assert _is_path_allowed_for_dir(tmp_path, "www/", ALLOWED_READ_DIRS) is True
-        assert _is_path_allowed_for_dir(tmp_path, "www/test.css", ALLOWED_READ_DIRS) is True
-        assert _is_path_allowed_for_dir(tmp_path, "www/subdir/test.js", ALLOWED_READ_DIRS) is True
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "www/test.css", ALLOWED_READ_DIRS)
+            is True
+        )
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "www/subdir/test.js", ALLOWED_READ_DIRS)
+            is True
+        )
 
     def test_allows_themes_directory(self, tmp_path):
         """Should allow paths in themes/ directory."""
         assert _is_path_allowed_for_dir(tmp_path, "themes/", ALLOWED_READ_DIRS) is True
-        assert _is_path_allowed_for_dir(tmp_path, "themes/dark.yaml", ALLOWED_READ_DIRS) is True
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "themes/dark.yaml", ALLOWED_READ_DIRS)
+            is True
+        )
 
     def test_allows_custom_templates_directory(self, tmp_path):
         """Should allow paths in custom_templates/ directory."""
-        assert _is_path_allowed_for_dir(tmp_path, "custom_templates/", ALLOWED_READ_DIRS) is True
-        assert _is_path_allowed_for_dir(tmp_path, "custom_templates/test.jinja2", ALLOWED_READ_DIRS) is True
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "custom_templates/", ALLOWED_READ_DIRS)
+            is True
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "custom_templates/test.jinja2", ALLOWED_READ_DIRS
+            )
+            is True
+        )
 
     def test_blocks_config_root_files(self, tmp_path):
         """Should block access to files in config root (not in allowed dirs)."""
-        assert _is_path_allowed_for_dir(tmp_path, "configuration.yaml", ALLOWED_READ_DIRS) is False
-        assert _is_path_allowed_for_dir(tmp_path, "secrets.yaml", ALLOWED_READ_DIRS) is False
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "configuration.yaml", ALLOWED_READ_DIRS)
+            is False
+        )
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "secrets.yaml", ALLOWED_READ_DIRS)
+            is False
+        )
 
     def test_blocks_path_traversal_with_dotdot(self, tmp_path):
         """Should block path traversal with '..'."""
-        assert _is_path_allowed_for_dir(tmp_path, "../etc/passwd", ALLOWED_READ_DIRS) is False
-        assert _is_path_allowed_for_dir(tmp_path, "www/../secrets.yaml", ALLOWED_READ_DIRS) is False
-        assert _is_path_allowed_for_dir(tmp_path, "www/../../etc/passwd", ALLOWED_READ_DIRS) is False
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "../etc/passwd", ALLOWED_READ_DIRS)
+            is False
+        )
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "www/../secrets.yaml", ALLOWED_READ_DIRS)
+            is False
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "www/../../etc/passwd", ALLOWED_READ_DIRS
+            )
+            is False
+        )
 
     def test_blocks_absolute_paths(self, tmp_path):
         """Should block absolute paths."""
-        assert _is_path_allowed_for_dir(tmp_path, "/etc/passwd", ALLOWED_READ_DIRS) is False
-        assert _is_path_allowed_for_dir(tmp_path, "/www/test.css", ALLOWED_READ_DIRS) is False
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "/etc/passwd", ALLOWED_READ_DIRS)
+            is False
+        )
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "/www/test.css", ALLOWED_READ_DIRS)
+            is False
+        )
 
     def test_blocks_storage_directory(self, tmp_path):
         """Should block .storage directory."""
-        assert _is_path_allowed_for_dir(tmp_path, ".storage/", ALLOWED_READ_DIRS) is False
-        assert _is_path_allowed_for_dir(tmp_path, ".storage/auth", ALLOWED_READ_DIRS) is False
+        assert (
+            _is_path_allowed_for_dir(tmp_path, ".storage/", ALLOWED_READ_DIRS) is False
+        )
+        assert (
+            _is_path_allowed_for_dir(tmp_path, ".storage/auth", ALLOWED_READ_DIRS)
+            is False
+        )
 
     def test_blocks_custom_components_directory(self, tmp_path):
         """Should block custom_components directory for writes."""
-        assert _is_path_allowed_for_dir(tmp_path, "custom_components/", ALLOWED_WRITE_DIRS) is False
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "custom_components/", ALLOWED_WRITE_DIRS)
+            is False
+        )
 
     def test_allows_dashboards_directory(self, tmp_path):
         """Should allow paths in dashboards/ directory (YAML-mode dashboards)."""
-        assert _is_path_allowed_for_dir(tmp_path, "dashboards/", ALLOWED_READ_DIRS) is True
-        assert _is_path_allowed_for_dir(tmp_path, "dashboards/main.yaml", ALLOWED_READ_DIRS) is True
-        assert _is_path_allowed_for_dir(tmp_path, "dashboards/", ALLOWED_WRITE_DIRS) is True
-        assert _is_path_allowed_for_dir(tmp_path, "dashboards/main.yaml", ALLOWED_WRITE_DIRS) is True
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "dashboards/", ALLOWED_READ_DIRS) is True
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "dashboards/main.yaml", ALLOWED_READ_DIRS
+            )
+            is True
+        )
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "dashboards/", ALLOWED_WRITE_DIRS)
+            is True
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "dashboards/main.yaml", ALLOWED_WRITE_DIRS
+            )
+            is True
+        )
 
 
 class TestIsPathAllowedForRead:
@@ -135,8 +198,18 @@ class TestIsPathAllowedForRead:
 
     def test_allows_custom_components_py_files(self, tmp_path):
         """Should allow reading custom_components/**/*.py files."""
-        assert _is_path_allowed_for_read(tmp_path, "custom_components/my_integration/init.py") is True
-        assert _is_path_allowed_for_read(tmp_path, "custom_components/my_integration/__init__.py") is True
+        assert (
+            _is_path_allowed_for_read(
+                tmp_path, "custom_components/my_integration/init.py"
+            )
+            is True
+        )
+        assert (
+            _is_path_allowed_for_read(
+                tmp_path, "custom_components/my_integration/__init__.py"
+            )
+            is True
+        )
 
     def test_blocks_path_traversal(self, tmp_path):
         """Should block path traversal attempts outside config dir."""
@@ -280,7 +353,9 @@ class TestFileOperationsIntegration:
 
         # Create config files
         (config_path / "configuration.yaml").write_text("homeassistant:\n  name: Test")
-        (config_path / "secrets.yaml").write_text("api_key: secret123\npassword: pass456")
+        (config_path / "secrets.yaml").write_text(
+            "api_key: secret123\npassword: pass456"
+        )
         (config_path / "automations.yaml").write_text("- alias: Test\n  trigger: []")
 
         yield config_path
@@ -308,12 +383,18 @@ class TestFileOperationsIntegration:
 
     def test_write_to_www_allowed(self, config_dir):
         """Should allow writing to www directory."""
-        assert _is_path_allowed_for_dir(config_dir, "www/new_file.css", ALLOWED_WRITE_DIRS)
+        assert _is_path_allowed_for_dir(
+            config_dir, "www/new_file.css", ALLOWED_WRITE_DIRS
+        )
 
     def test_write_to_config_root_blocked(self, config_dir):
         """Should block writing to config root."""
-        assert not _is_path_allowed_for_dir(config_dir, "configuration.yaml", ALLOWED_WRITE_DIRS)
-        assert not _is_path_allowed_for_dir(config_dir, "new_file.yaml", ALLOWED_WRITE_DIRS)
+        assert not _is_path_allowed_for_dir(
+            config_dir, "configuration.yaml", ALLOWED_WRITE_DIRS
+        )
+        assert not _is_path_allowed_for_dir(
+            config_dir, "new_file.yaml", ALLOWED_WRITE_DIRS
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +480,9 @@ class TestWriteFileSync:
     def test_creates_new_file(self, tmp_path):
         target = tmp_path / "sub" / "x.txt"
 
-        result = _write_file_sync(target, "hello", overwrite=False, create_dirs=True, config_dir=tmp_path)
+        result = _write_file_sync(
+            target, "hello", overwrite=False, create_dirs=True, config_dir=tmp_path
+        )
 
         assert "_error" not in result
         assert result["is_new"] is True
@@ -410,7 +493,9 @@ class TestWriteFileSync:
         target = tmp_path / "x.txt"
         target.write_text("original")
 
-        result = _write_file_sync(target, "new", overwrite=False, create_dirs=False, config_dir=tmp_path)
+        result = _write_file_sync(
+            target, "new", overwrite=False, create_dirs=False, config_dir=tmp_path
+        )
 
         assert result == {"_error": "exists_no_overwrite"}
         assert target.read_text() == "original"
@@ -419,7 +504,9 @@ class TestWriteFileSync:
         target = tmp_path / "x.txt"
         target.write_text("original")
 
-        result = _write_file_sync(target, "new", overwrite=True, create_dirs=False, config_dir=tmp_path)
+        result = _write_file_sync(
+            target, "new", overwrite=True, create_dirs=False, config_dir=tmp_path
+        )
 
         assert result["is_new"] is False
         assert target.read_text() == "new"
@@ -427,7 +514,9 @@ class TestWriteFileSync:
     def test_returns_no_parent_when_create_dirs_false(self, tmp_path):
         target = tmp_path / "missing_dir" / "x.txt"
 
-        result = _write_file_sync(target, "hi", overwrite=False, create_dirs=False, config_dir=tmp_path)
+        result = _write_file_sync(
+            target, "hi", overwrite=False, create_dirs=False, config_dir=tmp_path
+        )
 
         assert result["_error"] == "no_parent"
         assert result["parent"] == "missing_dir"

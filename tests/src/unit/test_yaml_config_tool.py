@@ -42,6 +42,7 @@ def _build_call_service_mock():
       1. ha_mcp_tools.get_caller_token → returns the token
       2. ha_mcp_tools.<actual_service> → returns the tool's response
     """
+
     async def fake_call_service(domain, service, payload, **kwargs):
         if service == "get_caller_token":
             return {"service_response": {"success": True, "token": "test-token"}}
