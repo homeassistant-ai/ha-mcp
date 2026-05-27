@@ -1,0 +1,311 @@
+"""Tests for the ha_mcp_tools caller-token auth path.
+
+Covers three layers:
+
+1. **Custom component handlers** — token check, unauthorized response shape,
+   get_caller_token bootstrap surface.
+2. **ha-mcp wrapper helper** (``call_mcp_tools_service``) — fetches and
+   caches the token, injects it on every call, refetches on unauthorized.
+3. **ha_call_service refusal** — the wrapper-layer block on the
+   ``ha_mcp_tools`` domain (closes the issue #1451 bypass).
+
+Custom-component tests stub the homeassistant.* imports the same way
+``test_custom_component_filesystem.py`` does so they can run without
+the real HA package available.
+"""
+
+from __future__ import annotations
+
+import sys
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastmcp.exceptions import ToolError
+
+# --- Custom-component-side imports (must stub HA first) ---------------------
+
+sys.modules.setdefault("voluptuous", MagicMock())
+sys.modules.setdefault("homeassistant", MagicMock())
+sys.modules.setdefault("homeassistant.components", MagicMock())
+sys.modules.setdefault("homeassistant.components.persistent_notification", MagicMock())
+sys.modules.setdefault("homeassistant.config_entries", MagicMock())
+sys.modules.setdefault("homeassistant.core", MagicMock())
+sys.modules.setdefault("homeassistant.helpers", MagicMock())
+sys.modules.setdefault("homeassistant.helpers.config_validation", MagicMock())
+sys.modules.setdefault("homeassistant.helpers.storage", MagicMock())
+
+from custom_components.ha_mcp_tools import (  # noqa: E402
+    CALLER_TOKEN_FIELD,
+    _caller_token_ok,
+    _unauthorized_response,
+)
+from custom_components.ha_mcp_tools.const import DOMAIN  # noqa: E402
+
+# --- ha-mcp wrapper-side imports --------------------------------------------
+from ha_mcp.tools.tools_filesystem import (  # noqa: E402
+    CALLER_TOKEN_BOOTSTRAP_SERVICE,
+    MCP_TOOLS_DOMAIN,
+    _reset_caller_token_cache,
+    call_mcp_tools_service,
+)
+
+# =============================================================================
+# Custom-component side: handler-level token check
+# =============================================================================
+
+
+def _fake_hass(token: str | None) -> MagicMock:
+    """Build a hass stand-in whose .data carries the expected caller token."""
+    hass = MagicMock()
+    hass.data = {DOMAIN: {"caller_token": token}} if token is not None else {}
+    return hass
+
+
+def _fake_call(presented_token: str | None, **extra: str) -> MagicMock:
+    """Build a ServiceCall stand-in with .data containing the presented token."""
+    call = MagicMock()
+    payload: dict[str, str] = dict(extra)
+    if presented_token is not None:
+        payload[CALLER_TOKEN_FIELD] = presented_token
+    call.data = payload
+    return call
+
+
+class TestCallerTokenOk:
+    """The handler's pre-flight check that gates all dangerous services."""
+
+    def test_accepts_matching_token(self):
+        hass = _fake_hass("good-token-xyz")
+        call = _fake_call("good-token-xyz")
+        assert _caller_token_ok(hass, call) is True
+
+    def test_rejects_missing_token(self):
+        hass = _fake_hass("good-token-xyz")
+        call = _fake_call(None)
+        assert _caller_token_ok(hass, call) is False
+
+    def test_rejects_mismatched_token(self):
+        hass = _fake_hass("good-token-xyz")
+        call = _fake_call("not-the-right-one")
+        assert _caller_token_ok(hass, call) is False
+
+    def test_rejects_when_hass_data_missing_token(self):
+        """If setup_entry hasn't run, no caller is authorized."""
+        hass = _fake_hass(None)
+        call = _fake_call("anything")
+        assert _caller_token_ok(hass, call) is False
+
+    def test_rejects_empty_string_token(self):
+        hass = _fake_hass("good-token-xyz")
+        call = _fake_call("")
+        assert _caller_token_ok(hass, call) is False
+
+
+class TestUnauthorizedResponse:
+    """The structured 'unauthorized' reply the helper emits."""
+
+    def test_has_error_code_unauthorized(self):
+        """Clients detect via error_code, not by string-matching error text."""
+        resp = _unauthorized_response("write_file")
+        assert resp["error_code"] == "unauthorized"
+        assert resp["success"] is False
+
+    def test_mentions_service_name_in_error(self):
+        resp = _unauthorized_response("delete_file")
+        assert "delete_file" in resp["error"]
+
+    def test_extra_kwargs_merged(self):
+        """list_files expects a 'files' key even on error — extras propagate."""
+        resp = _unauthorized_response("list_files", files=[])
+        assert resp["files"] == []
+        assert resp["error_code"] == "unauthorized"
+
+
+# =============================================================================
+# ha-mcp wrapper side: bootstrap + injection + refetch
+# =============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _reset_token_cache_between_tests():
+    """Each test starts with an empty per-client token cache."""
+    _reset_caller_token_cache()
+    yield
+    _reset_caller_token_cache()
+
+
+def _make_client_with_token(token: str) -> AsyncMock:
+    """Client that returns ``token`` from the get_caller_token bootstrap and
+    echoes payload back for downstream service calls so tests can assert
+    that the token was injected."""
+    client = AsyncMock()
+
+    async def fake_call_service(domain, service, payload, **kwargs):
+        if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
+            # HA wraps response under "service_response" — mirror that so
+            # unwrap_service_response finds the token.
+            return {"service_response": {"success": True, "token": token}}
+        # Echo the payload so the test can verify token injection.
+        return {
+            "service_response": {
+                "success": True,
+                "received_payload": dict(payload),
+                "domain": domain,
+                "service": service,
+            }
+        }
+
+    client.call_service.side_effect = fake_call_service
+    return client
+
+
+class TestCallMcpToolsServiceInjectsToken:
+    """call_mcp_tools_service must always pass the cached/fetched token."""
+
+    @pytest.mark.asyncio
+    async def test_bootstraps_token_on_first_call(self):
+        client = _make_client_with_token("server-token-A")
+        result = await call_mcp_tools_service(client, "list_files", {"path": "www"})
+
+        # First call to client.call_service should be the bootstrap
+        first_call = client.call_service.await_args_list[0]
+        assert first_call.args[1] == CALLER_TOKEN_BOOTSTRAP_SERVICE
+
+        # The downstream call_service was invoked with the token in payload
+        downstream = client.call_service.await_args_list[1]
+        downstream_payload = downstream.args[2]
+        assert downstream_payload[CALLER_TOKEN_FIELD] == "server-token-A"
+        assert downstream_payload["path"] == "www"
+
+        # And the result came back wrapped — the helper does not unwrap
+        # itself; that's the caller's job to keep parity with the prior
+        # behavior of self._client.call_service(...).
+        echoed = result["service_response"]
+        assert echoed["received_payload"][CALLER_TOKEN_FIELD] == "server-token-A"
+
+    @pytest.mark.asyncio
+    async def test_caches_token_across_calls(self):
+        client = _make_client_with_token("server-token-B")
+
+        await call_mcp_tools_service(client, "list_files", {"path": "www"})
+        await call_mcp_tools_service(client, "read_file", {"path": "configuration.yaml"})
+
+        # Bootstrap should fire exactly once — second call reuses cached token.
+        bootstrap_calls = [
+            c
+            for c in client.call_service.await_args_list
+            if c.args[1] == CALLER_TOKEN_BOOTSTRAP_SERVICE
+        ]
+        assert len(bootstrap_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_refetches_and_retries_once_on_unauthorized(self):
+        """Token rotation flow: cached token is stale → refetch → succeed."""
+        client = AsyncMock()
+        state = {"current_token": "fresh-token", "downstream_calls": 0}
+
+        async def fake_call_service(domain, service, payload, **kwargs):
+            if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
+                return {"service_response": {"success": True, "token": state["current_token"]}}
+            state["downstream_calls"] += 1
+            # First downstream call: simulate stale-cache rejection
+            if state["downstream_calls"] == 1:
+                return {
+                    "service_response": {
+                        "success": False,
+                        "error_code": "unauthorized",
+                        "error": "stale",
+                    }
+                }
+            # Second downstream call: accept
+            return {
+                "service_response": {
+                    "success": True,
+                    "received_payload": dict(payload),
+                }
+            }
+
+        client.call_service.side_effect = fake_call_service
+
+        # Pre-seed the cache with a stale token so the first downstream call
+        # uses it, gets rejected, refetches, and retries.
+        from ha_mcp.tools.tools_filesystem import _CALLER_TOKEN_CACHE
+        _CALLER_TOKEN_CACHE[str(id(client))] = "stale-token"
+
+        result = await call_mcp_tools_service(client, "write_file", {"path": "www/x"})
+
+        # Two downstream attempts were made
+        assert state["downstream_calls"] == 2
+        # Second succeeded with the freshly-fetched token
+        echoed = result["service_response"]
+        assert echoed["received_payload"][CALLER_TOKEN_FIELD] == "fresh-token"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_bootstrap_returns_no_token(self):
+        client = AsyncMock()
+        # Bootstrap returns a malformed response
+        client.call_service.return_value = {"service_response": {"success": False}}
+        with pytest.raises(RuntimeError, match="did not return a usable token"):
+            await call_mcp_tools_service(client, "list_files", {"path": "www"})
+
+
+# =============================================================================
+# ha_call_service refusal of the ha_mcp_tools domain (issue #1451)
+# =============================================================================
+
+
+class TestHaCallServiceRefusesMcpToolsDomain:
+    """ha_call_service must not forward to ha_mcp_tools — that's the bypass
+    skialpine's LLM used in issue #1451 to land yaml edits on stable."""
+
+    @pytest.mark.asyncio
+    async def test_blocks_ha_mcp_tools_domain(self):
+        from ha_mcp.tools.tools_service import ServiceTools
+
+        # Use a real ServiceTools instance with a mocked client — we never
+        # reach the client because the refusal is the first check.
+        tools = ServiceTools.__new__(ServiceTools)
+        tools._client = AsyncMock()
+        tools._device_tools = AsyncMock()
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_call_service(
+                domain="ha_mcp_tools", service="write_file", data={"path": "www/x"}
+            )
+
+        # Error message should point the LLM at the dedicated tool.
+        msg = str(exc_info.value)
+        assert "ha_mcp_tools" in msg
+        assert any(
+            name in msg
+            for name in ("ha_write_file", "ha_list_files", "ha_config_set_yaml")
+        )
+        # The downstream client was never touched.
+        tools._client.call_service.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_does_not_block_other_domains(self):
+        """light.turn_on must still pass the refusal gate — only ha_mcp_tools is refused."""
+        from ha_mcp.tools.tools_service import ServiceTools
+
+        tools = ServiceTools.__new__(ServiceTools)
+        client = AsyncMock()
+        client.call_service.return_value = {"context": {"id": "ctx"}, "result": []}
+        tools._client = client
+        tools._device_tools = AsyncMock()
+
+        # Should NOT raise the domain-refusal ToolError. (May still raise
+        # downstream for unrelated reasons; we just assert we got past
+        # the refusal gate.) wait=False skips the state-change-verification
+        # path so this test focuses on the refusal logic alone.
+        try:
+            await tools.ha_call_service(
+                domain="light",
+                service="turn_on",
+                entity_id="light.kitchen",
+                wait=False,
+            )
+        except ToolError as exc:
+            assert "ha_mcp_tools" not in str(exc), (
+                "Refusal incorrectly triggered for non-ha_mcp_tools domain"
+            )

@@ -21,6 +21,7 @@ sys.modules['homeassistant.config_entries'] = MagicMock()
 sys.modules['homeassistant.core'] = MagicMock()
 sys.modules['homeassistant.helpers'] = MagicMock()
 sys.modules['homeassistant.helpers.config_validation'] = MagicMock()
+sys.modules['homeassistant.helpers.storage'] = MagicMock()
 
 
 # Now we can import the functions
