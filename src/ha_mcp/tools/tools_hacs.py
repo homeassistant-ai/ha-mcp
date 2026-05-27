@@ -836,17 +836,15 @@ async def wait_for_repo_registration(
                 # then give up.
                 return await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
 
-            # When the dispatch payload tells us the repo we care
-            # about just registered, skip straight to a fresh list
-            # lookup to grab the full entry (the event payload only
-            # carries id + full_name, not the rest of the fields
-            # callers may need).
             if event is not None:
                 payload = event.get("event") or {}
                 if (
                     isinstance(payload, dict)
                     and payload.get("repository", "").lower() == full_name_lower
                 ):
+                    # Matching repo dispatched — fetch the full entry
+                    # since the event payload only carries id +
+                    # full_name and callers usually need more fields.
                     repo = await _find_repo_in_list_by_full_name(
                         ws_client, full_name_lower
                     )
@@ -856,15 +854,21 @@ async def wait_for_repo_registration(
                             "(HACS dispatch event)"
                         )
                         return repo
-                # Unrelated repo's dispatch — fall through to the
-                # belt-and-braces list re-check below before looping.
+                # Unrelated repo's dispatch — go back to waiting.
+                # Re-listing here on every dispatch is what made the
+                # old polling approach expensive (the HACS list payload
+                # is 2 MB+ on busy installs); the dispatcher is the
+                # signal, the list is the source of truth only when
+                # the dispatcher says something happened for us.
+                continue
 
-            # Either no event (poll backstop fired) or an unrelated
-            # repo's dispatch — re-check the list before looping.
+            # event is None ⇒ the backstop poll fired without a
+            # dispatch. Belt-and-braces re-check the list in case
+            # HACS dropped/lost a dispatch event.
             repo = await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
             if repo is not None:
                 logger.info(
-                    f"Found {full_name} -> id={repo.get('id')} (post-event sample)"
+                    f"Found {full_name} -> id={repo.get('id')} (backstop poll sample)"
                 )
                 return repo
     finally:

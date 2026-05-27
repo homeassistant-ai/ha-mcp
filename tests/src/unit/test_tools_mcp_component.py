@@ -161,8 +161,14 @@ class TestWaitForRepoRegistration:
         assert ws_client.send_command.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_unrelated_event_still_rechecks_list(self):
-        """Event for a different repo: still re-check list, find ours, return."""
+    async def test_unrelated_event_does_not_recheck_list(self):
+        """Unrelated dispatch must NOT trigger a list lookup.
+
+        HACS' ``hacs/repositories/list`` payload can be 2 MB+ on busy
+        installs; re-listing on every unrelated dispatch event would
+        defeat the whole point of using the dispatcher as the signal.
+        The list re-check belongs on the backstop-poll path only.
+        """
         from ha_mcp.tools.tools_hacs import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
@@ -177,18 +183,31 @@ class TestWaitForRepoRegistration:
                 },
             }
         )
-        ws_client = _build_ws_client(
-            list_responses=[
-                _list_response_empty(),  # post-subscribe sample
-                _list_response_with_repo(repo_id=42),  # after unrelated event
-            ],
-            subscribe_result=(7, queue),
+        ws_client = MagicMock()
+        # send_command is called once for the post-subscribe sample,
+        # then must NOT be called again for the unrelated event —
+        # the test would block on the empty queue otherwise, so the
+        # short backstop interval ensures the timeout fires and we
+        # assert send_command was called exactly once (sample-only).
+        ws_client.send_command = AsyncMock(return_value=_list_response_empty())
+        ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
+        ws_client.unsubscribe_command = AsyncMock()
+
+        repo = await wait_for_repo_registration(
+            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=0.02
         )
 
-        repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
-
-        assert repo is not None
-        assert str(repo.get("id")) == "42"
+        assert repo is None
+        # 1 = post-subscribe sample. Anything more means we re-listed
+        # on the unrelated event (1 extra) or on the backstop tick
+        # (allowed — but with timeout=0.05 we may see one backstop poll
+        # and at most one final list lookup for the queue-shutdown
+        # path; cap at 3 to fail loudly on regression to per-event
+        # re-listing).
+        assert ws_client.send_command.await_count <= 3, (
+            f"send_command should not be called per-event; saw "
+            f"{ws_client.send_command.await_count} calls"
+        )
 
     @pytest.mark.asyncio
     async def test_subscribe_failure_falls_back_to_single_list_lookup(self):
