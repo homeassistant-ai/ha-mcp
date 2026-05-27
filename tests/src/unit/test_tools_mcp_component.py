@@ -413,13 +413,11 @@ class TestWaitForRepoRegistration:
         )
 
         ws_client = MagicMock()
-        ws_client.send_command = AsyncMock(
-            side_effect=[
-                _list_response_empty(),  # post-subscribe sample
-                _list_response_empty(),  # post-event list (race)
-                _list_response_empty(),  # any later list call
-            ]
-        )
+        # Every list call returns empty so the loop never finds the
+        # repo. The waiter must keep going until the wall-clock
+        # budget exhausts and return None — NOT return early on the
+        # single failed post-event lookup.
+        ws_client.send_command = AsyncMock(return_value=_list_response_empty())
         ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
         ws_client.unsubscribe_command = AsyncMock()
 

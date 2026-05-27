@@ -852,8 +852,12 @@ async def wait_for_repo_registration(
                 return None
 
             # Wait for HACS to nudge us; if it doesn't, fall through
-            # to a re-check at ``backstop_poll_interval``.
+            # to a re-check at ``backstop_poll_interval``. Distinguish
+            # "true backstop tick fired" from "wall-clock budget about
+            # to exhaust" — the latter must NOT trigger an extra list
+            # call right before the next iteration would exit anyway.
             wait_for = min(remaining, backstop_poll_interval)
+            was_backstop_tick = remaining >= backstop_poll_interval
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=wait_for)
             except TimeoutError:
@@ -916,9 +920,17 @@ async def wait_for_repo_registration(
                 # installs); we only re-list on the backstop tick.
                 continue
 
-            # event is None ⇒ the backstop poll fired without a
-            # dispatch. Belt-and-braces re-check the list in case
-            # HACS dropped/lost a dispatch event.
+            # event is None.
+            if not was_backstop_tick:
+                # The wait timed out because the wall-clock budget
+                # was about to exhaust, not because the backstop
+                # cadence fired — loop and let ``remaining <= 0``
+                # exit cleanly without burning a list call.
+                continue
+
+            # True backstop poll: HACS dispatcher has been quiet for
+            # ``backstop_poll_interval``. Belt-and-braces re-check
+            # the list in case HACS dropped/lost a dispatch event.
             repo = await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
             if repo is not None:
                 logger.info(
