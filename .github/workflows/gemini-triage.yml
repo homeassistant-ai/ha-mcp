@@ -556,30 +556,12 @@ jobs:
             const changelog = process.env.CHANGELOG_CONTEXT || 'No changelog available.';
             const toolList = process.env.TOOL_LIST || '';
 
-            // Strip template boilerplate: ### section headers, _No response_, blank collapse
+            // Keep section headers (### ...) so the model can see structure and assess completeness.
+            // Only strip _No response_ placeholders and collapse blank runs.
             const cleanBody = t => (t || '')
-              .replace(/^###\s+.+$/gm, '')
               .replace(/^_No response_$/gim, '')
               .replace(/\n{3,}/g, '\n\n')
               .trim();
-
-            // Summarise which template sections were filled — preserves completeness signal
-            // without sending the header text to the model
-            const sectionSummary = (() => {
-              const parts = rawBody.split(/^###\s+/m).slice(1);
-              if (parts.length === 0) return '';
-              const filled = [], empty = [];
-              for (const part of parts) {
-                const nl = part.indexOf('\n');
-                const name = part.substring(0, nl).trim().replace(/[^\w\s()]/g, '').trim();
-                const content = cleanBody(part.substring(nl));
-                (content.length > 10 ? filled : empty).push(name);
-              }
-              const parts2 = [];
-              if (filled.length) parts2.push(`Filled: ${filled.join(', ')}`);
-              if (empty.length)  parts2.push(`Empty: ${empty.join(', ')}`);
-              return parts2.length ? `Template sections — ${parts2.join(' | ')}\n` : '';
-            })();
 
             const issueBody = cleanBody(rawBody).substring(0, 1500);
 
@@ -612,15 +594,29 @@ jobs:
               + '"priority":"Urgent|High|Medium|null","effort":"Low|Medium|High|null","good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}';
 
             const prompt = [
-              'You are triaging a GitHub issue for ha-mcp (Home Assistant MCP Server — 92+ tools enabling AI',
-              'assistants to control Home Assistant smart homes: entity control, automations, scripts, dashboards,',
-              'templates, and more).',
+              'You are triaging a GitHub issue for ha-mcp.',
+              '',
+              '## What is ha-mcp',
+              'ha-mcp is a Model Context Protocol (MCP) server. MCP is a standard that exposes tool calls to LLM',
+              'agents (Claude, ChatGPT, Gemini, etc.). ha-mcp wraps the Home Assistant REST and WebSocket APIs',
+              'into ~92 named tools, each with a name, description, and parameter schema that guide the agent on',
+              'when and how to use it. A user runs ha-mcp alongside their AI assistant; the assistant calls these',
+              'tools to read entity states, trigger automations, control devices, manage dashboards, and more.',
+              '',
+              '## Two distinct bug classes',
+              '1. Code bug — a tool crashes, returns wrong data, fails to call the HA API correctly, or produces',
+              '   a malformed response. The fix is in Python code.',
+              '2. Agent-behavior bug — the tool description or parameter schema misleads the agent: wrong tool',
+              '   gets selected, parameters are misunderstood, the agent loops or gives up unnecessarily. The fix',
+              '   is in text (docstring, description, example), not code. This is still a real bug.',
+              '   The repo has a dedicated "AI Agent Behavior Feedback" template for this class. Issues with the',
+              '   agent-behavior label or describing the AI doing the wrong thing (even with no error thrown)',
+              '   are bugs, not questions.',
               '',
               'Evaluate ONLY on the text below. Respond with ONLY a JSON object — no prose, no markdown, no code block.',
               '',
               '## Issue #' + issueNumber + ': ' + issueTitle,
               'Type: ' + issueType,
-              sectionSummary,
               keywordSummary,
               'Body:',
               issueBody,
@@ -636,13 +632,15 @@ jobs:
               'Is there enough information to take action? Be lenient:',
               '- question or enhancement: always complete (no info requirements)',
               '- 70%+ of requirements present, or clear error/stack trace: complete',
-              'Requirements:',
+              'Requirements per type:',
               '- runtime-bug: error message, ha-mcp version, install method (uvx/pip/docker/addon), which tool',
               '- startup-bug: error details, ha-mcp version, install method, client app, OS',
-              '- agent-behavior: which tool, what input, actual output, expected output',
+              '- agent-behavior: (1) clear description of what the agent did wrong AND what correct behavior',
+              '  looks like, (2) conversation paste or tool call history showing the problematic interaction',
               '',
               '### 2. Classification (pick one)',
-              '- bug: broken or incorrect behavior (error, crash, wrong output)',
+              '- bug: broken or incorrect behavior — includes code bugs (crash, wrong output) AND agent-behavior',
+              '  bugs (wrong tool chosen, bad parameters, misleading description). Both are bugs.',
               '- enhancement: new feature or improvement that does not exist yet',
               '- question: asking how to do something; no clear bug or feature request',
               '- invalid: off-topic, spam, not actionable',
@@ -668,7 +666,8 @@ jobs:
               '',
               'Urgent: regression in recent release AND blocks a core feature, OR affects multiple core features',
               'High: one tool broken but workaround exists, or affects subset (specific install method / HA version)',
-              'Medium: cosmetic, minor edge case, wrong error message, rarely-hit path',
+              'Medium: cosmetic, minor edge case, wrong error message, rarely-hit path, or agent-behavior bug',
+              '  (agent-behavior bugs are Medium by default unless they block a core feature)',
               '',
               '### 6. Effort (enhancements only; null for all others)',
               'Low: one tool/parameter/setting, ~1 file',
