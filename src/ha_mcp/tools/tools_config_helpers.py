@@ -2358,11 +2358,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
-        *,
         MandatoryBPS: Annotated[
             bool,
-            Field(),
-        ],
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities and config subentries

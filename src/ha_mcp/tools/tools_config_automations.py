@@ -468,11 +468,10 @@ class AutomationConfigTools:
                 default=True,
             ),
         ] = True,
-        *,
         MandatoryBPS: Annotated[
             bool,
-            Field(),
-        ],
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant automation.

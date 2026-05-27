@@ -163,11 +163,10 @@ class YamlConfigTools:
                 ),
             ),
         ] = True,
-        *,
         MandatoryBPS: Annotated[
             bool,
-            Field(),
-        ],
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
         """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 

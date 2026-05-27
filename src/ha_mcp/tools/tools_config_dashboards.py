@@ -924,11 +924,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "For existing dashboards, only updated when explicitly provided."
             ),
         ] = None,
-        *,
         MandatoryBPS: Annotated[
             bool,
-            Field(),
-        ],
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant dashboard.
