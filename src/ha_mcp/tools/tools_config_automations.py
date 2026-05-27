@@ -61,8 +61,8 @@ logger = logging.getLogger(__name__)
 
 
 # Skill files attached to ha_config_set_automation responses when
-# enabled=True (default), plus auto-attached on best-practice
-# warning hits regardless of enabled. Paths are relative to the
+# MandatoryBPS=True (default), plus auto-attached on best-practice
+# warning hits regardless of MandatoryBPS. Paths are relative to the
 # home-assistant-best-practices skill directory.
 _AUTOMATION_SKILL_FILES: tuple[str, ...] = (
     "references/automation-patterns.md",
@@ -468,10 +468,11 @@ class AutomationConfigTools:
                 default=True,
             ),
         ] = True,
-        enabled: Annotated[
+        *,
+        MandatoryBPS: Annotated[
             bool,
-            Field(default=True),
-        ] = True,
+            Field(),
+        ],
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant automation.
@@ -688,7 +689,7 @@ class AutomationConfigTools:
                     config_hash,
                     python_transform,
                     category,
-                    enabled,
+                    MandatoryBPS,
                 )
                 return response
 
@@ -732,7 +733,7 @@ class AutomationConfigTools:
                 wait,
                 bp_warnings,
                 validation_meta,
-                enabled,
+                MandatoryBPS,
             )
 
         except ToolError:
@@ -769,7 +770,7 @@ class AutomationConfigTools:
         config_hash: str | None,
         python_transform: str,
         category: str | None,
-        enabled: bool,
+        MandatoryBPS: bool,
     ) -> tuple[dict[str, Any], BestPracticeCheckResult]:
         """Execute python_transform mode and return (response, bp_warnings)."""
         if not identifier:
@@ -854,7 +855,7 @@ class AutomationConfigTools:
             response["best_practice_warnings"] = list(bp_warnings)
         attach_skill_content(
             response,
-            enabled=enabled,
+            MandatoryBPS=MandatoryBPS,
             canonical_files=_AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )
@@ -868,7 +869,7 @@ class AutomationConfigTools:
         wait: bool | str,
         bp_warnings: BestPracticeCheckResult,
         validation_meta: dict[str, Any],
-        enabled: bool,
+        MandatoryBPS: bool,
     ) -> dict[str, Any]:
         """Execute config-replacement mode and return the tool response."""
         result = await self._client.upsert_automation_config(config_dict, identifier)
@@ -918,7 +919,7 @@ class AutomationConfigTools:
 
         attach_skill_content(
             result,
-            enabled=enabled,
+            MandatoryBPS=MandatoryBPS,
             canonical_files=_AUTOMATION_SKILL_FILES,
             referenced_files=bp_warnings.referenced_files,
         )

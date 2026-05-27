@@ -1,7 +1,7 @@
 """Tests for the skill_loader utility.
 
 The loader is the shared resolver behind both the explicit ha_get_skill_guide
-tool and the write-tool enabled parameter. Symlink + path-traversal
+tool and the write-tool MandatoryBPS parameter. Symlink + path-traversal
 guards mirror server.py::_handle_skill_guide_call, but unlike that handler the
 loader returns a partial dict instead of raising, so a missing reference can
 never fail the write operation that's embedding the response.

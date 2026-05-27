@@ -13,7 +13,7 @@ LLM-discoverable way to pull the relevant skill content:
    works on every MCP client regardless of resource-fetch support.
 
 The write tools also auto-embed the matching section into the next
-response via ``referenced_files``, and accept an ``enabled``
+response via ``referenced_files``, and accept an ``MandatoryBPS``
 parameter for opting out — neither is advertised here because the
 parameter carries no description in its Pydantic Field and the tool
 docstrings never reference it, so a model inspecting the schema sees
@@ -278,7 +278,7 @@ def _skill_route_suffix(skill_prefix: str | None, file_ref: str) -> str:
        works on every MCP client. Anchor stripped (the tool reads the
        whole file).
 
-    The write tools' own ``enabled`` parameter is visible in
+    The write tools' own ``MandatoryBPS`` parameter is visible in
     the catalog but undescribed (no Pydantic Field description, no
     docstring mention) so the LLM has no semantic toggle signal pointing
     at it — it is therefore not advertised here either. Auto-embed of

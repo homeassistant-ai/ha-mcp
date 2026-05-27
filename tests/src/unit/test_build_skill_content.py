@@ -1,6 +1,6 @@
 """Tests for util_helpers.build_skill_content (issue #1182).
 
-The helper is the shared assembly point for the enabled parameter on
+The helper is the shared assembly point for the MandatoryBPS parameter on
 every write tool (set_automation / _script / _scene / _helper / _dashboard /
 _yaml). Behaviour exercised here applies uniformly to all six call sites.
 """
@@ -56,14 +56,14 @@ def patched_get_skills_dir(fake_skills_dir: Path):
 
 
 # ---------------------------------------------------------------------------
-# enabled=True path: canonical files attached
+# MandatoryBPS=True path: canonical files attached
 # ---------------------------------------------------------------------------
 
 
 class TestIncludeSkillCanonical:
     def test_canonical_files_attached_when_on(self, patched_get_skills_dir):
         result = build_skill_content(
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=("references/automation-patterns.md",),
             referenced_files=None,
         )
@@ -74,7 +74,7 @@ class TestIncludeSkillCanonical:
 
     def test_multiple_canonical_files(self, patched_get_skills_dir):
         result = build_skill_content(
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=(
                 "references/automation-patterns.md",
                 "references/template-guidelines.md",
@@ -89,7 +89,7 @@ class TestIncludeSkillCanonical:
     def test_top_level_skill_md(self, patched_get_skills_dir):
         """Scenes use top-level SKILL.md as their canonical doc."""
         result = build_skill_content(
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=("SKILL.md",),
             referenced_files=None,
         )
@@ -97,25 +97,25 @@ class TestIncludeSkillCanonical:
 
 
 # ---------------------------------------------------------------------------
-# enabled=False path: canonical files suppressed
+# MandatoryBPS=False path: canonical files suppressed
 # ---------------------------------------------------------------------------
 
 
 class TestIncludeSkillOff:
     def test_canonical_suppressed_when_off(self, patched_get_skills_dir):
         result = build_skill_content(
-            enabled=False,
+            MandatoryBPS=False,
             canonical_files=("references/automation-patterns.md",),
             referenced_files=None,
         )
         assert result == {}
 
     def test_referenced_files_still_attach_when_off(self, patched_get_skills_dir):
-        """enabled=False suppresses canonical defaults but BP-warning
+        """MandatoryBPS=False suppresses canonical defaults but BP-warning
         referenced files still ride along — the LLM needs them to fix the
         input it just submitted."""
         result = build_skill_content(
-            enabled=False,
+            MandatoryBPS=False,
             canonical_files=("references/automation-patterns.md",),
             referenced_files={"references/template-guidelines.md"},
         )
@@ -131,7 +131,7 @@ class TestIncludeSkillOff:
 class TestDedup:
     def test_canonical_and_referenced_union(self, patched_get_skills_dir):
         result = build_skill_content(
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=("references/automation-patterns.md",),
             referenced_files={"references/template-guidelines.md"},
         )
@@ -143,7 +143,7 @@ class TestDedup:
     def test_overlap_collapses_to_one(self, patched_get_skills_dir):
         """Same file in both canonical and referenced is read once."""
         result = build_skill_content(
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=("references/automation-patterns.md",),
             referenced_files={"references/automation-patterns.md"},
         )
@@ -160,16 +160,16 @@ class TestDegradedPaths:
         """When the submodule isn't checked out, build_skill_content is a no-op."""
         with patch("ha_mcp.utils.skill_loader.get_skills_dir", return_value=None):
             result = build_skill_content(
-                enabled=True,
+                MandatoryBPS=True,
                 canonical_files=("references/automation-patterns.md",),
                 referenced_files=None,
             )
             assert result == {}
 
     def test_nothing_requested(self, patched_get_skills_dir):
-        """enabled=False with no referenced_files returns empty without I/O."""
+        """MandatoryBPS=False with no referenced_files returns empty without I/O."""
         result = build_skill_content(
-            enabled=False,
+            MandatoryBPS=False,
             canonical_files=("references/automation-patterns.md",),
             referenced_files=None,
         )
@@ -179,7 +179,7 @@ class TestDegradedPaths:
         """An unknown canonical file doesn't fail the response — the others
         that resolve still come back."""
         result = build_skill_content(
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=(
                 "references/automation-patterns.md",
                 "references/does-not-exist.md",
@@ -258,7 +258,7 @@ class TestAttachSkillContent:
         response: dict = {"success": True}
         attach_skill_content(
             response,
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=("references/automation-patterns.md",),
             referenced_files=None,
         )
@@ -278,7 +278,7 @@ class TestAttachSkillContent:
         response: dict = {"success": True, "data": {"id": "x"}, "entity_id": "y"}
         attach_skill_content(
             response,
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=("references/automation-patterns.md",),
             referenced_files=None,
         )
@@ -300,11 +300,11 @@ class TestAttachSkillContent:
         }
 
     def test_nothing_requested_is_silent(self, patched_get_skills_dir):
-        """enabled=False + no referenced_files → silent (user opted out)."""
+        """MandatoryBPS=False + no referenced_files → silent (user opted out)."""
         response: dict = {"success": True}
         attach_skill_content(
             response,
-            enabled=False,
+            MandatoryBPS=False,
             canonical_files=("references/automation-patterns.md",),
             referenced_files=None,
         )
@@ -314,14 +314,14 @@ class TestAttachSkillContent:
         assert "skill_content_hint" not in response
         assert "warnings" not in response
 
-    def test_vendor_missing_with_enabled_warns(self):
+    def test_vendor_missing_with_MandatoryBPS_warns(self):
         """Asymmetry fix vs ha_get_skill_guide: write tools used to silently
         omit skill_content when the submodule was absent. Now they warn."""
         with patch("ha_mcp.utils.skill_loader.get_skills_dir", return_value=None):
             response: dict = {"success": True}
             attach_skill_content(
                 response,
-                enabled=True,
+                MandatoryBPS=True,
                 canonical_files=("references/automation-patterns.md",),
                 referenced_files=None,
             )
@@ -329,12 +329,12 @@ class TestAttachSkillContent:
         assert response.get("warnings") == [_SKILLS_VENDOR_MISSING_WARNING]
 
     def test_vendor_missing_with_opt_out_is_silent(self):
-        """Caller explicitly opted out with enabled=False — don't nag."""
+        """Caller explicitly opted out with MandatoryBPS=False — don't nag."""
         with patch("ha_mcp.utils.skill_loader.get_skills_dir", return_value=None):
             response: dict = {"success": True}
             attach_skill_content(
                 response,
-                enabled=False,
+                MandatoryBPS=False,
                 canonical_files=("references/automation-patterns.md",),
                 referenced_files=None,
             )
@@ -347,7 +347,7 @@ class TestAttachSkillContent:
             response: dict = {"success": True}
             attach_skill_content(
                 response,
-                enabled=False,
+                MandatoryBPS=False,
                 canonical_files=(),
                 referenced_files={
                     "references/automation-patterns.md#native-conditions"
@@ -362,7 +362,7 @@ class TestAttachSkillContent:
             response: dict = {"success": True, "warnings": ["pre-existing"]}
             attach_skill_content(
                 response,
-                enabled=True,
+                MandatoryBPS=True,
                 canonical_files=("references/automation-patterns.md",),
                 referenced_files=None,
             )
@@ -381,7 +381,7 @@ class TestAnchorExtraction:
     def test_anchored_ref_returns_section(self, patched_get_skills_dir):
         """An anchored referenced_file returns only that section's text."""
         result = build_skill_content(
-            enabled=False,
+            MandatoryBPS=False,
             canonical_files=(),
             referenced_files={"references/automation-patterns.md#native-conditions"},
         )
@@ -399,7 +399,7 @@ class TestAnchorExtraction:
         once whole, once sliced. Wasted bytes for the LLM.
         """
         result = build_skill_content(
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=("references/automation-patterns.md",),
             referenced_files={"references/automation-patterns.md#native-conditions"},
         )
@@ -412,7 +412,7 @@ class TestAnchorExtraction:
         """Dedup only collapses bare-vs-section for the SAME file. Cross-file
         refs are independent."""
         result = build_skill_content(
-            enabled=True,
+            MandatoryBPS=True,
             canonical_files=("references/template-guidelines.md",),
             referenced_files={"references/automation-patterns.md#native-conditions"},
         )
@@ -423,7 +423,7 @@ class TestAnchorExtraction:
         """An anchor that doesn't match any heading is silently omitted —
         same contract as missing files."""
         result = build_skill_content(
-            enabled=False,
+            MandatoryBPS=False,
             canonical_files=(),
             referenced_files={"references/automation-patterns.md#does-not-exist"},
         )

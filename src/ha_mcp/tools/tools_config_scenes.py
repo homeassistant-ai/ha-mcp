@@ -490,10 +490,11 @@ class ConfigSceneTools:
                 default=True,
             ),
         ] = True,
-        enabled: Annotated[
+        *,
+        MandatoryBPS: Annotated[
             bool,
-            Field(default=True),
-        ] = True,
+            Field(),
+        ],
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant scene.
@@ -785,7 +786,7 @@ class ConfigSceneTools:
                 }
                 attach_skill_content(
                     response,
-                    enabled=enabled,
+                    MandatoryBPS=MandatoryBPS,
                     canonical_files=_SCENE_SKILL_FILES,
                     referenced_files=None,
                 )
@@ -897,7 +898,7 @@ class ConfigSceneTools:
 
             attach_skill_content(
                 result,
-                enabled=enabled,
+                MandatoryBPS=MandatoryBPS,
                 canonical_files=_SCENE_SKILL_FILES,
                 referenced_files=None,
             )

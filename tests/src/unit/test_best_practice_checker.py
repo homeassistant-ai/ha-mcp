@@ -1688,7 +1688,7 @@ class TestThreeRouteWarningSuffix:
     """Each warning names the LLM-discoverable access routes for the
     referenced skill file (issue #1182). The skill:// URI works in clients
     that auto-fetch resources; ha_get_skill_guide works everywhere else.
-    The enabled parameter is intentionally NOT mentioned because it
+    The MandatoryBPS parameter is intentionally NOT mentioned because it
     is hidden from the tool catalog (FastMCP exclude_args) — the LLM
     cannot discover it from the schema, only from the opt-out hint that
     ships alongside delivered skill_content."""
@@ -1728,12 +1728,12 @@ class TestThreeRouteWarningSuffix:
         assert "ha_get_skill_guide(skill='home-assistant-best-practices'" in msg
         assert "file='references/automation-patterns.md'" in msg
 
-    def test_warning_does_not_mention_enabled_param(self):
-        """The hidden enabled param must NOT appear in warnings —
+    def test_warning_does_not_mention_MandatoryBPS_param(self):
+        """The hidden MandatoryBPS param must NOT appear in warnings —
         it isn't visible in the tool catalog, so naming it would mislead
         the LLM into trying to set a param it can't see in the schema."""
         msg = self._first_warning()
-        assert "enabled" not in msg
+        assert "MandatoryBPS" not in msg
 
     def test_custom_prefix_replaces_skill_uri_keeps_tool_route(self):
         msg = self._first_warning(prefix="https://example.com/refs")
@@ -1741,8 +1741,8 @@ class TestThreeRouteWarningSuffix:
         assert "skill://" not in msg
         # Tool route always present when skills are on
         assert "ha_get_skill_guide" in msg
-        # enabled remains hidden from the LLM
-        assert "enabled" not in msg
+        # MandatoryBPS remains hidden from the LLM
+        assert "MandatoryBPS" not in msg
 
     def test_anchor_preserved_in_uri_stripped_in_tool_route(self):
         """The skill:// URI keeps the #anchor (links scroll to section);

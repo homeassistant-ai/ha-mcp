@@ -45,18 +45,18 @@ from .util_helpers import (
 _HELPER_SKILL_FILES: tuple[str, ...] = ("references/helper-selection.md",)
 
 
-def _attach_helper_skill(response: dict[str, Any], enabled: bool) -> None:
+def _attach_helper_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
     """In-place attach skill_content to a helper response when applicable.
 
     Helper tool has no best-practice checker integration, so
     ``referenced_files`` is always None — embedding is driven purely by
-    the ``enabled`` flag. Delegates to the shared
+    the ``MandatoryBPS`` flag. Delegates to the shared
     :func:`attach_skill_content` so the missing-vendor-warning path is
     consistent across every write tool.
     """
     attach_skill_content(
         response,
-        enabled=enabled,
+        MandatoryBPS=MandatoryBPS,
         canonical_files=_HELPER_SKILL_FILES,
         referenced_files=None,
     )
@@ -2358,10 +2358,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
-        enabled: Annotated[
+        *,
+        MandatoryBPS: Annotated[
             bool,
-            Field(default=True),
-        ] = True,
+            Field(),
+        ],
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities and config subentries
@@ -2522,7 +2523,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         default=False,
                     ),
                 )
-                _attach_helper_skill(subentry_response, enabled)
+                _attach_helper_skill(subentry_response, MandatoryBPS)
                 return subentry_response
 
             # Determine if this is a create or update — set early so the
@@ -2709,7 +2710,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     wait=wait,
                     action=action,
                 )
-                _attach_helper_skill(flow_response, enabled)
+                _attach_helper_skill(flow_response, MandatoryBPS)
                 return flow_response
 
             # Parse JSON list parameters if provided as strings
@@ -3090,7 +3091,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message=f"Successfully created {helper_type}: {name}",
                         warnings=warnings,
                     )
-                    _attach_helper_skill(create_response, enabled)
+                    _attach_helper_skill(create_response, MandatoryBPS)
                     return create_response
                 else:
                     raise_tool_error(
@@ -3193,7 +3194,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message=f"Successfully updated {helper_type}: {entity_id}",
                         warnings=warnings,
                     )
-                    _attach_helper_skill(update_response, enabled)
+                    _attach_helper_skill(update_response, MandatoryBPS)
                     return update_response
 
                 elif helper_type in config_store_types:
@@ -3784,7 +3785,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     message=f"Successfully updated {helper_type}: {entity_id}",
                     warnings=warnings,
                 )
-                _attach_helper_skill(config_update_response, enabled)
+                _attach_helper_skill(config_update_response, MandatoryBPS)
                 return config_update_response
 
             # This should never be reached since action is either "create" or "update"

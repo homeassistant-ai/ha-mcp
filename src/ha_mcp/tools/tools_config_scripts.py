@@ -440,10 +440,11 @@ class ConfigScriptTools:
                 default=True,
             ),
         ] = True,
-        enabled: Annotated[
+        *,
+        MandatoryBPS: Annotated[
             bool,
-            Field(default=True),
-        ] = True,
+            Field(),
+        ],
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant script.
@@ -702,7 +703,7 @@ class ConfigScriptTools:
                     response["best_practice_warnings"] = list(bp_warnings)
                 attach_skill_content(
                     response,
-                    enabled=enabled,
+                    MandatoryBPS=MandatoryBPS,
                     canonical_files=_SCRIPT_SKILL_FILES,
                     referenced_files=bp_warnings.referenced_files,
                 )
@@ -779,7 +780,7 @@ class ConfigScriptTools:
 
             attach_skill_content(
                 result,
-                enabled=enabled,
+                MandatoryBPS=MandatoryBPS,
                 canonical_files=_SCRIPT_SKILL_FILES,
                 referenced_files=bp_warnings.referenced_files,
             )

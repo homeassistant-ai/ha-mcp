@@ -42,7 +42,7 @@ _DASHBOARD_SKILL_FILES: tuple[str, ...] = (
 )
 
 
-def _attach_dashboard_skill(response: dict[str, Any], enabled: bool) -> None:
+def _attach_dashboard_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
     """In-place attach skill_content to a dashboard response when applicable.
 
     Delegates to the shared :func:`attach_skill_content` so the
@@ -50,7 +50,7 @@ def _attach_dashboard_skill(response: dict[str, Any], enabled: bool) -> None:
     """
     attach_skill_content(
         response,
-        enabled=enabled,
+        MandatoryBPS=MandatoryBPS,
         canonical_files=_DASHBOARD_SKILL_FILES,
         referenced_files=None,
     )
@@ -924,10 +924,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "For existing dashboards, only updated when explicitly provided."
             ),
         ] = None,
-        enabled: Annotated[
+        *,
+        MandatoryBPS: Annotated[
             bool,
-            Field(default=True),
-        ] = True,
+            Field(),
+        ],
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant dashboard.
@@ -1273,7 +1274,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 }
                 if pre_resolved_from is not None:
                     transform_result["resolved_from"] = pre_resolved_from
-                _attach_dashboard_skill(transform_result, enabled)
+                _attach_dashboard_skill(transform_result, MandatoryBPS)
                 return transform_result
 
             # Check if dashboard exists. When the pre-resolver fired
@@ -1512,7 +1513,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # an existing dashboard was updated instead.
                 result_dict["resolved_from"] = pre_resolved_from
 
-            _attach_dashboard_skill(result_dict, enabled)
+            _attach_dashboard_skill(result_dict, MandatoryBPS)
             return result_dict
 
         except ToolError:

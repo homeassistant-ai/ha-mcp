@@ -163,10 +163,11 @@ class YamlConfigTools:
                 ),
             ),
         ] = True,
-        enabled: Annotated[
+        *,
+        MandatoryBPS: Annotated[
             bool,
-            Field(default=True),
-        ] = True,
+            Field(),
+        ],
     ) -> dict[str, Any]:
         """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 
@@ -262,7 +263,7 @@ class YamlConfigTools:
                     raise_tool_error(result)
                 attach_skill_content(
                     result,
-                    enabled=enabled,
+                    MandatoryBPS=MandatoryBPS,
                     canonical_files=_YAML_SKILL_FILES,
                     referenced_files=None,
                 )
