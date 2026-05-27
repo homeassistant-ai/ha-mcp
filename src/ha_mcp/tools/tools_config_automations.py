@@ -48,6 +48,8 @@ from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
     attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     coerce_bool_param,
     coerce_to_list,
     fetch_entity_category,
@@ -735,8 +737,8 @@ class AutomationConfigTools:
                 MandatoryBPS,
             )
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings) from None
         except Exception as e:
             # 404 during update only — create (identifier=None) never hits this branch.
             if (
@@ -757,11 +759,14 @@ class AutomationConfigTools:
                     "Config had best-practice issues that may be related: "
                     + "; ".join(bp_warnings)
                 )
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"identifier": identifier},
                 suggestions=suggestions,
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings)
+            raise_tool_error(error)
 
     async def _run_python_transform(
         self,

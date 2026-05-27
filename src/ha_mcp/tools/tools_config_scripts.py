@@ -43,6 +43,8 @@ from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
     attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     coerce_bool_param,
     fetch_entity_category,
     merge_validation_meta,
@@ -792,8 +794,8 @@ class ConfigScriptTools:
             )
             return response
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings) from None
         except Exception as e:
             suggestions = [
                 "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
@@ -813,11 +815,14 @@ class ConfigScriptTools:
             # script_id form is what callers pass and what the registry stores.
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_script_not_found(script_id)
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"script_id": script_id},
                 suggestions=suggestions,
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings)
+            raise_tool_error(error)
 
     @tool(
         name="ha_config_remove_script",

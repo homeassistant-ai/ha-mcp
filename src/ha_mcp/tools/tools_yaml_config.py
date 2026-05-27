@@ -33,6 +33,8 @@ from .tools_filesystem import (
 )
 from .util_helpers import (
     attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     coerce_bool_param,
     unwrap_service_response,
 )
@@ -276,10 +278,10 @@ class YamlConfigTools:
                 )
             )
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
         except Exception as e:
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={
                     "tool": "ha_config_set_yaml",
@@ -287,7 +289,10 @@ class YamlConfigTools:
                     "action": action,
                     "yaml_path": yaml_path,
                 },
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings=None)
+            raise_tool_error(error)
 
 
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

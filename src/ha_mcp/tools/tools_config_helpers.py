@@ -34,6 +34,8 @@ from .tools_config_entry_flow import (
 from .util_helpers import (
     apply_entity_category,
     attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     coerce_bool_param,
     parse_json_param,
     parse_string_list_param,
@@ -3795,10 +3797,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             )
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
         except Exception as e:
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"action": action, "helper_type": helper_type},
                 suggestions=[
@@ -3806,4 +3808,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Verify helper_id exists for update operations",
                     "Ensure required parameters are provided for the helper type",
                 ],
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings=None)
+            raise_tool_error(error)

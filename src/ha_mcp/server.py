@@ -1420,13 +1420,28 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 )
             )
 
-        return {
-            "success": True,
-            "skill": skill,
-            "file": file,
-            "uri": f"skill://{skill}/{file}",
-            "content": content,
-        }
+        # Hint goes at the top of the response so the LLM sees it before
+        # parsing the (potentially large) content body. Scoped to the
+        # best-practice skill because that's the one the write-tool
+        # MandatoryBPS param gates; other skills (if any) are unrelated.
+        from .tools.util_helpers import (
+            _HA_BEST_PRACTICES_SKILL_NAME,
+            _SKILL_GUIDE_MANDATORYBPS_HINT,
+        )
+
+        response: dict[str, Any] = {}
+        if skill == _HA_BEST_PRACTICES_SKILL_NAME:
+            response["skill_content_hint"] = _SKILL_GUIDE_MANDATORYBPS_HINT
+        response.update(
+            {
+                "success": True,
+                "skill": skill,
+                "file": file,
+                "uri": f"skill://{skill}/{file}",
+                "content": content,
+            }
+        )
+        return response
 
     # Helper methods required by EnhancedToolsMixin
 

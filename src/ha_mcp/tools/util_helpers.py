@@ -12,6 +12,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, overload
 
+from fastmcp.exceptions import ToolError
+
 from ..client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -2059,6 +2061,32 @@ _SKILL_CONTENT_OPTOUT_HINT = (
     "this session to skip this content."
 )
 
+# Suggestion appended to EVERY write-tool error response. Not every
+# error has BP-checker context, so the generic skill-guide pointer is
+# the floor — when BP fired, the checker's own warning text (with its
+# more specific 2-route hint) is appended alongside in the suggestions
+# array, and the matching section body auto-embeds inline.
+_WRITE_TOOL_BP_HINT_SUGGESTION = (
+    "For Home Assistant best-practice guidance, call "
+    "ha_get_skill_guide(skill='home-assistant-best-practices') and consult "
+    "the relevant reference file before retrying."
+)
+
+# Hint shipped at the top of ha_get_skill_guide responses that deliver
+# best-practice skill content directly (Tier 3 on the
+# `home-assistant-best-practices` skill). Smart clients that fetch the
+# reference files proactively via this tool would otherwise still
+# receive duplicate canonical content from the per-call write-tool
+# attach — this hint tells them to opt out so the same body doesn't
+# ride along again on every subsequent write.
+_SKILL_GUIDE_MANDATORYBPS_HINT = (
+    "You now have this best-practice reference in your context. "
+    "Pass `MandatoryBPS=false` on subsequent write-tool calls in this "
+    "session (ha_config_set_automation / _script / _scene / _helper / "
+    "_dashboard / _yaml) to avoid re-receiving the canonical reference "
+    "files inline."
+)
+
 
 def attach_skill_content(
     response: dict[str, Any],
@@ -2125,3 +2153,76 @@ def attach_skill_content(
     requested_anything = MandatoryBPS or referenced_files
     if master_on and requested_anything and get_skills_dir() is None:
         response.setdefault("warnings", []).append(_SKILLS_VENDOR_MISSING_WARNING)
+
+
+def augment_error_dict_with_skill_content(
+    error_dict: dict[str, Any],
+    bp_warnings: Any = None,
+) -> None:
+    """In-place: add generic BP-skill-guide hint + auto-embed any
+    BP-referenced section bodies into a write-tool error response dict.
+
+    Appends ``_WRITE_TOOL_BP_HINT_SUGGESTION`` to ``error_dict["error"]
+    ["suggestions"]`` (idempotent — won't double-append) and keeps the
+    legacy singular ``suggestion`` field aligned with the first entry.
+
+    When ``bp_warnings`` has ``referenced_files``, auto-embeds the
+    matching markdown sections under ``skill_content`` with
+    ``skill_content_hint`` at the top of the response, matching the
+    success-path attach shape. Canonical files are NOT attached on
+    errors (targeted section bodies are 1-5 KB and carry the fix
+    material; the 25-37 KB canonical bundle would bloat errors without
+    matching benefit). The opt-out hint is still placed first so the
+    LLM knows about ``MandatoryBPS=false`` for its next successful call.
+
+    No-op when ``error_dict`` doesn't have a nested ``error`` dict
+    (defensive — preserves the contract for any caller passing a
+    non-standard error shape).
+    """
+    err = error_dict.get("error")
+    if not isinstance(err, dict):
+        return
+    suggestions = err.setdefault("suggestions", [])
+    if _WRITE_TOOL_BP_HINT_SUGGESTION not in suggestions:
+        suggestions.append(_WRITE_TOOL_BP_HINT_SUGGESTION)
+    if suggestions:
+        err["suggestion"] = suggestions[0]
+
+    referenced_files = getattr(bp_warnings, "referenced_files", None)
+    if referenced_files:
+        attach_skill_content(
+            error_dict,
+            MandatoryBPS=False,
+            canonical_files=(),
+            referenced_files=referenced_files,
+        )
+
+
+def augment_tool_error_with_skill_content(
+    te: ToolError,
+    bp_warnings: Any = None,
+) -> ToolError:
+    """Wrap :func:`augment_error_dict_with_skill_content` around a ``ToolError``.
+
+    Each write tool wraps its method body in:
+
+        try:
+            ...
+            return result
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings) from None
+
+    Decodes the error JSON, applies the dict augmentation, re-encodes,
+    and returns a NEW ``ToolError`` to be raised with ``from None`` so
+    the original exception chain isn't surfaced. Falls through to
+    returning the original ``te`` when the body isn't JSON-decodable
+    as a structured error dict.
+    """
+    try:
+        error_dict = json.loads(str(te))
+    except (json.JSONDecodeError, TypeError):
+        return te
+    if not isinstance(error_dict, dict):
+        return te
+    augment_error_dict_with_skill_content(error_dict, bp_warnings)
+    return ToolError(json.dumps(error_dict, indent=2, default=str))

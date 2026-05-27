@@ -15,7 +15,9 @@ import pytest
 from ha_mcp.tools.util_helpers import (
     _SKILL_CONTENT_OPTOUT_HINT,
     _SKILLS_VENDOR_MISSING_WARNING,
+    _WRITE_TOOL_BP_HINT_SUGGESTION,
     attach_skill_content,
+    augment_error_dict_with_skill_content,
     build_skill_content,
 )
 
@@ -250,6 +252,73 @@ class TestDegradedPaths:
         assert "warnings" not in response, (
             "master-off must not produce the vendor-missing warning"
         )
+
+    def test_augment_error_adds_generic_hint_without_bp(self):
+        """Every write-tool error must surface the generic BP-skill-guide
+        pointer in suggestions — even when the BP checker didn't fire
+        (helpers / dashboards / yaml have no BP integration). Without
+        this, an error with no BP warnings ships zero skill guidance and
+        the LLM has no breadcrumb to ha_get_skill_guide."""
+        error = {
+            "success": False,
+            "error": {
+                "code": "VALIDATION_FAILED",
+                "message": "bad input",
+                "suggestions": ["check your config"],
+            },
+        }
+        augment_error_dict_with_skill_content(error, bp_warnings=None)
+        suggestions = error["error"]["suggestions"]
+        assert _WRITE_TOOL_BP_HINT_SUGGESTION in suggestions
+        assert "check your config" in suggestions
+        # singular ``suggestion`` mirrors the first entry for legacy consumers.
+        assert error["error"]["suggestion"] == suggestions[0]
+        # No skill_content delivered when bp_warnings has no referenced_files.
+        assert "skill_content" not in error
+        assert "skill_content_hint" not in error
+
+    def test_augment_error_idempotent_on_re_raise(self):
+        """The hint must not double-append when augment runs twice
+        (e.g. nested try/except re-raise paths)."""
+        error = {"success": False, "error": {"suggestions": []}}
+        augment_error_dict_with_skill_content(error, bp_warnings=None)
+        augment_error_dict_with_skill_content(error, bp_warnings=None)
+        suggestions = error["error"]["suggestions"]
+        assert suggestions.count(_WRITE_TOOL_BP_HINT_SUGGESTION) == 1
+
+    def test_augment_error_embeds_bp_sections_when_referenced(
+        self, patched_get_skills_dir
+    ):
+        """When the BP checker fired with referenced_files, the error
+        response auto-embeds the matching section bodies under
+        skill_content — the LLM gets the actionable fix material inline
+        instead of having to make a second tool call."""
+
+        # Build a minimal BestPracticeCheckResult-like object — the
+        # augment helper uses duck-typing on .referenced_files.
+        class _BP:
+            def __init__(self, refs):
+                self.referenced_files = refs
+
+        error = {"success": False, "error": {"suggestions": []}}
+        augment_error_dict_with_skill_content(
+            error,
+            bp_warnings=_BP({"references/automation-patterns.md#native-conditions"}),
+        )
+        # Section body inlined, hint at top, generic hint in suggestions.
+        assert "skill_content" in error
+        assert (
+            "references/automation-patterns.md#native-conditions"
+            in error["skill_content"]
+        )
+        assert error.get("skill_content_hint") == _SKILL_CONTENT_OPTOUT_HINT
+        assert _WRITE_TOOL_BP_HINT_SUGGESTION in error["error"]["suggestions"]
+        # Canonical files NOT attached on error — section body is enough.
+        assert "references/automation-patterns.md" not in (
+            error.get("skill_content") or {}
+        ) or list(error["skill_content"].keys()) == [
+            "references/automation-patterns.md#native-conditions"
+        ]
 
     def test_trailing_hash_resolves_to_whole_file(self, patched_get_skills_dir):
         """A trailing ``#`` with empty anchor (``"path#"``) must produce

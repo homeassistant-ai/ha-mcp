@@ -40,6 +40,8 @@ from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
     attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     coerce_bool_param,
     fetch_entity_category,
     merge_validation_meta,
@@ -916,10 +918,10 @@ class ConfigSceneTools:
             )
             return response
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
         except Exception as e:
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"scene_id": scene_id},
                 suggestions=[
@@ -928,7 +930,10 @@ class ConfigSceneTools:
                     "Use ha_search_entities(domain_filter='scene') to find scenes",
                     "Use ha_get_skill_guide for help",
                 ],
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings=None)
+            raise_tool_error(error)
 
     @tool(
         name="ha_config_remove_scene",

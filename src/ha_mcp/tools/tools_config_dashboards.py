@@ -29,7 +29,12 @@ from .helpers import (
     raise_tool_error,
     validate_identifier_not_empty,
 )
-from .util_helpers import attach_skill_content, parse_json_param
+from .util_helpers import (
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+    parse_json_param,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1517,10 +1522,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             _attach_dashboard_skill(result_dict, MandatoryBPS)
             return result_dict
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
         except Exception as e:
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"action": "set", "url_path": url_path},
                 suggestions=[
@@ -1529,7 +1534,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "Check that you have admin permissions",
                     "Verify config format is valid Lovelace JSON",
                 ],
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings=None)
+            raise_tool_error(error)
 
     @mcp.tool(
         tags={"Dashboards"},
