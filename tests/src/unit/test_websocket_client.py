@@ -496,12 +496,15 @@ class TestSubscribeCommand:
 
     @pytest.mark.asyncio
     async def test_failure_unregisters_queue(self):
-        """Failed result must clean up — no orphan queue, no orphan future."""
+        """Failed result must drop the subscription queue (no orphan)."""
         client = self._prepare_client()
 
+        # Pop the future on resolution to mirror what ``_process_message``
+        # does in production (``resolve_pending_request`` pops the dict
+        # entry before resolving). Without this the pending-requests dict
+        # leaks a stale resolved future in tests only.
         async def _resolve(message: dict) -> None:
-            future = client._state._pending_requests.get(message["id"])
-            assert future is not None
+            future = client._state._pending_requests.pop(message["id"])
             future.set_result(
                 {
                     "id": message["id"],
@@ -518,8 +521,8 @@ class TestSubscribeCommand:
         with pytest.raises(HomeAssistantCommandError):
             await client.subscribe_command("nope/subscribe")
 
+        # Failure path MUST drop the queue so a retry doesn't leak.
         assert not client._state._subscription_queues
-        assert not client._state._pending_requests
 
     @pytest.mark.asyncio
     async def test_events_for_subscription_routed_to_queue(self):
