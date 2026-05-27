@@ -158,9 +158,11 @@ jobs:
       - name: Fetch full issue thread
         id: issue_data
         uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
         with:
           script: |
-            const issueNumber = ${{ steps.issue_number.outputs.number }};
+            const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
             const issue = await github.rest.issues.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -537,6 +539,7 @@ jobs:
         id: build_prompt
         uses: actions/github-script@v9
         env:
+          ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
           ISSUE_TYPE: ${{ steps.issue_data.outputs.issue_type }}
           ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
           ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
@@ -547,7 +550,7 @@ jobs:
           EXTRACTED_KEYWORDS: ${{ steps.keywords.outputs.response }}
         with:
           script: |
-            const issueNumber = ${{ steps.issue_number.outputs.number }};
+            const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
             const issueType = process.env.ISSUE_TYPE || 'unknown';
             const issueTitle = process.env.ISSUE_TITLE || '';
             const rawBody = process.env.ISSUE_BODY || '';
@@ -631,7 +634,7 @@ jobs:
               '### 1. Completeness',
               'Is there enough information to take action? Be lenient:',
               '- question or enhancement: always complete (no info requirements)',
-              '- 70%+ of requirements present, or clear error/stack trace: complete',
+              '- 3 of 4 requirements present, or clear error/stack trace: complete',
               'Requirements per type:',
               '- runtime-bug: error message, ha-mcp version, install method (uvx/pip/docker/addon), which tool',
               '- startup-bug: error details, ha-mcp version, install method, client app, OS',
@@ -725,8 +728,6 @@ jobs:
             const text = result.data.choices[0].message.content;
             core.setOutput('summary', text);
 
-      # Skip on cancellation — superseded runs from concurrency.cancel-in-progress
-      # should not post stale results.
       - name: Post result and apply labels
         if: ${{ !cancelled() }}
         uses: actions/github-script@v9
@@ -740,7 +741,8 @@ jobs:
             const evaluateOutcome = process.env.EVALUATE_OUTCOME || '';
             const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
 
-            // Native org issue fields (gh api /orgs/homeassistant-ai/issue-fields)
+            // Native org issue fields — IDs from: gh api /orgs/homeassistant-ai/issue-fields
+            // Option IDs are stable unless the field is deleted and recreated.
             const PRIORITY_FIELD_ID = 36564402;
             const EFFORT_FIELD_ID = 36564405;
             const PRIORITY_OPTIONS = { Urgent: 63981585, High: 63981586, Medium: 63981587, Low: 63981588 };
@@ -828,8 +830,10 @@ jobs:
             const duplicateNumber = result.duplicate_of;
             const relatedNumbers = Array.isArray(result.related) ? result.related : [];
             const missingInfo = Array.isArray(result.missing_info) ? result.missing_info : [];
-            const priority = result.priority || null;
-            const effort = result.effort || null;
+            const priority = PRIORITY_OPTIONS[result.priority] ? result.priority : null;
+            if (result.priority && !priority) core.warning(`Unrecognised priority value: "${result.priority}" — skipping field`);
+            const effort = EFFORT_OPTIONS[result.effort] ? result.effort : null;
+            if (result.effort && !effort) core.warning(`Unrecognised effort value: "${result.effort}" — skipping field`);
             const goodFirstIssue = result.good_first_issue || false;
 
             core.info('Triage result: ' + JSON.stringify({
@@ -841,16 +845,16 @@ jobs:
 
             // (A) High-confidence duplicate — flag for maintainer review
             if (isDuplicate) {
+              const labels = ['needs-info', 'duplicate'];
+              if (classification) labels.push(classification);
+              try { await addLabels(labels); } catch (err) { core.warning('addLabels failed: ' + err.message); }
+              await removeLabel('triage-failed');
               const body = '## 🔄 Possible Duplicate\n\n' +
                 'This issue looks like a duplicate of #' + duplicateNumber + '.\n\n' +
                 'A maintainer will verify and close if confirmed. If this is **not** a duplicate, ' +
                 'please comment to explain the difference.\n\n' +
                 '*🤖 Automated triage by Issue Bot*';
               await postComment(body);
-              const labels = ['needs-info', 'duplicate'];
-              if (classification) labels.push(classification);
-              await addLabels(labels);
-              await removeLabel('triage-failed');
               core.info('Issue flagged as likely duplicate of #' + duplicateNumber);
               return;
             }
@@ -894,10 +898,12 @@ jobs:
             const body = '## ℹ️ Information Needed\n\n' + missingText + relatedText + reportIssueTip +
               '\n\n---\n\n💬 **Please reply to this issue** with the requested information.\n\n' +
               '*🤖 Automated triage by Issue Bot*';
-            await postComment(body);
-            if (classification) await addLabels([classification]);
-            await addLabels(['needs-info']);
+            try {
+              if (classification) await addLabels([classification]);
+              await addLabels(['needs-info']);
+            } catch (err) { core.warning('addLabels failed: ' + err.message); }
             await removeLabel('triage-failed');
+            await postComment(body);
 
       - name: Fail job if evaluate step failed
         if: ${{ !cancelled() && steps.evaluate.outcome != 'success' && steps.evaluate.outcome != 'skipped' }}
