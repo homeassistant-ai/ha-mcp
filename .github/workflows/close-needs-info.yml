@@ -64,15 +64,19 @@ jobs:
 
               core.info(`  Bot comment is ${daysSinceBot.toFixed(1)} days old`);
 
-              // Any non-bot reply since the bot comment resets the clock
+              // Only the issue author replying resets the clock — matches gemini-triage.yml which
+              // only re-runs triage on author comments. A maintainer/bystander comment must not
+              // remove needs-info without triggering re-triage, or the issue silently escapes
+              // the stale-close path with the requested info still missing.
               const repliesAfterBot = comments.filter(c =>
                 c.user.type !== 'Bot' &&
+                c.user.login === issue.user.login &&
                 new Date(c.created_at) > botCommentDate
               );
 
               if (repliesAfterBot.length > 0) {
-                // Someone replied — remove needs-info label; triage will re-evaluate on next comment
-                core.info(`  Non-bot comment found after bot comment — removing needs-info`);
+                // Author replied — remove needs-info; triage will re-evaluate on next comment
+                core.info(`  Author comment found after bot comment — removing needs-info`);
                 try {
                   await github.rest.issues.removeLabel({
                     owner: context.repo.owner,
