@@ -245,11 +245,30 @@ class TestWaitForRepoRegistration:
 
     @pytest.mark.asyncio
     async def test_queue_shutdown_attempts_one_last_lookup(self):
-        """Mid-wait connection teardown: try one final list lookup before giving up."""
+        """Mid-wait connection teardown: try one final list lookup before giving up.
+
+        Setup primes the queue with one non-matching event so the
+        wait loop is exercised (not just the post-subscribe sample).
+        Then shutdown(immediate=True) causes the next ``queue.get()``
+        to raise ``QueueShutDown``, triggering the last-chance lookup.
+        """
         from ha_mcp.tools.tools_hacs import wait_for_repo_registration
 
         queue: asyncio.Queue = asyncio.Queue()
-        queue.shutdown(immediate=True)
+        await queue.put(
+            {
+                "id": 7,
+                "type": "event",
+                "event": {
+                    "action": "registration",
+                    "repository": "someone-else/other-repo",
+                    "repository_id": 1,
+                },
+            }
+        )
+        # Shut down so the SECOND queue.get() (after the unrelated
+        # event is consumed) raises QueueShutDown.
+        queue.shutdown(immediate=False)
 
         ws_client = _build_ws_client(
             list_responses=[
@@ -263,6 +282,123 @@ class TestWaitForRepoRegistration:
 
         assert repo is not None
         assert str(repo.get("id")) == "42"
+        ws_client.unsubscribe_command.assert_awaited_once_with(7)
+
+    @pytest.mark.asyncio
+    async def test_last_chance_lookup_swallows_transport_error(self):
+        """QueueShutDown + dead WS: list call fails → return None, no propagation."""
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+
+        queue: asyncio.Queue = asyncio.Queue()
+        queue.shutdown(immediate=True)
+
+        ws_client = MagicMock()
+        # First call (post-subscribe sample) succeeds, second
+        # (last-chance after QueueShutDown) raises — the same teardown
+        # that shut the queue typically also kills the WS connection.
+        ws_client.send_command = AsyncMock(
+            side_effect=[
+                _list_response_empty(),
+                HomeAssistantConnectionError("WS torn down"),
+            ]
+        )
+        ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
+        ws_client.unsubscribe_command = AsyncMock()
+
+        # Must not propagate the connection error — callers see a
+        # wait timeout (None), not a noisy stack trace.
+        repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+        assert repo is None
+        ws_client.unsubscribe_command.assert_awaited_once_with(7)
+
+    @pytest.mark.asyncio
+    async def test_subscribe_propagates_programming_error(self):
+        """Bug-class exceptions from subscribe must NOT degrade to fallback."""
+        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+
+        ws_client = MagicMock()
+        # AttributeError simulates a programming bug — e.g. ws_client
+        # shape drift. Must propagate, not be swallowed by an
+        # ``except Exception`` and silently degraded.
+        ws_client.subscribe_command = AsyncMock(
+            side_effect=AttributeError("ws_client missing 'subscribe_command'")
+        )
+        ws_client.send_command = AsyncMock(return_value=_list_response_empty())
+        ws_client.unsubscribe_command = AsyncMock()
+
+        with pytest.raises(AttributeError):
+            await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+        ws_client.unsubscribe_command.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_malformed_event_payload_does_not_recheck_list(self):
+        """Non-dict / empty event payloads must NOT trigger list lookups."""
+        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+
+        queue: asyncio.Queue = asyncio.Queue()
+        await queue.put({"id": 7, "type": "event", "event": None})
+        await queue.put({"id": 7, "type": "event", "event": "not-a-dict"})
+        await queue.put({"id": 7, "type": "event", "event": {}})
+
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(return_value=_list_response_empty())
+        ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
+        ws_client.unsubscribe_command = AsyncMock()
+
+        repo = await wait_for_repo_registration(
+            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=0.02
+        )
+
+        # Three malformed events should each ``continue`` without a
+        # list re-check. Only the post-subscribe sample (1) and at
+        # most one backstop tick fired before timeout. Cap at 3 to
+        # guard against regression to per-event re-listing.
+        assert repo is None
+        assert ws_client.send_command.await_count <= 3
+
+    @pytest.mark.asyncio
+    async def test_matching_event_with_empty_list_continues_waiting(self):
+        """Dispatch claims our repo, but list lookup races and returns empty.
+
+        Loop must NOT return None on that single failed lookup — it
+        should fall through to the queue wait so a later dispatch
+        catches the actual registration.
+        """
+        from ha_mcp.tools.tools_hacs import wait_for_repo_registration
+
+        queue: asyncio.Queue = asyncio.Queue()
+        # First dispatch: matches but the list lookup will race.
+        await queue.put(
+            {
+                "id": 7,
+                "type": "event",
+                "event": {
+                    "action": "registration",
+                    "repository": MCP_TOOLS_REPO,
+                    "repository_id": 42,
+                },
+            }
+        )
+
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(
+            side_effect=[
+                _list_response_empty(),  # post-subscribe sample
+                _list_response_empty(),  # post-event list (race)
+                _list_response_empty(),  # any later list call
+            ]
+        )
+        ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
+        ws_client.unsubscribe_command = AsyncMock()
+
+        repo = await wait_for_repo_registration(
+            ws_client, MCP_TOOLS_REPO, timeout=0.05, backstop_poll_interval=0.02
+        )
+
+        # Returns None on timeout (not on the single failed lookup)
+        # — and unsubscribe always runs in finally.
+        assert repo is None
         ws_client.unsubscribe_command.assert_awaited_once_with(7)
 
 

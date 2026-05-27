@@ -429,6 +429,11 @@ class HomeAssistantWebSocketClient:
             # Continuous subscriptions take priority: a single ``hacs/subscribe``
             # can deliver many events sharing one id and the one-shot
             # ``_event_responses`` future would only catch the first.
+            # Events delivered to a subscription queue do NOT also
+            # fan out to ``add_event_handler`` listeners below — the
+            # ``return`` here is intentional; subscribe-via-queue and
+            # the legacy event-type registry are mutually exclusive
+            # routes for a given message id.
             queue = self._state.get_subscription_queue(message_id)
             if queue is not None:
                 try:

@@ -15,6 +15,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import HomeAssistantCommandError, HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -792,15 +793,22 @@ async def wait_for_repo_registration(
     """
     full_name_lower = full_name.lower()
 
+    # Narrow exception list: transport / command / timeout / socket
+    # errors degrade to the polling fallback; programming bugs
+    # (``AttributeError``, ``TypeError``, ``KeyError``) must propagate
+    # so the underlying defect surfaces instead of being silently
+    # masked as "HACS subscribe blew up" and a quiet degradation.
     try:
         sub_id, queue = await ws_client.subscribe_command(
             "hacs/subscribe", signal=HACS_REPOSITORY_SIGNAL
         )
-    except Exception as e:
-        # Subscription path unavailable — fall back to a single
-        # post-add list lookup so we still benefit from the work the
-        # caller already did before invoking us.
-        logger.debug(
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantCommandError,
+        TimeoutError,
+        OSError,
+    ) as e:
+        logger.warning(
             "hacs/subscribe failed (%s); falling back to single list lookup", e
         )
         return await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
@@ -832,19 +840,43 @@ async def wait_for_repo_registration(
                 event = None
             except asyncio.QueueShutDown:
                 # Connection was torn down — try one last list lookup
-                # in case the repo registered before the shutdown,
-                # then give up.
-                return await _find_repo_in_list_by_full_name(ws_client, full_name_lower)
+                # in case the repo registered before the shutdown.
+                # The list call itself may fail (the same teardown that
+                # shut the queue probably killed the WS), so swallow
+                # transport errors here and report "not found" rather
+                # than leaking a HomeAssistantConnectionError out of
+                # what callers see as a wait timeout.
+                try:
+                    return await _find_repo_in_list_by_full_name(
+                        ws_client, full_name_lower
+                    )
+                except (
+                    HomeAssistantConnectionError,
+                    HomeAssistantCommandError,
+                    OSError,
+                ) as last_e:
+                    logger.debug(
+                        "Last-chance list lookup after queue shutdown failed: %s",
+                        last_e,
+                    )
+                    return None
 
             if event is not None:
+                # HACS dispatch payload shape (from
+                # ``custom_components/hacs/repositories/base.py`` and
+                # ``base.py::async_register_repository``):
+                #   {"action": "registration"|"install"|"uninstall",
+                #    "repository": <full_name>, "repository_id": <id>}
+                # Older/empty dispatches may send ``{}`` or ``None``;
+                # accept those without raising.
                 payload = event.get("event") or {}
                 if (
                     isinstance(payload, dict)
                     and payload.get("repository", "").lower() == full_name_lower
                 ):
                     # Matching repo dispatched — fetch the full entry
-                    # since the event payload only carries id +
-                    # full_name and callers usually need more fields.
+                    # since the event payload only carries the three
+                    # fields above and callers usually need more.
                     repo = await _find_repo_in_list_by_full_name(
                         ws_client, full_name_lower
                     )
@@ -854,12 +886,14 @@ async def wait_for_repo_registration(
                             "(HACS dispatch event)"
                         )
                         return repo
-                # Unrelated repo's dispatch — go back to waiting.
-                # Re-listing here on every dispatch is what made the
-                # old polling approach expensive (the HACS list payload
-                # is 2 MB+ on busy installs); the dispatcher is the
-                # signal, the list is the source of truth only when
-                # the dispatcher says something happened for us.
+                    # Matching event but list lookup raced — the repo
+                    # may show up on the next dispatch. Fall through to
+                    # the queue wait without spamming a re-list.
+                # Unrelated repo's dispatch (or no-payload nudge) — go
+                # back to waiting. Re-listing here on every dispatch
+                # would defeat the point of using the dispatcher as
+                # the signal (HACS' list payload is 2 MB+ on busy
+                # installs); we only re-list on the backstop tick.
                 continue
 
             # event is None ⇒ the backstop poll fired without a
@@ -872,7 +906,17 @@ async def wait_for_repo_registration(
                 )
                 return repo
     finally:
-        await ws_client.unsubscribe_command(sub_id)
+        # ``asyncio.shield`` so a cancellation of the surrounding task
+        # (caller timed out, server torn down) does not also cancel the
+        # HA-side ``unsubscribe_events`` mid-flight — that would leak
+        # the subscription registration on HA's connection map.
+        try:
+            await asyncio.shield(ws_client.unsubscribe_command(sub_id))
+        except asyncio.CancelledError:
+            # Surrounding task is being cancelled. The shielded
+            # unsubscribe has already been dispatched; allow the
+            # cancellation to propagate.
+            raise
 
 
 async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str, str]:
