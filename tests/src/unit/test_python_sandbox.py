@@ -8,6 +8,7 @@ from ha_mcp.utils.python_sandbox import (
     PythonSandboxExecutionError,
     PythonSandboxValidationError,
     format_sandbox_error,
+    get_security_documentation,
     safe_execute,
     safe_execute_expression,
     validate_expression,
@@ -47,11 +48,33 @@ for view in config['views']:
         valid, error = validate_expression(expr)
         assert valid is True
 
+    def test_while_loop_rejected(self):
+        """Regression for issue #1461: while loops can hang in-process exec."""
+        expr = """
+while True:
+    pass
+"""
+        valid, error = validate_expression(expr)
+        assert valid is False
+        assert "While" in error
+        assert "for-loop" in error
+
     def test_list_comprehension(self):
         """Test list comprehension."""
         expr = "config['entities'] = [e for e in config.get('entities', []) if 'light' in e]"
         valid, error = validate_expression(expr)
         assert valid is True
+
+
+class TestSecurityDocumentation:
+    """Test sandbox documentation shown to agents."""
+
+    def test_while_loop_not_documented_as_allowed(self):
+        docs = get_security_documentation()
+        allowed_section = docs.split("FORBIDDEN:", 1)[0]
+
+        assert "while" not in allowed_section.lower()
+        assert "- Loops: for, if/else, pass, break, continue" in docs
 
 
 class TestUnaryOperators:
