@@ -261,3 +261,10 @@ def _read_file_safely(
     except OSError as e:
         logger.warning("Could not read %s/%s: %s", skill, rel_path, e)
         return None
+    except UnicodeDecodeError as e:
+        # Invalid UTF-8 in a skill file is operator/vendor-side data
+        # corruption. Catch separately because UnicodeDecodeError
+        # subclasses ValueError, not OSError, and would otherwise
+        # propagate up and fail the write the agent just committed.
+        logger.warning("Skill file %s/%s is not valid UTF-8: %s", skill, rel_path, e)
+        return None

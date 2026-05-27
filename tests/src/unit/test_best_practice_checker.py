@@ -1684,14 +1684,15 @@ class TestBestPracticeCheckResultShape:
         }
 
 
-class TestThreeRouteWarningSuffix:
+class TestTwoRouteWarningSuffix:
     """Each warning names the LLM-discoverable access routes for the
     referenced skill file (issue #1182). The skill:// URI works in clients
     that auto-fetch resources; ha_get_skill_guide works everywhere else.
-    The MandatoryBPS parameter is intentionally NOT mentioned because it
-    is hidden from the tool catalog (FastMCP exclude_args) — the LLM
-    cannot discover it from the schema, only from the opt-out hint that
-    ships alongside delivered skill_content."""
+    The MandatoryBPS parameter is intentionally NOT mentioned in the
+    warning suffix — the param ships visible-but-undescribed, and naming
+    it here would prime models to flip it. The opt-out hint shipped
+    alongside delivered skill_content is the only place the param is
+    described."""
 
     @staticmethod
     def _first_warning(prefix=None):
@@ -1729,9 +1730,10 @@ class TestThreeRouteWarningSuffix:
         assert "file='references/automation-patterns.md'" in msg
 
     def test_warning_does_not_mention_MandatoryBPS_param(self):
-        """The hidden MandatoryBPS param must NOT appear in warnings —
-        it isn't visible in the tool catalog, so naming it would mislead
-        the LLM into trying to set a param it can't see in the schema."""
+        """MandatoryBPS must not appear in warnings. The param is visible
+        in the catalog but undescribed; naming it in warnings would
+        re-prime the reflex-disable that BAT showed kills the feature
+        for smart models."""
         msg = self._first_warning()
         assert "MandatoryBPS" not in msg
 
@@ -1741,7 +1743,8 @@ class TestThreeRouteWarningSuffix:
         assert "skill://" not in msg
         # Tool route always present when skills are on
         assert "ha_get_skill_guide" in msg
-        # MandatoryBPS remains hidden from the LLM
+        # MandatoryBPS not advertised in the warning suffix —
+        # only in the opt-out hint shipped with delivered content.
         assert "MandatoryBPS" not in msg
 
     def test_anchor_preserved_in_uri_stripped_in_tool_route(self):

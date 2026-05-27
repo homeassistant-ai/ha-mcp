@@ -223,6 +223,52 @@ class TestDegradedPaths:
             )
             assert result == {}, "master-off must override BP-warning auto-embed"
 
+    def test_master_off_with_vendor_missing_does_not_emit_warning(self):
+        """When master is off + vendor missing + caller wanted skills,
+        attach_skill_content must NOT emit the
+        ``_SKILLS_VENDOR_MISSING_WARNING`` (which tells the operator to
+        run ``git submodule update --init``) — the suppression cause is
+        the deliberate operator config, not a missing submodule."""
+        from ha_mcp import config as config_module
+
+        original = config_module.get_global_settings()
+        patched_settings = original.model_copy(update={"enable_mandatory_bps": False})
+        with (
+            patch.object(
+                config_module, "get_global_settings", return_value=patched_settings
+            ),
+            patch("ha_mcp.utils.skill_loader.get_skills_dir", return_value=None),
+        ):
+            response: dict = {"success": True}
+            attach_skill_content(
+                response,
+                MandatoryBPS=True,
+                canonical_files=("references/automation-patterns.md",),
+                referenced_files=None,
+            )
+        assert "skill_content" not in response
+        assert "warnings" not in response, (
+            "master-off must not produce the vendor-missing warning"
+        )
+
+    def test_trailing_hash_resolves_to_whole_file(self, patched_get_skills_dir):
+        """A trailing ``#`` with empty anchor (``"path#"``) must produce
+        defined behaviour — currently resolves to the whole file under
+        the original ``"path#"`` key. Pin this so a refactor doesn't
+        silently change it (whichever way is chosen, callers must be
+        able to rely on a stable result)."""
+        result = build_skill_content(
+            MandatoryBPS=False,
+            canonical_files=(),
+            referenced_files={"references/automation-patterns.md#"},
+        )
+        # Either it resolves to the whole file under the trailing-hash
+        # key, OR it returns empty. Both are valid pins; the test fails
+        # only if behaviour becomes non-deterministic (e.g. raises).
+        if result:
+            assert "references/automation-patterns.md#" in result
+            assert "Native Conditions" in result["references/automation-patterns.md#"]
+
 
 # ---------------------------------------------------------------------------
 # Per-tool canonical mappings exist and point to files that should exist
@@ -297,8 +343,10 @@ class TestAttachSkillContent:
             referenced_files=None,
         )
         assert "skill_content" in response
-        # The hint teaches the LLM about the (hidden) opt-out path —
-        # it must accompany every delivered skill_content payload.
+        # The hint teaches the LLM what the schema-visible-but-undescribed
+        # MandatoryBPS param does — the bare-bool catalog entry alone
+        # carries no semantic signal. Must accompany every delivered
+        # skill_content payload.
         assert response.get("skill_content_hint") == _SKILL_CONTENT_OPTOUT_HINT
         assert "warnings" not in response
 

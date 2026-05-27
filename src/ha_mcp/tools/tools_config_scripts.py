@@ -777,17 +777,20 @@ class ConfigScriptTools:
 
             merge_validation_meta(result, validation_meta)
 
+            response = {
+                "success": True,
+                **result,
+            }
+            # attach AFTER the outer dict is built so hint lands at
+            # position 0 of the FINAL response (see BAT history in
+            # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
             attach_skill_content(
-                result,
+                response,
                 MandatoryBPS=MandatoryBPS,
                 canonical_files=_SCRIPT_SKILL_FILES,
                 referenced_files=bp_warnings.referenced_files,
             )
-
-            return {
-                "success": True,
-                **result,
-            }
+            return response
 
         except ToolError:
             raise

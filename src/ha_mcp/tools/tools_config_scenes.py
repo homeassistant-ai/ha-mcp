@@ -895,23 +895,26 @@ class ConfigSceneTools:
 
             merge_validation_meta(result, validation_meta)
 
-            attach_skill_content(
-                result,
-                MandatoryBPS=MandatoryBPS,
-                canonical_files=_SCENE_SKILL_FILES,
-                referenced_files=None,
-            )
-
             # Issue #1168 R3 blocker 6: build response from ``resolved_id``
             # so the outer ``scene_id`` always matches the storage key.
             # ``result["scene_id"]`` is also the storage key (from
             # rest_client); explicit assignment after the spread guards
             # against any future result-shape drift.
-            return {
+            response = {
                 "success": True,
                 **result,
                 "scene_id": resolved_id,
             }
+            # attach AFTER the outer dict is built so hint lands at
+            # position 0 of the FINAL response (see
+            # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
+            attach_skill_content(
+                response,
+                MandatoryBPS=MandatoryBPS,
+                canonical_files=_SCENE_SKILL_FILES,
+                referenced_files=None,
+            )
+            return response
 
         except ToolError:
             raise

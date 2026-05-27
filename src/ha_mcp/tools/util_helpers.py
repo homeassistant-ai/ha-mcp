@@ -2009,7 +2009,18 @@ def build_skill_content(
     # Sits above the per-call ``MandatoryBPS`` flag because that flag
     # controls per-call behaviour; this controls whether the feature is
     # active at all.
-    if not get_global_settings().enable_mandatory_bps:
+    #
+    # Settings-load is wrapped because skill_content is opportunistic —
+    # the write has already committed by the time we're consulting
+    # settings here, and a settings-validation regression must not turn
+    # a successful write into a tool-level INTERNAL_ERROR (which would
+    # then prompt the agent to retry, double-applying the mutation).
+    # Silent degrade to "no skill_content" is the documented contract.
+    try:
+        if not get_global_settings().enable_mandatory_bps:
+            return {}
+    except Exception:
+        logger.warning("skill_content settings lookup failed; omitting", exc_info=True)
         return {}
 
     wanted: set[str] = set()
@@ -2037,24 +2048,12 @@ _SKILLS_VENDOR_MISSING_WARNING = (
     "Run `git submodule update --init` on the server install."
 )
 
-# Opt-out hint shipped alongside delivered skill_content. The
-# MandatoryBPS parameter is visible in the tool catalog but
-# carries no description in its Pydantic Field, and the tool docstrings
-# never mention it — so a model inspecting the schema sees a bare
-# default-True boolean with no semantic signal pointing at "this is the
-# skill toggle, flip it for a minimal response".
-#
-# BAT history on this PR (#1448):
-#   - First attempt: param visible WITH description. Smart models
-#     (Opus) reflex-disabled it on first call to be minimal.
-#   - Second attempt: param hidden via exclude_args + hint at end of
-#     response. Hidden worked, but no model ever found the trailing
-#     hint to disable when content was redundant (Opus: 5 tries to
-#     notice; Sonnet/Haiku: never).
-#   - Third attempt (current): visible, undescribed, opaque name, hint
-#     still at the top of the response and imperative. Naming hides the
-#     toggle semantic; hint placement teaches the param name only
-#     after content has been delivered.
+# Opt-out hint shipped alongside delivered skill_content. The param
+# name (`MandatoryBPS`), absence of a Field description, and first-key
+# response placement are all load-bearing — each was settled by BAT
+# (failing alternatives reflexively triggered minimisation, omission,
+# or invisibility on at least one model). Don't tune any of them
+# casually; re-BAT before any change.
 _SKILL_CONTENT_OPTOUT_HINT = (
     "Pass `MandatoryBPS=false` on subsequent calls to this tool in "
     "this session to skip this content."
@@ -2088,6 +2087,7 @@ def attach_skill_content(
         canonical_files: Tool-specific default mapping.
         referenced_files: Files cited by best-practice warnings.
     """
+    from ..config import get_global_settings
     from ..utils.skill_loader import get_skills_dir
 
     content = build_skill_content(
@@ -2111,11 +2111,17 @@ def attach_skill_content(
         response["skill_content"] = content
         return
 
-    # Empty content has two distinct causes:
-    # 1. Nothing was requested (MandatoryBPS=False AND no referenced_files).
+    # Empty content has three distinct causes:
+    # 1. Operator disabled the feature server-wide (ENABLE_MANDATORY_BPS=False).
+    #    Suppression is deliberate — no warning, no nag.
+    # 2. Nothing was requested (MandatoryBPS=False AND no referenced_files).
     #    Benign — return silently.
-    # 2. Something was requested but the vendor submodule is missing.
+    # 3. Something was requested but the vendor submodule is missing.
     #    Degraded — append a warning so operators notice.
+    try:
+        master_on = get_global_settings().enable_mandatory_bps
+    except Exception:
+        master_on = True
     requested_anything = MandatoryBPS or referenced_files
-    if requested_anything and get_skills_dir() is None:
+    if master_on and requested_anything and get_skills_dir() is None:
         response.setdefault("warnings", []).append(_SKILLS_VENDOR_MISSING_WARNING)

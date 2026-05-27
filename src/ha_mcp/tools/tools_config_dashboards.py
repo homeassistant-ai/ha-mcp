@@ -1046,8 +1046,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
           in a separate YAML file but its registration is in configuration.yaml.
         - Dashboards inlined directly in ``configuration.yaml`` under the ``lovelace:``
           key (legacy single-dashboard mode).
-        For either YAML case, edit the relevant file directly (or via
-        ``ha_config_set_yaml`` for the configuration.yaml registration entry).
+        For either YAML case, edit the dashboard's .yaml file directly.
+        ``ha_config_set_yaml`` can update the ``lovelace:`` registration
+        entry in configuration.yaml but does NOT touch the dashboard
+        body in the referenced .yaml file.
         """
         try:
             # ``url_path`` is required (always non-None). Reject empty/

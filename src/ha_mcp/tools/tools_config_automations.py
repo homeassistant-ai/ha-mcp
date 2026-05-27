@@ -916,15 +916,8 @@ class AutomationConfigTools:
 
         merge_validation_meta(result, validation_meta)
 
-        attach_skill_content(
-            result,
-            MandatoryBPS=MandatoryBPS,
-            canonical_files=_AUTOMATION_SKILL_FILES,
-            referenced_files=bp_warnings.referenced_files,
-        )
-
         automation_id = entity_id or identifier or result.get("unique_id")
-        return {
+        response = {
             "success": True,
             # automation_id omitted when all three fallbacks are falsy —
             # the create path is unguarded by validate_identifier_not_empty,
@@ -933,6 +926,18 @@ class AutomationConfigTools:
             **({"automation_id": automation_id} if automation_id else {}),
             **_strip_redundant_identifier_echo(result),
         }
+        # attach AFTER the outer dict is built so attach_skill_content's
+        # reorder puts skill_content_hint at position 0 of the FINAL
+        # response — building the outer dict via spread otherwise pushes
+        # the hint to position 2-3 behind success/automation_id, which
+        # is the exact position BAT showed small models can't find.
+        attach_skill_content(
+            response,
+            MandatoryBPS=MandatoryBPS,
+            canonical_files=_AUTOMATION_SKILL_FILES,
+            referenced_files=bp_warnings.referenced_files,
+        )
+        return response
 
     async def _list_automation_entity_ids(self) -> list[str]:
         """Best-effort list of automation entity_ids (up to 10) from the entity registry.

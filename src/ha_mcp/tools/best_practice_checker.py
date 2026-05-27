@@ -13,13 +13,9 @@ LLM-discoverable way to pull the relevant skill content:
    works on every MCP client regardless of resource-fetch support.
 
 The write tools also auto-embed the matching section into the next
-response via ``referenced_files``, and accept an ``MandatoryBPS``
-parameter for opting out — neither is advertised here because the
-parameter carries no description in its Pydantic Field and the tool
-docstrings never reference it, so a model inspecting the schema sees
-only a bare default-True boolean with no semantic toggle signal. The
-opt-out hint that ships alongside delivered content is the only place
-the param name appears.
+response via ``referenced_files`` and accept a ``MandatoryBPS`` opt-out
+parameter. Neither is advertised in the warning suffix by design —
+see ``util_helpers._SKILL_CONTENT_OPTOUT_HINT`` for the param contract.
 
 The ``skill_prefix`` kwarg lets callers pass any URL prefix (e.g., a
 GitHub mirror) when ``skill://`` isn't reachable, or ``None`` to omit
@@ -69,19 +65,15 @@ _SKILL_NAME = "home-assistant-best-practices"
 class BestPracticeCheckResult(list[str]):
     """Warning list with an attached set of referenced skill files.
 
-    Behaves as a plain ``list[str]`` for all existing call sites — ``len()``,
-    indexing, iteration, equality with ``[...]`` all work unchanged. The
-    ``referenced_files`` attribute is added on top so callers (the write
-    tools) can resolve and embed the relevant skill bodies into responses.
+    Behaves as a plain ``list[str]`` for all call sites — ``len()``,
+    indexing, iteration, equality with ``[...]`` all work unchanged.
+    ``referenced_files`` is added on top so the write tools can resolve
+    and embed the relevant skill bodies into responses.
 
-    Mutating the list directly (``append``, ``extend``) does NOT update
-    ``referenced_files`` — use :func:`_emit` to keep both in sync.
-
-    Slicing (``result[:]``) returns a plain ``list[str]`` per CPython's
-    default ``list.__getitem__`` semantics — the ``referenced_files``
-    attribute is dropped. No current caller slices the result, but
-    consumers that need to copy should use ``copy.copy(result)`` or
-    construct a fresh ``BestPracticeCheckResult`` explicitly.
+    Use :func:`_emit` to append warnings; direct ``append``/``extend``
+    skip the ``referenced_files`` mirror. Slicing, ``list()`` coercion,
+    and ``copy.copy``/``copy.deepcopy`` all return plain ``list[str]``
+    without the attribute — no current call site does any of these.
     """
 
     referenced_files: set[str]
@@ -89,30 +81,6 @@ class BestPracticeCheckResult(list[str]):
     def __init__(self, items: list[str] | None = None) -> None:
         super().__init__(items or [])
         self.referenced_files = set()
-
-    def __copy__(self) -> BestPracticeCheckResult:
-        """Preserve ``referenced_files`` on ``copy.copy()``.
-
-        Without this override, the default copy protocol re-enters
-        ``__init__`` and resets ``referenced_files`` to an empty set —
-        silently dropping the auto-embed payload on any caller that
-        copies the result.
-        """
-        new = BestPracticeCheckResult(list(self))
-        new.referenced_files = set(self.referenced_files)
-        return new
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> BestPracticeCheckResult:
-        """Preserve ``referenced_files`` on ``copy.deepcopy()``.
-
-        Mirrors ``__copy__``; entries are immutable ``str`` so a shallow
-        copy of the set is sufficient even under deepcopy semantics.
-        """
-        from copy import deepcopy
-
-        new = BestPracticeCheckResult(deepcopy(list(self), memo))
-        new.referenced_files = deepcopy(self.referenced_files, memo)
-        return new
 
 
 # ---------------------------------------------------------------------------
@@ -278,12 +246,9 @@ def _skill_route_suffix(skill_prefix: str | None, file_ref: str) -> str:
        works on every MCP client. Anchor stripped (the tool reads the
        whole file).
 
-    The write tools' own ``MandatoryBPS`` parameter is visible in
-    the catalog but undescribed (no Pydantic Field description, no
-    docstring mention) so the LLM has no semantic toggle signal pointing
-    at it — it is therefore not advertised here either. Auto-embed of
-    the matching section still happens in the next write's response
-    unconditionally, driven by ``referenced_files``.
+    Auto-embed of the matching section still happens in the next
+    write's response, driven by ``referenced_files``; the
+    ``MandatoryBPS`` opt-out param is not named here by design.
     """
     if not skill_prefix:
         # Skills feature is disabled server-wide; none of the routes work.

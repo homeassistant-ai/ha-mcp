@@ -282,9 +282,15 @@ def main() -> int:
                 raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
             )
             raw_mandatory_bps = config.get("enable_mandatory_bps", True)
-            enable_mandatory_bps = (
-                raw_mandatory_bps if isinstance(raw_mandatory_bps, bool) else True
-            )
+            if isinstance(raw_mandatory_bps, bool):
+                enable_mandatory_bps = raw_mandatory_bps
+            else:
+                log_error(
+                    "enable_mandatory_bps must be bool, got "
+                    f"{type(raw_mandatory_bps).__name__}={raw_mandatory_bps!r}; "
+                    "using default True"
+                )
+                enable_mandatory_bps = True
             raw_auto_backup = config.get("enable_auto_backup", True)
             enable_auto_backup = (
                 raw_auto_backup if isinstance(raw_auto_backup, bool) else False
