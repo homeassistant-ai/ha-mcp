@@ -170,7 +170,9 @@ class YamlConfigTools:
             Field(default=True),
         ] = True,
     ) -> dict[str, Any]:
-        """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
+        """MUST call ha_get_skill_guide first.
+
+        Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
 
         **WARNING:** Destructive, disabled by default. Dedicated tools exist for
         almost every use case and should be preferred:

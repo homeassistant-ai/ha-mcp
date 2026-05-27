@@ -935,6 +935,8 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         ] = True,
     ) -> dict[str, Any]:
         """
+        MUST call ha_get_skill_guide first.
+
         Create or update a Home Assistant dashboard.
 
         Creates a new dashboard or updates an existing one with the provided configuration.

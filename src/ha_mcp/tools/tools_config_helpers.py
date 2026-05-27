@@ -2366,6 +2366,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = True,
     ) -> dict[str, Any]:
         """
+        MUST call ha_get_skill_guide first.
+
         Create or update Home Assistant helper entities and config subentries
         (28 types, unified interface).
 
