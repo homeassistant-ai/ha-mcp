@@ -63,7 +63,20 @@ async def _make_tool():
             captured.setdefault("fns", []).append(method)
 
     client = MagicMock()
-    client.get_services = AsyncMock(return_value=[{"domain": "ha_mcp_tools"}])
+    # _fetch_caller_token pre-flights /api/services and requires
+    # get_caller_token to be registered — list it alongside the other
+    # services so the bootstrap doesn't trip COMPONENT_NOT_INSTALLED.
+    client.get_services = AsyncMock(
+        return_value=[
+            {
+                "domain": "ha_mcp_tools",
+                "services": {
+                    "get_caller_token": {},
+                    "edit_yaml_config": {},
+                },
+            }
+        ]
+    )
     client.send_websocket_message = AsyncMock()
     client.call_service = _build_call_service_mock()
 

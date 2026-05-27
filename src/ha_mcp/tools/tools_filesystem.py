@@ -61,8 +61,46 @@ def _get_token_lock(client: Any) -> asyncio.Lock:
     return lock
 
 
+async def _is_bootstrap_service_registered(client: Any) -> bool:
+    """Returns True if ha_mcp_tools.get_caller_token is present in HA's
+    service registry. Old (<0.5.0) versions of the custom component
+    didn't ship this service; the bootstrap call would otherwise fail
+    with an opaque 400 from HA."""
+    services = await client.get_services()
+    for entry in services:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("domain") != MCP_TOOLS_DOMAIN:
+            continue
+        domain_services = entry.get("services") or {}
+        return CALLER_TOKEN_BOOTSTRAP_SERVICE in domain_services
+    return False
+
+
 async def _fetch_caller_token(client: Any) -> str:
-    """Call the bootstrap service and cache the returned token."""
+    """Call the bootstrap service and cache the returned token.
+
+    Old custom-component versions (<0.5.0) don't register get_caller_token.
+    We detect that explicitly and surface an actionable "update component"
+    error rather than a generic "no usable token" string, which would
+    otherwise be the symptom for both (a) old component installed and
+    (b) a race condition during integration setup.
+    """
+    if not await _is_bootstrap_service_registered(client):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                "The installed ha_mcp_tools custom component is too old "
+                "(pre-0.5.0) — it does not register the get_caller_token "
+                "bootstrap service that this ha-mcp version requires. "
+                "Update via HACS and restart Home Assistant.",
+                suggestions=[
+                    "HACS → Integrations → HA MCP Tools → Update",
+                    "Restart Home Assistant after update completes",
+                    "Then retry the operation",
+                ],
+            )
+        )
     result = await client.call_service(
         MCP_TOOLS_DOMAIN,
         CALLER_TOKEN_BOOTSTRAP_SERVICE,
@@ -287,9 +325,14 @@ class FilesystemTools:
                 service_data,
             )
 
-            # The service returns the response directly
+            # Mirror ha_config_set_yaml: raise on success=false so callers
+            # see a ToolError rather than a success-shaped response that
+            # carries an error payload.
             if isinstance(result, dict):
-                return unwrap_service_response(result)
+                result = unwrap_service_response(result)
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return result
 
             raise_tool_error(
                 create_error_response(
@@ -401,7 +444,10 @@ class FilesystemTools:
             )
 
             if isinstance(result, dict):
-                return unwrap_service_response(result)
+                result = unwrap_service_response(result)
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return result
 
             raise_tool_error(
                 create_error_response(
@@ -534,7 +580,10 @@ class FilesystemTools:
             )
 
             if isinstance(result, dict):
-                return unwrap_service_response(result)
+                result = unwrap_service_response(result)
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return result
 
             raise_tool_error(
                 create_error_response(
@@ -645,7 +694,10 @@ class FilesystemTools:
             )
 
             if isinstance(result, dict):
-                return unwrap_service_response(result)
+                result = unwrap_service_response(result)
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return result
 
             raise_tool_error(
                 create_error_response(

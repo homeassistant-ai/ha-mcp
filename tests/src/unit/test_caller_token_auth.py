@@ -140,6 +140,24 @@ def _make_client_with_token(token: str) -> AsyncMock:
     that the token was injected."""
     client = AsyncMock()
 
+    # _fetch_caller_token now pre-flights via /api/services to detect old
+    # (pre-0.5.0) custom components that lack get_caller_token. The mock
+    # must report the bootstrap service as registered or the bootstrap
+    # path raises COMPONENT_NOT_INSTALLED before ever calling call_service.
+    client.get_services.return_value = [
+        {
+            "domain": MCP_TOOLS_DOMAIN,
+            "services": {
+                CALLER_TOKEN_BOOTSTRAP_SERVICE: {},
+                "list_files": {},
+                "read_file": {},
+                "write_file": {},
+                "delete_file": {},
+                "edit_yaml_config": {},
+            },
+        }
+    ]
+
     async def fake_call_service(domain, service, payload, **kwargs):
         if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
             # HA wraps response under "service_response" — mirror that so
@@ -204,6 +222,14 @@ class TestCallMcpToolsServiceInjectsToken:
     async def test_refetches_and_retries_once_on_unauthorized(self):
         """Token rotation flow: cached token is stale → refetch → succeed."""
         client = AsyncMock()
+        # Bootstrap service must appear registered or _fetch_caller_token
+        # short-circuits with COMPONENT_NOT_INSTALLED before retry happens.
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "write_file": {}},
+            }
+        ]
         state = {"current_token": "fresh-token", "downstream_calls": 0}
 
         async def fake_call_service(domain, service, payload, **kwargs):
@@ -250,11 +276,44 @@ class TestCallMcpToolsServiceInjectsToken:
 
     @pytest.mark.asyncio
     async def test_raises_when_bootstrap_returns_no_token(self):
+        """Service exists but returns a malformed response (race condition
+        during integration setup, etc.) → RuntimeError."""
         client = AsyncMock()
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
+            }
+        ]
         # Bootstrap returns a malformed response
         client.call_service.return_value = {"service_response": {"success": False}}
         with pytest.raises(RuntimeError, match="did not return a usable token"):
             await call_mcp_tools_service(client, "list_files", {"path": "www"})
+
+    @pytest.mark.asyncio
+    async def test_raises_component_too_old_when_bootstrap_service_missing(self):
+        """Old (pre-0.5.0) custom component lacks get_caller_token → actionable
+        COMPONENT_NOT_INSTALLED ToolError, not a generic 'no usable token' string.
+
+        This is the failure mode an upgrade-skipping user hits: ha-mcp updates
+        but the HACS integration doesn't, so the bootstrap call would otherwise
+        hit a 400 from HA. We pre-flight via /api/services to detect this
+        and surface a 'update via HACS' message instead.
+        """
+        client = AsyncMock()
+        # Component is installed, but get_caller_token is NOT registered
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {"list_files": {}, "write_file": {}},  # no get_caller_token
+            }
+        ]
+        with pytest.raises(ToolError) as exc_info:
+            await call_mcp_tools_service(client, "list_files", {"path": "www"})
+        msg = str(exc_info.value)
+        assert "too old" in msg or "pre-0.5.0" in msg
+        # call_service must NOT have been called — pre-flight rejected upstream
+        client.call_service.assert_not_called()
 
 
 # =============================================================================
