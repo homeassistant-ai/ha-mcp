@@ -18,6 +18,7 @@ sys.modules["homeassistant.core"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
 sys.modules["homeassistant.helpers.storage"] = MagicMock()
+sys.modules["homeassistant.loader"] = MagicMock()
 
 from custom_components.ha_mcp_tools import CALLER_TOKEN_FIELD  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
@@ -193,6 +194,119 @@ class TestParseYamlPath:
     def test_rejects_other_dotted_path(self, parse):
         _, _, err = parse("homeassistant.customize")
         assert err is not None
+
+
+class TestParseYamlPathPackagesOnly:
+    """PACKAGES_ONLY_YAML_KEYS (automation/script/scene) gating.
+
+    Accepted only when is_package=True; in configuration.yaml the rejection
+    must point at the storage-mode tools, not just dump the generic
+    allowlist.
+    """
+
+    @pytest.fixture(scope="class")
+    def parse(self):
+        from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
+
+        return _parse_and_validate_yaml_path
+
+    @pytest.mark.parametrize("key", ["automation", "script", "scene"])
+    def test_accepts_packages_only_key_when_is_package(self, parse, key):
+        kind, parts, err = parse(key, is_package=True)
+        assert err is None
+        assert kind == "single"
+        assert parts == (key,)
+
+    @pytest.mark.parametrize("key", ["automation", "script", "scene"])
+    def test_rejects_packages_only_key_in_configuration_yaml(self, parse, key):
+        _, _, err = parse(key, is_package=False)
+        assert err is not None
+        assert "packages/*.yaml" in err
+        # Spell each tool name out individually — an agent reading the
+        # rejection sees the combined slash-form as one malformed name.
+        assert "ha_config_set_automation" in err
+        assert "ha_config_set_script" in err
+        assert "ha_config_set_scene" in err
+
+    def test_default_is_package_false(self, parse):
+        # Omitting is_package must behave like is_package=False — no silent
+        # acceptance of PACKAGES_ONLY keys through positional callers.
+        _, _, err = parse("automation")
+        assert err is not None
+        assert "packages/*.yaml" in err
+
+    def test_union_list_in_generic_error_when_is_package(self, parse):
+        # Unknown single key inside a package file: error must enumerate both
+        # ALLOWED_YAML_KEYS and PACKAGES_ONLY_YAML_KEYS so the user sees the
+        # full surface they can pick from.
+        _, _, err = parse("frontend", is_package=True)
+        assert err is not None
+        assert "automation" in err
+        assert "script" in err
+        assert "scene" in err
+
+    def test_generic_error_excludes_packages_only_when_not_package(self, parse):
+        # Unknown single key against configuration.yaml: allowlist must NOT
+        # include PACKAGES_ONLY keys — listing them would mislead the user
+        # into thinking they can rename their key to one of those.
+        _, _, err = parse("frontend", is_package=False)
+        assert err is not None
+        assert "automation" not in err
+        assert "script" not in err
+        assert "scene" not in err
+
+
+class TestPostActionTableContract:
+    """PACKAGES_ONLY_YAML_KEYS and YAML_KEY_POST_ACTIONS must stay in sync.
+
+    If a future PR adds a key to PACKAGES_ONLY_YAML_KEYS without a matching
+    reload_service entry, callers would see the default restart_required
+    response — a regression we should catch at unit-test time.
+    """
+
+    def test_packages_only_keys_have_post_actions(self):
+        from custom_components.ha_mcp_tools.const import (
+            PACKAGES_ONLY_YAML_KEYS,
+            YAML_KEY_POST_ACTIONS,
+        )
+
+        missing = PACKAGES_ONLY_YAML_KEYS - set(YAML_KEY_POST_ACTIONS)
+        assert not missing, (
+            f"PACKAGES_ONLY_YAML_KEYS missing YAML_KEY_POST_ACTIONS entries: {missing}"
+        )
+
+    def test_packages_only_disjoint_from_allowed(self):
+        """ALLOWED_YAML_KEYS and PACKAGES_ONLY_YAML_KEYS must not overlap.
+
+        ``_parse_and_validate_yaml_path`` checks ``ALLOWED_YAML_KEYS``
+        first, then the ``is_package and key in PACKAGES_ONLY_YAML_KEYS``
+        branch. If a future change accidentally lands a packages-only
+        key (``automation`` / ``script`` / ``scene``) into
+        ``ALLOWED_YAML_KEYS`` as well, the gating branch becomes dead
+        code and that key would silently land in ``configuration.yaml``.
+        """
+        from custom_components.ha_mcp_tools.const import (
+            ALLOWED_YAML_KEYS,
+            PACKAGES_ONLY_YAML_KEYS,
+        )
+
+        overlap = ALLOWED_YAML_KEYS & PACKAGES_ONLY_YAML_KEYS
+        assert not overlap, f"sets must be disjoint; overlap: {overlap}"
+
+    @pytest.mark.parametrize(
+        ("key", "expected_service"),
+        [
+            ("automation", "automation.reload"),
+            ("script", "script.reload"),
+            ("scene", "scene.reload"),
+        ],
+    )
+    def test_packages_only_reload_services(self, key, expected_service):
+        from custom_components.ha_mcp_tools.const import YAML_KEY_POST_ACTIONS
+
+        entry = YAML_KEY_POST_ACTIONS[key]
+        assert entry["post_action"] == "reload_available"
+        assert entry["reload_service"] == expected_service
 
 
 class TestHandleEditYamlConfigDashboards:
@@ -584,3 +698,71 @@ class TestHandleEditYamlConfigSingleKey:
         )
         assert result["success"] is True, result
         assert result["post_action"] == "restart_required"
+
+
+class TestHandleEditYamlConfigPathTraversal:
+    """Path-traversal defense composes ``os.path.normpath`` before the
+    ``fnmatch`` package check, so a crafted ``packages/../configuration.yaml``
+    cannot smuggle a PACKAGES_ONLY key into ``configuration.yaml``."""
+
+    @pytest.fixture
+    def hass(self, tmp_path):
+        h = MM()
+        h.config = MM()
+        h.config.config_dir = str(tmp_path)
+        h.data = {DOMAIN: {"caller_token": _TEST_CALLER_TOKEN}}
+
+        async def _run(fn, *args):
+            return fn(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=_run)
+        h.services = MM()
+        h.services.async_call = AsyncMock(return_value={"errors": None})
+        return h
+
+    @pytest.fixture
+    def call_factory(self):
+        def _make(data):
+            call = MM()
+            call.data = {**data, CALLER_TOKEN_FIELD: _TEST_CALLER_TOKEN}
+            return call
+
+        return _make
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_packages_dotdot_normalizes_to_configuration_yaml_and_rejects(
+        self, tmp_path, hass, call_factory
+    ):
+        """``packages/../configuration.yaml`` → ``configuration.yaml`` after
+        normpath, so the ``packages/*.yaml`` fnmatch does not match and
+        ``yaml_path="automation"`` is rejected with the storage-mode pointer.
+
+        Pins the layering: normpath at __init__.py:330 must run before
+        the fnmatch package check at __init__.py:338 so a crafted path
+        cannot smuggle a PACKAGES_ONLY key into configuration.yaml. The
+        defense is correct by construction; this is belt-and-suspenders
+        against a future refactor reordering those two steps."""
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text("")
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "packages/../configuration.yaml",
+                        "action": "add",
+                        "yaml_path": "automation",
+                        "content": "- id: x\n  alias: x\n",
+                        "backup": False,
+                    }
+                )
+            )
+        )
+        assert result["success"] is False
+        assert "packages/*.yaml" in result["error"]
+        assert "ha_config_set_automation" in result["error"]

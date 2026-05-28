@@ -52,7 +52,19 @@ def _build_call_service_mock():
 
     async def fake_call_service(domain, service, payload, **kwargs):
         if service == "get_caller_token":
-            return {"service_response": {"success": True, "token": "test-token"}}
+            # ``version`` is required by the ha-mcp MIN_COMPONENT_VERSION
+            # gate (added with packages-only-keys PR). Use the current
+            # minimum so the test setup matches what a freshly-installed
+            # component would return.
+            from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+
+            return {
+                "service_response": {
+                    "success": True,
+                    "token": "test-token",
+                    "version": MIN_COMPONENT_VERSION,
+                }
+            }
         return {"success": True, "file": "configuration.yaml"}
 
     mock = AsyncMock(side_effect=fake_call_service)

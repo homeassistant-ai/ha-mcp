@@ -29,6 +29,7 @@ from homeassistant.core import (
 )
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
+from homeassistant.loader import async_get_integration
 from ruamel.yaml import YAMLError
 
 from .const import (
@@ -38,6 +39,7 @@ from .const import (
     ALLOWED_YAML_KEYS,
     DASHBOARD_URL_PATH_PATTERN,
     DOMAIN,
+    PACKAGES_ONLY_YAML_KEYS,
     RESERVED_DASHBOARD_URL_PATHS,
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
@@ -260,10 +262,11 @@ def _is_path_allowed_for_read(config_dir: Path, rel_path: str) -> bool:
     if parts and parts[0] in ALLOWED_READ_DIRS:
         return True
 
-    # Check for packages/*.yaml pattern
+    # Check for packages/*.yaml pattern. ``fnmatch``'s ``*`` matches
+    # ``/`` too, so this pattern alone covers nested paths
+    # (``packages/sub/foo.yaml``) — no explicit recursive variant
+    # needed.
     if fnmatch.fnmatch(normalized, "packages/*.yaml"):
-        return True
-    if fnmatch.fnmatch(normalized, "packages/**/*.yaml"):
         return True
 
     # Check for custom_components/**/*.py pattern
@@ -432,9 +435,12 @@ def _build_edit_yaml_config_handler(hass):
             }
 
         is_config_yaml = normalized in ALLOWED_YAML_CONFIG_FILES
-        is_package = fnmatch.fnmatch(normalized, "packages/*.yaml") or fnmatch.fnmatch(
-            normalized, "packages/**/*.yaml"
-        )
+        # ``fnmatch``'s ``*`` matches ``/`` too, so this single
+        # pattern covers both flat ``packages/foo.yaml`` and nested
+        # ``packages/sub/foo.yaml``. The recursive variant
+        # ``packages/**/*.yaml`` is mathematically a subset of this
+        # one (``**`` reduces to ``*`` in fnmatch), so it's omitted.
+        is_package = fnmatch.fnmatch(normalized, "packages/*.yaml")
         if not is_config_yaml and not is_package:
             return {
                 "success": False,
@@ -445,7 +451,9 @@ def _build_edit_yaml_config_handler(hass):
             }
 
         # Parse and validate yaml_path (replaces the old ALLOWED_YAML_KEYS check)
-        kind, path_parts, path_err = _parse_and_validate_yaml_path(yaml_path)
+        kind, path_parts, path_err = _parse_and_validate_yaml_path(
+            yaml_path, is_package=is_package
+        )
         if path_err is not None:
             return {"success": False, "error": path_err}
 
@@ -733,11 +741,15 @@ def _build_edit_yaml_config_handler(hass):
 
 def _parse_and_validate_yaml_path(
     yaml_path: str,
+    *,
+    is_package: bool = False,
 ) -> tuple[str, tuple[str, ...], str | None]:
     """Parse and validate a yaml_path argument.
 
     Two accepted shapes:
     1. Single segment in ALLOWED_YAML_KEYS -> kind='single'
+       When ``is_package=True``, single segments in PACKAGES_ONLY_YAML_KEYS
+       (automation, script, scene) are also accepted.
     2. Exactly 'lovelace.dashboards.<url_path>' -> kind='lovelace_dashboard'
 
     Returns (kind, parts, error). On error, kind is '' and parts is ().
@@ -752,12 +764,36 @@ def _parse_and_validate_yaml_path(
         key = parts[0]
         if key in ALLOWED_YAML_KEYS:
             return "single", parts, None
+        if is_package and key in PACKAGES_ONLY_YAML_KEYS:
+            return "single", parts, None
+        # Reaching here means the key was not accepted. If it is a
+        # PACKAGES_ONLY key, we know is_package=False (otherwise the
+        # preceding branch would have returned) — emit the targeted
+        # "move it to a package file" guidance instead of the generic
+        # allowlist dump below.
+        if key in PACKAGES_ONLY_YAML_KEYS:
+            return (
+                "",
+                (),
+                (
+                    f"Key '{yaml_path}' is only allowed in packages/*.yaml "
+                    "files, not in configuration.yaml. Move the edit to a "
+                    "package file (e.g., packages/automations.yaml) or use "
+                    "ha_config_set_automation, ha_config_set_script, or "
+                    "ha_config_set_scene for storage-mode."
+                ),
+            )
+        allowed = (
+            ALLOWED_YAML_KEYS | PACKAGES_ONLY_YAML_KEYS
+            if is_package
+            else ALLOWED_YAML_KEYS
+        )
         return (
             "",
             (),
             (
                 f"Key '{yaml_path}' is not in the allowed list. "
-                f"Allowed keys: {', '.join(sorted(ALLOWED_YAML_KEYS))}. "
+                f"Allowed keys: {', '.join(sorted(allowed))}. "
                 "For YAML-mode dashboards use 'lovelace.dashboards.<url_path>'."
             ),
         )
@@ -1246,7 +1282,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "completed setup. Reload the ha_mcp_tools integration."
                 ),
             }
-        return {"success": True, "token": token}
+        # Report the manifest version so ha-mcp can enforce a minimum
+        # compatible component version. The integration loader reads
+        # ``manifest.json`` once at startup; ``async_get_integration``
+        # is cheap and avoids hard-coding the version twice.
+        # Pathological-but-belt-and-suspenders: a corrupted manifest
+        # would otherwise surface as HA's generic handler error rather
+        # than the actionable structured response shape this service
+        # uses everywhere else.
+        try:
+            integration = await async_get_integration(hass, DOMAIN)
+            version = str(integration.version)
+        except Exception as exc:  # pragma: no cover — manifest sanity
+            _LOGGER.warning(
+                "Could not read ha_mcp_tools manifest version for "
+                "get_caller_token response: %s",
+                exc,
+            )
+            return {
+                "success": False,
+                "error_code": "manifest_unreadable",
+                "error": (
+                    "ha_mcp_tools manifest version could not be read. "
+                    "Reinstall the integration via HACS."
+                ),
+            }
+        return {
+            "success": True,
+            "token": token,
+            "version": version,
+        }
 
     # Register all services with response support
     hass.services.async_register(
