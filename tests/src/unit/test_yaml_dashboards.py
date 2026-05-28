@@ -429,7 +429,7 @@ class TestHandleEditYamlConfigDashboards:
 
 class TestHandleEditYamlConfigSingleKey:
     """Single-key branch of _build_edit_yaml_config_handler must behave the same
-    after the factory refactor (regression guard for issue #1034)."""
+    after the factory refactor."""
 
     @pytest.fixture
     def hass(self, tmp_path):

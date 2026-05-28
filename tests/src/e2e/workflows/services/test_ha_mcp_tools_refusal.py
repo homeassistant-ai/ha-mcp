@@ -196,30 +196,12 @@ class TestCallerTokenBootstrapEndToEnd:
 
     async def test_list_files_round_trips(self, mcp_client_for_refusal):
         """Implicit end-to-end coverage of bootstrap + admin gate + token
-        gate. Skips with a clear reason if the ha_mcp_tools custom
-        component isn't installed (testcontainer lanes without the
-        component baked in)."""
-        result = await safe_call_tool(
-            mcp_client_for_refusal,
-            "ha_list_files",
-            {"path": "www/"},
-        )
-
-        if isinstance(result, dict):
-            error = result.get("error") or {}
-            if (
-                isinstance(error, dict)
-                and error.get("code") == "COMPONENT_NOT_INSTALLED"
-            ):
-                pytest.skip(
-                    "ha_mcp_tools custom component not installed in this test "
-                    "config; bootstrap coverage is exercised in the lanes "
-                    "that pre-bake the component"
-                )
-
-        # If we got here the bootstrap + token gate must have worked end
-        # to end. The exact ``data`` shape isn't load-bearing for this
-        # test — we just need success.
+        gate. Fails loudly if ha_mcp_tools is missing — the testcontainer
+        conftest auto-installs it and the HAOS lanes bake it in, so a
+        missing component means the install path regressed.
+        ``TestMcpToolsComponentNotInstalled`` in
+        ``workflows/filesystem/test_file_operations.py`` covers the
+        deliberate not-installed scenario; this test does not."""
         async with MCPAssertions(mcp_client_for_refusal) as mcp:
             data = await mcp.call_tool_success(
                 "ha_list_files",
@@ -270,13 +252,12 @@ class TestCallerTokenAdminGate:
                 json={},
             )
 
-        if response.status_code == 400 and "ServiceNotFound" in response.text:
-            pytest.skip(
-                "ha_mcp_tools.get_caller_token not registered in this lane "
-                "(custom component not installed); admin-gate coverage is "
-                "exercised in the lanes that pre-bake the component"
-            )
-
+        # No graceful skip on missing component: the testcontainer conftest
+        # auto-installs ha_mcp_tools and HAOS lanes bake it in, so a 400
+        # ServiceNotFound here means the install path regressed.
+        # TestMcpToolsComponentNotInstalled in
+        # workflows/filesystem/test_file_operations.py covers the
+        # deliberate not-installed scenario; this test does not.
         assert response.status_code == 200, (
             f"HA must accept the non-admin LLAT at the auth layer (the "
             f"admin gate fires inside the handler, not at the transport). "

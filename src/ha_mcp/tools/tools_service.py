@@ -355,7 +355,7 @@ class ServiceTools:
         **Key behavior:**
         - **wait** (default True): wait for the entity state to change before
           returning. Only applies to state-changing services on a single entity.
-        - **Result compaction (issue #1446, default ON)**: ``result`` is trimmed
+        - **Result compaction (default ON)**: ``result`` is trimmed
           to the targeted entity's record (drops parent-group propagation) and
           stripped of ``context`` / ``last_*`` metadata and heavy attribute
           lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``

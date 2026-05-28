@@ -217,7 +217,7 @@ def is_filesystem_tools_enabled() -> bool:
 
     Reads through :func:`config.get_global_settings` so the same
     env-var / override-file / default precedence path applies as
-    every other runtime-editable Settings field (issue #863 web UI).
+    every other runtime-editable Settings field.
     """
     from ..config import get_global_settings
 
