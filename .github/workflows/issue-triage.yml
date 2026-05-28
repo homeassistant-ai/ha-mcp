@@ -783,12 +783,12 @@ jobs:
             const evaluateOutcome = process.env.EVALUATE_OUTCOME || '';
             const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
 
-            // Native org issue fields — IDs from: gh api /orgs/homeassistant-ai/issue-fields
-            // Option IDs are stable unless the field is deleted and recreated.
+            // Native org issue fields — field IDs from: gh api /orgs/homeassistant-ai/issue-fields
+            // value is the option *name* (string), not the numeric option ID.
             const PRIORITY_FIELD_ID = 36564402;
             const EFFORT_FIELD_ID = 36564405;
-            const PRIORITY_OPTIONS = { Urgent: 63981585, High: 63981586, Medium: 63981587, Low: 63981588 };
-            const EFFORT_OPTIONS   = { Low: 63981591, Medium: 63981590, High: 63981589 };
+            const VALID_PRIORITIES = new Set(['Urgent', 'High', 'Medium', 'Low']);
+            const VALID_EFFORTS    = new Set(['Low', 'Medium', 'High']);
 
             const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nYour issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
 
@@ -874,9 +874,9 @@ jobs:
             const duplicateNumber = result.duplicate_of;
             const relatedNumbers = Array.isArray(result.related) ? result.related.filter(n => typeof n === 'number') : [];
             const missingInfo = Array.isArray(result.missing_info) ? result.missing_info.filter(s => typeof s === 'string') : [];
-            const priority = PRIORITY_OPTIONS[result.priority] ? result.priority : null;
+            const priority = VALID_PRIORITIES.has(result.priority) ? result.priority : null;
             if (result.priority && !priority) core.warning(`Unrecognised priority value: "${result.priority}" — skipping field`);
-            const effort = EFFORT_OPTIONS[result.effort] ? result.effort : null;
+            const effort = VALID_EFFORTS.has(result.effort) ? result.effort : null;
             if (result.effort && !effort) core.warning(`Unrecognised effort value: "${result.effort}" — skipping field`);
             const goodFirstIssue = result.good_first_issue || false;
 
@@ -912,12 +912,12 @@ jobs:
               await removeLabel('triage-failed');
               await removeLabel('needs-info');
               const fieldUpdates = [];
-              if (priority && PRIORITY_OPTIONS[priority]) {
-                fieldUpdates.push({ field_id: PRIORITY_FIELD_ID, value: PRIORITY_OPTIONS[priority] });
+              if (priority) {
+                fieldUpdates.push({ field_id: PRIORITY_FIELD_ID, value: priority });
                 core.info('Setting Priority = ' + priority);
               }
-              if (effort && EFFORT_OPTIONS[effort]) {
-                fieldUpdates.push({ field_id: EFFORT_FIELD_ID, value: EFFORT_OPTIONS[effort] });
+              if (effort) {
+                fieldUpdates.push({ field_id: EFFORT_FIELD_ID, value: effort });
                 core.info('Setting Effort = ' + effort);
               }
               if (fieldUpdates.length) await setIssueFields(fieldUpdates);
