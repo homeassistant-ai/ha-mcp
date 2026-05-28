@@ -300,10 +300,13 @@ class TestCallMcpToolsServiceInjectsToken:
 
         async def fake_call_service(domain, service, payload, **kwargs):
             if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
+                from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+
                 return {
                     "service_response": {
                         "success": True,
                         "token": state["current_token"],
+                        "version": MIN_COMPONENT_VERSION,
                     }
                 }
             state["downstream_calls"] += 1
@@ -375,8 +378,14 @@ class TestCallMcpToolsServiceInjectsToken:
 
         async def fake_call_service(domain, service, payload, **kwargs):
             if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
+                from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+
                 return {
-                    "service_response": {"success": True, "token": "freshly-fetched"}
+                    "service_response": {
+                        "success": True,
+                        "token": "freshly-fetched",
+                        "version": MIN_COMPONENT_VERSION,
+                    }
                 }
             downstream_attempts["n"] += 1
             return {
