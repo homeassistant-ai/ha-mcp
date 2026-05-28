@@ -33,7 +33,10 @@ async def test_call_event_with_dict_data(mcp_client):
     """Publish a custom event with dict event data."""
     result = await mcp_client.call_tool(
         "ha_call_event",
-        {"event_type": "test_mcp_event_with_data", "data": {"key": "value", "count": 1}},
+        {
+            "event_type": "test_mcp_event_with_data",
+            "data": {"key": "value", "count": 1},
+        },
     )
     data = assert_mcp_success(result, "call event with dict data")
     assert data["success"] is True
@@ -84,8 +87,7 @@ async def test_call_event_delivery_verified(mcp_client):
     )
     boolean_data = assert_mcp_success(boolean_result, "Create input_boolean flag")
     boolean_id = (
-        boolean_data.get("entity_id")
-        or f"input_boolean.{boolean_data['data']['id']}"
+        boolean_data.get("entity_id") or f"input_boolean.{boolean_data['data']['id']}"
     )
     logger.info("Created flag entity: %s", boolean_id)
 
@@ -105,13 +107,17 @@ async def test_call_event_delivery_verified(mcp_client):
             "ha_config_set_automation",
             {"config": automation_config},
         )
-        create_data = assert_mcp_success(create_result, "Create delivery-probe automation")
+        create_data = assert_mcp_success(
+            create_result, "Create delivery-probe automation"
+        )
         automation_id = create_data.get("entity_id") or create_data.get("automation_id")
         logger.info("Created automation: %s", automation_id)
 
         # 3. Wait for automation to be fully registered before firing
         config = await wait_for_automation(mcp_client, automation_id, timeout=15)
-        assert config is not None, f"Automation {automation_id} not registered within 15s"
+        assert config is not None, (
+            f"Automation {automation_id} not registered within 15s"
+        )
 
         # 4. Fire the event via ha_call_event
         event_result = await mcp_client.call_tool(
@@ -141,11 +147,13 @@ async def test_call_event_delivery_verified(mcp_client):
                     {"identifier": automation_id},
                 )
             except Exception as exc:
-                logger.warning("Cleanup failed for automation %s: %s", automation_id, exc)
+                logger.warning(
+                    "Cleanup failed for automation %s: %s", automation_id, exc
+                )
         if boolean_id:
             try:
                 await mcp_client.call_tool(
-                    "ha_delete_helpers_integrations",
+                    "ha_remove_helpers_integrations",
                     {
                         "target": boolean_id,
                         "helper_type": "input_boolean",

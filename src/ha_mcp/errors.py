@@ -89,6 +89,13 @@ class ErrorCode(StrEnum):
     SANDBOX_SYNTAX_UNSUPPORTED = "SANDBOX_SYNTAX_UNSUPPORTED"
     SANDBOX_RUNTIME_ERROR = "SANDBOX_RUNTIME_ERROR"
 
+    # Tool security policy gating (#966). The middleware gates a tool
+    # call awaiting user approval, the user denied it, or the policy
+    # file itself failed to load (treated as a fail-closed safety stop).
+    USER_APPROVAL_REQUIRED = "USER_APPROVAL_REQUIRED"
+    USER_DENIED = "USER_DENIED"
+    POLICY_LOAD_FAILED = "POLICY_LOAD_FAILED"
+
 
 # Default suggestions for common error codes
 DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
@@ -240,7 +247,9 @@ def create_error_response(
         }
     """
     # Use provided suggestions or fall back to defaults
-    error_suggestions = suggestions if suggestions else DEFAULT_SUGGESTIONS.get(code, [])
+    error_suggestions = (
+        suggestions if suggestions else DEFAULT_SUGGESTIONS.get(code, [])
+    )
 
     error_dict: dict[str, Any] = {
         "code": code.value,
@@ -331,14 +340,20 @@ def create_validation_error(
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a validation error response."""
-    code = ErrorCode.VALIDATION_INVALID_JSON if invalid_json else ErrorCode.VALIDATION_FAILED
+    code = (
+        ErrorCode.VALIDATION_INVALID_JSON
+        if invalid_json
+        else ErrorCode.VALIDATION_FAILED
+    )
     # Build context, prioritizing explicit context but adding parameter if provided
     final_context: dict[str, Any] = {}
     if context:
         final_context.update(context)
     if parameter:
         final_context["parameter"] = parameter
-    return create_error_response(code, message, details, context=final_context if final_context else None)
+    return create_error_response(
+        code, message, details, context=final_context if final_context else None
+    )
 
 
 def create_config_error(

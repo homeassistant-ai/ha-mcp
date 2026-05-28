@@ -1,6 +1,6 @@
 """
 Unit tests for module-level helpers in tools_integrations and
-IntegrationTools.ha_delete_helpers_integrations dispatch.
+IntegrationTools.ha_remove_helpers_integrations dispatch.
 """
 
 import json
@@ -21,9 +21,7 @@ from ha_mcp.tools.tools_integrations import (
 )
 
 
-def _make_client(
-    ws_response: Any = None, raises: Exception | None = None
-) -> MagicMock:
+def _make_client(ws_response: Any = None, raises: Exception | None = None) -> MagicMock:
     """Build a mock client whose send_websocket_message returns / raises."""
     client = MagicMock()
     if raises is not None:
@@ -61,7 +59,9 @@ class TestGetEntryIdForFlowHelper:
     async def test_returns_none_for_unknown_helper_type(self) -> None:
         client = _make_client()
         entry_id, reason = await _get_entry_id_for_flow_helper(
-            client, "input_button", "my_button"  # SIMPLE, not FLOW
+            client,
+            "input_button",
+            "my_button",  # SIMPLE, not FLOW
         )
         assert entry_id is None
         assert reason == "wrong_helper_type"
@@ -77,9 +77,7 @@ class TestGetEntryIdForFlowHelper:
 
     async def test_returns_none_when_entity_has_no_config_entry_id(self) -> None:
         # YAML-defined helper: entity exists but no config_entry_id
-        client = _make_client(
-            {"success": True, "result": {"entity_id": "template.x"}}
-        )
+        client = _make_client({"success": True, "result": {"entity_id": "template.x"}})
         entry_id, reason = await _get_entry_id_for_flow_helper(
             client, "template", "template.x"
         )
@@ -118,26 +116,18 @@ class TestGetEntryIdForFlowHelper:
     async def test_connection_error_propagates(self) -> None:
         # Auth/connection errors must reach the outer handler — they are
         # not "lookup_failed", they are infrastructure failures.
-        client = _make_client(
-            raises=HomeAssistantConnectionError("network down")
-        )
+        client = _make_client(raises=HomeAssistantConnectionError("network down"))
         with pytest.raises(HomeAssistantConnectionError):
-            await _get_entry_id_for_flow_helper(
-                client, "utility_meter", "sensor.x"
-            )
+            await _get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
 
     async def test_auth_error_propagates(self) -> None:
-        client = _make_client(
-            raises=HomeAssistantAuthError("token expired")
-        )
+        client = _make_client(raises=HomeAssistantAuthError("token expired"))
         with pytest.raises(HomeAssistantAuthError):
-            await _get_entry_id_for_flow_helper(
-                client, "utility_meter", "sensor.x"
-            )
+            await _get_entry_id_for_flow_helper(client, "utility_meter", "sensor.x")
 
 
-class TestDeleteHelpersIntegrations:
-    """Unit tests for ha_delete_helpers_integrations.
+class TestRemoveHelpersIntegrations:
+    """Unit tests for ha_remove_helpers_integrations.
 
     Covers all three routing paths (SIMPLE / FLOW / DIRECT) plus the
     confirm gate and wait flag.
@@ -149,9 +139,7 @@ class TestDeleteHelpersIntegrations:
         client = MagicMock()
         client.get_entity_state = AsyncMock(return_value={"state": "on"})
         client.send_websocket_message = AsyncMock()
-        client.delete_config_entry = AsyncMock(
-            return_value={"require_restart": False}
-        )
+        client.delete_config_entry = AsyncMock(return_value={"require_restart": False})
         return client
 
     @pytest.fixture
@@ -163,7 +151,7 @@ class TestDeleteHelpersIntegrations:
     async def test_confirm_false_raises_validation_error(self, tools):
         """confirm=False (default) blocks all three paths."""
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="entry_xyz",
                 # helper_type defaults to None → DIRECT path
                 # confirm defaults to False
@@ -177,10 +165,8 @@ class TestDeleteHelpersIntegrations:
 
     async def test_direct_path_happy(self, tools, mock_client):
         """helper_type=None + entry_id → direct delete."""
-        mock_client.delete_config_entry.return_value = {
-            "require_restart": False
-        }
-        result = await tools.ha_delete_helpers_integrations(
+        mock_client.delete_config_entry.return_value = {"require_restart": False}
+        result = await tools.ha_remove_helpers_integrations(
             target="01HXYZ_entry_id",
             confirm=True,
         )
@@ -190,42 +176,74 @@ class TestDeleteHelpersIntegrations:
         assert result["entry_id"] == "01HXYZ_entry_id"
         assert result["entity_ids"] == []
         assert result["require_restart"] is False
-        mock_client.delete_config_entry.assert_awaited_once_with(
-            "01HXYZ_entry_id"
-        )
+        mock_client.delete_config_entry.assert_awaited_once_with("01HXYZ_entry_id")
 
     async def test_direct_path_require_restart(self, tools, mock_client):
         """require_restart=True is propagated."""
-        mock_client.delete_config_entry.return_value = {
-            "require_restart": True
-        }
-        result = await tools.ha_delete_helpers_integrations(
+        mock_client.delete_config_entry.return_value = {"require_restart": True}
+        result = await tools.ha_remove_helpers_integrations(
             target="01HXYZ_entry_id",
             confirm=True,
         )
         assert result["require_restart"] is True
         assert "restart required" in result["message"].lower()
 
-    async def test_direct_path_entry_not_found(self, tools, mock_client):
-        """404 from delete_config_entry → RESOURCE_NOT_FOUND with entry_id
-        spread to the response top level via create_error_response context."""
-        mock_client.delete_config_entry.side_effect = Exception(
-            "404 Config entry not found"
+    async def test_direct_path_entry_not_found_raises(self, tools, mock_client):
+        """Path 3: HA REST 404 on delete_config_entry → raises
+        RESOURCE_NOT_FOUND so a typo'd entry_id surfaces instead of being
+        silently masked as success.
+
+        Realistic backend behavior: RestClient.delete_config_entry raises
+        HomeAssistantAPIError(status_code=404) when the entry is missing.
+        Non-404 API errors still surface via exception_to_structured_error.
+        """
+        mock_client.delete_config_entry.side_effect = HomeAssistantAPIError(
+            "Config entry not found", status_code=404
         )
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="ghost_entry",
                 confirm=True,
             )
         err = json.loads(str(exc_info.value))
+        assert err["success"] is False
         assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert err["entry_id"] == "ghost_entry"
+        assert "ghost_entry" in err["error"]["message"]
+        # Pin the diagnostic hint so the caller-facing wording can't
+        # silently degrade — both the "may indicate" framing and the
+        # ha_get_integration tool reference were part of the review-cycle
+        # outcome and removing either would regress UX without
+        # otherwise failing this test.
+        assert "May indicate" in err["error"]["message"]
+        assert "ha_get_integration" in err["error"]["message"]
+        assert "already_deleted" not in json.dumps(err)
+
+    async def test_direct_path_non_404_apierror_surfaces_structured_error(
+        self, tools, mock_client
+    ):
+        """Pin the Path 3 narrow: only status_code == 404 routes to the
+        RESOURCE_NOT_FOUND raise. Non-404 API errors (500 server, 401
+        auth, …) must propagate via exception_to_structured_error and
+        surface as a different structured error code, not silently
+        classified as a missing target. Mirrors the Path 1 narrow in
+        test_simple_path_non_404_apierror_propagates.
+        """
+        mock_client.delete_config_entry.side_effect = HomeAssistantAPIError(
+            "Internal server error", status_code=500
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_helpers_integrations(
+                target="some_entry",
+                confirm=True,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["success"] is False
+        assert "already_deleted" not in json.dumps(err)
+        assert err["error"]["code"] not in ("ENTITY_NOT_FOUND", "RESOURCE_NOT_FOUND")
 
     # === Path 1: SIMPLE ===
 
-    async def test_simple_path_standard_via_unique_id(
-        self, tools, mock_client
-    ):
+    async def test_simple_path_standard_via_unique_id(self, tools, mock_client):
         """Registry returns unique_id → standard delete path."""
         # First call: registry/get → success, unique_id present
         # Second call: <type>/delete → success
@@ -236,7 +254,7 @@ class TestDeleteHelpersIntegrations:
         # State check returns truthy → no retry needed
         mock_client.get_entity_state.return_value = {"state": "off"}
 
-        result = await tools.ha_delete_helpers_integrations(
+        result = await tools.ha_remove_helpers_integrations(
             target="my_button",
             helper_type="input_button",
             confirm=True,
@@ -277,7 +295,7 @@ class TestDeleteHelpersIntegrations:
         ]
         target = f"my_disabled_{helper_type}_target"
 
-        result = await tools.ha_delete_helpers_integrations(
+        result = await tools.ha_remove_helpers_integrations(
             target=target,
             helper_type=helper_type,
             confirm=True,
@@ -306,7 +324,7 @@ class TestDeleteHelpersIntegrations:
             [{"success": True, "result": {}}] * 3  # registry returns no uid
             + [{"success": True}]  # direct delete succeeds
         )
-        result = await tools.ha_delete_helpers_integrations(
+        result = await tools.ha_remove_helpers_integrations(
             target="my_button",
             helper_type="input_button",
             confirm=True,
@@ -318,11 +336,11 @@ class TestDeleteHelpersIntegrations:
         delete_call = mock_client.send_websocket_message.call_args_list[-1]
         assert delete_call[0][0]["input_button_id"] == "my_button"
 
-    async def test_simple_path_fallback_already_deleted(
+    async def test_simple_path_state_gone_raises_entity_not_found(
         self, tools, mock_client
     ):
         """Registry empty + direct delete fails + state=None + registry-verify
-        confirms gone → already_deleted."""
+        confirms gone → raises ENTITY_NOT_FOUND (entity-shape target)."""
         # 3x registry no unique_id, 1x direct delete fails, 1x verify-registry
         # confirms entity is truly gone (success=False)
         mock_client.send_websocket_message.side_effect = (
@@ -336,14 +354,97 @@ class TestDeleteHelpersIntegrations:
             + [None]  # final check after direct-delete fail
         )
 
-        result = await tools.ha_delete_helpers_integrations(
-            target="my_button",
-            helper_type="input_button",
-            confirm=True,
-            wait=False,
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_helpers_integrations(
+                target="my_button",
+                helper_type="input_button",
+                confirm=True,
+                wait=False,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["success"] is False
+        assert err["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert "my_button" in err["error"]["message"]
+        # Pin the diagnostic-hint wording (same rationale as Path 3).
+        assert "May indicate" in err["error"]["message"]
+        assert "ha_search_entities" in err["error"]["message"]
+        assert "already_deleted" not in json.dumps(err)
+
+    async def test_simple_path_404_on_state_check_raises_entity_not_found(
+        self, tools, mock_client
+    ):
+        """Pin the Path 1 fallback-2 contract for never-existed targets:
+        get_entity_state raising HomeAssistantAPIError(status_code=404)
+        must classify as state_gone → registry-verify confirms absent →
+        raises ENTITY_NOT_FOUND. The 404 catch routes the never-existed
+        case (typo) through the same confirmed-absent path so the raise
+        carries the structured "typo or removed" hint message.
+        """
+        # 3x registry retries return success=False → no unique_id
+        # 1x direct-id delete returns success=False → falls through to
+        #   fallback-2
+        # 1x verify-registry returns success=False → registry confirms absent
+        mock_client.send_websocket_message.side_effect = (
+            [{"success": False, "error": "Entity not found"}] * 3
+            + [{"success": False, "error": "Unable to find input_button_id"}]
+            + [{"success": False, "error": "Entity not found"}]
         )
-        assert result["success"] is True
-        assert result["fallback_used"] == "already_deleted"
+        # State check raises 404 throughout — never-existed entity case
+        mock_client.get_entity_state.side_effect = HomeAssistantAPIError(
+            "Entity not found", status_code=404
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_helpers_integrations(
+                target="never_existed_button",
+                helper_type="input_button",
+                confirm=True,
+                wait=False,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["success"] is False
+        assert err["error"]["code"] == "ENTITY_NOT_FOUND"
+        assert "never_existed_button" in err["error"]["message"]
+        # Same diagnostic hint as the state-gone branch — both sub-paths
+        # of Path 1 confirmed-absent route to the same raise.
+        assert "May indicate" in err["error"]["message"]
+        assert "ha_search_entities" in err["error"]["message"]
+        assert "already_deleted" not in json.dumps(err)
+
+    async def test_simple_path_non_404_apierror_propagates(self, tools, mock_client):
+        """Pin the Path 1 narrow: only status_code == 404 classifies as
+        state_gone (→ ENTITY_NOT_FOUND raise). Other APIError status
+        codes (e.g. 500 server error, 401 auth failure) must propagate
+        via the outer exception chain rather than mis-classify as a
+        missing target.
+        """
+        # 3x registry retries return success=False → no unique_id
+        # 1x direct-id delete returns success=False → falls through
+        mock_client.send_websocket_message.side_effect = [
+            {"success": False, "error": "Entity not found"}
+        ] * 3 + [{"success": False, "error": "Unable to find"}]
+        # State check raises a non-404 APIError — must propagate
+        mock_client.get_entity_state.side_effect = HomeAssistantAPIError(
+            "Internal server error", status_code=500
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_remove_helpers_integrations(
+                target="server_error_button",
+                helper_type="input_button",
+                confirm=True,
+                wait=False,
+            )
+        err = json.loads(str(exc_info.value))
+        assert err["success"] is False
+        # Outer chain converts the propagated APIError via
+        # exception_to_structured_error — must surface as a structured
+        # error, not as the ENTITY_NOT_FOUND missing-target branch (or
+        # leak the old "already_deleted" marker that no longer exists).
+        # Two independent assertions so a regression that re-routes the
+        # propagated error into a missing-target code still fails.
+        assert err["error"]["code"] != "ENTITY_NOT_FOUND"
+        assert "already_deleted" not in json.dumps(err)
 
     async def test_simple_path_disabled_no_unique_id_surfaces_error(
         self, tools, mock_client
@@ -360,16 +461,18 @@ class TestDeleteHelpersIntegrations:
         mock_client.send_websocket_message.side_effect = (
             [{"success": True, "result": {"entity_id": "input_button.my_button"}}] * 3
             + [{"success": False, "error": "not found"}]
-            + [{
-                "success": True,
-                "result": {"entity_id": "input_button.my_button"},
-            }]
+            + [
+                {
+                    "success": True,
+                    "result": {"entity_id": "input_button.my_button"},
+                }
+            ]
         )
         # Disabled entity: state-absent throughout
         mock_client.get_entity_state.return_value = None
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="my_button",
                 helper_type="input_button",
                 confirm=True,
@@ -389,14 +492,14 @@ class TestDeleteHelpersIntegrations:
         still has to run.
         """
         mock_client.get_entity_state.side_effect = HomeAssistantAPIError(
-            "404 simulated"
+            "404 simulated", status_code=404
         )
         mock_client.send_websocket_message.side_effect = [
             {"success": True, "result": {"unique_id": "uid-disabled-apierror"}},
             {"success": True},
         ]
 
-        result = await tools.ha_delete_helpers_integrations(
+        result = await tools.ha_remove_helpers_integrations(
             target="my_disabled_button",
             helper_type="input_button",
             confirm=True,
@@ -407,19 +510,16 @@ class TestDeleteHelpersIntegrations:
         assert result.get("fallback_used") is None
         assert result["unique_id"] == "uid-disabled-apierror"
 
-    async def test_simple_path_all_fallbacks_exhausted(
-        self, tools, mock_client
-    ):
+    async def test_simple_path_all_fallbacks_exhausted(self, tools, mock_client):
         """Registry empty + direct fails + state still present → ENTITY_NOT_FOUND."""
-        mock_client.send_websocket_message.side_effect = (
-            [{"success": False, "error": "no entity"}] * 3
-            + [{"success": False, "error": "still no"}]
-        )
+        mock_client.send_websocket_message.side_effect = [
+            {"success": False, "error": "no entity"}
+        ] * 3 + [{"success": False, "error": "still no"}]
         # State check ALWAYS returns a state → no fallback path catches it
         mock_client.get_entity_state.return_value = {"state": "off"}
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="ghost_button",
                 helper_type="input_button",
                 confirm=True,
@@ -438,7 +538,7 @@ class TestDeleteHelpersIntegrations:
         mock_client.get_entity_state.return_value = {"state": "off"}
 
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="locked_button",
                 helper_type="input_button",
                 confirm=True,
@@ -450,9 +550,7 @@ class TestDeleteHelpersIntegrations:
 
     # === Path 2: FLOW ===
 
-    async def test_flow_path_happy_single_subentity(
-        self, tools, mock_client
-    ):
+    async def test_flow_path_happy_single_subentity(self, tools, mock_client):
         """FLOW helper resolves entity_id → entry_id → delete + wait."""
         # Sequence of WS calls in order:
         # 1. _get_entry_id_for_flow_helper → registry/get → has config_entry_id
@@ -481,11 +579,9 @@ class TestDeleteHelpersIntegrations:
                 ],
             },
         ]
-        mock_client.delete_config_entry.return_value = {
-            "require_restart": False
-        }
+        mock_client.delete_config_entry.return_value = {"require_restart": False}
 
-        result = await tools.ha_delete_helpers_integrations(
+        result = await tools.ha_remove_helpers_integrations(
             target="sensor.my_template",
             helper_type="template",
             confirm=True,
@@ -497,9 +593,7 @@ class TestDeleteHelpersIntegrations:
         assert result["entity_ids"] == ["sensor.my_template"]
         mock_client.delete_config_entry.assert_awaited_once_with("entry_abc")
 
-    async def test_flow_path_multi_subentity_utility_meter(
-        self, tools, mock_client
-    ):
+    async def test_flow_path_multi_subentity_utility_meter(self, tools, mock_client):
         """utility_meter pattern: multiple sub-entities share one entry_id."""
         mock_client.send_websocket_message.side_effect = [
             # lookup for sensor.energy_peak
@@ -526,7 +620,7 @@ class TestDeleteHelpersIntegrations:
                 ],
             },
         ]
-        result = await tools.ha_delete_helpers_integrations(
+        result = await tools.ha_remove_helpers_integrations(
             target="sensor.energy_peak",
             helper_type="utility_meter",
             confirm=True,
@@ -540,25 +634,33 @@ class TestDeleteHelpersIntegrations:
         }
         assert result["entry_id"] == "um_entry"
 
-    async def test_flow_path_entity_not_in_registry(
-        self, tools, mock_client
-    ):
-        """FLOW: entity_id not in registry → ENTITY_NOT_FOUND."""
+    async def test_flow_path_entity_not_in_registry_raises(self, tools, mock_client):
+        """Path 2 not_in_registry: target FLOW entity_id confirmed absent
+        from the entity registry → raises ENTITY_NOT_FOUND (entity-shape
+        target). Matches the existing bare_id_not_supported branch and
+        sibling ha_remove_entity.
+        """
         # First lookup returns success=False → entry_id resolves to None
-        # Disambiguation re-query also returns success=False → ENTITY_NOT_FOUND
+        # Disambiguation re-query also returns success=False → reason
+        # discriminates as "not_in_registry"
         mock_client.send_websocket_message.side_effect = [
             {"success": False, "error": "not found"},  # initial lookup
             {"success": False, "error": "not found"},  # disambiguation
         ]
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="template.ghost",
                 helper_type="template",
                 confirm=True,
             )
         err = json.loads(str(exc_info.value))
+        assert err["success"] is False
         assert err["error"]["code"] == "ENTITY_NOT_FOUND"
         assert "template.ghost" in err["error"]["message"]
+        # Pin the diagnostic-hint wording (same rationale as Path 1).
+        assert "May indicate" in err["error"]["message"]
+        assert "ha_search_entities" in err["error"]["message"]
+        assert "already_deleted" not in json.dumps(err)
 
     async def test_flow_path_lookup_failed_maps_to_websocket_disconnected(
         self, tools, mock_client
@@ -578,7 +680,7 @@ class TestDeleteHelpersIntegrations:
             "websocket dropped mid-call"
         )
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="sensor.energy_meter",
                 helper_type="utility_meter",
                 confirm=True,
@@ -587,9 +689,7 @@ class TestDeleteHelpersIntegrations:
         assert err["error"]["code"] == "WEBSOCKET_DISCONNECTED"
         assert "sensor.energy_meter" in err["error"]["message"]
 
-    async def test_flow_path_yaml_helper_no_config_entry(
-        self, tools, mock_client
-    ):
+    async def test_flow_path_yaml_helper_no_config_entry(self, tools, mock_client):
         """FLOW: entity exists but config_entry_id is None (YAML) →
         RESOURCE_NOT_FOUND."""
         mock_client.send_websocket_message.side_effect = [
@@ -605,7 +705,7 @@ class TestDeleteHelpersIntegrations:
             },
         ]
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="template.yaml_template",
                 helper_type="template",
                 confirm=True,
@@ -614,11 +714,12 @@ class TestDeleteHelpersIntegrations:
         assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
         assert "storage-based" in err["error"]["message"]
 
-    async def test_flow_path_entry_not_found_at_delete(
-        self, tools, mock_client
-    ):
-        """FLOW: lookup succeeds but delete_config_entry returns 404
-        → RESOURCE_NOT_FOUND."""
+    async def test_flow_path_entry_not_found_at_delete_raises(self, tools, mock_client):
+        """Path 2 TOCTOU: entry_id resolved at step 1 but already deleted
+        before step 3 reaches HA → raises RESOURCE_NOT_FOUND. Silent
+        success would hide the race from a wrapper that acted on the
+        intermediate state.
+        """
         mock_client.send_websocket_message.side_effect = [
             {
                 "success": True,
@@ -626,21 +727,27 @@ class TestDeleteHelpersIntegrations:
             },
             {"success": True, "result": []},  # empty registry/list
         ]
-        mock_client.delete_config_entry.side_effect = Exception(
-            "404 entry not found"
+        mock_client.delete_config_entry.side_effect = HomeAssistantAPIError(
+            "entry not found", status_code=404
         )
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="sensor.stale",
                 helper_type="template",
                 confirm=True,
             )
         err = json.loads(str(exc_info.value))
+        assert err["success"] is False
         assert err["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert "stale_entry" in err["error"]["message"]
+        # Pin the TOCTOU-specific diagnostic hint ("concurrent removal"
+        # framing) — distinct from the typo-framed hint on other paths
+        # because the entry WAS resolvable at step 1 and only vanished
+        # before step 3 reached HA.
+        assert "concurrent removal" in err["error"]["message"]
+        assert "already_deleted" not in json.dumps(err)
 
-    async def test_flow_path_require_restart_propagated(
-        self, tools, mock_client
-    ):
+    async def test_flow_path_require_restart_propagated(self, tools, mock_client):
         """FLOW: delete_config_entry response require_restart=True is
         propagated in the tool response."""
         mock_client.send_websocket_message.side_effect = [
@@ -658,10 +765,8 @@ class TestDeleteHelpersIntegrations:
                 ],
             },
         ]
-        mock_client.delete_config_entry.return_value = {
-            "require_restart": True
-        }
-        result = await tools.ha_delete_helpers_integrations(
+        mock_client.delete_config_entry.return_value = {"require_restart": True}
+        result = await tools.ha_remove_helpers_integrations(
             target="sensor.needs_restart",
             helper_type="template",
             confirm=True,
@@ -671,9 +776,7 @@ class TestDeleteHelpersIntegrations:
 
     # === R7: wait=True coverage (KP13 review #1056) ===
 
-    async def test_simple_path_wait_true_happy(
-        self, tools, mock_client
-    ):
+    async def test_simple_path_wait_true_happy(self, tools, mock_client):
         """SIMPLE standard wait=True: wait_for_entity_removed returns True
         → no warning field in response."""
         mock_client.send_websocket_message.side_effect = [
@@ -686,19 +789,19 @@ class TestDeleteHelpersIntegrations:
             new_callable=AsyncMock,
         ) as mock_wait:
             mock_wait.return_value = True
-            result = await tools.ha_delete_helpers_integrations(
+            result = await tools.ha_remove_helpers_integrations(
                 target="my_button",
                 helper_type="input_button",
                 confirm=True,
                 wait=True,
             )
         assert result["success"] is True
-        assert not result.get("warnings"), f"Unexpected warnings: {result.get('warnings')}"
+        assert not result.get("warnings"), (
+            f"Unexpected warnings: {result.get('warnings')}"
+        )
         mock_wait.assert_awaited_once()
 
-    async def test_simple_path_wait_true_timeout_warns(
-        self, tools, mock_client
-    ):
+    async def test_simple_path_wait_true_timeout_warns(self, tools, mock_client):
         """SIMPLE standard wait=True: wait_for_entity_removed returns False
         (timeout) → warning field set, success still True."""
         mock_client.send_websocket_message.side_effect = [
@@ -711,7 +814,7 @@ class TestDeleteHelpersIntegrations:
             new_callable=AsyncMock,
         ) as mock_wait:
             mock_wait.return_value = False  # timeout
-            result = await tools.ha_delete_helpers_integrations(
+            result = await tools.ha_remove_helpers_integrations(
                 target="my_button",
                 helper_type="input_button",
                 confirm=True,
@@ -740,7 +843,7 @@ class TestDeleteHelpersIntegrations:
                 "network down during poll"
             )
             with pytest.raises(ToolError):
-                await tools.ha_delete_helpers_integrations(
+                await tools.ha_remove_helpers_integrations(
                     target="my_button",
                     helper_type="input_button",
                     confirm=True,
@@ -762,11 +865,11 @@ class TestDeleteHelpersIntegrations:
         # State check returns nothing (entity not in state) → falls through
         # to registry lookup, which raises a connection error.
         mock_client.get_entity_state.return_value = None
-        mock_client.send_websocket_message.side_effect = (
-            HomeAssistantConnectionError("websocket disconnected during lookup")
+        mock_client.send_websocket_message.side_effect = HomeAssistantConnectionError(
+            "websocket disconnected during lookup"
         )
         with pytest.raises(ToolError) as exc_info:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target="my_button",
                 helper_type="input_button",
                 confirm=True,
@@ -800,16 +903,14 @@ class TestDeleteHelpersIntegrations:
                 ],
             },
         ]
-        mock_client.delete_config_entry.return_value = {
-            "require_restart": False
-        }
+        mock_client.delete_config_entry.return_value = {"require_restart": False}
         with patch(
             "ha_mcp.tools.tools_integrations.wait_for_entity_removed",
             new_callable=AsyncMock,
         ) as mock_wait:
             # First entity removed cleanly, second times out
             mock_wait.side_effect = [True, False]
-            result = await tools.ha_delete_helpers_integrations(
+            result = await tools.ha_remove_helpers_integrations(
                 target="sensor.energy_peak",
                 helper_type="utility_meter",
                 confirm=True,
@@ -834,14 +935,17 @@ class TestGetIntegrationDiagnostics:
             "config_entry_id": "entry_abc",
             "data": {"home_assistant": {"version": "2026.5.0"}},
         }
-        with patch.object(
-            IntegrationTools,
-            "_get_single_entry",
-            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(return_value=diag_payload),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_get_single_entry",
+                new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(return_value=diag_payload),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_integration(
                 entry_id="entry_abc", include_diagnostics=True
             )
@@ -862,14 +966,17 @@ class TestGetIntegrationDiagnostics:
     async def test_device_id_forwarded_to_helper(self) -> None:
         client = MagicMock()
         tools = IntegrationTools(client)
-        with patch.object(
-            IntegrationTools,
-            "_get_single_entry",
-            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(return_value={"data": {}}),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_get_single_entry",
+                new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(return_value={"data": {}}),
+            ) as mock_fetch,
+        ):
             await tools.ha_get_integration(
                 entry_id="entry_abc",
                 include_diagnostics=True,
@@ -890,14 +997,17 @@ class TestGetIntegrationDiagnostics:
     async def test_device_id_without_include_surfaces_warning(self) -> None:
         client = MagicMock()
         tools = IntegrationTools(client)
-        with patch.object(
-            IntegrationTools,
-            "_get_single_entry",
-            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_get_single_entry",
+                new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_integration(
                 entry_id="entry_abc",
                 include_diagnostics=False,
@@ -906,23 +1016,24 @@ class TestGetIntegrationDiagnostics:
         mock_fetch.assert_not_awaited()
         assert "diagnostics" not in result
         assert "warnings" in result
-        assert any(
-            "device_id" in w and "ignored" in w for w in result["warnings"]
-        )
+        assert any("device_id" in w and "ignored" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_include_diagnostics_false_omits_call(self) -> None:
         """The diagnostics helper must not run when the flag is off."""
         client = MagicMock()
         tools = IntegrationTools(client)
-        with patch.object(
-            IntegrationTools,
-            "_get_single_entry",
-            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_get_single_entry",
+                new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_integration(
                 entry_id="entry_abc", include_diagnostics=False
             )
@@ -936,36 +1047,40 @@ class TestGetIntegrationDiagnostics:
         client = MagicMock()
         tools = IntegrationTools(client)
         list_payload = {"entries": [], "count": 0}
-        with patch.object(
-            IntegrationTools,
-            "_list_entries",
-            new=AsyncMock(return_value=list_payload),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_list_entries",
+                new=AsyncMock(return_value=list_payload),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_integration(
                 include_diagnostics=True, device_id="dev_xyz"
             )
         mock_fetch.assert_not_awaited()
         assert "warnings" in result
-        assert any(
-            "entry_id was not set" in w for w in result["warnings"]
-        )
+        assert any("entry_id was not set" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_diagnostics_fields_and_truncate_forwarded(self) -> None:
         """Tool surfaces ``diagnostics_fields`` + ``diagnostics_truncate_at_bytes``."""
         client = MagicMock()
         tools = IntegrationTools(client)
-        with patch.object(
-            IntegrationTools,
-            "_get_single_entry",
-            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(return_value={"data": {}}),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_get_single_entry",
+                new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(return_value={"data": {}}),
+            ) as mock_fetch,
+        ):
             await tools.ha_get_integration(
                 entry_id="entry_abc",
                 include_diagnostics=True,
@@ -989,14 +1104,17 @@ class TestGetIntegrationDiagnostics:
         single-entry path."""
         client = MagicMock()
         tools = IntegrationTools(client)
-        with patch.object(
-            IntegrationTools,
-            "_get_single_entry",
-            new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(return_value={"data": {}}),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_get_single_entry",
+                new=AsyncMock(return_value={"success": True, "entry_id": "entry_abc"}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(return_value={"data": {}}),
+            ) as mock_fetch,
+        ):
             await tools.ha_get_integration(
                 entry_id="entry_abc",
                 include_diagnostics=True,
@@ -1021,43 +1139,45 @@ class TestGetIntegrationDiagnostics:
         are also caught by the orphan-args parity warning."""
         client = MagicMock()
         tools = IntegrationTools(client)
-        with patch.object(
-            IntegrationTools,
-            "_list_entries",
-            new=AsyncMock(return_value={"entries": [], "count": 0}),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_list_entries",
+                new=AsyncMock(return_value={"entries": [], "count": 0}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_integration(
                 diagnostics_data_path="data.devices",
                 diagnostics_data_limit=10,
             )
         mock_fetch.assert_not_awaited()
-        assert any(
-            "diagnostics_data_path" in w for w in result.get("warnings", [])
-        )
+        assert any("diagnostics_data_path" in w for w in result.get("warnings", []))
 
     @pytest.mark.asyncio
     async def test_list_mode_warns_on_diagnostics_fields_too(self) -> None:
         """Passing ``diagnostics_fields`` in list mode is also ignored, with warning."""
         client = MagicMock()
         tools = IntegrationTools(client)
-        with patch.object(
-            IntegrationTools,
-            "_list_entries",
-            new=AsyncMock(return_value={"entries": [], "count": 0}),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_list_entries",
+                new=AsyncMock(return_value={"entries": [], "count": 0}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_integration(
                 diagnostics_fields=["home_assistant"],
             )
         mock_fetch.assert_not_awaited()
-        assert any(
-            "diagnostics_fields" in w for w in result.get("warnings", [])
-        )
+        assert any("diagnostics_fields" in w for w in result.get("warnings", []))
 
     @pytest.mark.asyncio
     async def test_list_mode_warns_on_data_offset_alone(self) -> None:
@@ -1067,21 +1187,22 @@ class TestGetIntegrationDiagnostics:
         drops the term would silently swallow the orphan offset."""
         client = MagicMock()
         tools = IntegrationTools(client)
-        with patch.object(
-            IntegrationTools,
-            "_list_entries",
-            new=AsyncMock(return_value={"entries": [], "count": 0}),
-        ), patch(
-            "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
-            new=AsyncMock(),
-        ) as mock_fetch:
+        with (
+            patch.object(
+                IntegrationTools,
+                "_list_entries",
+                new=AsyncMock(return_value={"entries": [], "count": 0}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_integrations.fetch_integration_diagnostics",
+                new=AsyncMock(),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_integration(
                 diagnostics_data_offset=5,
             )
         mock_fetch.assert_not_awaited()
-        assert any(
-            "diagnostics_data_offset" in w for w in result.get("warnings", [])
-        )
+        assert any("diagnostics_data_offset" in w for w in result.get("warnings", []))
 
     @pytest.mark.asyncio
     async def test_data_path_non_string_rejected_with_validation_error(self) -> None:

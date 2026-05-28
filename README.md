@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-88-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-86-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -151,25 +151,25 @@ Spend less time configuring, more time enjoying your smart home.
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (88 tools)</b></summary>
+<summary><b>Complete Tool List (86 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
 | **Add-ons** | `ha_get_addon`, `ha_manage_addon` |
-| **Areas & Floors** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_list_floors_areas`, `ha_remove_area_or_floor`, `ha_set_area_or_floor` |
+| **Areas & Floors** | `ha_list_floors_areas`, `ha_remove_area_or_floor`, `ha_set_area_or_floor` |
 | **Assist** | `ha_manage_pipeline` |
 | **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
 | **Blueprints** | `ha_get_blueprint`, `ha_import_blueprint` |
 | **Calendar** | `ha_config_get_calendar_events`, `ha_config_remove_calendar_event`, `ha_config_set_calendar_event` |
 | **Camera** | `ha_get_camera_image` |
 | **Dashboards** | `ha_config_delete_dashboard_resource`, `ha_config_delete_dashboard`, `ha_config_get_dashboard`, `ha_config_list_dashboard_resources`, `ha_config_set_dashboard_resource`, `ha_config_set_dashboard` |
-| **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_update_device` |
+| **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_set_device` |
 | **Energy** | `ha_manage_energy_prefs` |
 | **Entity Registry** | `ha_get_entity_exposure`, `ha_get_entity`, `ha_remove_entity`, `ha_set_entity` |
 | **Files** | `ha_delete_file` *(beta)*, `ha_list_files` *(beta)*, `ha_read_file` *(beta)*, `ha_write_file` *(beta)* |
 | **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
 | **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_repository_info`, `ha_hacs_search` |
-| **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_delete_helpers_integrations` |
+| **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_remove_helpers_integrations` |
 | **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs` |
 | **Integrations** | `ha_get_integration`, `ha_get_system_health`, `ha_set_integration_enabled` |
 | **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
@@ -292,7 +292,7 @@ For comprehensive testing documentation, see **[tests/README.md](tests/README.md
 
 Ha-mcp runs **locally** on your machine. Your smart home data stays on your network.
 
-- **Configurable telemetry** — optional anonymous usage stats
+- **No telemetry today** — anonymous usage stats are a planned future feature (as of May 2026); users will be notified when it lands and it will be opt-in only
 - **No personal data collection** — we never collect entity names, configs, or device data
 - **User-controlled bug reports** — only sent with your explicit approval
 
@@ -312,6 +312,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[FastMCP](https://github.com/jlowin/fastmcp)**: Excellent MCP server framework
 - **[Model Context Protocol](https://modelcontextprotocol.io/)**: Standardized AI-application communication
 - **[Claude Code](https://github.com/anthropics/claude-code)**: AI-powered coding assistant
+- **[PolicyLayer](https://policylayer.com/)**: Argument-path predicate DSL shape (`args.domain in [...]` with `eq`/`in`/`regex`/`contains`/`exists`/...) inspired the per-tool approval rule schema (#966).
 
 ## 👥 Contributors
 
@@ -320,6 +321,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@julienld](https://github.com/julienld)** — Project creator.
 - **[@sergeykad](https://github.com/sergeykad)** — Core maintainer.
 - **[@kingpanther13](https://github.com/kingpanther13)** — Core maintainer.
+- **[@Patch76](https://github.com/Patch76)** — Core maintainer.
 
 ### Contributors
 
@@ -344,7 +346,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 - **[@lcrostarosa](https://github.com/lcrostarosa)** — Diagnostic and health monitoring tools concept (#675), inspiring system/error logs, repairs, and ZHA radio metrics integration.
 - **[@roysha1](https://github.com/roysha1)** — Copilot CLI support in the installation wizard; replaced placeholder logo SVGs with real brand icons on the documentation site.
-- **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, history/statistics pagination and validation, docs sync automation, docstring guidelines, dashboard tool consolidation.
 - **[@teancom](https://github.com/teancom)** — Fix add-on stats endpoint (`/addons/{slug}/stats`).
 - **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
 - **[@bzelch](https://github.com/bzelch)** — `python_transform` support for automations and scripts.
@@ -360,6 +361,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@drseanwing](https://github.com/drseanwing)** — Progress emission via FastMCP `Context` in long-running tools (#1124); tool-discovery / categorized-search docs (#1123).
 - **[@fnordpig](https://github.com/fnordpig)** — Config subentry support (#1393) and Assist pipeline management tool (#1392).
 - **[@paul43210](https://github.com/paul43210)** — `array_patch` mode in `ha_manage_addon` for atomic GET-modify-POST (#1063).
+- **[@L1AD](https://github.com/L1AD)** — Filed #966 proposing tool security policies; pointed to PolicyLayer's MCP-security work as prior art that inspired the predicate DSL shape.
 
 ---
 

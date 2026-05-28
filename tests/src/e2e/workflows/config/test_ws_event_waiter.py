@@ -122,7 +122,7 @@ class TestWsEventWaiter:
             assert ready, f"Entity {entity_id} not registered after rapid creates"
 
     async def test_remove_helper_clears_state(self, mcp_client, cleanup_tracker):
-        """``ha_config_set_helper`` create + ``ha_delete_helpers_integrations``
+        """``ha_config_set_helper`` create + ``ha_remove_helpers_integrations``
         delete should both complete inline without soft-failure warnings,
         validating both the registration and removal WS waiters in one
         round trip."""
@@ -139,7 +139,7 @@ class TestWsEventWaiter:
         cleanup_tracker.track("input_text", entity_id)
 
         delete_result = await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_text",
                 "target": entity_id,

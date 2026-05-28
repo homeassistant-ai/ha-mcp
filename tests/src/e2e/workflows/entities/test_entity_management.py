@@ -6,8 +6,8 @@ import logging
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success, safe_call_tool
-from tests.src.e2e.utilities.cleanup import (
+from ...utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.cleanup import (
     TestEntityCleaner as EntityCleaner,
 )
 
@@ -469,8 +469,12 @@ class TestEntityManagement:
 
         # Verify both entities are present
         returned_entity_ids = {e.get("entity_id") for e in entity_entries}
-        assert entity_id1 in returned_entity_ids, f"entity_id1 missing: {entity_entries}"
-        assert entity_id2 in returned_entity_ids, f"entity_id2 missing: {entity_entries}"
+        assert entity_id1 in returned_entity_ids, (
+            f"entity_id1 missing: {entity_entries}"
+        )
+        assert entity_id2 in returned_entity_ids, (
+            f"entity_id2 missing: {entity_entries}"
+        )
 
         # Verify each entry has expected fields
         for entry in entity_entries:
@@ -499,7 +503,9 @@ class TestEntityManagement:
 
         assert not data.get("success", True), "Should fail for non-existent entity"
         assert "error" in data, f"Missing error field: {data}"
-        assert data.get("error", {}).get("suggestions"), f"Missing suggestions field: {data}"
+        assert data.get("error", {}).get("suggestions"), (
+            f"Missing suggestions field: {data}"
+        )
 
         logger.info("Non-existent entity error handling verified")
 
@@ -512,7 +518,9 @@ class TestEntityManagement:
         data = assert_mcp_success(result, "Get entity with empty list")
 
         assert data.get("count") == 0, f"Expected count=0, got: {data}"
-        assert data.get("entity_entries") == [], f"Expected empty entity_entries: {data}"
+        assert data.get("entity_entries") == [], (
+            f"Expected empty entity_entries: {data}"
+        )
         assert data.get("message") == "No entities requested", (
             f"Expected 'No entities requested' message: {data}"
         )
@@ -546,7 +554,9 @@ class TestEntityManagement:
         get_data = assert_mcp_success(get_result, "Get entity partial success")
 
         # Verify partial success
-        assert get_data.get("count") == 1, f"Expected count=1 (partial), got: {get_data}"
+        assert get_data.get("count") == 1, (
+            f"Expected count=1 (partial), got: {get_data}"
+        )
 
         entity_entries = get_data.get("entity_entries", [])
         assert len(entity_entries) == 1, f"Expected 1 entry: {entity_entries}"

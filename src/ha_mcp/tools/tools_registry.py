@@ -593,10 +593,10 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"Device Registry"},
-        annotations={"destructiveHint": True, "title": "Update Device"},
+        annotations={"destructiveHint": True, "title": "Set Device"},
     )
     @log_tool_usage
-    async def ha_update_device(
+    async def ha_set_device(
         device_id: Annotated[
             str,
             Field(description="Device ID to update"),
@@ -637,7 +637,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Device and entity names are independent. To rename entities, use ha_set_entity(new_entity_id=...).
 
         Common workflow for full rename:
-        1. ha_update_device(device_id="abc", name="Living Room Sensor")  # Rename device
+        1. ha_set_device(device_id="abc", name="Living Room Sensor")  # Rename device
         2. ha_set_entity("sensor.old", new_entity_id="sensor.living_room")  # Rename entities separately
 
         PARAMETERS:
@@ -647,11 +647,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - labels: List of labels (replaces existing labels)
 
         EXAMPLES:
-        - Rename device: ha_update_device("abc123", name="Living Room Hub")
-        - Move to area: ha_update_device("abc123", area_id="living_room")
-        - Disable device: ha_update_device("abc123", disabled_by="user")
-        - Enable device: ha_update_device("abc123", disabled_by="")
-        - Add labels: ha_update_device("abc123", labels=["important", "sensor"])
+        - Rename device: ha_set_device("abc123", name="Living Room Hub")
+        - Move to area: ha_set_device("abc123", area_id="living_room")
+        - Disable device: ha_set_device("abc123", disabled_by="user")
+        - Enable device: ha_set_device("abc123", disabled_by="")
+        - Add labels: ha_set_device("abc123", labels=["important", "sensor"])
         """
         # Parse labels if provided as string
         parsed_labels = None
@@ -717,7 +717,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Remove orphaned device: ha_remove_device("abc123def456")
 
         NOTE: For most use cases, consider disabling the device instead:
-        ha_update_device(device_id="abc123", disabled_by="user")
+        ha_set_device(device_id="abc123", disabled_by="user")
         """
         try:
             # Empty/whitespace device_id would slip past the local-filter

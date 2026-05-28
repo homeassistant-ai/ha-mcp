@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 88+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 86+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -256,7 +256,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Replaces the full tool catalog (~88 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
 
@@ -272,12 +272,32 @@ Replaces the full tool catalog (~88 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
+### enable_tool_security_policies
+
+**Default:** `false`
+
+Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behind explicit user approval. When a guarded tool is called, the agent is told to ask the user to open the Tool Security Policies tab in the web UI, and the call is held until the user clicks **Approve** there. Per-tool rules — with optional argument conditions — are configured from the same Tool Security Policies tab.
+
+**When to enable:**
+- Shared installations where you want a human in the loop for destructive or security-relevant operations
+- Locks, alarms, and other entities where an LLM mistake has real-world consequences
+- Whenever you want a per-call user-approval prompt before high-stakes operations run (locks, automations, etc.)
+
+**When to leave disabled (default):**
+- Single-user setups where you're comfortable with the LLM acting autonomously
+- You haven't configured any policy rules yet (with no rules, the toggle has no effect — but the runtime cost is small either way)
+
+Off by default. Requires add-on restart to take effect.
+
 **Example Configuration:**
 
 ```yaml
-backup_hint: normal
-secret_path: ""  # Leave empty for auto-generation
+enable_tool_security_policies: true
 ```
+
+Per-tool rules (including argument conditions like `args.domain in ['lock', 'alarm_control_panel']`) are configured from the **Tool Security Policies** tab in the web UI, not from `config.yaml`.
+
+*Inspired by [PolicyLayer](https://policylayer.com/)'s policy DSL shape, originally proposed in [#966](https://github.com/homeassistant-ai/ha-mcp/issues/966) by [@L1AD](https://github.com/L1AD).*
 
 ---
 
@@ -366,7 +386,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 88+ MCP tools for controlling Home Assistant:
+The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -377,8 +397,6 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 - `ha_manage_addon` — Manage a Home Assistant add-on — update its configuration or call its internal API.
 
 ### Areas & Floors
-- `ha_config_list_areas` — List all Home Assistant areas (rooms).
-- `ha_config_list_floors` — List all Home Assistant floors.
 - `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
 - `ha_remove_area_or_floor` — Remove a Home Assistant area or floor.
 - `ha_set_area_or_floor` — Create or update a Home Assistant area or floor.
@@ -414,7 +432,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 ### Device Registry
 - `ha_get_device` — Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.
 - `ha_remove_device` — Remove an orphaned device from the Home Assistant device registry.
-- `ha_update_device` — Update device properties such as name, area, disabled state, or labels.
+- `ha_set_device` — Update device properties such as name, area, disabled state, or labels.
 
 ### Energy
 - `ha_manage_energy_prefs` — Manage the Home Assistant Energy Dashboard preferences.
@@ -445,7 +463,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 ### Helper Entities
 - `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
 - `ha_config_set_helper` — Create or update Home Assistant helper entities and config subentries
-- `ha_delete_helpers_integrations` — Delete a Home Assistant helper or integration config entry.
+- `ha_remove_helpers_integrations` — Remove a Home Assistant helper or integration config entry.
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.

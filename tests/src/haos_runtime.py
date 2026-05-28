@@ -91,6 +91,10 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # with the ``local_`` prefix that Supervisor applies to local-store
 # addons.
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
+# Webhook-proxy addon's installed slug. Bake-installed (boot=manual; not
+# auto-started) by build_image.install_webhook_proxy_addon. The
+# haos_only test module's session fixture starts it on demand.
+HA_MCP_WEBHOOK_PROXY_ADDON_SLUG = "local_ha_mcp_webhook_proxy"
 # Advanced SSH Web Terminal addon's installed slug. Bake-installed by
 # build_image.install_advanced_ssh; available on host port
 # SSH_DEBUG_HOST_PORT (22222). User/password are CI-test-only and can

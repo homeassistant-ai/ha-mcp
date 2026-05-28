@@ -886,7 +886,7 @@ class TestFlowHelperDirectGuard:
 # --- tools_integrations.py (Round-4 sibling sweep) -----------------------
 #
 # Two destructive-class siblings the round-3 audit missed:
-#   1. ``ha_delete_helpers_integrations`` — empty/whitespace ``target``
+#   1. ``ha_remove_helpers_integrations`` — empty/whitespace ``target``
 #      would reach the destructive backend call on every routing path
 #      (simple-helper WS delete, flow-helper entry-resolution, direct
 #      config-entry delete). Single up-front guard closes all three.
@@ -908,7 +908,7 @@ class TestIntegrationsIdentifierValidation:
         [None, "input_boolean", "utility_meter"],
         ids=["direct_entry", "simple_helper", "flow_helper"],
     )
-    async def test_delete_helpers_integrations_rejects_empty_target(
+    async def test_remove_helpers_integrations_rejects_empty_target(
         self, tools, bad, helper_type
     ):
         # Parametrized across all three routing paths (None→direct entry,
@@ -916,7 +916,7 @@ class TestIntegrationsIdentifierValidation:
         # guard is locked against a regression that moves it inside any
         # one path.
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_delete_helpers_integrations(
+            await tools.ha_remove_helpers_integrations(
                 target=bad, helper_type=helper_type, confirm=True
             )
         _assert_invalid_param(excinfo)
@@ -1120,18 +1120,18 @@ class TestRegistryIdentifierValidation:
         mock_ws_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_update_device_rejects_empty_device_id(self, mock_ws_client, bad):
-        # ``device_id`` is passed straight through ``ha_update_device`` to
+    async def test_set_device_rejects_empty_device_id(self, mock_ws_client, bad):
+        # ``device_id`` is passed straight through ``ha_set_device`` to
         # ``_update_device_internal`` which builds a
         # ``config/device_registry/update`` WS message; without the new
         # guard, ``device_id=""`` would surface as a misleading HA
         # "device not found". Same destructive-WS-call class as
         # ``ha_remove_device``.
         captured = _register_registry_tools_and_capture(mock_ws_client)
-        ha_update_device = captured["ha_update_device"]
+        ha_set_device = captured["ha_set_device"]
 
         with pytest.raises(ToolError) as excinfo:
-            await ha_update_device(device_id=bad, name="New Name")
+            await ha_set_device(device_id=bad, name="New Name")
         _assert_invalid_param(excinfo)
         assert '"parameter": "device_id"' in str(excinfo.value), str(excinfo.value)
         mock_ws_client.send_websocket_message.assert_not_called()

@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     # Dramatically reduces idle context token usage for LLMs.
     enable_tool_search: bool = Field(False, alias="ENABLE_TOOL_SEARCH")
 
+    # Tool security policies middleware — opt-in gate that routes high-stakes
+    # tool calls through a per-tool policy with out-of-band web-UI approval
+    # (issue #966). Disabled by default.
+    enable_tool_security_policies: bool = Field(
+        False, alias="ENABLE_TOOL_SECURITY_POLICIES"
+    )
+
     # Managed YAML config editing — allows ha_config_set_yaml to add,
     # replace, or remove top-level keys in configuration.yaml and package
     # files. Disabled by default; only for YAML-only features with no UI/API path.
@@ -330,6 +337,7 @@ FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
         "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION",
         bool,
     ),
+    ("enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool),
 )
 
 # Override-file location is the same data dir that holds tool_config.json

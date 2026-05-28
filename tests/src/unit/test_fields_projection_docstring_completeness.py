@@ -130,10 +130,10 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "return_harvest": [],
     },
     {
-        "tool": "ha_config_list_areas",
-        "docstring": ("tools/tools_areas.py", "ha_config_list_areas"),
+        "tool": "ha_list_floors_areas",
+        "docstring": ("tools/tools_areas.py", "ha_list_floors_areas"),
         "var_harvest": [
-            ("tools/tools_areas.py", "ha_config_list_areas", "response"),
+            ("tools/tools_areas.py", "ha_list_floors_areas", "response"),
         ],
         "return_harvest": [],
     },

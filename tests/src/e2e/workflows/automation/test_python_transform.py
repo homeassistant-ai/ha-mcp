@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import MCPAssertions, extract_error_message
+from ...utilities.assertions import MCPAssertions, extract_error_message
 
 
 @pytest.mark.asyncio
@@ -66,9 +66,24 @@ async def test_python_transform_pattern_update(mcp_client, ha_client):
                 "alias": "Test Pattern Transform",
                 "trigger": [{"platform": "time", "at": "08:00:00"}],
                 "action": [
-                    {"alias": "Step A", "action": "light.turn_on", "target": {"entity_id": "light.a"}, "data": {"brightness": 50}},
-                    {"alias": "Step B", "action": "light.turn_on", "target": {"entity_id": "light.b"}, "data": {"brightness": 50}},
-                    {"alias": "Step C", "action": "climate.set_temperature", "target": {"entity_id": "climate.test"}, "data": {"temperature": 22}},
+                    {
+                        "alias": "Step A",
+                        "action": "light.turn_on",
+                        "target": {"entity_id": "light.a"},
+                        "data": {"brightness": 50},
+                    },
+                    {
+                        "alias": "Step B",
+                        "action": "light.turn_on",
+                        "target": {"entity_id": "light.b"},
+                        "data": {"brightness": 50},
+                    },
+                    {
+                        "alias": "Step C",
+                        "action": "climate.set_temperature",
+                        "target": {"entity_id": "climate.test"},
+                        "data": {"temperature": 22},
+                    },
                 ],
             }
         },
@@ -115,7 +130,9 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
             "config": {
                 "alias": "Test Hash Required",
                 "trigger": [{"platform": "time", "at": "09:00:00"}],
-                "action": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "action": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             }
         },
     )
@@ -176,7 +193,9 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
             "config": {
                 "alias": "Test Conflict",
                 "trigger": [{"platform": "time", "at": "10:00:00"}],
-                "action": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "action": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             }
         },
     )
@@ -194,7 +213,9 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
             "config": {
                 "alias": "Test Conflict Modified",
                 "trigger": [{"platform": "time", "at": "11:00:00"}],
-                "action": [{"action": "light.turn_off", "target": {"entity_id": "light.test"}}],
+                "action": [
+                    {"action": "light.turn_off", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -222,7 +243,9 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
             "config": {
                 "alias": "Test Security",
                 "trigger": [{"platform": "time", "at": "12:00:00"}],
-                "action": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "action": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             }
         },
     )
@@ -257,7 +280,11 @@ async def test_chained_transforms(mcp_client, ha_client):
                 "alias": "Test Chain",
                 "trigger": [{"platform": "time", "at": "13:00:00"}],
                 "action": [
-                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}, "data": {"brightness": 50}},
+                    {
+                        "action": "light.turn_on",
+                        "target": {"entity_id": "light.test"},
+                        "data": {"brightness": 50},
+                    },
                 ],
             }
         },
@@ -302,7 +329,9 @@ async def test_returned_hash_matches_next_get(mcp_client, ha_client):
             "config": {
                 "alias": "Test Hash Match",
                 "trigger": [{"platform": "time", "at": "14:00:00"}],
-                "action": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "action": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             }
         },
     )
@@ -339,7 +368,9 @@ async def test_transform_invalid_config_rejected(mcp_client, ha_client):
             "config": {
                 "alias": "Test Invalid Transform",
                 "trigger": [{"platform": "time", "at": "15:00:00"}],
-                "action": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "action": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             }
         },
     )
@@ -409,7 +440,9 @@ async def test_plural_key_hash_stability(mcp_client, ha_client):
             "config": {
                 "alias": "Test Plural Keys",
                 "triggers": [{"platform": "time", "at": "17:00:00"}],
-                "actions": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "actions": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             }
         },
     )
@@ -447,7 +480,9 @@ async def test_full_config_update_with_config_hash(mcp_client, ha_client):
             "config": {
                 "alias": "Test Full Hash",
                 "trigger": [{"platform": "time", "at": "18:00:00"}],
-                "action": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "action": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             }
         },
     )
@@ -466,7 +501,9 @@ async def test_full_config_update_with_config_hash(mcp_client, ha_client):
             "config": {
                 "alias": "Full Hash Updated",
                 "trigger": [{"platform": "time", "at": "18:30:00"}],
-                "action": [{"action": "light.turn_off", "target": {"entity_id": "light.test"}}],
+                "action": [
+                    {"action": "light.turn_off", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -483,7 +520,9 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
             "config": {
                 "alias": "Test Full Stale",
                 "trigger": [{"platform": "time", "at": "19:00:00"}],
-                "action": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "action": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             }
         },
     )
@@ -525,7 +564,9 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
 
 
 @pytest.mark.asyncio
-async def test_categorized_automation_transform_preserves_category(mcp_client, ha_client):
+async def test_categorized_automation_transform_preserves_category(
+    mcp_client, ha_client
+):
     """Test that python_transform on a categorized automation preserves the category.
 
     Regression test for blocker #1: category must be popped before upsert
@@ -548,7 +589,11 @@ async def test_categorized_automation_transform_preserves_category(mcp_client, h
                 "alias": "Test Categorized Transform",
                 "trigger": [{"platform": "time", "at": "21:00:00"}],
                 "action": [
-                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}, "data": {"brightness": 50}},
+                    {
+                        "action": "light.turn_on",
+                        "target": {"entity_id": "light.test"},
+                        "data": {"brightness": 50},
+                    },
                 ],
             },
             "category": category_id,

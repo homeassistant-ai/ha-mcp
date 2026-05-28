@@ -4,13 +4,13 @@ Device Registry E2E Tests
 Tests for the device registry management tools:
 - ha_get_device: List all devices with optional filtering
 - ha_get_device: Get device details including entities
-- ha_update_device: Update device properties (name, area, disabled, labels)
+- ha_set_device: Set device properties (name, area, disabled, labels)
 - ha_remove_device: Remove orphaned devices
 
 Key test scenarios:
 - List devices and verify structure
 - Get device details with entities
-- Update device name (note: does NOT cascade to entities)
+- Set device name (note: does NOT cascade to entities)
 - Filter devices by area and manufacturer
 - Handle non-existent devices
 """
@@ -304,8 +304,8 @@ class TestDeviceGet:
 
 
 @pytest.mark.registry
-class TestDeviceUpdate:
-    """Test ha_update_device functionality."""
+class TestDeviceSet:
+    """Test ha_set_device functionality."""
 
     async def test_update_device_name(self, mcp_client):
         """
@@ -332,7 +332,7 @@ class TestDeviceUpdate:
 
         # Update device name
         update_result = await mcp_client.call_tool(
-            "ha_update_device",
+            "ha_set_device",
             {
                 "device_id": device_id,
                 "name": test_name,
@@ -356,7 +356,7 @@ class TestDeviceUpdate:
         # Restore original name (or clear custom name)
         logger.info("Restoring original device name")
         restore_result = await mcp_client.call_tool(
-            "ha_update_device",
+            "ha_set_device",
             {
                 "device_id": device_id,
                 "name": "",  # Clear custom name
@@ -392,7 +392,7 @@ class TestDeviceUpdate:
         # Update device labels
         # Note: If labels don't exist in label registry, they won't be applied
         update_result = await mcp_client.call_tool(
-            "ha_update_device",
+            "ha_set_device",
             {
                 "device_id": device_id,
                 "labels": test_labels,
@@ -421,7 +421,7 @@ class TestDeviceUpdate:
         # Clear labels (set to empty)
         logger.info("Clearing device labels")
         clear_result = await mcp_client.call_tool(
-            "ha_update_device",
+            "ha_set_device",
             {
                 "device_id": device_id,
                 "labels": [],
@@ -450,7 +450,7 @@ class TestDeviceUpdate:
         # Update with no parameters
         update_data = await safe_call_tool(
             mcp_client,
-            "ha_update_device",
+            "ha_set_device",
             {"device_id": device_id},
         )
 
@@ -472,7 +472,7 @@ class TestDeviceUpdate:
 
         update_data = await safe_call_tool(
             mcp_client,
-            "ha_update_device",
+            "ha_set_device",
             {
                 "device_id": "definitely_not_a_real_device_id_12345",
                 "name": "Test Name",
@@ -598,7 +598,7 @@ async def test_device_entity_independence(mcp_client):
     # Rename the device
     test_name = "Independence Test Device"
     update_result = await mcp_client.call_tool(
-        "ha_update_device",
+        "ha_set_device",
         {
             "device_id": device_id,
             "name": test_name,
@@ -624,7 +624,7 @@ async def test_device_entity_independence(mcp_client):
 
     # Restore device name
     restore_result = await mcp_client.call_tool(
-        "ha_update_device",
+        "ha_set_device",
         {
             "device_id": device_id,
             "name": "",  # Clear custom name

@@ -91,6 +91,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self._tools_registry: ToolsRegistry | None = None
         # Populated by _apply_settings_visibility from tool_config.json on startup
         self._user_pinned_tools: list[str] = []
+        # Tools the user explicitly toggled to "enabled" in the Tools tab.
+        # Used by _apply_tool_search to remove default-pinned tools from
+        # the always_visible set so users can unpin defaults (#966).
+        self._user_enabled_tools: set[str] = set()
 
         # Get server name/version from settings if no client provided
         if not self._client_provided:
@@ -186,6 +190,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # the skill guide tool are registered so it can wrap everything)
         self._apply_tool_search()
 
+        # Wire tool security policies middleware (#966) — opt-in via
+        # ENABLE_TOOL_SECURITY_POLICIES. Must come last so the middleware
+        # wraps the final tool surface (including the search proxies).
+        self._apply_tool_security_policies()
+
     def _get_skills_dir(self) -> Path | None:
         """Return the bundled skills directory if it exists.
 
@@ -273,9 +282,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "      - ha_call_delete_tool \u2014 removes data permanently\n\n"
                 "Once you know a tool\u2019s name, you do NOT need to search "
                 "again \u2014 call it directly.\n\n"
-                f"A few critical tools are listed directly "
-                f"({', '.join(DEFAULT_PINNED_TOOLS)}). Everything else must "
-                f"be discovered via search.\n\n"
+                f"A few default tools are listed directly "
+                f"({', '.join(DEFAULT_PINNED_TOOLS)}) — these are the "
+                f"starting pins, but users can unpin any of them via the "
+                f"Tools tab in the settings UI, so the actual visible set "
+                f"may be a subset of this list. Everything else must be "
+                f"discovered via search.\n\n"
                 "DO NOT assume a capability is unavailable because you "
                 "don't see a direct tool for it. ALWAYS search first."
             )
@@ -362,10 +374,18 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         from .settings_ui import apply_tool_visibility, load_tool_config
 
         config = load_tool_config(self.settings)
+        # When tool_config.json is absent (fresh install), `config` is falsy
+        # and we leave self._user_enabled_tools at its __init__ default (empty
+        # set). That yields no defaults filtered in _apply_tool_search, which
+        # is correct: a fresh install gets the full DEFAULT_PINNED_TOOLS set.
         if config:
-            pinned = apply_tool_visibility(self.mcp, config, self.settings)
-            if pinned:
-                self._user_pinned_tools = list(pinned)
+            result = apply_tool_visibility(self.mcp, config, self.settings)
+            if result.pinned_names:
+                self._user_pinned_tools = list(result.pinned_names)
+            # Captured even when empty so _apply_tool_search can subtract
+            # explicit "enabled" entries from DEFAULT_PINNED_TOOLS — this
+            # is how users unpin a default-pinned tool from the UI.
+            self._user_enabled_tools = set(result.enabled_names)
             logger.info(
                 "Applied persisted tool config (%d entries)",
                 len(config.get("tools", {})),
@@ -764,18 +784,27 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
             return
 
-        # Build the always_visible list: defaults + user-configured pins.
+        # Build the always_visible list: defaults (minus tools the user
+        # explicitly toggled to "enabled" in the Tools tab) + user pins.
         # The skill guide tool is part of DEFAULT_PINNED_TOOLS and is
         # also in MANDATORY_TOOLS (settings UI strips it from any
         # disable list before applying), so the catalog presence is
         # protected from both the search transform and user disables.
-        pinned = list(self._PINNED_TOOLS)
+        # Filtering by _user_enabled_tools is how a user unpins a
+        # default-pinned tool — flipping its UI state to "enabled" (not
+        # "pinned") removes it from the always_visible set so it goes
+        # behind the search proxy like any other tool.
+        pinned = [
+            name for name in self._PINNED_TOOLS if name not in self._user_enabled_tools
+        ]
         pinned.extend(self._user_pinned_tools)
 
-        # Pin code mode tool so it gets individual permission gating
-        # rather than being hidden behind the BM25 search proxy.
-        if self.settings.enable_code_mode:
-            pinned.append("ha_manage_custom_tool")
+        # ``ha_manage_custom_tool`` was previously pinned here whenever
+        # code mode was enabled, so users could gate it via per-tool MCP
+        # permission prompts even when toolsearch hid the catalog. The
+        # tool security policies middleware shipped in #966 now gates it
+        # at call time regardless of catalog visibility, so it no longer
+        # needs an explicit pin just to be reachable for gating.
 
         # The client may not support resources or server instructions — add
         # skills hint to the search tool description (the one place the LLM
@@ -811,6 +840,71 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             )
         except Exception:
             logger.exception("Failed to apply tool search transform")
+
+    def _apply_tool_security_policies(self) -> None:
+        """Register the tool security policies middleware (#966).
+
+        Opt-in via ``ENABLE_TOOL_SECURITY_POLICIES``. When enabled, every
+        tool call is funneled through :class:`PolicyMiddleware`, which
+        consults the persisted :class:`Policy` and gates calls matching
+        a rule until the user approves or denies via the settings UI's
+        ``/api/policy/approve`` / ``/api/policy/deny`` endpoints.
+
+        The middleware is exposed alongside an :class:`ApprovalQueue`
+        attached to ``self.approval_queue`` so the settings-UI handler
+        layer (``build_settings_handlers``) can discover the same queue
+        via ``getattr(server, "approval_queue", None)``.
+
+        Policies are reloaded from disk on every gated call (a small
+        JSON file, typically well under a kB) so live updates via the
+        UI take effect immediately without restart and without a stale
+        in-memory cache.
+        """
+        if not self.settings.enable_tool_security_policies:
+            return
+
+        try:
+            from .policy.approval_queue import ApprovalQueue
+            from .policy.middleware import PolicyMiddleware
+            from .policy.model import Policy
+            from .policy.persistence import load_policy
+            from .utils.data_paths import get_data_dir
+        except ImportError:
+            logger.exception(
+                "Tool Security Policies enabled (ENABLE_TOOL_SECURITY_POLICIES=true) "
+                "but the policy package failed to import. TOOL SECURITY GATING IS NOT ACTIVE; "
+                "all tool calls pass through ungated. Verify ha_mcp.policy is importable."
+            )
+            return
+
+        self.approval_queue = ApprovalQueue()
+        data_dir = get_data_dir()
+
+        def _policy_provider() -> Policy:
+            # Re-read from disk each call so UI edits via PUT
+            # /api/policy/config take effect immediately. The file is
+            # tiny; the cost is negligible relative to the network/HA
+            # roundtrip of a gated tool call.
+            return load_policy(data_dir)
+
+        try:
+            self.mcp.add_middleware(
+                PolicyMiddleware(
+                    policy_provider=_policy_provider,
+                    queue=self.approval_queue,
+                )
+            )
+            logger.info(
+                "Tool security policies middleware registered (data_dir=%s)",
+                data_dir,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to register PolicyMiddleware (data_dir=%s, "
+                "ENABLE_TOOL_SECURITY_POLICIES=true). TOOL SECURITY GATING IS NOT ACTIVE; "
+                "all tool calls pass through ungated.",
+                data_dir,
+            )
 
     # Shared action-phrased keyword block for retrieval. Some MCP clients
     # (Claude Code, others) rank candidate tools by token-overlap between

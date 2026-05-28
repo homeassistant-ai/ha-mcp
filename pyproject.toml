@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ha-mcp"
-version = "7.5.0"
+version = "7.6.0"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -96,7 +96,13 @@ ignore_missing_imports = true
 [tool.ruff]
 target-version = "py313"
 line-length = 88
-extend-exclude = ["tests/initial_test_state"]
+extend-exclude = [
+    "tests/initial_test_state",
+    # HA integration manifests must be strict JSON (no trailing commas);
+    # ruff 0.15+ formats .json files as JSONC and inserts trailing commas
+    # which makes Python's json.load() reject the file at HA startup.
+    "custom_components/**/*.json",
+]
 
 [tool.ruff.lint]
 select = [

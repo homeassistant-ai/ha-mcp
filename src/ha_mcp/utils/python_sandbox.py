@@ -62,7 +62,6 @@ SAFE_NODES = {
     # Control flow
     ast.If,
     ast.For,
-    ast.While,
     ast.Break,
     ast.Continue,
     ast.IfExp,  # ternary: x if c else y
@@ -144,6 +143,8 @@ _NODE_SUGGESTIONS: dict[str, str] = {
     "AsyncWith": "perform the inner logic directly; with-blocks aren't supported",
     "FunctionDef": "use a list comprehension or inline the logic",
     "AsyncFunctionDef": "use a list comprehension or inline the logic",
+    "While": "use a for-loop or list comprehension instead of while-loops to ensure termination",
+    "AsyncFor": "use a regular for-loop over a synchronous iterable",
     "ClassDef": "use a dict literal instead of defining a class",
     "Yield": "build a list with a comprehension or for-loop append",
     "YieldFrom": "build a list with a comprehension or for-loop append",
@@ -163,6 +164,8 @@ _NODE_SUGGESTIONS: dict[str, str] = {
     "MatchOr": "use if/elif/else or a dict lookup instead of match/case",
     "MatchStar": "use if/elif/else or a dict lookup instead of match/case",
 }
+
+_INTERPRETER_INTERNAL_NAMES = frozenset({"__builtins__", "__name__", "__doc__"})
 
 # Whitelist of safe methods that can be called
 SAFE_METHODS = {
@@ -299,6 +302,9 @@ def _validate_node(node: ast.AST) -> str | None:
             return f"Forbidden node type: {name} — {hint}"
         return f"Forbidden node type: {name}"
 
+    if isinstance(node, ast.Name) and node.id in _INTERPRETER_INTERNAL_NAMES:
+        return f"Forbidden: direct access to interpreter internals ({node.id})"
+
     if isinstance(node, ast.Attribute):
         if node.attr.startswith("__") and node.attr.endswith("__"):
             return f"Forbidden: dunder attribute access ({node.attr})"
@@ -369,7 +375,7 @@ def safe_execute_expression(
         )
 
     safe_globals: dict[str, Any] = {
-        "__builtins__": _SAFE_BUILTINS,
+        "__builtins__": dict(_SAFE_BUILTINS),
         "__name__": "__main__",
         "__doc__": None,
     }
@@ -508,7 +514,7 @@ PYTHON TRANSFORM SECURITY:
 - Deletion: del config['key'] or config.pop('key')
 - List methods: append, insert, pop, remove, clear, extend
 - Dict methods: update, get, setdefault, keys, values, items
-- Loops: for, while, if/else, pass, break, continue
+- Loops: for, if/else, pass, break, continue
 - Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)
 - Ternary: x if condition else y
 - Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]
@@ -527,6 +533,7 @@ PYTHON TRANSFORM SECURITY:
 - Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr
 - Function definitions: def, class
 - Exception handling: try/except (validate with isinstance/in/.get() instead)
+- While loops: use bounded for loops or comprehensions instead
 
 🎯 PATTERNS:
 - Filter cards: cards = [c for c in cards if keep(c)]

@@ -125,9 +125,7 @@ async def test_get_integration_includes_subentry_menu_schema_and_aborts(mock_cli
     mock_client.abort_config_subentry_flow.assert_awaited_once_with("flow-1")
 
 
-async def test_get_integration_subentry_schema_abort_failure_warns(
-    mock_client, caplog
-):
+async def test_get_integration_subentry_schema_abort_failure_warns(mock_client, caplog):
     mock_client.list_config_subentries.return_value = {"success": True, "result": []}
     mock_client.start_config_subentry_flow.return_value = {
         "flow_id": "flow-1",
@@ -418,9 +416,7 @@ async def test_config_set_helper_rejects_update_without_subentry_id(
     mock_client.start_config_subentry_flow.assert_not_awaited()
 
 
-async def test_config_set_helper_rejects_invalid_config_json(
-    helper_tools, mock_client
-):
+async def test_config_set_helper_rejects_invalid_config_json(helper_tools, mock_client):
     with pytest.raises(ToolError) as exc_info:
         await helper_tools["ha_config_set_helper"](
             helper_type="config_subentry",
@@ -460,13 +456,13 @@ async def test_config_set_helper_subentry_abort_failure_warns(
     assert "Failed to abort config subentry flow flow-1 after error" in caplog.text
 
 
-async def test_delete_helpers_integrations_deletes_config_subentry(mock_client):
+async def test_remove_helpers_integrations_deletes_config_subentry(mock_client):
     mock_client.delete_config_subentry.return_value = {
         "success": True,
         "result": {"subentry_id": "subentry-1"},
     }
 
-    result = await IntegrationTools(mock_client).ha_delete_helpers_integrations(
+    result = await IntegrationTools(mock_client).ha_remove_helpers_integrations(
         target="entry-1",
         helper_type="config_subentry",
         subentry_id="subentry-1",
@@ -476,16 +472,14 @@ async def test_delete_helpers_integrations_deletes_config_subentry(mock_client):
     assert result["success"] is True
     assert result["method"] == "config_subentry_delete"
     assert result["subentry_id"] == "subentry-1"
-    mock_client.delete_config_subentry.assert_awaited_once_with(
-        "entry-1", "subentry-1"
-    )
+    mock_client.delete_config_subentry.assert_awaited_once_with("entry-1", "subentry-1")
 
 
-async def test_delete_helpers_integrations_config_subentry_requires_confirm(
+async def test_remove_helpers_integrations_config_subentry_requires_confirm(
     mock_client,
 ):
     with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(mock_client).ha_delete_helpers_integrations(
+        await IntegrationTools(mock_client).ha_remove_helpers_integrations(
             target="entry-1",
             helper_type="config_subentry",
             subentry_id="subentry-1",
@@ -498,9 +492,9 @@ async def test_delete_helpers_integrations_config_subentry_requires_confirm(
     mock_client.delete_config_subentry.assert_not_awaited()
 
 
-async def test_delete_helpers_integrations_requires_subentry_id(mock_client):
+async def test_remove_helpers_integrations_requires_subentry_id(mock_client):
     with pytest.raises(ToolError) as exc_info:
-        await IntegrationTools(mock_client).ha_delete_helpers_integrations(
+        await IntegrationTools(mock_client).ha_remove_helpers_integrations(
             target="entry-1",
             helper_type="config_subentry",
             confirm=True,
@@ -509,3 +503,94 @@ async def test_delete_helpers_integrations_requires_subentry_id(mock_client):
     error_data = json.loads(str(exc_info.value))
     assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     assert "subentry_id" in error_data["error"]["message"]
+
+
+async def test_remove_helpers_integrations_subentry_not_found_raises(
+    mock_client,
+):
+    """Path 4: HA returns code="not_found" when the subentry is already
+    absent → raises RESOURCE_NOT_FOUND. Silent success would mask a
+    typo'd subentry_id (or wrong parent entry_id) until the user noticed
+    nothing was removed."""
+    mock_client.delete_config_subentry.return_value = {
+        "success": False,
+        "error": {"code": "not_found", "message": "Subentry not found"},
+    }
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(mock_client).ha_remove_helpers_integrations(
+            target="entry-1",
+            helper_type="config_subentry",
+            subentry_id="ghost-subentry",
+            confirm=True,
+        )
+
+    error_data = json.loads(str(exc_info.value))
+    assert error_data["success"] is False
+    assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert "ghost-subentry" in error_data["error"]["message"]
+    # Pin the diagnostic-hint wording (same rationale as Paths 1/3).
+    assert "May indicate" in error_data["error"]["message"]
+    assert "ha_get_integration" in error_data["error"]["message"]
+    assert "already_deleted" not in json.dumps(error_data)
+
+
+async def test_remove_helpers_integrations_subentry_other_error_surfaces_service_call_failed(
+    mock_client,
+):
+    """Path 4 negative case: a non-not_found error code (e.g. HA returns
+    a permission, validation, or unknown-error code) must NOT silently
+    classify as idempotent success. SERVICE_CALL_FAILED is the expected
+    surface, with the underlying error message preserved.
+    """
+    mock_client.delete_config_subentry.return_value = {
+        "success": False,
+        "error": {
+            "code": "permission_denied",
+            "message": "Insufficient permissions to delete subentry",
+        },
+    }
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(mock_client).ha_remove_helpers_integrations(
+            target="entry-1",
+            helper_type="config_subentry",
+            subentry_id="subentry-1",
+            confirm=True,
+        )
+
+    error_data = json.loads(str(exc_info.value))
+    assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert "Insufficient permissions" in error_data["error"]["message"]
+    # Symmetric with the string-form sibling test below: a regression
+    # that re-routes a non-not_found error into the already_deleted
+    # success shape must not pass this test.
+    assert "already_deleted" not in json.dumps(error_data)
+
+
+async def test_remove_helpers_integrations_subentry_string_error_surfaces_service_call_failed(
+    mock_client,
+):
+    """Path 4 narrow stays narrow: the idempotent ``not_found`` branch
+    only fires when ``error`` is a dict carrying ``code="not_found"``.
+    A string-form ``"error": "not found"`` (no structured code) must
+    NOT classify as idempotent — it surfaces as SERVICE_CALL_FAILED.
+    Without this pin, a regression that loosened to substring-matching
+    against ``error_msg`` would pass CI silently.
+    """
+    mock_client.delete_config_subentry.return_value = {
+        "success": False,
+        "error": "Subentry not found",
+    }
+
+    with pytest.raises(ToolError) as exc_info:
+        await IntegrationTools(mock_client).ha_remove_helpers_integrations(
+            target="entry-1",
+            helper_type="config_subentry",
+            subentry_id="subentry-1",
+            confirm=True,
+        )
+
+    error_data = json.loads(str(exc_info.value))
+    assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert "already_deleted" not in json.dumps(error_data)

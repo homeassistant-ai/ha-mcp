@@ -1154,7 +1154,7 @@ async def _validate_registry_ids(
                     f"area_id={area_id!r} does not exist in the area registry.",
                     context={"area_id": area_id},
                     suggestions=[
-                        "Use ha_config_list_areas() to list valid area IDs.",
+                        "Use ha_list_floors_areas() to list valid area IDs.",
                         'Pass area_id="" to clear the area assignment.',
                         f"Available area_ids: {sorted(valid_area_ids)}",
                     ],

@@ -154,7 +154,7 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
          ``ha_get_entity``.
       3. Add an event via ``ha_config_set_calendar_event``.
       4. Retrieve it via ``ha_config_get_calendar_events``.
-      5. Tear down the config entry via ``ha_delete_helpers_integrations``.
+      5. Tear down the config entry via ``ha_remove_helpers_integrations``.
     """
     unique = uuid.uuid4().hex[:8]
     calendar_name = f"HAOS Lifecycle {unique}"
@@ -254,7 +254,7 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
         if entry_id is not None:
             cleanup = await safe_call_tool(
                 mcp_client,
-                "ha_delete_helpers_integrations",
+                "ha_remove_helpers_integrations",
                 {"target": entry_id, "helper_type": None, "confirm": True},
             )
             assert cleanup.get("success"), (

@@ -1,6 +1,6 @@
 """Unit tests for fields= and attribute_keys= projection in ha_get_state (issue #1199)."""
 
-from ha_mcp.tools.tools_search import _project_entity
+from ha_mcp.tools.util_helpers import project_entity_record as _project_entity
 
 _ENTITY_RECORD = {
     "entity_id": "light.kitchen",

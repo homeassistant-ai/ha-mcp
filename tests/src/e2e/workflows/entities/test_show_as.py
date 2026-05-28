@@ -7,7 +7,7 @@ import logging
 import pytest
 from fastmcp.exceptions import ToolError
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success
+from ...utilities.assertions import assert_mcp_success
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ async def _delete_template_helper(mcp_client, entity_id: str) -> None:
     """Best-effort cleanup for a template helper (no built-in cleaner support)."""
     try:
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {"target": entity_id, "helper_type": "template", "confirm": True},
         )
     except Exception as e:  # pragma: no cover - cleanup best-effort

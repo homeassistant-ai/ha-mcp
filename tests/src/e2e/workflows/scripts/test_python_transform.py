@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import MCPAssertions, extract_error_message
+from ...utilities.assertions import MCPAssertions, extract_error_message
 
 
 @pytest.mark.asyncio
@@ -65,7 +65,9 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
         {
             "script_id": "test_py_hash_req",
             "config": {
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -109,7 +111,9 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
             "script_id": "test_py_conflict",
             "config": {
                 "alias": "Test Conflict",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -125,7 +129,9 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
             "script_id": "test_py_conflict",
             "config": {
                 "alias": "Test Conflict Modified",
-                "sequence": [{"action": "light.turn_off", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_off", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -152,7 +158,9 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
         {
             "script_id": "test_py_security",
             "config": {
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -221,7 +229,11 @@ async def test_chained_transforms(mcp_client, ha_client):
             "config": {
                 "alias": "Chain Test",
                 "sequence": [
-                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}, "data": {"brightness": 50}},
+                    {
+                        "action": "light.turn_on",
+                        "target": {"entity_id": "light.test"},
+                        "data": {"brightness": 50},
+                    },
                 ],
             },
         },
@@ -265,7 +277,9 @@ async def test_returned_hash_matches_next_get(mcp_client, ha_client):
             "script_id": "test_hash_match",
             "config": {
                 "alias": "Hash Match Test",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -301,7 +315,9 @@ async def test_transform_invalid_config_rejected(mcp_client, ha_client):
             "script_id": "test_invalid_transform",
             "config": {
                 "alias": "Invalid Transform Test",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -334,7 +350,9 @@ async def test_full_config_update_with_config_hash(mcp_client, ha_client):
             "script_id": "test_full_hash",
             "config": {
                 "alias": "Full Hash Test",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -351,7 +369,9 @@ async def test_full_config_update_with_config_hash(mcp_client, ha_client):
             "config_hash": get_result["config_hash"],
             "config": {
                 "alias": "Full Hash Updated",
-                "sequence": [{"action": "light.turn_off", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_off", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -368,7 +388,9 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
             "script_id": "test_full_stale",
             "config": {
                 "alias": "Full Stale Test",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )

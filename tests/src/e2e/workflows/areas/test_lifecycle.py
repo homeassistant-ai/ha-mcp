@@ -25,6 +25,16 @@ REGISTRY_OPERATION_DELAY = 0.5  # Time to wait after create/delete for registry 
 BATCH_OPERATION_DELAY = 0.2  # Time to wait between batch operations
 
 
+def _flatten_areas(topology: dict) -> list[dict]:
+    """Flatten ha_list_floors_areas' 3-bucket area shape into a single list."""
+    nested = [a for f in topology.get("floors", []) for a in f.get("areas", [])]
+    return (
+        nested
+        + topology.get("unassigned_areas", [])
+        + topology.get("orphaned_areas", [])
+    )
+
+
 def generate_unique_name(prefix: str) -> str:
     """Generate a unique name for test entities to avoid conflicts."""
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
@@ -62,12 +72,12 @@ class TestAreaLifecycle:
         logger.info(f"Created area: {area_name} (ID: {area_id})")
 
         # 2. LIST: Verify area exists in list
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
 
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list areas: {list_data}"
 
-        areas = list_data.get("areas", [])
+        areas = _flatten_areas(list_data)
         found_area = next(
             (a for a in areas if a.get("area_id") == area_id),
             None,
@@ -89,10 +99,10 @@ class TestAreaLifecycle:
         logger.info(f"Deleted area: {area_id}")
 
         # 4. VERIFY: Area no longer in list
-        verify_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        verify_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         verify_data = parse_mcp_result(verify_result)
 
-        areas_after = verify_data.get("areas", [])
+        areas_after = _flatten_areas(verify_data)
         found_after = next(
             (a for a in areas_after if a.get("area_id") == area_id),
             None,
@@ -143,10 +153,10 @@ class TestAreaLifecycle:
         logger.info(f"Updated area: {area_id}")
 
         # 3. VERIFY: Check changes in list
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         list_data = parse_mcp_result(list_result)
 
-        areas = list_data.get("areas", [])
+        areas = _flatten_areas(list_data)
         found_area = next(
             (a for a in areas if a.get("area_id") == area_id),
             None,
@@ -199,10 +209,10 @@ class TestAreaLifecycle:
         logger.info(f"Created area with aliases: {area_id}")
 
         # 2. VERIFY: Check aliases in list
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         list_data = parse_mcp_result(list_result)
 
-        areas = list_data.get("areas", [])
+        areas = _flatten_areas(list_data)
         found_area = next(
             (a for a in areas if a.get("area_id") == area_id),
             None,
@@ -257,7 +267,7 @@ class TestFloorLifecycle:
         logger.info(f"Created floor: {floor_name} (ID: {floor_id})")
 
         # 2. LIST: Verify floor exists in list
-        list_result = await mcp_client.call_tool("ha_config_list_floors", {})
+        list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
 
         list_data = parse_mcp_result(list_result)
         assert list_data.get("success"), f"Failed to list floors: {list_data}"
@@ -287,7 +297,7 @@ class TestFloorLifecycle:
         logger.info(f"Deleted floor: {floor_id}")
 
         # 4. VERIFY: Floor no longer in list
-        verify_result = await mcp_client.call_tool("ha_config_list_floors", {})
+        verify_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         verify_data = parse_mcp_result(verify_result)
 
         floors_after = verify_data.get("floors", [])
@@ -343,7 +353,7 @@ class TestFloorLifecycle:
         logger.info(f"Updated floor: {floor_id}")
 
         # 3. VERIFY: Check changes in list
-        list_result = await mcp_client.call_tool("ha_config_list_floors", {})
+        list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         list_data = parse_mcp_result(list_result)
 
         floors = list_data.get("floors", [])
@@ -403,7 +413,7 @@ class TestFloorLifecycle:
         logger.info(f"Created floor with aliases: {floor_id}")
 
         # 2. VERIFY: Check aliases in list
-        list_result = await mcp_client.call_tool("ha_config_list_floors", {})
+        list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         list_data = parse_mcp_result(list_result)
 
         floors = list_data.get("floors", [])
@@ -415,7 +425,9 @@ class TestFloorLifecycle:
         assert found_floor is not None, f"Floor not found: {floor_id}"
         floor_aliases = found_floor.get("aliases", [])
         for alias in aliases:
-            assert alias in floor_aliases, f"Alias '{alias}' not found in {floor_aliases}"
+            assert alias in floor_aliases, (
+                f"Alias '{alias}' not found in {floor_aliases}"
+            )
         logger.info(f"Verified aliases: {floor_aliases}")
 
         # 3. CLEANUP
@@ -479,10 +491,10 @@ class TestAreaFloorIntegration:
         logger.info(f"Created area on floor: {area_id}")
 
         # 3. VERIFY: Check floor assignment in list
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         list_data = parse_mcp_result(list_result)
 
-        areas = list_data.get("areas", [])
+        areas = _flatten_areas(list_data)
         found_area = next(
             (a for a in areas if a.get("area_id") == area_id),
             None,
@@ -509,10 +521,10 @@ class TestAreaFloorIntegration:
         logger.info("Removed floor assignment")
 
         # 5. VERIFY: Floor assignment removed
-        verify_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        verify_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         verify_data = parse_mcp_result(verify_result)
 
-        areas_after = verify_data.get("areas", [])
+        areas_after = _flatten_areas(verify_data)
         found_after = next(
             (a for a in areas_after if a.get("area_id") == area_id),
             None,
@@ -696,7 +708,9 @@ class TestAreaFloorIntegration:
               insertion order within the tie).
         """
         prefix = generate_unique_name("test_topo_sort")
-        logger.info(f"Testing topology sort order with levels [-1, 0, None, 2]: {prefix}")
+        logger.info(
+            f"Testing topology sort order with levels [-1, 0, None, 2]: {prefix}"
+        )
 
         levels = [-1, 0, None, 2]
         floor_ids_by_level: dict[str, Any] = {}
@@ -737,16 +751,17 @@ class TestAreaFloorIntegration:
             f"Last floor should be level=2, got: {returned_order[3]}"
         )
 
-        middle_ids = {returned_order[1].get("floor_id"), returned_order[2].get("floor_id")}
+        middle_ids = {
+            returned_order[1].get("floor_id"),
+            returned_order[2].get("floor_id"),
+        }
         expected_middle = {floor_ids_by_level["0"], floor_ids_by_level["None"]}
         assert middle_ids == expected_middle, (
             f"Middle positions should contain level=0 and level=None floors, "
             f"got: {middle_ids} vs expected {expected_middle}"
         )
 
-        logger.info(
-            "Verified sort order: -1 first, 2 last, 0/None tied in middle"
-        )
+        logger.info("Verified sort order: -1 first, 2 last, 0/None tied in middle")
 
         for fid in floor_ids_by_level.values():
             await mcp_client.call_tool(
@@ -799,19 +814,20 @@ class TestAreaFloorIntegration:
             )
 
             area_data = parse_mcp_result(area_result)
-            assert area_data.get("success"), f"Failed to create area {name}: {area_data}"
+            assert area_data.get("success"), (
+                f"Failed to create area {name}: {area_data}"
+            )
 
             area_id = area_data.get("area_id")
             area_ids.append(area_id)
             cleanup_tracker.track("area", area_id)
             logger.info(f"Created area: {name} (ID: {area_id})")
 
-
         # 3. VERIFY: All areas on floor
-        list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+        list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
         list_data = parse_mcp_result(list_result)
 
-        areas = list_data.get("areas", [])
+        areas = _flatten_areas(list_data)
         floor_areas = [a for a in areas if a.get("floor_id") == floor_id]
 
         assert len(floor_areas) >= len(area_ids), (
@@ -844,45 +860,49 @@ class TestAreaFloorIntegration:
 @pytest.mark.area
 async def test_area_list_empty_or_populated(mcp_client):
     """
-    Test: List areas works correctly (empty or with existing areas)
+    Test: ha_list_floors_areas returns the area facet correctly (empty or populated).
 
-    Basic validation that the list endpoint works.
+    Validates the area-facing parts of the combined topology response —
+    area_count and the flattened union of nested/unassigned/orphaned buckets.
+    Pairs with test_floor_list_empty_or_populated which covers the floor facet
+    of the same endpoint.
     """
-    logger.info("Testing ha_list_areas functionality")
+    logger.info("Testing ha_list_floors_areas functionality")
 
-    list_result = await mcp_client.call_tool("ha_config_list_areas", {})
+    list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
     list_data = parse_mcp_result(list_result)
 
     assert list_data.get("success"), f"Failed to list areas: {list_data}"
-    assert "count" in list_data, f"Missing count in response: {list_data}"
-    assert "areas" in list_data, f"Missing areas in response: {list_data}"
-    assert isinstance(list_data["areas"], list), (
-        f"Areas should be a list: {type(list_data['areas'])}"
-    )
+    assert "area_count" in list_data, f"Missing area_count in response: {list_data}"
+    areas = _flatten_areas(list_data)
+    assert isinstance(areas, list), f"Flattened areas should be a list: {type(areas)}"
 
-    logger.info(f"Found {list_data['count']} existing area(s)")
+    logger.info(f"Found {list_data['area_count']} existing area(s)")
 
 
 @pytest.mark.floor
 async def test_floor_list_empty_or_populated(mcp_client):
     """
-    Test: List floors works correctly (empty or with existing floors)
+    Test: ha_list_floors_areas returns the floor facet correctly (empty or populated).
 
-    Basic validation that the list endpoint works.
+    Validates the floor-facing parts of the combined topology response —
+    floor_count and the floors list (each carrying nested areas).
+    Pairs with test_area_list_empty_or_populated which covers the area facet
+    of the same endpoint.
     """
-    logger.info("Testing ha_list_floors functionality")
+    logger.info("Testing ha_list_floors_areas functionality")
 
-    list_result = await mcp_client.call_tool("ha_config_list_floors", {})
+    list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
     list_data = parse_mcp_result(list_result)
 
     assert list_data.get("success"), f"Failed to list floors: {list_data}"
-    assert "count" in list_data, f"Missing count in response: {list_data}"
+    assert "floor_count" in list_data, f"Missing floor_count in response: {list_data}"
     assert "floors" in list_data, f"Missing floors in response: {list_data}"
     assert isinstance(list_data["floors"], list), (
         f"Floors should be a list: {type(list_data['floors'])}"
     )
 
-    logger.info(f"Found {list_data['count']} existing floor(s)")
+    logger.info(f"Found {list_data['floor_count']} existing floor(s)")
 
 
 @pytest.mark.area
