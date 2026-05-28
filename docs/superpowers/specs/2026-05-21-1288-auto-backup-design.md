@@ -233,7 +233,7 @@ which would restart HA. Layered defenses:
 `ha_set_entity`,
 `ha_set_integration_enabled`, `ha_remove_helpers_integrations`.
 
-**Explicitly NOT wrapped:** `ha_call_service`, `ha_call_event`, `ha_restart`, `ha_reload_core`, `ha_check_config`, `ha_eval_template`, `ha_delete_file`, `ha_remove_entity`, `ha_remove_device`, `ha_update_device`, `ha_install_mcp_tools`, `ha_hacs_*`, blueprint/import ops.
+**Explicitly NOT wrapped:** `ha_call_service`, `ha_call_event`, `ha_restart`, `ha_reload_core`, `ha_check_config`, `ha_eval_template`, `ha_delete_file`, `ha_remove_entity`, `ha_remove_device`, `ha_set_device`, `ha_install_mcp_tools`, `ha_hacs_*`, blueprint/import ops.
 
 ## Error handling
 

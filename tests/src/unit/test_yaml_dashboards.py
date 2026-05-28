@@ -11,15 +11,26 @@ import pytest
 # Mock HA imports before importing the module
 sys.modules["voluptuous"] = MagicMock()
 sys.modules["homeassistant"] = MagicMock()
+sys.modules["homeassistant.components"] = MagicMock()
+sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
 sys.modules["homeassistant.config_entries"] = MagicMock()
 sys.modules["homeassistant.core"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
+sys.modules["homeassistant.helpers.storage"] = MagicMock()
 
+from custom_components.ha_mcp_tools import CALLER_TOKEN_FIELD  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DASHBOARD_URL_PATH_PATTERN,
+    DOMAIN,
     RESERVED_DASHBOARD_URL_PATHS,
 )
+
+# Both handler fixtures below preload this token into hass.data and inject
+# it into every call_factory payload so the caller-token gate added by the
+# auth PR is transparent to these dashboard tests (which exercise the
+# yaml-editing logic, not the auth boundary).
+_TEST_CALLER_TOKEN = "test-caller-token-yaml-dashboards"
 
 
 class TestDashboardUrlPathPattern:
@@ -42,17 +53,17 @@ class TestDashboardUrlPathPattern:
     @pytest.mark.parametrize(
         "url_path",
         [
-            "",                     # empty
-            "no_underscore",        # underscores not allowed
-            "NoUpper",              # uppercase not allowed
-            "single",               # must contain a hyphen
-            "-leading-hyphen",      # cannot start with hyphen
-            "trailing-hyphen-",     # cannot end with hyphen
-            "double--hyphen",       # no consecutive hyphens
-            "has space",            # no spaces
-            "has/slash",            # no slashes
-            "has.dot",              # no dots
-            "..",                   # path traversal-ish
+            "",  # empty
+            "no_underscore",  # underscores not allowed
+            "NoUpper",  # uppercase not allowed
+            "single",  # must contain a hyphen
+            "-leading-hyphen",  # cannot start with hyphen
+            "trailing-hyphen-",  # cannot end with hyphen
+            "double--hyphen",  # no consecutive hyphens
+            "has space",  # no spaces
+            "has/slash",  # no slashes
+            "has.dot",  # no dots
+            "..",  # path traversal-ish
         ],
     )
     def test_rejects_invalid_url_paths(self, url_path):
@@ -91,6 +102,7 @@ class TestValidateDashboardFilename:
     @pytest.fixture(scope="class")
     def validate(self):
         from custom_components.ha_mcp_tools import _validate_dashboard_filename
+
         return _validate_dashboard_filename
 
     @pytest.mark.parametrize(
@@ -111,12 +123,12 @@ class TestValidateDashboardFilename:
             "../secrets.yaml",
             "/etc/passwd",
             "dashboards/../secrets.yaml",
-            "dashboards/main.yml",       # wrong extension
-            "main.yaml",                 # not under dashboards/
-            "www/dashboard.yaml",        # other allowlist dir, not dashboards
+            "dashboards/main.yml",  # wrong extension
+            "main.yaml",  # not under dashboards/
+            "www/dashboard.yaml",  # other allowlist dir, not dashboards
             "",
             "dashboards/",
-            "dashboards/main",           # no extension
+            "dashboards/main",  # no extension
         ],
     )
     def test_rejects_invalid_filenames(self, validate, filename):
@@ -132,6 +144,7 @@ class TestParseYamlPath:
     @pytest.fixture(scope="class")
     def parse(self):
         from custom_components.ha_mcp_tools import _parse_and_validate_yaml_path
+
         return _parse_and_validate_yaml_path
 
     def test_accepts_single_allowed_key(self, parse):
@@ -191,9 +204,13 @@ class TestHandleEditYamlConfigDashboards:
         h = MM()
         h.config = MM()
         h.config.config_dir = str(tmp_path)
+        # Seed the caller token so _caller_token_ok passes (auth PR).
+        h.data = {DOMAIN: {"caller_token": _TEST_CALLER_TOKEN}}
+
         # Run executor jobs inline so we can assert filesystem state
         async def _run(fn, *args):
             return fn(*args)
+
         h.async_add_executor_job = AsyncMock(side_effect=_run)
         # check_config service returns 'ok'
         h.services = MM()
@@ -202,11 +219,13 @@ class TestHandleEditYamlConfigDashboards:
 
     @pytest.fixture
     def call_factory(self):
-        """Build a ServiceCall-like object."""
+        """Build a ServiceCall-like object with the caller token pre-injected."""
+
         def _make(data):
             call = MM()
-            call.data = data
+            call.data = {**data, CALLER_TOKEN_FIELD: _TEST_CALLER_TOKEN}
             return call
+
         return _make
 
     def _run(self, coro):
@@ -249,6 +268,7 @@ class TestHandleEditYamlConfigDashboards:
         # Make sure 'mode:' isn't a sibling of 'dashboards:' under 'lovelace:'
         # (i.e., lovelace key should only contain 'dashboards')
         import yaml
+
         parsed = yaml.safe_load(text)
         assert set(parsed["lovelace"].keys()) == {"dashboards"}
 
@@ -267,9 +287,7 @@ class TestHandleEditYamlConfigDashboards:
                         "action": "add",
                         "yaml_path": "lovelace.dashboards.bad-dash",
                         "content": (
-                            "mode: yaml\n"
-                            "title: Bad\n"
-                            "filename: ../secrets.yaml\n"
+                            "mode: yaml\ntitle: Bad\nfilename: ../secrets.yaml\n"
                         ),
                         "backup": False,
                     }
@@ -335,6 +353,7 @@ class TestHandleEditYamlConfigDashboards:
         )
         assert result["success"] is True
         import yaml
+
         parsed = yaml.safe_load(cfg.read_text())
         assert "energy-dash" not in parsed["lovelace"]["dashboards"]
         assert "weather-dash" in parsed["lovelace"]["dashboards"]
@@ -399,6 +418,7 @@ class TestHandleEditYamlConfigDashboards:
         )
         assert result["success"] is True, result
         import yaml
+
         parsed = yaml.safe_load(cfg.read_text())
         entry = parsed["lovelace"]["dashboards"]["energy-dash"]
         # Old keys retained, overlapping keys overwritten, new keys added
@@ -409,15 +429,19 @@ class TestHandleEditYamlConfigDashboards:
 
 class TestHandleEditYamlConfigSingleKey:
     """Single-key branch of _build_edit_yaml_config_handler must behave the same
-    after the factory refactor (regression guard for issue #1034)."""
+    after the factory refactor."""
 
     @pytest.fixture
     def hass(self, tmp_path):
         h = MM()
         h.config = MM()
         h.config.config_dir = str(tmp_path)
+        # Seed the caller token so _caller_token_ok passes (auth PR).
+        h.data = {DOMAIN: {"caller_token": _TEST_CALLER_TOKEN}}
+
         async def _run(fn, *args):
             return fn(*args)
+
         h.async_add_executor_job = AsyncMock(side_effect=_run)
         h.services = MM()
         h.services.async_call = AsyncMock(return_value={"errors": None})
@@ -427,8 +451,9 @@ class TestHandleEditYamlConfigSingleKey:
     def call_factory(self):
         def _make(data):
             call = MM()
-            call.data = data
+            call.data = {**data, CALLER_TOKEN_FIELD: _TEST_CALLER_TOKEN}
             return call
+
         return _make
 
     def _run(self, coro):
@@ -456,6 +481,7 @@ class TestHandleEditYamlConfigSingleKey:
         )
         assert result["success"] is True, result
         import yaml
+
         parsed = yaml.safe_load(cfg.read_text())
         assert "command_line" in parsed
         assert parsed["default_config"] is None
@@ -464,10 +490,7 @@ class TestHandleEditYamlConfigSingleKey:
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
         cfg = Path(tmp_path) / "configuration.yaml"
-        cfg.write_text(
-            "shell_command:\n"
-            "  old_cmd: 'echo old'\n"
-        )
+        cfg.write_text("shell_command:\n  old_cmd: 'echo old'\n")
 
         handler = _build_edit_yaml_config_handler(hass)
         result = self._run(
@@ -485,6 +508,7 @@ class TestHandleEditYamlConfigSingleKey:
         )
         assert result["success"] is True, result
         import yaml
+
         parsed = yaml.safe_load(cfg.read_text())
         assert parsed["shell_command"] == {"new_cmd": "echo new"}
 
@@ -510,9 +534,7 @@ class TestHandleEditYamlConfigSingleKey:
         assert result["success"] is False
         assert "command_line" in result["error"]
 
-    def test_single_key_post_action_for_template(
-        self, tmp_path, hass, call_factory
-    ):
+    def test_single_key_post_action_for_template(self, tmp_path, hass, call_factory):
         """template -> reload_available; covers post-action lookup for single-key kind."""
         from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
 
@@ -527,11 +549,7 @@ class TestHandleEditYamlConfigSingleKey:
                         "file": "configuration.yaml",
                         "action": "add",
                         "yaml_path": "template",
-                        "content": (
-                            "- sensor:\n"
-                            "    - name: t\n"
-                            "      state: 'ok'\n"
-                        ),
+                        "content": ("- sensor:\n    - name: t\n      state: 'ok'\n"),
                         "backup": False,
                     }
                 )

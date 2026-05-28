@@ -39,7 +39,6 @@ VALUE_SOURCE_REGISTRY: dict[tuple[str, str], str] = {
     ("ha_get_entity", "args.entity_id"): "ha_entities",
     ("ha_get_history", "args.entity_ids"): "ha_entities",
     ("ha_remove_entity", "args.entity_id"): "ha_entities",
-    ("ha_update_device", "args.entity_id"): "ha_entities",
     ("ha_get_entity_exposure", "args.entity_id"): "ha_entities",
     ("ha_set_integration_enabled", "args.entity_id"): "ha_entities",
 }

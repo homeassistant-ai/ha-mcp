@@ -4,10 +4,12 @@ import pytest
 
 from ha_mcp.utils.python_sandbox import (
     _EXECUTION_ERROR_TEXT_LIMIT,
+    _SAFE_BUILTINS,
     PythonSandboxError,
     PythonSandboxExecutionError,
     PythonSandboxValidationError,
     format_sandbox_error,
+    get_security_documentation,
     safe_execute,
     safe_execute_expression,
     validate_expression,
@@ -47,11 +49,33 @@ for view in config['views']:
         valid, error = validate_expression(expr)
         assert valid is True
 
+    def test_while_loop_rejected(self):
+        """Regression for issue #1461: while loops can hang in-process exec."""
+        expr = """
+while True:
+    pass
+"""
+        valid, error = validate_expression(expr)
+        assert valid is False
+        assert "While" in error
+        assert "for-loop" in error
+
     def test_list_comprehension(self):
         """Test list comprehension."""
         expr = "config['entities'] = [e for e in config.get('entities', []) if 'light' in e]"
         valid, error = validate_expression(expr)
         assert valid is True
+
+
+class TestSecurityDocumentation:
+    """Test sandbox documentation shown to agents."""
+
+    def test_while_loop_not_documented_as_allowed(self):
+        docs = get_security_documentation()
+        allowed_section = docs.split("FORBIDDEN:", 1)[0]
+
+        assert "while" not in allowed_section.lower()
+        assert "- Loops: for, if/else, pass, break, continue" in docs
 
 
 class TestUnaryOperators:
@@ -690,6 +714,67 @@ class TestSandboxErrorSubclasses:
                 pytest.raises(type(infra_exc)),
             ):
                 safe_execute_expression("response = 1", {"response": 0}, "response")
+
+
+class TestBuiltinsIsolation:
+    """Regression tests for GHSA-6w5w-h7g8-gm26."""
+
+    @pytest.mark.parametrize(
+        ("name", "expr"),
+        [
+            ("__builtins__", "config['x'] = __builtins__"),
+            ("__name__", "config['x'] = __name__"),
+            ("__doc__", "config['x'] = __doc__"),
+            ("__builtins__", "__builtins__ = {}"),
+            ("__name__", "__name__ = 'x'"),
+            ("__doc__", "__doc__ = 'x'"),
+            ("__builtins__", "del __builtins__"),
+            ("__name__", "del __name__"),
+            ("__doc__", "del __doc__"),
+        ],
+    )
+    def test_direct_interpreter_internal_names_rejected(self, name, expr):
+        valid, error = validate_expression(expr)
+
+        assert valid is False
+        assert name in error
+        assert "interpreter internals" in error
+
+    def test_subsequent_real_execution_sees_pristine_builtins(self):
+        """After a per-call copy is mutated, real executions still resolve
+        len/range/etc. from the unmodified _SAFE_BUILTINS source — guards
+        against a shallow-copy regression.
+        """
+        result = safe_execute_expression(
+            "response = len(items)",
+            {"items": [1, 2, 3], "response": 0},
+            "response",
+        )
+        assert result == 3
+
+    def test_builtin_replacement_does_not_persist_between_executions(self):
+        from unittest.mock import patch
+
+        original_builtins = dict(_SAFE_BUILTINS)
+        mutated_builtins = None
+
+        def mutate_execution_builtins(_expr, safe_globals, safe_locals):
+            nonlocal mutated_builtins
+            mutated_builtins = safe_globals["__builtins__"]
+            mutated_builtins["len"] = lambda value: 999
+
+        try:
+            with patch("ha_mcp.utils.python_sandbox.exec", mutate_execution_builtins):
+                safe_execute_expression(
+                    "response = response", {"response": []}, "response"
+                )
+        finally:
+            _SAFE_BUILTINS.clear()
+            _SAFE_BUILTINS.update(original_builtins)
+
+        assert mutated_builtins is not _SAFE_BUILTINS
+        assert mutated_builtins["len"] is not len
+        assert _SAFE_BUILTINS["len"] is len
 
 
 class TestFormatSandboxError:

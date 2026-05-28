@@ -499,7 +499,9 @@ via `MCP_SECRET_PATH`) is accepted. The MCP client must use the full URL
 including this path (e.g. `http://host:8086/private_<random>`); the web
 settings UI mounts under the same path (`<MCP_SECRET_PATH>/settings`), so
 operators reach it through the secret-prefixed URL too. Bind to `127.0.0.1`
-for same-host LLM clients; on LAN-reachable interfaces set a 128-bit-entropy
+for same-host LLM clients (either at the Docker layer with
+`-p 127.0.0.1:8086:8086` or, when running outside Docker, by setting
+`MCP_HOST=127.0.0.1`); on LAN-reachable interfaces set a 128-bit-entropy
 `MCP_SECRET_PATH` (the Home Assistant add-on auto-generates one with
 `secrets.token_urlsafe(16)`). Internet-facing deployments need a different
 mode — see [SECURITY.md](SECURITY.md).
@@ -648,9 +650,9 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 
 **Accepted exceptions**: A small set of tools name a single, distinct operation where forcing a `<verb>_<noun>` shape would read worse than the natural name. These are accepted as-is and should not be flagged:
 - `ha_restart`, `ha_reload_core`, `ha_check_config`, `ha_eval_template`
-- `ha_report_issue`, `ha_import_blueprint`, `ha_update_device`
+- `ha_report_issue`, `ha_import_blueprint`
 - `ha_read_file`, `ha_write_file`, `ha_deep_search`, `ha_bulk_control`
-- `ha_backup_create`, `ha_backup_restore`, `ha_install_mcp_tools`
+- `ha_install_mcp_tools`
 - `ha_hacs_*` family (`ha_hacs_search`, `ha_hacs_download`, `ha_hacs_add_repository`, `ha_hacs_repository_info`) — grandfathered; pre-dates this convention
 
 **Adding new verbs**: When no existing verb fits a new tool's purpose, add the verb to the approved-verbs list above rather than forcing a poor fit. `.gemini/styleguide.md` points back to this section as the single source of truth, so updates here propagate automatically.

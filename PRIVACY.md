@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated:** November 2024
+**Last updated:** May 2026
 
 ## Scope
 
@@ -12,20 +12,20 @@ Ha-mcp runs on your local machine and communicates with your own Home Assistant 
 
 ## Anonymous Usage Statistics
 
-Ha-mcp may collect anonymous usage statistics to help improve the server. If enabled, this includes:
+Anonymous usage statistics are a planned future feature and are **not currently collected or transmitted** as of May 2026. When this feature is implemented, users will be notified in the release notes and it will be **opt-in only**.
+
+When enabled in a future release, anonymous usage statistics would include:
 
 - **Tool usage counts** — which tools are used and how often
 - **Server version** — to understand adoption of updates
 - **Request/response sizes** — to optimize performance (not content)
 
-**What we do NOT collect:**
+**What would NOT be collected:**
 - Entity names or IDs
 - Home Assistant configuration
 - Personal information
 - Automation or script content
 - Any data from your smart home devices
-
-Telemetry is configurable in the settings.
 
 ## Bug Reports
 
@@ -49,13 +49,13 @@ When you use ha-mcp, your MCP client accesses data from your Home Assistant inst
 
 - **Your Home Assistant instance** — via the URL and token you provide
 - **Your MCP client** — the application that runs ha-mcp
-- **Our telemetry server** — for anonymous usage statistics (if enabled)
+- **A telemetry server** — *planned future feature, not currently active*; would only receive data if you opt in
 
 ## Data Security
 
 - Your Home Assistant credentials are stored locally by your MCP client
-- Anonymous telemetry contains no identifying information
 - Bug reports are only sent when you explicitly approve
+- Anonymous telemetry (when implemented) will contain no identifying information
 
 ## Changes to This Policy
 
@@ -72,7 +72,7 @@ For privacy-related questions or concerns:
 
 | Aspect | Status |
 |--------|--------|
-| Anonymous telemetry | Configurable |
+| Anonymous telemetry | Not currently implemented (planned future feature, opt-in only) |
 | Personal data collected | None |
 | Bug reports | User-approved only |
 | Local processing | Yes |

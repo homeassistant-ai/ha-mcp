@@ -30,6 +30,35 @@ def enable_flag(monkeypatch):
     ha_mcp_config._settings = None
 
 
+@pytest.fixture(autouse=True)
+def _reset_caller_token_cache():
+    """The wrapper now caches the bootstrap token per-client. Each test gets
+    a fresh client, so the cache must be reset to avoid stale entries from
+    a previously-recycled id()."""
+    from ha_mcp.tools.tools_filesystem import _reset_caller_token_cache
+
+    _reset_caller_token_cache()
+    yield
+    _reset_caller_token_cache()
+
+
+def _build_call_service_mock():
+    """Make a call_service mock that satisfies the bootstrap fetch + dispatch.
+
+    The wrapper does two service calls per tool invocation now:
+      1. ha_mcp_tools.get_caller_token → returns the token
+      2. ha_mcp_tools.<actual_service> → returns the tool's response
+    """
+
+    async def fake_call_service(domain, service, payload, **kwargs):
+        if service == "get_caller_token":
+            return {"service_response": {"success": True, "token": "test-token"}}
+        return {"success": True, "file": "configuration.yaml"}
+
+    mock = AsyncMock(side_effect=fake_call_service)
+    return mock
+
+
 async def _make_tool():
     """Build a minimal mcp + client harness around register_yaml_config_tools."""
     from ha_mcp.tools.tools_yaml_config import register_yaml_config_tools
@@ -41,16 +70,41 @@ async def _make_tool():
             captured.setdefault("fns", []).append(method)
 
     client = MagicMock()
-    client.get_services = AsyncMock(return_value=[{"domain": "ha_mcp_tools"}])
-    client.send_websocket_message = AsyncMock()
-    client.call_service = AsyncMock(
-        return_value={"success": True, "file": "configuration.yaml"}
+    # _fetch_caller_token pre-flights /api/services and requires
+    # get_caller_token to be registered — list it alongside the other
+    # services so the bootstrap doesn't trip COMPONENT_NOT_INSTALLED.
+    client.get_services = AsyncMock(
+        return_value=[
+            {
+                "domain": "ha_mcp_tools",
+                "services": {
+                    "get_caller_token": {},
+                    "edit_yaml_config": {},
+                },
+            }
+        ]
     )
+    client.send_websocket_message = AsyncMock()
+    client.call_service = _build_call_service_mock()
 
     mcp = FakeMCP()
     register_yaml_config_tools(mcp, client)
     # Find the ha_config_set_yaml fn — only one tool registered in this module
     return captured["fns"][0], client
+
+
+def _dispatch_call_count(client) -> int:
+    """Count call_service invocations that aren't the bootstrap fetch.
+
+    With caller-token auth, every tool invocation makes 2 calls (bootstrap +
+    actual service) on first use, 1 (just the actual) afterward. Tests want
+    to count just the dispatched-to-ha_mcp_tools.<dangerous-service> calls.
+    """
+    return sum(
+        1
+        for c in client.call_service.await_args_list
+        if c.args[1] != "get_caller_token"
+    )
 
 
 async def test_storage_collision_blocks_dispatch(monkeypatch):
@@ -88,7 +142,7 @@ async def test_no_collision_dispatches(monkeypatch):
         action="add",
         content="mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
     )
-    client.call_service.assert_called_once()
+    assert _dispatch_call_count(client) == 1
 
 
 async def test_non_dashboard_path_skips_ws_check(monkeypatch):
@@ -100,7 +154,7 @@ async def test_non_dashboard_path_skips_ws_check(monkeypatch):
         content="- sensor: []\n",
     )
     client.send_websocket_message.assert_not_called()
-    client.call_service.assert_called_once()
+    assert _dispatch_call_count(client) == 1
 
 
 async def test_ws_failure_skips_check_and_dispatches(monkeypatch):
@@ -112,7 +166,7 @@ async def test_ws_failure_skips_check_and_dispatches(monkeypatch):
         action="add",
         content="mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
     )
-    client.call_service.assert_called_once()
+    assert _dispatch_call_count(client) == 1
 
 
 async def test_ws_returns_bare_list_blocks_collision(monkeypatch):
@@ -147,7 +201,7 @@ async def test_yaml_mode_existing_does_not_block(monkeypatch):
         action="add",
         content="mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
     )
-    client.call_service.assert_called_once()
+    assert _dispatch_call_count(client) == 1
 
 
 async def test_ws_returns_unexpected_shape_warns_and_dispatches(monkeypatch):
@@ -159,7 +213,7 @@ async def test_ws_returns_unexpected_shape_warns_and_dispatches(monkeypatch):
         action="add",
         content="mode: yaml\ntitle: x\nfilename: dashboards/x.yaml\n",
     )
-    client.call_service.assert_called_once()
+    assert _dispatch_call_count(client) == 1
 
 
 async def test_remove_action_skips_collision_check(monkeypatch):
@@ -178,4 +232,4 @@ async def test_remove_action_skips_collision_check(monkeypatch):
         action="remove",
     )
     client.send_websocket_message.assert_not_called()
-    client.call_service.assert_called_once()
+    assert _dispatch_call_count(client) == 1
