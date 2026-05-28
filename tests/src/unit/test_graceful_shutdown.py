@@ -615,6 +615,15 @@ class TestHTTPEntryPoints:
             "ha_mcp.settings_ui.register_settings_routes",
             lambda *a, **kw: None,
         )
+        # Stub the async runner BEFORE _run_entrypoint so no real coroutine
+        # is created — otherwise the un-awaited coroutine triggers a
+        # PytestUnraisableExceptionWarning even though _run_entrypoint
+        # itself is a no-op here.
+        monkeypatch.setattr(
+            main_module,
+            "_run_http_with_graceful_shutdown",
+            lambda *a, **kw: None,
+        )
         monkeypatch.setattr(main_module, "_run_entrypoint", lambda *a, **kw: None)
 
         main_module._run_http_server("http", default_port=8086)
