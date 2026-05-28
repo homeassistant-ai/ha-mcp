@@ -21,6 +21,7 @@ truststore.inject_into_ssl()
 import asyncio  # noqa: E402
 import copy  # noqa: E402
 import hashlib  # noqa: E402
+import ipaddress  # noqa: E402
 import logging  # noqa: E402
 import os  # noqa: E402
 import signal  # noqa: E402
@@ -754,6 +755,46 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
     return host, port, path
 
 
+_LOOPBACK_HOSTNAMES = frozenset({"localhost", "ip6-localhost", "ip6-loopback"})
+
+
+def _warn_if_default_path_exposed(host: str, port: int, path: str) -> None:
+    """Warn when the default MCP path is bound to a non-loopback host.
+
+    Standard-mode HTTP/SSE authenticates by URL-path secrecy
+    (see SECURITY.md threat model). The default ``/mcp`` does not provide
+    the high-entropy secret that model assumes once the bind escapes
+    loopback. Operators silence this by following either of the two
+    documented hardening levers — bind ``MCP_HOST=127.0.0.1`` or set
+    ``MCP_SECRET_PATH`` to a high-entropy value.
+
+    Only called from ``_run_http_server`` (``ha-mcp-web`` / ``ha-mcp-sse``).
+    OAuth mode and the add-on entrypoint bypass this call site.
+    """
+    if path != "/mcp":
+        return
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return
+    except ValueError:
+        # Hostname rather than IP literal. Treat known loopback names as
+        # loopback; everything else (including unresolvable strings) as
+        # non-loopback so the warning surfaces.
+        if host.lower() in _LOOPBACK_HOSTNAMES:
+            return
+    logger.warning(
+        "ha-mcp listening on %s:%s%s with default MCP_SECRET_PATH. "
+        "Standard-mode HTTP/SSE authenticates by URL-path secrecy and assumes "
+        "a high-entropy MCP_SECRET_PATH for non-loopback binds "
+        "(see SECURITY.md \u2192 standard-mode threat model). "
+        "Either bind loopback (MCP_HOST=127.0.0.1) or set MCP_SECRET_PATH "
+        "to a high-entropy value (e.g. /private_<token_urlsafe(16)>).",
+        host,
+        port,
+        path,
+    )
+
+
 async def _run_http_with_graceful_shutdown(
     transport: str,
     host: str,
@@ -835,6 +876,7 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     from ha_mcp.settings_ui import register_settings_routes
 
     host, port, path = _get_http_runtime(default_port)
+    _warn_if_default_path_exposed(host, port, path)
     register_browser_landing(_get_mcp(), path)
     register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
 
