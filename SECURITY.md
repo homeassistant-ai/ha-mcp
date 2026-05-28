@@ -45,6 +45,24 @@ By default the HTTP entrypoints bind to `0.0.0.0` so they are reachable from
 other machines on the LAN. To restrict to the local machine, set
 `MCP_HOST=127.0.0.1` (or use `-p 127.0.0.1:8086:8086` at the Docker layer).
 
+### Standard mode is single-tenant
+
+The secret-URL model (`ha-mcp-web`, `ha-mcp-sse`) assumes a single operator.
+All MCP clients that share the same `MCP_SECRET_PATH` get identical access —
+there is no per-client authorization or isolation. Reports that assume "client A
+shouldn't be able to see client B's data" don't apply to standard mode; that
+isolation model only exists in OAuth mode (scoped per HA token).
+
+### ha-mcp does not add or restrict Home Assistant permissions
+
+ha-mcp uses the long-lived access token the operator provides. That token's
+permissions in Home Assistant are what they are. If the configured token is an
+admin token, ha-mcp can perform admin-level operations. Reports stating "ha-mcp
+can do X" where X is permitted by the configured token are not vulnerabilities —
+they are the intended behavior. Restricting HA permissions is done in Home
+Assistant (e.g. by creating a non-admin user and generating a token for that
+user).
+
 ### OAuth Bearer token design
 
 In OAuth mode, access and refresh tokens are HMAC-signed, stateless Bearer
