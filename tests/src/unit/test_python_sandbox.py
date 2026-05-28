@@ -719,13 +719,38 @@ class TestSandboxErrorSubclasses:
 class TestBuiltinsIsolation:
     """Regression tests for GHSA-6w5w-h7g8-gm26."""
 
-    @pytest.mark.parametrize("name", ("__builtins__", "__name__", "__doc__"))
-    def test_direct_interpreter_internal_names_rejected(self, name):
-        valid, error = validate_expression(f"config['x'] = {name}")
+    @pytest.mark.parametrize(
+        ("name", "expr"),
+        [
+            ("__builtins__", "config['x'] = __builtins__"),
+            ("__name__", "config['x'] = __name__"),
+            ("__doc__", "config['x'] = __doc__"),
+            ("__builtins__", "__builtins__ = {}"),
+            ("__name__", "__name__ = 'x'"),
+            ("__doc__", "__doc__ = 'x'"),
+            ("__builtins__", "del __builtins__"),
+            ("__name__", "del __name__"),
+            ("__doc__", "del __doc__"),
+        ],
+    )
+    def test_direct_interpreter_internal_names_rejected(self, name, expr):
+        valid, error = validate_expression(expr)
 
         assert valid is False
         assert name in error
         assert "interpreter internals" in error
+
+    def test_subsequent_real_execution_sees_pristine_builtins(self):
+        """After a per-call copy is mutated, real executions still resolve
+        len/range/etc. from the unmodified _SAFE_BUILTINS source — guards
+        against a shallow-copy regression.
+        """
+        result = safe_execute_expression(
+            "response = len(items)",
+            {"items": [1, 2, 3], "response": 0},
+            "response",
+        )
+        assert result == 3
 
     def test_builtin_replacement_does_not_persist_between_executions(self):
         from unittest.mock import patch

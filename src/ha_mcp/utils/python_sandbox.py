@@ -144,6 +144,7 @@ _NODE_SUGGESTIONS: dict[str, str] = {
     "FunctionDef": "use a list comprehension or inline the logic",
     "AsyncFunctionDef": "use a list comprehension or inline the logic",
     "While": "use a for-loop or list comprehension instead of while-loops to ensure termination",
+    "AsyncFor": "use a regular for-loop over a synchronous iterable",
     "ClassDef": "use a dict literal instead of defining a class",
     "Yield": "build a list with a comprehension or for-loop append",
     "YieldFrom": "build a list with a comprehension or for-loop append",
