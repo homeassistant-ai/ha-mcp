@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import weakref
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -47,6 +47,28 @@ MCP_TOOLS_DOMAIN = "ha_mcp_tools"
 # subsequent call comes back unauthorized (covers token rotation).
 CALLER_TOKEN_FIELD = "_ha_mcp_token"
 CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
+
+# Minimum version of the ha_mcp_tools custom component that this ha-mcp
+# release expects. Bumps in lockstep with ``manifest.json`` whenever a
+# server-side behavior change requires it. Older components (no
+# ``version`` in the get_caller_token response, or a version below this)
+# get an actionable "update via HACS" error.
+MIN_COMPONENT_VERSION = "0.5.1"
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """Parse ``'0.5.1'`` → ``(0, 5, 1)`` for tuple-comparison.
+
+    Raises ``ValueError`` on any non-numeric segment. Coercing a bad
+    segment to ``0`` would not actually achieve the "fail closed"
+    intent: a malformed high-order segment like ``"1.x.0"`` would
+    still parse to ``(1, 0, 0)`` and pass a ``>= (0, 5, 1)`` gate.
+    Caller routes the ValueError through ``_raise_component_too_old``
+    so the actionable update prompt fires.
+    """
+    return tuple(int(segment) for segment in version.split("."))
+
+
 # Weak-keyed by client object to support multi-client setups and self-evict
 # when a client is garbage-collected (avoids id() reuse if a freed client's
 # address gets recycled before the unauthorized-retry fires).
@@ -81,29 +103,47 @@ async def _is_bootstrap_service_registered(client: Any) -> bool:
     return False
 
 
+def _raise_component_too_old(detail: str) -> NoReturn:
+    """Single actionable 'update via HACS' error path."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            f"The installed ha_mcp_tools custom component is too old: {detail}. "
+            f"This ha-mcp release requires >= {MIN_COMPONENT_VERSION}. "
+            "Update via HACS and restart Home Assistant.",
+            suggestions=[
+                "HACS → Integrations → HA MCP Tools → Update",
+                "Restart Home Assistant after update completes",
+                "Then retry the operation",
+            ],
+        )
+    )
+
+
 async def _fetch_caller_token(client: Any) -> str:
     """Call the bootstrap service and cache the returned token.
 
-    Old custom-component versions (<0.5.0) don't register get_caller_token.
-    We detect that explicitly and surface an actionable "update component"
-    error rather than a generic "no usable token" string, which would
-    otherwise be the symptom for both (a) old component installed and
-    (b) a race condition during integration setup.
+    Two version gates:
+
+    1. ``_is_bootstrap_service_registered`` — pre-0.5.0 components don't
+       ship ``get_caller_token`` at all. Surface an actionable "update"
+       error instead of letting HA return an opaque 400 to the caller.
+    2. ``MIN_COMPONENT_VERSION`` — even when the bootstrap service is
+       present, the response now carries the component's manifest
+       version. ha-mcp releases that depend on newer custom-component
+       behavior (e.g. a new accepted yaml_path key, a new schema field)
+       bump ``MIN_COMPONENT_VERSION`` together with the manifest, and
+       this check rejects 0.5.0+ components that are still behind that
+       bar with the same actionable update prompt.
+
+    Components that pre-date the version-reporting field (returned no
+    ``version`` in the response) are treated as "too old" for the same
+    reason: the absence of the field IS the signal that the component
+    doesn't yet know how to report its capabilities to ha-mcp.
     """
     if not await _is_bootstrap_service_registered(client):
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.COMPONENT_NOT_INSTALLED,
-                "The installed ha_mcp_tools custom component is too old "
-                "(pre-0.5.0) — it does not register the get_caller_token "
-                "bootstrap service that this ha-mcp version requires. "
-                "Update via HACS and restart Home Assistant.",
-                suggestions=[
-                    "HACS → Integrations → HA MCP Tools → Update",
-                    "Restart Home Assistant after update completes",
-                    "Then retry the operation",
-                ],
-            )
+        _raise_component_too_old(
+            "the get_caller_token bootstrap service is not registered (pre-0.5.0)"
         )
     result = await client.call_service(
         MCP_TOOLS_DOMAIN,
@@ -125,6 +165,19 @@ async def _fetch_caller_token(client: Any) -> str:
                 ],
             )
         )
+    raw_version: Any = unwrapped.get("version") if isinstance(unwrapped, dict) else None
+    if not isinstance(raw_version, str) or not raw_version:
+        _raise_component_too_old(
+            "the get_caller_token response did not include a version "
+            f"field (pre-{MIN_COMPONENT_VERSION})"
+        )
+    version: str = raw_version
+    try:
+        parsed = _version_tuple(version)
+    except ValueError:
+        _raise_component_too_old(f"malformed version: {version!r}")
+    if parsed < _version_tuple(MIN_COMPONENT_VERSION):
+        _raise_component_too_old(f"reported version is {version}")
     _CALLER_TOKEN_CACHE[client] = token
     return token
 

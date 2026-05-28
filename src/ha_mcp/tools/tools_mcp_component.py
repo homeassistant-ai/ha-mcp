@@ -8,6 +8,7 @@ that are not available through standard Home Assistant APIs.
 Feature Flag: Set HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true to enable this tool.
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -15,6 +16,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import HomeAssistantCommandError
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -246,22 +248,54 @@ class McpComponentTools:
             repo_id = await self._resolve_repo_id(ws_client, existing_repo)
 
             logger.info(f"Installing {MCP_TOOLS_REPO} (ID: {repo_id})")
-            download_response = await ws_client.send_command(
-                "hacs/repository/download",
-                repository=repo_id,
-            )
-
-            if not download_response.get("success"):
+            # HACS' download often returns a generic "Command failed:
+            # Unknown error" on transient GitHub hiccups (rate-limit,
+            # tarball stream interruption). Retry the download with
+            # exponential backoff so a one-shot transient doesn't
+            # surface as an installation failure to the caller.
+            # ``send_command`` raises ``HomeAssistantCommandError`` on
+            # ``success: False`` responses, so the retry catches that
+            # specific class — programming bugs / connection errors
+            # propagate normally.
+            max_attempts = 3
+            backoff_seconds = 2.0
+            last_error: HomeAssistantCommandError | None = None
+            download_response: dict[str, Any] | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    download_response = await ws_client.send_command(
+                        "hacs/repository/download",
+                        repository=repo_id,
+                    )
+                    last_error = None
+                    break
+                except HomeAssistantCommandError as e:
+                    last_error = e
+                    if attempt < max_attempts:
+                        wait_for = backoff_seconds * (2 ** (attempt - 1))
+                        logger.warning(
+                            "hacs/repository/download attempt %d/%d failed (%s); "
+                            "retrying in %.1fs",
+                            attempt,
+                            max_attempts,
+                            e,
+                            wait_for,
+                        )
+                        await asyncio.sleep(wait_for)
+            if last_error is not None:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to download repository: {download_response}",
+                        f"Failed to download repository after {max_attempts} "
+                        f"attempts: {last_error}",
                         suggestions=[
                             "Check HACS logs for errors",
                             "Verify GitHub is accessible",
+                            "HACS may be rate-limited; wait a minute and retry",
                         ],
                     )
                 )
+            assert download_response is not None  # narrowing for type checker
 
             result: dict[str, Any] = {
                 "success": True,
