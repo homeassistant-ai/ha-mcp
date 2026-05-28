@@ -101,6 +101,62 @@ assert set(get_args(HelperTypeLiteral)) == (
 )
 
 
+def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
+    """Extract ``{field_name: current_value}`` from a form-type OptionsFlow.
+
+    Reads each ``data_schema`` entry's ``default`` key, falling back to
+    ``value`` (constant-type fields ship ``value`` instead of ``default``)
+    and then ``description.suggested_value`` (UI-created template, group,
+    utility_meter, and other flow-based helpers stash the current value
+    there — voluptuous renders ``suggested_value=...`` into the
+    ``description`` sub-object, not as a top-level field key). Fields with
+    a missing or ``None`` value are skipped.
+    """
+    out: dict[str, Any] = {}
+    for field in flow.get("data_schema") or []:
+        name = field.get("name")
+        if name is None:
+            continue
+        value = field.get("default", field.get("value"))
+        if value is None:
+            description = field.get("description")
+            if isinstance(description, dict):
+                value = description.get("suggested_value")
+        if value is not None:
+            out[name] = value
+    return out
+
+
+async def fetch_entry_options(client: Any, entry_id: str) -> dict[str, Any]:
+    """Probe an integration's options flow and return the persisted options.
+
+    See :meth:`IntegrationTools._fetch_entry_options` for full rationale.
+    Module-level form so non-class callers (e.g. ``smart_search``) can
+    surface flow-helper config without going through the tool class.
+    """
+    flow_id: str | None = None
+    try:
+        flow = await client.start_options_flow(entry_id)
+        flow_id = flow.get("flow_id")
+        if flow.get("type") != "form":
+            return {}
+        return options_from_form_flow(flow)
+    except Exception as exc:
+        logger.warning(
+            f"Failed to fetch options for {entry_id}: {type(exc).__name__}: {exc}"
+        )
+        return {}
+    finally:
+        if flow_id:
+            try:
+                await client.abort_options_flow(flow_id)
+            except Exception as abort_err:
+                logger.warning(
+                    f"Failed to abort options flow {flow_id}: "
+                    f"{type(abort_err).__name__}: {abort_err}"
+                )
+
+
 async def _get_entry_id_for_flow_helper(
     client: Any,
     helper_type: str,
@@ -213,7 +269,13 @@ class IntegrationTools:
             Field(
                 description="Include the options object for each entry. "
                 "Automatically enabled when domain filter is set. "
-                "Useful for auditing template definitions and helper configurations.",
+                "For UI-created flow-based helpers (template, group, "
+                "utility_meter, derivative, ...), the current config — "
+                "template body, group members, source entity, etc. — is "
+                "surfaced here by probing the options flow. Prefer this over "
+                "include_schema when you only need to read the current values; "
+                "use include_schema when you also need the field types or "
+                "selector metadata.",
                 default=False,
             ),
         ] = False,
@@ -758,22 +820,8 @@ class IntegrationTools:
 
     @staticmethod
     def _options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
-        """Extract ``{field_name: current_value}`` from a form-type OptionsFlow.
-
-        Reads each ``data_schema`` entry's ``default`` key, falling back to
-        ``value`` only when the ``default`` key is absent (constant-type
-        fields ship ``value`` instead of ``default``). Fields with a missing
-        or ``None`` value are skipped.
-        """
-        out: dict[str, Any] = {}
-        for field in flow.get("data_schema") or []:
-            name = field.get("name")
-            if name is None:
-                continue
-            value = field.get("default", field.get("value"))
-            if value is not None:
-                out[name] = value
-        return out
+        """Class-method alias for :func:`options_from_form_flow`."""
+        return options_from_form_flow(flow)
 
     async def _fetch_entry_options(self, entry_id: str) -> dict[str, Any]:
         """Read the current ``options`` for a config entry via its OptionsFlow.

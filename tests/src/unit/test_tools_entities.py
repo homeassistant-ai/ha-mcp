@@ -788,8 +788,7 @@ class TestHaSetEntityCombined:
         device_rename = result["device_rename"]
         assert device_rename.get("lookup_failed") is None
         assert any(
-            "no associated device" in w
-            for w in device_rename.get("warnings", [])
+            "no associated device" in w for w in device_rename.get("warnings", [])
         )
 
 
@@ -1861,3 +1860,80 @@ class TestHaGetEntityRegistryOptions:
         assert entry["device_class"] == "window"
         assert entry["original_device_class"] is None
         assert entry["options"] == {"sensor": {"display_precision": 2}}
+
+    @pytest.mark.asyncio
+    async def test_get_entity_surfaces_config_entry_id(self, mock_mcp, mock_client):
+        # Issue #1457: agents trying to read a UI-created template helper
+        # need the parent config entry id to call ha_get_integration. Before
+        # this change the field was dropped from the response, forcing them
+        # to fall back to a domain-list scan.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "entity_id": "sensor.weather_message",
+                    "name": None,
+                    "original_name": "Weather Message",
+                    "icon": None,
+                    "area_id": None,
+                    "disabled_by": None,
+                    "hidden_by": None,
+                    "aliases": [],
+                    "labels": [],
+                    "categories": {},
+                    "device_class": None,
+                    "original_device_class": None,
+                    "options": {},
+                    "platform": "template",
+                    "device_id": None,
+                    "config_entry_id": "01KB6B1Z1SA8B6AVAEMQ4FM8SD",
+                    "unique_id": "01KB6B1Z1SA8B6AVAEMQ4FM8SD",
+                },
+            }
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_get_entity"]
+
+        result = await tool(entity_id="sensor.weather_message")
+
+        entry = result["entity_entry"]
+        assert entry["config_entry_id"] == "01KB6B1Z1SA8B6AVAEMQ4FM8SD"
+        assert entry["platform"] == "template"
+
+    @pytest.mark.asyncio
+    async def test_config_entry_id_is_none_for_yaml_only_entity(
+        self, mock_mcp, mock_client
+    ):
+        # YAML-defined entities (e.g. legacy template platform) have no
+        # config entry — the field is surfaced as None rather than omitted
+        # so consumers can rely on a stable schema.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "entity_id": "sensor.legacy",
+                    "name": None,
+                    "original_name": "Legacy",
+                    "icon": None,
+                    "area_id": None,
+                    "disabled_by": None,
+                    "hidden_by": None,
+                    "aliases": [],
+                    "labels": [],
+                    "categories": {},
+                    "device_class": None,
+                    "original_device_class": None,
+                    "options": {},
+                    "platform": "sensor",
+                    "device_id": None,
+                    # No config_entry_id key in HA's response.
+                    "unique_id": None,
+                },
+            }
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_get_entity"]
+
+        result = await tool(entity_id="sensor.legacy")
+
+        assert result["entity_entry"]["config_entry_id"] is None

@@ -18,6 +18,8 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
     _get_entry_id_for_flow_helper,
+    fetch_entry_options,
+    options_from_form_flow,
 )
 
 
@@ -1221,3 +1223,126 @@ class TestGetIntegrationDiagnostics:
         err_payload = json.loads(str(excinfo.value))
         assert err_payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "diagnostics_data_path" in err_payload["error"]["message"]
+
+
+class TestOptionsFromFormFlow:
+    """``options_from_form_flow`` field extraction (issue #1457)."""
+
+    def test_reads_default_when_present(self) -> None:
+        flow = {
+            "data_schema": [
+                {"name": "max_value", "default": 42},
+            ]
+        }
+        assert options_from_form_flow(flow) == {"max_value": 42}
+
+    def test_falls_back_to_value_for_constant_fields(self) -> None:
+        flow = {"data_schema": [{"name": "fixed", "value": "constant"}]}
+        assert options_from_form_flow(flow) == {"fixed": "constant"}
+
+    def test_falls_back_to_description_suggested_value_for_template(self) -> None:
+        # UI-created template helpers stash the current template body under
+        # description.suggested_value — not as a top-level field key.
+        # Before issue #1457 the extractor skipped this path, so options
+        # came back empty for template/group/utility_meter/derivative/...
+        flow = {
+            "data_schema": [
+                {
+                    "name": "state",
+                    "selector": {"template": {}},
+                    "description": {
+                        "suggested_value": "{{ states('sensor.x') | float }}",
+                    },
+                    "required": True,
+                },
+                {
+                    "name": "device_class",
+                    "selector": {"select": {"options": ["temperature"]}},
+                    "description": {"suggested_value": "temperature"},
+                },
+            ]
+        }
+        assert options_from_form_flow(flow) == {
+            "state": "{{ states('sensor.x') | float }}",
+            "device_class": "temperature",
+        }
+
+    def test_default_wins_over_description_suggested_value(self) -> None:
+        flow = {
+            "data_schema": [
+                {
+                    "name": "field",
+                    "default": "wins",
+                    "description": {"suggested_value": "loses"},
+                }
+            ]
+        }
+        assert options_from_form_flow(flow) == {"field": "wins"}
+
+    def test_skips_fields_with_no_value_anywhere(self) -> None:
+        flow = {
+            "data_schema": [
+                {"name": "optional_blank"},
+                {"name": "explicit_none", "default": None},
+            ]
+        }
+        assert options_from_form_flow(flow) == {}
+
+    def test_static_alias_on_class_calls_module_helper(self) -> None:
+        # Backwards-compatibility: callers still using the @staticmethod
+        # alias must get the same answer as the module-level helper.
+        flow = {
+            "data_schema": [
+                {
+                    "name": "state",
+                    "description": {"suggested_value": "{{ 1 + 1 }}"},
+                }
+            ]
+        }
+        assert (
+            IntegrationTools._options_from_form_flow(flow)
+            == options_from_form_flow(flow)
+            == {"state": "{{ 1 + 1 }}"}
+        )
+
+
+class TestFetchEntryOptions:
+    """``fetch_entry_options`` module-level probe (issue #1457)."""
+
+    async def test_returns_options_from_form_flow(self) -> None:
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={
+                "flow_id": "f1",
+                "type": "form",
+                "data_schema": [
+                    {
+                        "name": "state",
+                        "description": {"suggested_value": "{{ true }}"},
+                    }
+                ],
+            }
+        )
+        client.abort_options_flow = AsyncMock()
+
+        assert await fetch_entry_options(client, "entry_x") == {"state": "{{ true }}"}
+        client.abort_options_flow.assert_awaited_once_with("f1")
+
+    async def test_returns_empty_when_flow_is_a_menu(self) -> None:
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={"flow_id": "f2", "type": "menu", "menu_options": []}
+        )
+        client.abort_options_flow = AsyncMock()
+
+        assert await fetch_entry_options(client, "entry_y") == {}
+        client.abort_options_flow.assert_awaited_once_with("f2")
+
+    async def test_aborts_flow_even_when_extraction_raises(self) -> None:
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(side_effect=RuntimeError("init blew up"))
+        client.abort_options_flow = AsyncMock()
+
+        assert await fetch_entry_options(client, "entry_z") == {}
+        # start raised before a flow_id existed → abort skipped (no leak)
+        client.abort_options_flow.assert_not_awaited()
