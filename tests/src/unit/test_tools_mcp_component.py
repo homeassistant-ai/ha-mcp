@@ -584,7 +584,13 @@ class TestHacsDownloadRetry:
             AsyncMock(return_value=ws_client),
         )
 
-        tools = McpComponentTools(AsyncMock())
+        # Explicit AsyncMock for ``get_config`` — ``AsyncMock()`` child
+        # attributes default to MagicMock, so ``await client.get_config()``
+        # in ``add_timezone_metadata`` would leak an unawaited coroutine
+        # that pytest's strict warning mode turns into a failure.
+        client_mock = AsyncMock()
+        client_mock.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        tools = McpComponentTools(client_mock)
         result = await tools.ha_install_mcp_tools(restart=False)
 
         # ``add_timezone_metadata`` wraps the success response in
@@ -642,7 +648,13 @@ class TestHacsDownloadRetry:
             AsyncMock(return_value=ws_client),
         )
 
-        tools = McpComponentTools(AsyncMock())
+        # Explicit AsyncMock for ``get_config`` — ``AsyncMock()`` child
+        # attributes default to MagicMock, so ``await client.get_config()``
+        # in ``add_timezone_metadata`` would leak an unawaited coroutine
+        # that pytest's strict warning mode turns into a failure.
+        client_mock = AsyncMock()
+        client_mock.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        tools = McpComponentTools(client_mock)
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_install_mcp_tools(restart=False)
 
