@@ -164,6 +164,8 @@ _NODE_SUGGESTIONS: dict[str, str] = {
     "MatchStar": "use if/elif/else or a dict lookup instead of match/case",
 }
 
+_INTERPRETER_INTERNAL_NAMES = frozenset({"__builtins__", "__name__", "__doc__"})
+
 # Whitelist of safe methods that can be called
 SAFE_METHODS = {
     # List methods
@@ -299,6 +301,9 @@ def _validate_node(node: ast.AST) -> str | None:
             return f"Forbidden node type: {name} — {hint}"
         return f"Forbidden node type: {name}"
 
+    if isinstance(node, ast.Name) and node.id in _INTERPRETER_INTERNAL_NAMES:
+        return f"Forbidden: direct access to interpreter internals ({node.id})"
+
     if isinstance(node, ast.Attribute):
         if node.attr.startswith("__") and node.attr.endswith("__"):
             return f"Forbidden: dunder attribute access ({node.attr})"
@@ -369,7 +374,7 @@ def safe_execute_expression(
         )
 
     safe_globals: dict[str, Any] = {
-        "__builtins__": _SAFE_BUILTINS,
+        "__builtins__": dict(_SAFE_BUILTINS),
         "__name__": "__main__",
         "__doc__": None,
     }

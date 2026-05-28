@@ -4,6 +4,7 @@ import pytest
 
 from ha_mcp.utils.python_sandbox import (
     _EXECUTION_ERROR_TEXT_LIMIT,
+    _SAFE_BUILTINS,
     PythonSandboxError,
     PythonSandboxExecutionError,
     PythonSandboxValidationError,
@@ -713,6 +714,40 @@ class TestSandboxErrorSubclasses:
                 pytest.raises(type(infra_exc)),
             ):
                 safe_execute_expression("response = 1", {"response": 0}, "response")
+
+
+class TestBuiltinsIsolation:
+    """Regression tests for GHSA-6w5w-h7g8-gm26."""
+
+    @pytest.mark.parametrize("name", ("__builtins__", "__name__", "__doc__"))
+    def test_direct_interpreter_internal_names_rejected(self, name):
+        valid, error = validate_expression(f"config['x'] = {name}")
+
+        assert valid is False
+        assert name in error
+        assert "interpreter internals" in error
+
+    def test_builtin_replacement_does_not_persist_between_executions(self):
+        from unittest.mock import patch
+
+        original_builtins = dict(_SAFE_BUILTINS)
+        mutated_builtins = None
+
+        def mutate_execution_builtins(_expr, safe_globals, safe_locals):
+            nonlocal mutated_builtins
+            mutated_builtins = safe_globals["__builtins__"]
+            mutated_builtins["len"] = lambda value: 999
+
+        try:
+            with patch("ha_mcp.utils.python_sandbox.exec", mutate_execution_builtins):
+                safe_execute_expression("response = response", {"response": []}, "response")
+        finally:
+            _SAFE_BUILTINS.clear()
+            _SAFE_BUILTINS.update(original_builtins)
+
+        assert mutated_builtins is not _SAFE_BUILTINS
+        assert mutated_builtins["len"] is not len
+        assert _SAFE_BUILTINS["len"] is len
 
 
 class TestFormatSandboxError:
