@@ -29,6 +29,7 @@ from homeassistant.core import (
 )
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
+from homeassistant.loader import async_get_integration
 from ruamel.yaml import YAMLError
 
 from .const import (
@@ -1277,7 +1278,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "completed setup. Reload the ha_mcp_tools integration."
                 ),
             }
-        return {"success": True, "token": token}
+        # Report the manifest version so ha-mcp can enforce a minimum
+        # compatible component version. The integration loader reads
+        # ``manifest.json`` once at startup; ``async_get_integration`` is
+        # cheap and avoids hard-coding the version twice.
+        integration = await async_get_integration(hass, DOMAIN)
+        return {
+            "success": True,
+            "token": token,
+            "version": str(integration.version),
+        }
 
     # Register all services with response support
     hass.services.async_register(

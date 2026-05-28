@@ -215,8 +215,19 @@ def _make_client_with_token(token: str) -> AsyncMock:
     async def fake_call_service(domain, service, payload, **kwargs):
         if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
             # HA wraps response under "service_response" — mirror that so
-            # unwrap_service_response finds the token.
-            return {"service_response": {"success": True, "token": token}}
+            # unwrap_service_response finds the token. ``version`` is
+            # reported alongside the token so ha-mcp's MIN_COMPONENT_VERSION
+            # gate (added with the packages-only-keys PR) sees a current
+            # version and doesn't reject the test setup as "too old".
+            from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+
+            return {
+                "service_response": {
+                    "success": True,
+                    "token": token,
+                    "version": MIN_COMPONENT_VERSION,
+                }
+            }
         # Echo the payload so the test can verify token injection.
         return {
             "service_response": {
@@ -407,9 +418,99 @@ class TestCallMcpToolsServiceInjectsToken:
         with pytest.raises(ToolError) as exc_info:
             await call_mcp_tools_service(client, "list_files", {"path": "www"})
         msg = str(exc_info.value)
-        assert "too old" in msg or "pre-0.5.0" in msg
+        assert "too old" in msg
+        assert "pre-0.5.0" in msg
         # call_service must NOT have been called — pre-flight rejected upstream
         client.call_service.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_raises_component_too_old_when_response_missing_version(self):
+        """Bootstrap registered but response has no ``version`` field → still
+        rejected as "too old" with the same actionable update prompt.
+
+        This covers the 0.5.0 component case after this PR adds the
+        version-reporting field: bootstrap service exists (passes the
+        first gate) but the older code path returns ``{success, token}``
+        without ``version``. ha-mcp treats the missing field as the
+        signal that the component pre-dates version reporting.
+        """
+        from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
+            }
+        ]
+        client.call_service = AsyncMock(
+            return_value={
+                "service_response": {"success": True, "token": "tok-no-version"}
+            }
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await call_mcp_tools_service(client, "list_files", {"path": "www"})
+        msg = str(exc_info.value)
+        assert "too old" in msg
+        assert MIN_COMPONENT_VERSION in msg
+
+    @pytest.mark.asyncio
+    async def test_raises_component_too_old_when_version_below_minimum(self):
+        """Bootstrap registered + version present but below
+        ``MIN_COMPONENT_VERSION`` → rejected with the reported version
+        in the error so the operator knows exactly what they have.
+        """
+        from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
+            }
+        ]
+        # Hardcode an older version to ensure < MIN_COMPONENT_VERSION
+        # holds regardless of where the minimum advances over time.
+        client.call_service = AsyncMock(
+            return_value={
+                "service_response": {
+                    "success": True,
+                    "token": "tok-old",
+                    "version": "0.0.1",
+                }
+            }
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await call_mcp_tools_service(client, "list_files", {"path": "www"})
+        msg = str(exc_info.value)
+        assert "too old" in msg
+        assert "0.0.1" in msg
+        assert MIN_COMPONENT_VERSION in msg
+
+    @pytest.mark.asyncio
+    async def test_version_at_minimum_accepted(self):
+        """A component reporting exactly ``MIN_COMPONENT_VERSION`` is accepted."""
+        from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
+            }
+        ]
+        client.call_service = AsyncMock(
+            return_value={
+                "service_response": {
+                    "success": True,
+                    "token": "tok-current",
+                    "version": MIN_COMPONENT_VERSION,
+                }
+            }
+        )
+        # No exception means the gate passed and the downstream
+        # list_files call also went through.
+        await call_mcp_tools_service(client, "list_files", {"path": "www"})
 
 
 # =============================================================================
