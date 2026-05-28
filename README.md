@@ -292,7 +292,7 @@ For comprehensive testing documentation, see **[tests/README.md](tests/README.md
 
 Ha-mcp runs **locally** on your machine. Your smart home data stays on your network.
 
-- **Configurable telemetry** — optional anonymous usage stats
+- **No telemetry today** — anonymous usage stats are a planned future feature (as of May 2026); users will be notified when it lands and it will be opt-in only
 - **No personal data collection** — we never collect entity names, configs, or device data
 - **User-controlled bug reports** — only sent with your explicit approval
 
