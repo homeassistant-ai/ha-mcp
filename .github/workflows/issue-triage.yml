@@ -71,7 +71,13 @@ jobs:
                 });
                 isMaintainer = true;
               } catch (err) {
-                if (err.status !== 404) core.warning(`Maintainer team check failed (HTTP ${err.status}) — treating as non-maintainer`);
+                if (err.status !== 404) {
+                  // Non-404 means auth/config problem — fail closed (skip triage) rather than
+                  // accidentally triaging a maintainer's issue.
+                  core.warning(`Maintainer team check failed (HTTP ${err.status}) — skipping triage to be safe`);
+                  core.setOutput('should_run', 'false');
+                  return;
+                }
               }
               if (isMaintainer) {
                 core.info(`Skipping: Issue created by maintainer (${issue.user.login})`);
@@ -237,7 +243,7 @@ jobs:
               }
               core.info('Template maps: ' + JSON.stringify({ labelToType: labelToTypes, headerToType }));
             } catch (e) {
-              core.warning('Template fetch failed — type detection may be degraded: ' + e.message);
+              core.error('Template fetch failed — all issues will triage as type=unknown: ' + e.message);
             }
 
             // Labels shared across multiple templates are ambiguous — drop them from the map
@@ -280,6 +286,9 @@ jobs:
             --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | \
             python3 -c "import json,sys; tools=json.load(sys.stdin); print('\n'.join(t['name']+': '+(t.get('description') or '')[:80].rstrip() for t in tools))" \
             2>/dev/null || echo "")
+          if [ -z "$TOOLS" ]; then
+            echo "::warning::Failed to fetch tool list — keyword extraction and priority assessment will be degraded"
+          fi
           {
             echo "tools<<EOF"
             echo "$TOOLS"
@@ -303,7 +312,7 @@ jobs:
               .replace(/^_No response_$/gim, '')
               .replace(/\n{3,}/g, '\n\n')
               .trim();
-            const issueBody = cleanBody(process.env.ISSUE_BODY || '').substring(0, 1200);
+            const issueBody = cleanBody(process.env.ISSUE_BODY || '').substring(0, 3000);
             const toolList = process.env.TOOL_LIST || '';
             const token = process.env.GH_TOKEN;
 
@@ -329,39 +338,48 @@ jobs:
               'Return ONLY a JSON array: [{"term":"ha_call_service","weight":1.0},{"term":"service call","weight":0.7}]',
             ].join('\n');
 
-            try {
-              const resp = await fetch('https://models.github.ai/inference/chat/completions', {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  model: 'openai/gpt-4.1-nano',
-                  messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt },
-                  ],
-                  max_tokens: 400,
-                  temperature: 0.1,
-                }),
-              });
+            const payload = {
+              model: 'openai/gpt-4.1-nano',
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt },
+              ],
+              max_tokens: 400,
+              temperature: 0.1,
+            };
 
-              if (!resp.ok) {
-                const text = await resp.text();
-                core.warning(`GitHub Models API error: ${resp.status} — ${text.substring(0, 200)}`);
+            let resp;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              try {
+                resp = await fetch('https://models.github.ai/inference/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload),
+                });
+              } catch (e) {
+                core.warning(`Keyword extraction network error (attempt ${attempt}/3): ${e.message}`);
                 core.setOutput('response', '');
                 return;
               }
-
-              const data = await resp.json();
-              const content = data.choices?.[0]?.message?.content || '';
-              core.info('Extracted keywords: ' + content.substring(0, 300));
-              core.setOutput('response', content);
-            } catch (e) {
-              core.warning('Keyword extraction failed: ' + e.message);
-              core.setOutput('response', '');
+              if (resp.status < 500) break;
+              if (attempt < 3) {
+                const delay = attempt * 2000;
+                core.warning(`HTTP ${resp.status} on attempt ${attempt}/3, retrying in ${delay / 1000}s`);
+                await new Promise(r => setTimeout(r, delay));
+              }
             }
+
+            if (!resp.ok) {
+              const text = await resp.text();
+              core.warning(`GitHub Models API error: ${resp.status} — ${text.substring(0, 200)}`);
+              core.setOutput('response', '');
+              return;
+            }
+
+            const data = await resp.json();
+            const content = data.choices?.[0]?.message?.content || '';
+            core.info('Extracted keywords: ' + content.substring(0, 300));
+            core.setOutput('response', content);
 
       - name: BM25 candidate retrieval
         id: bm25
@@ -385,27 +403,34 @@ jobs:
               .replace(/\n{3,}/g, '\n\n')
               .trim();
 
-            const issueBody = cleanBody(process.env.ISSUE_BODY || '').substring(0, 2000);
+            const issueBody = cleanBody(process.env.ISSUE_BODY || '').substring(0, 4000);
 
             // Fetch up to 500 recent issues (open + closed), excluding PRs and current issue
             const allIssues = [];
-            for (let page = 1; page <= 5; page++) {
-              const resp = await github.rest.issues.listForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: 'all',
-                per_page: 100,
-                page: page,
-                sort: 'created',
-                direction: 'desc',
-              });
-              if (resp.data.length === 0) break;
-              allIssues.push(...resp.data.filter(i => !i.pull_request && i.number !== issueNumber));
-              if (resp.data.length < 100) break;
+            try {
+              for (let page = 1; page <= 5; page++) {
+                const resp = await github.rest.issues.listForRepo({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'all',
+                  per_page: 100,
+                  page: page,
+                  sort: 'created',
+                  direction: 'desc',
+                });
+                if (resp.data.length === 0) break;
+                allIssues.push(...resp.data.filter(i => !i.pull_request && i.number !== issueNumber));
+                if (resp.data.length < 100) break;
+              }
+            } catch (e) {
+              core.warning(`BM25 corpus fetch failed: ${e.message} — skipping duplicate check`);
+              core.setOutput('candidates', '');
+              return;
             }
 
             core.info(`BM25 corpus: ${allIssues.length} issues`);
             if (allIssues.length === 0) {
+              core.warning('BM25 corpus is empty — no issues found, skipping duplicate check');
               core.setOutput('candidates', '');
               return;
             }
@@ -485,7 +510,7 @@ jobs:
             const THRESHOLD = usingKeywords ? 1.0 : 60;
             const candidates = scored
               .sort((a, b) => b.score - a.score)
-              .slice(0, 8)
+              .slice(0, 5)
               .filter(x => x.score >= THRESHOLD);
 
             if (candidates.length === 0) {
@@ -496,7 +521,7 @@ jobs:
 
             const formatted = candidates.map(c =>
               '#' + c.issue.number + ' [' + c.issue.state + ']: ' + c.issue.title + '\n' +
-              cleanBody(c.issue.body).substring(0, 600)
+              cleanBody(c.issue.body).substring(0, 1200)
             ).join('\n\n---\n\n');
 
             core.info('BM25 found ' + candidates.length + ' candidates: ' + candidates.map(c => '#' + c.issue.number).join(', '));
@@ -532,6 +557,9 @@ jobs:
             fi
           done
 
+          if [ -z "$CHANGELOG_CONTEXT" ]; then
+            echo "::warning::Failed to fetch changelogs — regression detection will be degraded"
+          fi
           {
             echo "changelog_context<<EOF"
             printf '%b' "$CHANGELOG_CONTEXT"
@@ -569,7 +597,7 @@ jobs:
               .replace(/\n{3,}/g, '\n\n')
               .trim();
 
-            const issueBody = cleanBody(rawBody).substring(0, 1500);
+            const issueBody = cleanBody(rawBody).substring(0, 8000);
 
             // Parse extracted keywords for context (show top-5 by weight in prompt)
             let keywordSummary = '';
@@ -581,7 +609,7 @@ jobs:
                 const top = kws.slice(0, 5).map(k => k.term).join(', ');
                 keywordSummary = `\nSearch keywords extracted from this issue: ${top}\n`;
               }
-            } catch (e) {}
+            } catch (e) { core.info('Keyword summary parse failed: ' + e.message); }
 
             const authorSection = authorComments
               ? `\nAuthor follow-up comments:\n${authorComments}\n`
@@ -719,10 +747,21 @@ jobs:
               return { status: resp.status, data };
             };
 
-            let result = await call('openai/gpt-4.1');
-            if (result.status === 429) {
-              core.warning('gpt-4.1 rate limited, falling back to gpt-4.1-mini');
-              result = await call('openai/gpt-4.1-mini');
+            // Retry primary model on 5xx with exponential backoff; fall back to mini on 429.
+            let result;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              result = await call('openai/gpt-4.1');
+              if (result.status === 429) {
+                core.warning('gpt-4.1 rate limited, falling back to gpt-4.1-mini');
+                result = await call('openai/gpt-4.1-mini');
+                break;
+              }
+              if (result.status < 500) break;
+              if (attempt < 3) {
+                const delay = attempt * 2000;
+                core.warning(`HTTP ${result.status} on attempt ${attempt}/3, retrying in ${delay / 1000}s`);
+                await new Promise(r => setTimeout(r, delay));
+              }
             }
             if (result.status !== 200) {
               core.setFailed(`Model call failed: HTTP ${result.status} — ${JSON.stringify(result.data)}`);
@@ -731,7 +770,7 @@ jobs:
             const text = result.data.choices[0].message.content;
             core.setOutput('summary', text);
 
-      - name: Post result and apply labels
+      - name: Post result, apply labels and set fields
         if: ${{ !cancelled() }}
         uses: actions/github-script@v9
         env:
@@ -782,7 +821,9 @@ jobs:
               }
             };
 
-            // Set native org issue fields via REST API (requires only issues: write)
+            // Set native org issue fields via REST API (requires only issues: write).
+            // issue_field_values is an undocumented/preview param — failures are surfaced as
+            // job failures so silent Priority/Effort drift is caught in the workflow run log.
             const setIssueFields = async (fields) => {
               try {
                 await github.rest.issues.update({
@@ -792,7 +833,7 @@ jobs:
                   issue_field_values: fields,
                 });
               } catch (err) {
-                core.warning('Failed to set issue fields: ' + err.message);
+                core.setFailed('Failed to set issue fields: ' + err.message);
               }
             };
 
@@ -831,8 +872,8 @@ jobs:
               result.duplicate_of !== undefined &&
               result.duplicate_confidence === 'high';
             const duplicateNumber = result.duplicate_of;
-            const relatedNumbers = Array.isArray(result.related) ? result.related : [];
-            const missingInfo = Array.isArray(result.missing_info) ? result.missing_info : [];
+            const relatedNumbers = Array.isArray(result.related) ? result.related.filter(n => typeof n === 'number') : [];
+            const missingInfo = Array.isArray(result.missing_info) ? result.missing_info.filter(s => typeof s === 'string') : [];
             const priority = PRIORITY_OPTIONS[result.priority] ? result.priority : null;
             if (result.priority && !priority) core.warning(`Unrecognised priority value: "${result.priority}" — skipping field`);
             const effort = EFFORT_OPTIONS[result.effort] ? result.effort : null;
@@ -856,7 +897,7 @@ jobs:
                 'This issue looks like a duplicate of #' + duplicateNumber + '.\n\n' +
                 'A maintainer will verify and close if confirmed. If this is **not** a duplicate, ' +
                 'please comment to explain the difference.\n\n' +
-                '*🤖 Automated triage by Issue Bot*';
+                '*🤖 Automated triage by Issue Bot*\n<!-- triage-bot:duplicate -->';
               await postComment(body);
               core.info('Issue flagged as likely duplicate of #' + duplicateNumber);
               return;
@@ -867,7 +908,7 @@ jobs:
               const labels = ['triaged', ...(classification ? [classification] : [])];
               if (goodFirstIssue) labels.push('good first issue');
               core.info('Issue is complete; adding labels: ' + labels.join(', '));
-              await addLabels(labels);
+              try { await addLabels(labels); } catch (err) { core.warning('addLabels failed: ' + err.message); }
               await removeLabel('triage-failed');
               await removeLabel('needs-info');
               const fieldUpdates = [];
@@ -900,7 +941,7 @@ jobs:
 
             const body = '## ℹ️ Information Needed\n\n' + missingText + relatedText + reportIssueTip +
               '\n\n---\n\n💬 **Please reply to this issue** with the requested information.\n\n' +
-              '*🤖 Automated triage by Issue Bot*';
+              '*🤖 Automated triage by Issue Bot*\n<!-- triage-bot:info-needed -->';
             try {
               if (classification) await addLabels([classification]);
               await addLabels(['needs-info']);
