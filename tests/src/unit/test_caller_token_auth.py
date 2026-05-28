@@ -7,7 +7,7 @@ Covers three layers:
 2. **ha-mcp wrapper helper** (``call_mcp_tools_service``) — fetches and
    caches the token, injects it on every call, refetches on unauthorized.
 3. **ha_call_service refusal** — the wrapper-layer block on the
-   ``ha_mcp_tools`` domain (closes the issue #1451 bypass).
+   ``ha_mcp_tools`` domain.
 
 Custom-component tests stub the homeassistant.* imports the same way
 ``test_custom_component_filesystem.py`` does so they can run without
@@ -413,13 +413,13 @@ class TestCallMcpToolsServiceInjectsToken:
 
 
 # =============================================================================
-# ha_call_service refusal of the ha_mcp_tools domain (issue #1451)
+# ha_call_service refusal of the ha_mcp_tools domain
 # =============================================================================
 
 
 class TestHaCallServiceRefusesMcpToolsDomain:
-    """ha_call_service must not forward to ha_mcp_tools — that's the bypass
-    skialpine's LLM used in issue #1451 to land yaml edits on stable."""
+    """ha_call_service must not forward to ha_mcp_tools — the dedicated
+    wrapper tools are the only supported path into that domain."""
 
     @pytest.mark.asyncio
     async def test_blocks_ha_mcp_tools_domain(self):

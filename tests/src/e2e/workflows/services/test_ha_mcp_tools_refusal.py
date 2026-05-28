@@ -1,29 +1,22 @@
-"""E2E coverage for the caller-token auth contract added in PR #1459.
+"""E2E coverage for the caller-token auth contract.
 
 Runs cross-lane (no backend marker) — the same assertions execute against
 the testcontainer backend, the HAOS external lane (``ha-mcp`` running
 externally against booted HAOS), and the HAOS inaddon lane (``ha-mcp``
 running inside the dev addon container with the supervisor token):
 
-* ``ha_call_service`` refuses ``domain == ha_mcp_tools`` — closes the
-  issue #1451 bypass at the wrapper layer. Verified across literal,
-  upper-case, mixed-case, and whitespace variants of the domain name so
-  the refusal cannot be sidestepped by HA core's domain-lowercasing
-  fallback (``homeassistant/core.py`` ``ServiceRegistry.async_call``).
+* ``ha_call_service`` refuses ``domain == ha_mcp_tools`` at the wrapper
+  layer. Verified across literal, upper-case, mixed-case, and
+  whitespace variants of the domain so the refusal cannot be
+  sidestepped by HA core's domain-lowercasing fallback
+  (``homeassistant/core.py`` ``ServiceRegistry.async_call``).
 * Positive smoke: ``ha_list_files`` round-trips successfully — implicit
   proof that ``call_mcp_tools_service`` bootstrap-fetches the caller
   token via ``ha_mcp_tools.get_caller_token``, injects it, and the
   handler accepts it. In addon mode the supervisor token maps to the
   admin-forced ``hassio_user`` and therefore passes the explicit admin
-  gate added to the bootstrap; in container / external HAOS mode the
-  user-supplied admin LLAT does the same.
-
-The negative branch of the admin gate (a non-admin caller is rejected
-by ``ha_mcp_tools.get_caller_token``) is covered by
-``test_caller_token_auth.py::TestCallerIsAdmin``. ``initial_test_state``
-ships only the system content user + the admin ``mcp`` user, so the
-positive admin path is the only one currently reachable at the E2E
-tier.
+  gate; in container / external HAOS mode the user-supplied admin LLAT
+  does the same.
 """
 
 from __future__ import annotations
@@ -86,7 +79,7 @@ async def mcp_client_for_refusal(
 
 
 # ---------------------------------------------------------------------------
-# ha_call_service refusal — issue #1451 bypass closure
+# ha_call_service refusal of the ha_mcp_tools domain
 # ---------------------------------------------------------------------------
 
 
@@ -169,7 +162,7 @@ class TestHaCallServiceRefusesMcpToolsDomain:
                 "service": "create",
                 "data": {
                     "message": f"caller-token-refusal-test {nonce}",
-                    "title": "PR #1459 refusal coverage",
+                    "title": "ha_mcp_tools refusal coverage",
                     "notification_id": f"pr1459_{nonce}",
                 },
             },
@@ -235,4 +228,68 @@ class TestCallerTokenBootstrapEndToEnd:
         assert data.get("success") is True, (
             f"ha_list_files must succeed once the bootstrap + token gate is "
             f"in place; got: {data!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Admin gate — non-admin caller is rejected at the bootstrap surface
+# ---------------------------------------------------------------------------
+
+
+class TestCallerTokenAdminGate:
+    """``ha_mcp_tools.get_caller_token`` is admin-gated explicitly.
+
+    The seeded non-admin user lives in ``tests/initial_test_state/.storage/auth``
+    (``a5973d59…``, ``system-users`` group). The matching LLAT is
+    ``NON_ADMIN_TEST_TOKEN`` in ``tests/test_constants.py``. We call the
+    HA REST endpoint directly with that token — no MCP wrapper, no
+    ``HOMEASSISTANT_TOKEN`` shadowing — and assert HA returns the
+    structured ``unauthorized`` reply emitted by the handler when
+    ``_caller_is_admin`` rejects.
+    """
+
+    async def test_non_admin_caller_rejected(
+        self,
+        _filesystem_feature_flag,
+        ha_container_with_fresh_config,
+    ):
+        import httpx
+
+        from tests.test_constants import NON_ADMIN_TEST_TOKEN
+
+        base_url = ha_container_with_fresh_config["base_url"]
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{base_url}/api/services/ha_mcp_tools/get_caller_token",
+                headers={
+                    "Authorization": f"Bearer {NON_ADMIN_TEST_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                params={"return_response": ""},
+                json={},
+            )
+
+        if response.status_code == 400 and "ServiceNotFound" in response.text:
+            pytest.skip(
+                "ha_mcp_tools.get_caller_token not registered in this lane "
+                "(custom component not installed); admin-gate coverage is "
+                "exercised in the lanes that pre-bake the component"
+            )
+
+        assert response.status_code == 200, (
+            f"HA must accept the non-admin LLAT at the auth layer (the "
+            f"admin gate fires inside the handler, not at the transport). "
+            f"Status={response.status_code}, body={response.text!r}"
+        )
+
+        body = response.json()
+        # HA wraps the service response under ``service_response``
+        service_response = body.get("service_response", body)
+        assert service_response.get("success") is False, (
+            f"Non-admin caller must be rejected by the admin gate; got: {body!r}"
+        )
+        assert service_response.get("error_code") == "unauthorized", (
+            f"Rejection must carry error_code='unauthorized' so clients can "
+            f"distinguish it from other failures; got: {body!r}"
         )
