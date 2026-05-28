@@ -6,7 +6,7 @@
     "inputSchema": {
       "properties": {
         "source": {
-          "type": "Annotated[str | None, Field(description=\"Add-on source: 'installed' (default) for currently installed add-ons, 'available' for add-ons in the store that can be installed.\", default=None)]",
+          "type": "Annotated[Literal['installed', 'available'] | None, Field(description=\"Add-on source: 'installed' (default) for currently installed add-ons, 'available' for add-ons in the store that can be installed.\", default=None)]",
           "default": null
         },
         "slug": {
