@@ -76,6 +76,8 @@ class BestPracticeCheckResult(list[str]):
     without the attribute — no current call site does any of these.
     """
 
+    __slots__ = ("referenced_files",)
+
     referenced_files: set[str]
 
     def __init__(self, items: list[str] | None = None) -> None:

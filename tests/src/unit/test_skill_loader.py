@@ -10,6 +10,7 @@ never fail the write operation that's embedding the response.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -309,3 +310,38 @@ def test_get_skills_dir_returns_bundled_path_or_none() -> None:
         pytest.skip("skills-vendor submodule not initialised in this checkout")
     assert result.is_dir()
     assert (result / "home-assistant-best-practices" / "SKILL.md").is_file()
+
+
+def test_resolve_skill_files_oserror_during_resolve_returns_skipped(
+    fake_skills_dir: Path,
+) -> None:
+    """``Path.resolve()`` can raise OSError on the host (e.g. ELOOP from
+    a circular symlink, EACCES from permission-restricted parents). The
+    silent-skip contract requires the loader to swallow it and return
+    the ref omitted — never propagate, because the surrounding write
+    operation has already committed."""
+    with patch.object(Path, "resolve", side_effect=OSError("ELOOP")):
+        result = skill_loader.resolve_skill_files(
+            fake_skills_dir,
+            "home-assistant-best-practices",
+            ["references/automation-patterns.md"],
+        )
+    assert result == {}
+
+
+def test_resolve_skill_files_invalid_utf8_returns_skipped(
+    fake_skills_dir: Path,
+) -> None:
+    """A skill file with invalid UTF-8 bytes raises ``UnicodeDecodeError``
+    on ``read_text(encoding='utf-8')``. ``UnicodeDecodeError`` subclasses
+    ``ValueError``, NOT ``OSError`` — without the dedicated except clause
+    it would propagate and fail the surrounding write the agent already
+    committed."""
+    bad = fake_skills_dir / "home-assistant-best-practices" / "references" / "bad.md"
+    bad.write_bytes(b"\xff\xfe# not valid utf-8\n")
+    result = skill_loader.resolve_skill_files(
+        fake_skills_dir,
+        "home-assistant-best-practices",
+        ["references/bad.md"],
+    )
+    assert result == {}

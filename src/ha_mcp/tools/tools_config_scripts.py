@@ -448,9 +448,7 @@ class ConfigScriptTools:
         ] = True,
     ) -> dict[str, Any]:
         """
-        MUST call ha_get_skill_guide first.
-
-        Create or update a Home Assistant script.
+        Create or update a Home Assistant script. MUST call ha_get_skill_guide first.
 
         PREFER NATIVE ACTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native actions are validated at config load, fail loudly, and do not bypass HA's

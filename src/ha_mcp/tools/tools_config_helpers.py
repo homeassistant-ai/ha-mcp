@@ -2366,10 +2366,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = True,
     ) -> dict[str, Any]:
         """
-        MUST call ha_get_skill_guide first.
-
         Create or update Home Assistant helper entities and config subentries
-        (28 types, unified interface).
+        (28 types, unified interface). MUST call ha_get_skill_guide first.
 
         SIMPLE/FLOW helper create requires `name`; SIMPLE/FLOW helper update
         requires `helper_id`. Config subentry create requires `entry_id` and

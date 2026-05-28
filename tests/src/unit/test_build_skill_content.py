@@ -18,6 +18,7 @@ from ha_mcp.tools.util_helpers import (
     _WRITE_TOOL_BP_HINT_SUGGESTION,
     attach_skill_content,
     augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     build_skill_content,
 )
 
@@ -319,6 +320,76 @@ class TestDegradedPaths:
         ) or list(error["skill_content"].keys()) == [
             "references/automation-patterns.md#native-conditions"
         ]
+
+    def test_augment_tool_error_wraps_dict_augmentation(self, patched_get_skills_dir):
+        """The ToolError wrapper is what the 6 write tools call from their
+        outer except handler. Decodes the JSON body, runs the dict
+        augmentation (generic hint + section embed), re-encodes into a
+        new ToolError. Without this test the wrapper itself was
+        unverified — only the dict variant was covered."""
+        import json
+
+        from fastmcp.exceptions import ToolError
+
+        class _BP:
+            def __init__(self, refs):
+                self.referenced_files = refs
+
+        error_dict = {
+            "success": False,
+            "error": {
+                "code": "VALIDATION_FAILED",
+                "message": "bad config",
+                "suggestions": ["fix the config"],
+            },
+        }
+        te = ToolError(json.dumps(error_dict))
+        augmented = augment_tool_error_with_skill_content(
+            te,
+            bp_warnings=_BP({"references/automation-patterns.md#native-conditions"}),
+        )
+        # New ToolError instance is returned; body carries the augmentation.
+        assert isinstance(augmented, ToolError)
+        body = json.loads(str(augmented))
+        suggestions = body["error"]["suggestions"]
+        assert _WRITE_TOOL_BP_HINT_SUGGESTION in suggestions
+        assert "fix the config" in suggestions
+        # Section auto-embedded under skill_content with hint at top.
+        assert "skill_content" in body
+        assert (
+            "references/automation-patterns.md#native-conditions"
+            in body["skill_content"]
+        )
+        assert body.get("skill_content_hint") == _SKILL_CONTENT_OPTOUT_HINT
+
+    def test_augment_tool_error_falls_through_on_non_json_body(self):
+        """When the ToolError body isn't a JSON-decodable error dict,
+        return the original ToolError unchanged. Preserves the contract
+        for any future raise that doesn't use ``raise_tool_error``."""
+        from fastmcp.exceptions import ToolError
+
+        te = ToolError("plain string body, not JSON")
+        result = augment_tool_error_with_skill_content(te, bp_warnings=None)
+        assert result is te
+
+    def test_settings_load_raises_returns_empty(self, patched_get_skills_dir):
+        """build_skill_content must silently degrade to {} when
+        get_global_settings() raises — the documented contract is "skill
+        content is opportunistic; never fail the surrounding write".
+        Without this defensive wrap, a settings-validation regression
+        would propagate, the outer except in each tool would re-map to
+        INTERNAL_ERROR, and the agent would retry an already-committed
+        mutation."""
+        with patch(
+            "ha_mcp.tools.util_helpers.get_global_settings",
+            side_effect=ValueError("settings broken"),
+        ):
+            result = build_skill_content(
+                MandatoryBPS=True,
+                canonical_files=("references/automation-patterns.md",),
+                referenced_files=None,
+            )
+        assert result == {}
 
     def test_trailing_hash_resolves_to_whole_file(self, patched_get_skills_dir):
         """A trailing ``#`` with empty anchor (``"path#"``) must produce

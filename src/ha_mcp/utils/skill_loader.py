@@ -14,8 +14,10 @@ Functions:
   (``"references/X.md"``) or a path with an anchor
   (``"references/X.md#native-conditions"``); anchored refs yield just the
   matching markdown section so reactive embeds don't ship 20 KB when only
-  one 2 KB section is relevant. Silently skips missing files, missing
-  anchors, symlinks, and path-traversal attempts.
+  one 2 KB section is relevant. A top-level ``#`` anchor or a section
+  near EOF will return most of the file — the section runs from the
+  matching heading to the next same/higher-level heading. Silently skips
+  missing files, missing anchors, symlinks, and path-traversal attempts.
 * :func:`extract_section` — markdown heading-based slicer used by
   ``resolve_skill_files`` and exposed for callers that already have a file
   body in hand.
@@ -74,8 +76,7 @@ def extract_section(body: str, anchor: str) -> str | None:
     # Slugify the caller-provided anchor too — otherwise asymmetric
     # comparison silently misses on trailing whitespace, double-hash
     # typos (``"file.md##x"`` → anchor=``"#x"``), or mixed-case anchors.
-    # Current ``_emit`` sites all pre-slugify, but normalising here makes
-    # the contract robust to future typos.
+    # Contract: callers may pass slugified or raw heading text, both match.
     target = _slugify(anchor)
     if not target:
         return None  # Anchor that slugifies to empty (e.g. all punctuation).

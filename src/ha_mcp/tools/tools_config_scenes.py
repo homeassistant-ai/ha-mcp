@@ -498,9 +498,7 @@ class ConfigSceneTools:
         ] = True,
     ) -> dict[str, Any]:
         """
-        MUST call ha_get_skill_guide first.
-
-        Create or update a Home Assistant scene.
+        Create or update a Home Assistant scene. MUST call ha_get_skill_guide first.
 
         Supports two modes: full config replacement (``config``) or
         Python transformation of an existing scene (``python_transform``).

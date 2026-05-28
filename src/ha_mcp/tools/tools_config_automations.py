@@ -476,9 +476,7 @@ class AutomationConfigTools:
         ] = True,
     ) -> dict[str, Any]:
         """
-        MUST call ha_get_skill_guide first.
-
-        Create or update a Home Assistant automation.
+        Create or update a Home Assistant automation. MUST call ha_get_skill_guide first.
 
         PREFER NATIVE SOLUTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native triggers/conditions/actions are validated at config load, fail loudly, and
