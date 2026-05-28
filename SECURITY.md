@@ -25,7 +25,10 @@ Consequences:
   vulnerability.
 - `python_transform` expressions are treated as **trusted code from a trusted
   client**. The sandbox exists to prevent accidental mistakes (e.g. a runaway
-  loop), not to sandbox an adversarial party. See
+  loop), not to sandbox an adversarial party. Additionally, `python_transform`
+  only ever receives data that ha-mcp fetched from the HA API and
+  JSON-deserialized — no Python callables can reach the expression's `config`
+  variable through any normal MCP or HA API call. See
   [python_sandbox.py](src/ha_mcp/utils/python_sandbox.py) for the explicit
   "not a security boundary" note.
 
@@ -73,8 +76,16 @@ token (LLAT). This is **by design**:
   immediately invalidates all derived tokens — that is the intended revocation
   path.
 - Tokens are HMAC-signed (preventing forgery and tampering) but not encrypted.
-  A party that captures a token can decode it to recover the LLAT. This is
-  equivalent to capturing any other Bearer token that grants the same access.
+  Encrypting the payload would not improve security: the LLAT must ultimately
+  be sent to Home Assistant in cleartext over HTTPS to authenticate API calls.
+  Anyone with access to the MCP server process can observe the LLAT regardless
+  of token format.
+- A party that captures a token can decode it to recover the LLAT. This is
+  equivalent to capturing any other Bearer token that grants the same access —
+  including the standard OAuth `client_credentials` model used by many MCP
+  clients, where a static `client_secret` stored at the AI provider grants
+  full service access. The trust boundary is identical; the only difference is
+  packaging.
 - Token revocation at the ha-mcp level is a no-op: there is no server-side
   token store. Revoke the LLAT in Home Assistant instead.
 
