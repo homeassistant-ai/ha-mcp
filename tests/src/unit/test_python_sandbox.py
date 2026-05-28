@@ -740,7 +740,9 @@ class TestBuiltinsIsolation:
 
         try:
             with patch("ha_mcp.utils.python_sandbox.exec", mutate_execution_builtins):
-                safe_execute_expression("response = response", {"response": []}, "response")
+                safe_execute_expression(
+                    "response = response", {"response": []}, "response"
+                )
         finally:
             _SAFE_BUILTINS.clear()
             _SAFE_BUILTINS.update(original_builtins)
