@@ -122,6 +122,25 @@ class Settings(BaseSettings):
     # files. Disabled by default; only for YAML-only features with no UI/API path.
     enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
 
+    # Per-key gates for ``automation`` / ``script`` / ``scene`` under
+    # ``packages/*.yaml``. The custom component accepts these three
+    # PACKAGES_ONLY_YAML_KEYS unconditionally; ha-mcp's UI exposes a
+    # toggle per key so an operator who wants YAML-managed
+    # automations/scripts/scenes in packages but not the others can
+    # narrow the surface. ha_config_set_yaml rejects calls for a
+    # disabled key client-side, and passes the disabled set to the
+    # custom component so the underlying service rejects too. Each
+    # toggle is meaningful only when ``enable_yaml_config_editing`` is
+    # on; the UI nests these rows under that parent and dims them when
+    # the parent is off.
+    enable_yaml_packages_automation: bool = Field(
+        False, alias="ENABLE_YAML_PACKAGES_AUTOMATION"
+    )
+    enable_yaml_packages_script: bool = Field(
+        False, alias="ENABLE_YAML_PACKAGES_SCRIPT"
+    )
+    enable_yaml_packages_scene: bool = Field(False, alias="ENABLE_YAML_PACKAGES_SCENE")
+
     # Seed values for tool visibility (comma-separated tool names).
     # Used as initial config when no tool_config.json exists.
     # The web settings UI (/settings) is the primary interface for managing these.
@@ -413,6 +432,20 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
         "enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool
     ),
     FeatureFlagField("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
+    # Per-key sub-gates beneath enable_yaml_config_editing. Nested in
+    # the UI, dimmed when the parent is off. Not in BETA_FEATURE_FIELDS
+    # because the master-off → parent-off → these-are-irrelevant
+    # cascade is transitive; an independent master-cascade would be
+    # redundant.
+    FeatureFlagField(
+        "enable_yaml_packages_automation",
+        "ENABLE_YAML_PACKAGES_AUTOMATION",
+        bool,
+    ),
+    FeatureFlagField(
+        "enable_yaml_packages_script", "ENABLE_YAML_PACKAGES_SCRIPT", bool
+    ),
+    FeatureFlagField("enable_yaml_packages_scene", "ENABLE_YAML_PACKAGES_SCENE", bool),
     FeatureFlagField("enable_lite_docstrings", "ENABLE_LITE_DOCSTRINGS", bool),
     FeatureFlagField("enable_filesystem_tools", "HAMCP_ENABLE_FILESYSTEM_TOOLS", bool),
     FeatureFlagField(
