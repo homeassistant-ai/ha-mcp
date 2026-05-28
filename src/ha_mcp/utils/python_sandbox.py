@@ -4,6 +4,7 @@ Python expression validation for dashboard transformations.
 Restricts expressions to a known-safe subset: dict/list operations,
 basic control flow, and whitelisted methods. Not a security boundary —
 callers are already authenticated MCP users with full HA access.
+See SECURITY.md § "MCP clients are trusted principals" for the rationale.
 """
 
 import ast

@@ -6,16 +6,74 @@
 | ------- | --------- |
 | latest  | ✅        |
 
+## Threat Model
+
+Understanding what ha-mcp does and doesn't defend against helps you write
+accurate reports and helps us triage quickly.
+
+### MCP clients are trusted principals
+
+An authenticated MCP client (one that has the secret URL or completed the OAuth
+flow) is a **trusted principal**. ha-mcp does not attempt to defend against a
+malicious or compromised MCP client — that is equivalent to defending against a
+malicious user who has your Home Assistant long-lived access token.
+
+Consequences:
+- Prompt injection that reaches an MCP client is the **client's responsibility**
+  to defend against. If the LLM embedded in a client is tricked into calling a
+  tool it shouldn't, that is a client-side control issue, not a server-side
+  vulnerability.
+- `python_transform` expressions are treated as **trusted code from a trusted
+  client**. The sandbox exists to prevent accidental mistakes (e.g. a runaway
+  loop), not to sandbox an adversarial party. See
+  [python_sandbox.py](src/ha_mcp/utils/python_sandbox.py) for the explicit
+  "not a security boundary" note.
+
+### Local network is the trusted zone for standard mode
+
+The HTTP entrypoints (`ha-mcp-web`, `ha-mcp-sse`) authenticate by URL-path
+secrecy and are designed for loopback HTTP or LAN HTTP with a high-entropy
+`MCP_SECRET_PATH`. Any peer that can reach the configured path is treated as
+trusted — securing the local network is outside ha-mcp's scope.
+
+For internet-facing deployments use the OAuth entrypoint (`ha-mcp-oauth`)
+behind a TLS-terminating reverse proxy (see
+[OAuth Mode](#oauth-mode--beta-warning) below). Deployment guidance:
+[AGENTS.md → Docker](AGENTS.md#docker).
+
+By default the HTTP entrypoints bind to `0.0.0.0` so they are reachable from
+other machines on the LAN. To restrict to the local machine, set
+`MCP_HOST=127.0.0.1` (or use `-p 127.0.0.1:8086:8086` at the Docker layer).
+
+### OAuth Bearer token design
+
+In OAuth mode, access and refresh tokens are HMAC-signed, stateless Bearer
+tokens. The token payload contains the user's Home Assistant long-lived access
+token (LLAT). This is **by design**:
+
+- The LLAT is the authorization boundary. Revoking it in Home Assistant
+  immediately invalidates all derived tokens — that is the intended revocation
+  path.
+- Tokens are HMAC-signed (preventing forgery and tampering) but not encrypted.
+  A party that captures a token can decode it to recover the LLAT. This is
+  equivalent to capturing any other Bearer token that grants the same access.
+- Token revocation at the ha-mcp level is a no-op: there is no server-side
+  token store. Revoke the LLAT in Home Assistant instead.
+
+The consent form explains this revocation path. Reports about token opacity
+(the LLAT being visible inside the token) will be closed as by-design.
+
 ## Scope
 
 **In scope** — please report these:
 
 - Authentication bypass in standard (LLAT) or OAuth mode
-- OAuth mode: XSS, SSRF, token leakage, open redirect
-- Prompt injection paths that circumvent tool-level safeguards
-  (e.g., HA entity data triggering unintended tool calls)
+- OAuth mode: XSS, SSRF, open redirect, or credential exfiltration via the
+  consent form or token endpoint (i.e. an unauthenticated party obtaining a
+  token or extracting credentials without completing the consent flow)
+- Unintended information disclosure via API responses (e.g. secrets returned to
+  a client that shouldn't have them)
 - Privilege escalation within the MCP tool surface
-- Unintended information disclosure via API responses
 - Dependency vulnerabilities with a credible exploit path
 
 **Out of scope** — these will not be actioned:
@@ -26,26 +84,23 @@
 - Attacks requiring physical access to the HA host
 - "The LLM performed a destructive action using valid, authorized tools" —
   this is a configuration or usage issue, not a security vulnerability.
-  Tool visibility controls (`ENABLED_TOOL_MODULES`, group toggles) exist for this purpose.
+  Tool visibility controls (`ENABLED_TOOL_MODULES`, group toggles) exist for
+  this purpose.
+- Prompt injection that only travels through read-only tool return values —
+  the MCP client controls what the LLM sees and acts on; hardening that path
+  is the client's responsibility (see [Threat Model](#threat-model) above).
+- `python_transform` issues: the sandbox is not a security boundary between
+  trusted and untrusted code. Problems with `python_transform` behavior are
+  bugs, not security vulnerabilities.
+- LAN-peer access to standard-mode HTTP endpoints: the local network is the
+  trusted zone (see [Threat Model](#threat-model) above).
+- OAuth token containing an encoded LLAT: this is the Bearer token design
+  (see [Threat Model](#threat-model) above).
+- OAuth token revocation not preventing further HA API access: revoke the LLAT
+  in Home Assistant instead.
 - Vulnerabilities that are only exploitable due to a misconfigured deployment
   (e.g., standard-mode instance exposed to the internet without TLS, or a
   network-reachable HTTP entrypoint using the default `MCP_SECRET_PATH`).
-
-### Standard-mode threat model
-
-The HTTP entrypoints (`ha-mcp-web`, `ha-mcp-sse`) authenticate by URL-path
-secrecy and are designed for loopback HTTP or LAN HTTP with a high-entropy
-`MCP_SECRET_PATH`. For internet-facing deployments use the OAuth entrypoint
-(`ha-mcp-oauth`) behind a TLS-terminating reverse proxy (see
-[OAuth Mode](#oauth-mode--beta-warning) below). Deployment guidance:
-[AGENTS.md → Docker](AGENTS.md#docker).
-
-By default the HTTP entrypoints (`ha-mcp-web`, `ha-mcp-sse`,
-`ha-mcp-oauth`) bind to `0.0.0.0` so they are reachable from other
-machines on the LAN. To restrict the server to the local machine, set
-`MCP_HOST=127.0.0.1` before launching (the Docker snippet in AGENTS.md
-uses `-p 127.0.0.1:8086:8086` to achieve the same effect at the
-container level — either approach works).
 
 ## OAuth Mode — Beta Warning
 
@@ -57,15 +112,17 @@ and carries a larger attack surface than the standard LLAT setup.
 - CVEs were published and fixed in v7.x (XSS: GHSA-pf93-j98v-25pv;
   SSRF: GHSA-fmfg-9g7c-3vq7). Upgrade to the latest release before deploying.
 
-If you choose to run OAuth mode, restrict the consent endpoint to trusted networks
-and place it behind a TLS-terminating reverse proxy.
+If you choose to run OAuth mode, restrict the consent endpoint to trusted
+networks and place it behind a TLS-terminating reverse proxy.
 
 ## Reporting a Vulnerability
 
 Use the private reporting page at:
 **https://github.com/homeassistant-ai/ha-mcp/security/advisories/new**
 
-Reports are assessed within 48 hours; fixes may take an additional 24–48 hours. We aim for coordinated disclosure and will work with you to agree on a disclosure timeline, typically within 90 days of the initial report.
+Reports are assessed within 48 hours; fixes may take an additional 24–48 hours.
+We aim for coordinated disclosure and will work with you to agree on a
+disclosure timeline, typically within 90 days of the initial report.
 Severity is assessed using CVSS base scores where applicable.
 
 **Requirements for a valid report:**

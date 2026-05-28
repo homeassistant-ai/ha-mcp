@@ -73,6 +73,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
     Security comes from HTTPS transport and the LLAT itself being the
     authorization boundary — revoking the LLAT in Home Assistant
     immediately invalidates all derived tokens.
+    See SECURITY.md § "OAuth Bearer token design" for the full rationale
+    and the intended revocation path.
     """
 
     def __init__(
