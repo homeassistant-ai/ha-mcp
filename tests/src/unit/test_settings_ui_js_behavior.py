@@ -337,8 +337,14 @@ class TestXssGuard:
             """,
         )
         _assert_clean_init(result)
+        # The probe div's ``data-input-value`` attribute may contain the
+        # literal ``>`` from the unescaped XSS payload, so the previous
+        # ``<div[^>]*id="__xss_probe"[^>]*>`` regex stopped at the first
+        # inner ``>`` and missed the data-* attributes that come after.
+        # Anchor on the probe's id and grab everything up to the matching
+        # ``</div>`` (or end of body, since the probe is appended last).
         probe_match = re.search(
-            r'<div[^>]*id="__xss_probe"[^>]*>',
+            r'<div [^<]*id="__xss_probe"[^<]*',
             result.dom,
         )
         assert probe_match, f"xss probe missing; dom tail: {result.dom[-1500:]}"
@@ -354,8 +360,8 @@ class TestXssGuard:
         #    property is the unambiguous assertion that the payload was
         #    treated as text, not parsed as a tag.
         assert (
-            'data-input-value="&lt;script&gt;window.__xss_pwned' in probe_html
-            or 'data-input-value="<script>window.__xss_pwned' in probe_html
+            "&lt;script&gt;window.__xss_pwned" in probe_html
+            or "<script>window.__xss_pwned" in probe_html
         ), f"input.value didn't receive payload as text: {probe_html}"
         # 3. No <script> element should have been parsed into the document
         #    from the rendered field. The MIN_DOM has no scripts of its
