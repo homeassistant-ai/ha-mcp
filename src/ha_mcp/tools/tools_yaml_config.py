@@ -111,9 +111,10 @@ class YamlConfigTools:
                     "route. No other multi-segment paths are supported. "
                     "'automation', 'script', and 'scene' are accepted only when "
                     "file is under packages/*.yaml; in configuration.yaml use "
-                    "the dedicated ha_config_set_automation/script/scene tools "
-                    "(storage-mode). Not for template sensors or input_* "
-                    "helpers — those have dedicated tools."
+                    "the dedicated storage-mode tools "
+                    "(ha_config_set_automation, ha_config_set_script, "
+                    "ha_config_set_scene). Not for template sensors or "
+                    "input_* helpers — those have dedicated tools."
                 ),
             ),
         ],

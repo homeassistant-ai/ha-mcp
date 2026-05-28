@@ -488,8 +488,17 @@ class TestYamlConfigOperations:
             assert "packages/*.yaml" in msg, (
                 f"{key} error message should mention packages/*.yaml: {data}"
             )
-            assert "ha_config_set_automation/script/scene" in msg, (
-                f"{key} error should point at storage-mode tools: {data}"
+            # Spell out each tool name individually — an agent reading
+            # the rejection would otherwise see the combined slash-form
+            # as a single (malformed) tool name and fail to route.
+            assert "ha_config_set_automation" in msg, (
+                f"{key} error should mention ha_config_set_automation: {data}"
+            )
+            assert "ha_config_set_script" in msg, (
+                f"{key} error should mention ha_config_set_script: {data}"
+            )
+            assert "ha_config_set_scene" in msg, (
+                f"{key} error should mention ha_config_set_scene: {data}"
             )
             # Rejected calls must not advertise reload metadata.
             assert data.get("post_action") is None, (

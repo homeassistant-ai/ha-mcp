@@ -774,7 +774,8 @@ def _parse_and_validate_yaml_path(
                     f"Key '{yaml_path}' is only allowed in packages/*.yaml "
                     "files, not in configuration.yaml. Move the edit to a "
                     "package file (e.g., packages/automations.yaml) or use "
-                    "ha_config_set_automation/script/scene for storage-mode."
+                    "ha_config_set_automation, ha_config_set_script, or "
+                    "ha_config_set_scene for storage-mode."
                 ),
             )
         allowed = (

@@ -221,7 +221,11 @@ class TestParseYamlPathPackagesOnly:
         _, _, err = parse(key, is_package=False)
         assert err is not None
         assert "packages/*.yaml" in err
-        assert "ha_config_set_automation/script/scene" in err
+        # Spell each tool name out individually — an agent reading the
+        # rejection sees the combined slash-form as one malformed name.
+        assert "ha_config_set_automation" in err
+        assert "ha_config_set_script" in err
+        assert "ha_config_set_scene" in err
 
     def test_default_is_package_false(self, parse):
         # Omitting is_package must behave like is_package=False — no silent
@@ -693,3 +697,71 @@ class TestHandleEditYamlConfigSingleKey:
         )
         assert result["success"] is True, result
         assert result["post_action"] == "restart_required"
+
+
+class TestHandleEditYamlConfigPathTraversal:
+    """Path-traversal defense composes ``os.path.normpath`` before the
+    ``fnmatch`` package check, so a crafted ``packages/../configuration.yaml``
+    cannot smuggle a PACKAGES_ONLY key into ``configuration.yaml``."""
+
+    @pytest.fixture
+    def hass(self, tmp_path):
+        h = MM()
+        h.config = MM()
+        h.config.config_dir = str(tmp_path)
+        h.data = {DOMAIN: {"caller_token": _TEST_CALLER_TOKEN}}
+
+        async def _run(fn, *args):
+            return fn(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=_run)
+        h.services = MM()
+        h.services.async_call = AsyncMock(return_value={"errors": None})
+        return h
+
+    @pytest.fixture
+    def call_factory(self):
+        def _make(data):
+            call = MM()
+            call.data = {**data, CALLER_TOKEN_FIELD: _TEST_CALLER_TOKEN}
+            return call
+
+        return _make
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_packages_dotdot_normalizes_to_configuration_yaml_and_rejects(
+        self, tmp_path, hass, call_factory
+    ):
+        """``packages/../configuration.yaml`` → ``configuration.yaml`` after
+        normpath, so the ``packages/*.yaml`` fnmatch does not match and
+        ``yaml_path="automation"`` is rejected with the storage-mode pointer.
+
+        Pins the layering: normpath at __init__.py:330 must run before
+        the fnmatch package check at __init__.py:338 so a crafted path
+        cannot smuggle a PACKAGES_ONLY key into configuration.yaml. The
+        defense is correct by construction; this is belt-and-suspenders
+        against a future refactor reordering those two steps."""
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text("")
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "packages/../configuration.yaml",
+                        "action": "add",
+                        "yaml_path": "automation",
+                        "content": "- id: x\n  alias: x\n",
+                        "backup": False,
+                    }
+                )
+            )
+        )
+        assert result["success"] is False
+        assert "packages/*.yaml" in result["error"]
+        assert "ha_config_set_automation" in result["error"]
