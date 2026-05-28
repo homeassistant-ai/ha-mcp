@@ -143,7 +143,9 @@ class TestApplyArrayOps:
         assert new == items
         entry = summary["deleted_where"][0]
         assert entry["count"] == 0
-        assert not entry.get("warnings"), f"Unexpected warnings: {entry.get('warnings')}"
+        assert not entry.get("warnings"), (
+            f"Unexpected warnings: {entry.get('warnings')}"
+        )
 
     def test_delete_where_against_empty_array_no_warning(self):
         """Empty input array is not a typo signal — there are no items to
@@ -157,7 +159,9 @@ class TestApplyArrayOps:
         assert new == []
         entry = summary["deleted_where"][0]
         assert entry["count"] == 0
-        assert not entry.get("warnings"), f"Unexpected warnings: {entry.get('warnings')}"
+        assert not entry.get("warnings"), (
+            f"Unexpected warnings: {entry.get('warnings')}"
+        )
 
     def test_delete_where_against_non_dict_items_no_warning(self):
         """Arrays of scalars (or other non-dict items) are not a typo signal
@@ -171,7 +175,9 @@ class TestApplyArrayOps:
         assert new == [1, 2, "x"]
         entry = summary["deleted_where"][0]
         assert entry["count"] == 0
-        assert not entry.get("warnings"), f"Unexpected warnings: {entry.get('warnings')}"
+        assert not entry.get("warnings"), (
+            f"Unexpected warnings: {entry.get('warnings')}"
+        )
 
     def test_delete_where_zero_matches_is_not_an_error(self):
         items = self._flows_fixture()
@@ -337,6 +343,21 @@ class TestApplyArrayOpsValidation:
             items, [{"op": "delete_where", "field": "z", "value": None}], id_field="id"
         )
         assert {it["id"] for it in new} == {"b"}
+        assert summary["deleted_where"][0]["count"] == 1
+
+    def test_delete_where_none_value_does_not_delete_items_missing_field(self):
+        # Items that don't have the field at all should NOT be deleted when value=None.
+        # dict.get() returns None for missing keys, so without an explicit `field in it`
+        # check, these items would be incorrectly matched.
+        items = [
+            {"id": "a", "z": None},
+            {"id": "b"},  # field absent — must survive
+            {"id": "c", "z": "tab1"},
+        ]
+        new, summary = _apply_array_ops(
+            items, [{"op": "delete_where", "field": "z", "value": None}], id_field="id"
+        )
+        assert {it["id"] for it in new} == {"b", "c"}
         assert summary["deleted_where"][0]["count"] == 1
 
     def test_failure_midway_does_not_keep_partial_state_visible(self):
