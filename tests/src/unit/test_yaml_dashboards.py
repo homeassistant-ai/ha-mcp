@@ -11,15 +11,26 @@ import pytest
 # Mock HA imports before importing the module
 sys.modules["voluptuous"] = MagicMock()
 sys.modules["homeassistant"] = MagicMock()
+sys.modules["homeassistant.components"] = MagicMock()
+sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
 sys.modules["homeassistant.config_entries"] = MagicMock()
 sys.modules["homeassistant.core"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
+sys.modules["homeassistant.helpers.storage"] = MagicMock()
 
+from custom_components.ha_mcp_tools import CALLER_TOKEN_FIELD  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DASHBOARD_URL_PATH_PATTERN,
+    DOMAIN,
     RESERVED_DASHBOARD_URL_PATHS,
 )
+
+# Both handler fixtures below preload this token into hass.data and inject
+# it into every call_factory payload so the caller-token gate added by the
+# auth PR is transparent to these dashboard tests (which exercise the
+# yaml-editing logic, not the auth boundary).
+_TEST_CALLER_TOKEN = "test-caller-token-yaml-dashboards"
 
 
 class TestDashboardUrlPathPattern:
@@ -302,6 +313,8 @@ class TestHandleEditYamlConfigDashboards:
         h = MM()
         h.config = MM()
         h.config.config_dir = str(tmp_path)
+        # Seed the caller token so _caller_token_ok passes (auth PR).
+        h.data = {DOMAIN: {"caller_token": _TEST_CALLER_TOKEN}}
 
         # Run executor jobs inline so we can assert filesystem state
         async def _run(fn, *args):
@@ -315,11 +328,11 @@ class TestHandleEditYamlConfigDashboards:
 
     @pytest.fixture
     def call_factory(self):
-        """Build a ServiceCall-like object."""
+        """Build a ServiceCall-like object with the caller token pre-injected."""
 
         def _make(data):
             call = MM()
-            call.data = data
+            call.data = {**data, CALLER_TOKEN_FIELD: _TEST_CALLER_TOKEN}
             return call
 
         return _make
@@ -525,13 +538,15 @@ class TestHandleEditYamlConfigDashboards:
 
 class TestHandleEditYamlConfigSingleKey:
     """Single-key branch of _build_edit_yaml_config_handler must behave the same
-    after the factory refactor (regression guard for issue #1034)."""
+    after the factory refactor."""
 
     @pytest.fixture
     def hass(self, tmp_path):
         h = MM()
         h.config = MM()
         h.config.config_dir = str(tmp_path)
+        # Seed the caller token so _caller_token_ok passes (auth PR).
+        h.data = {DOMAIN: {"caller_token": _TEST_CALLER_TOKEN}}
 
         async def _run(fn, *args):
             return fn(*args)
@@ -545,7 +560,7 @@ class TestHandleEditYamlConfigSingleKey:
     def call_factory(self):
         def _make(data):
             call = MM()
-            call.data = data
+            call.data = {**data, CALLER_TOKEN_FIELD: _TEST_CALLER_TOKEN}
             return call
 
         return _make

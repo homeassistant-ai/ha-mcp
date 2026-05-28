@@ -28,8 +28,8 @@ from .helpers import (
 )
 from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import (
-    MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
+    call_mcp_tools_service,
 )
 from .util_helpers import coerce_bool_param, unwrap_service_response
 
@@ -240,12 +240,11 @@ class YamlConfigTools:
             if content is not None:
                 service_data["content"] = content
 
-            # Call the custom component service
-            result = await self._client.call_service(
-                MCP_TOOLS_DOMAIN,
+            # Call the custom component service (token injected by helper)
+            result = await call_mcp_tools_service(
+                self._client,
                 "edit_yaml_config",
                 service_data,
-                return_response=True,
             )
 
             if isinstance(result, dict):

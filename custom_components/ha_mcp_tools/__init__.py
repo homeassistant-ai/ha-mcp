@@ -11,6 +11,7 @@ import fnmatch
 import logging
 import os
 import re
+import secrets
 import shutil
 from datetime import datetime
 from io import StringIO
@@ -27,6 +28,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.storage import Store
 from ruamel.yaml import YAMLError
 
 from .const import (
@@ -51,6 +53,16 @@ SERVICE_READ_FILE = "read_file"
 SERVICE_WRITE_FILE = "write_file"
 SERVICE_DELETE_FILE = "delete_file"
 SERVICE_EDIT_YAML_CONFIG = "edit_yaml_config"
+SERVICE_GET_CALLER_TOKEN = "get_caller_token"
+
+# Caller-token auth (PR: restrict ha_mcp_tools.* to ha-mcp callers).
+# ha-mcp injects this field in every service-call payload; non-ha-mcp callers
+# (HA UI, automations, other integrations, the ha_call_service LLM bypass)
+# omit it and are rejected with a structured unauthorized response.
+CALLER_TOKEN_FIELD = "_ha_mcp_token"
+_TOKEN_STORAGE_KEY = f"{DOMAIN}_auth"
+_TOKEN_STORAGE_VERSION = 1
+_HASS_DATA_TOKEN_KEY = "caller_token"
 
 # Service schemas
 SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
@@ -60,6 +72,7 @@ SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
         vol.Required("yaml_path"): cv.string,
         vol.Optional("content"): cv.string,
         vol.Optional("backup", default=True): cv.boolean,
+        vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
 
@@ -67,6 +80,7 @@ SERVICE_LIST_FILES_SCHEMA = vol.Schema(
     {
         vol.Required("path"): cv.string,
         vol.Optional("pattern"): cv.string,
+        vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
 
@@ -74,6 +88,7 @@ SERVICE_READ_FILE_SCHEMA = vol.Schema(
     {
         vol.Required("path"): cv.string,
         vol.Optional("tail_lines"): vol.Coerce(int),
+        vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
 
@@ -83,12 +98,23 @@ SERVICE_WRITE_FILE_SCHEMA = vol.Schema(
         vol.Required("content"): cv.string,
         vol.Optional("overwrite", default=False): cv.boolean,
         vol.Optional("create_dirs", default=True): cv.boolean,
+        vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
 
 SERVICE_DELETE_FILE_SCHEMA = vol.Schema(
     {
         vol.Required("path"): cv.string,
+        vol.Optional(CALLER_TOKEN_FIELD): cv.string,
+    }
+)
+
+# get_caller_token is the bootstrap surface: ha-mcp does not know the token
+# yet on first run, so this service intentionally does NOT require the token
+# itself. HA's default admin-auth still applies to the service call.
+SERVICE_GET_CALLER_TOKEN_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
 
@@ -104,6 +130,76 @@ ALLOWED_READ_FILES = [
 
 # Default tail lines for log files
 DEFAULT_LOG_TAIL_LINES = 1000
+
+
+async def _load_or_create_caller_token(hass: HomeAssistant) -> str:
+    """Return the persisted caller token, generating + saving one on first use.
+
+    The token authorizes a caller as ha-mcp. It's stored under
+    ``.storage/ha_mcp_tools_auth`` and remains stable across restarts so the
+    ha-mcp server can re-bootstrap without user intervention.
+    """
+    store: Store = Store(hass, _TOKEN_STORAGE_VERSION, _TOKEN_STORAGE_KEY)
+    data = await store.async_load()
+    if isinstance(data, dict):
+        existing = data.get("token")
+        if isinstance(existing, str) and existing:
+            return existing
+    token = secrets.token_urlsafe(32)
+    await store.async_save({"token": token})
+    return token
+
+
+def _unauthorized_response(service_name: str, **extra: Any) -> dict[str, Any]:
+    """Structured 'unauthorized' response.
+
+    ha-mcp clients detect this via ``error_code == "unauthorized"`` and
+    re-fetch the token before retrying.
+    """
+    return {
+        "success": False,
+        "error": (
+            f"Unauthorized: caller token missing or invalid for "
+            f"{DOMAIN}.{service_name}. This service is restricted to the "
+            "ha-mcp server; other callers should not invoke it directly."
+        ),
+        "error_code": "unauthorized",
+        **extra,
+    }
+
+
+def _caller_token_ok(hass: HomeAssistant, call: ServiceCall) -> bool:
+    """Return True if the caller presented the configured token."""
+    domain_data = hass.data.get(DOMAIN)
+    expected = (
+        domain_data.get(_HASS_DATA_TOKEN_KEY) if isinstance(domain_data, dict) else None
+    )
+    presented = call.data.get(CALLER_TOKEN_FIELD)
+    # token_urlsafe(32) is 256-bit; the timing-side-channel risk is already
+    # negligible, but secrets.compare_digest is the right reflex regardless.
+    if not isinstance(expected, str) or not isinstance(presented, str):
+        return False
+    return secrets.compare_digest(expected, presented)
+
+
+async def _caller_is_admin(hass: HomeAssistant, call: ServiceCall) -> bool:
+    """Return True if the caller is an admin user (or a no-user-context call).
+
+    HA's service registry has no built-in admin requirement — `Service`
+    has no admin flag, `async_call` performs no permission check, and
+    WS / REST `call_service` lack `@require_admin`. Gate explicitly here.
+
+    Calls without `context.user_id` (system-internal events) are treated
+    as trusted, matching HA's `async_admin_handler_factory` convention.
+    The supported deployment shapes all use admin tokens: addon's
+    SUPERVISOR_TOKEN maps to HA's `hassio_user`, which HA force-promotes
+    into `GROUP_ID_ADMIN` (hassio/__init__.py); standalone Docker/pip
+    deployments use a user-supplied admin LLAT.
+    """
+    if not call.context.user_id:
+        return True
+    user = await hass.auth.async_get_user(call.context.user_id)
+    return user is not None and bool(user.is_admin)
 
 
 def _is_path_allowed_for_dir(
@@ -320,6 +416,8 @@ def _build_edit_yaml_config_handler(hass):
 
     async def handle_edit_yaml_config(call: ServiceCall) -> dict[str, Any]:
         """Handle the edit_yaml_config service call."""
+        if not _caller_token_ok(hass, call):
+            return _unauthorized_response(SERVICE_EDIT_YAML_CONFIG)
         rel_path = call.data["file"]
         action = call.data["action"]
         yaml_path = call.data["yaml_path"]
@@ -797,6 +895,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA MCP Tools from a config entry."""
     config_dir = Path(hass.config.config_dir)
 
+    # Bootstrap the caller-auth token. Generated on first setup, persisted
+    # to .storage/ha_mcp_tools_auth, cached in hass.data for fast handler
+    # access. ha-mcp fetches it via the get_caller_token service.
+    caller_token = await _load_or_create_caller_token(hass)
+    hass.data.setdefault(DOMAIN, {})[_HASS_DATA_TOKEN_KEY] = caller_token
+
     # One-time migration of pre-fix YAML backups out of the publicly-served
     # www/ directory (GHSA-g39v-cvjh-8fpf). Wrapped so a migration failure
     # cannot prevent the integration from loading — the integration's
@@ -860,6 +964,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def handle_list_files(call: ServiceCall) -> ServiceResponse:
         """Handle the list_files service call."""
+        if not _caller_token_ok(hass, call):
+            return _unauthorized_response(SERVICE_LIST_FILES, files=[])
         rel_path = call.data["path"]
         pattern = call.data.get("pattern")
 
@@ -918,6 +1024,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def handle_read_file(call: ServiceCall) -> ServiceResponse:
         """Handle the read_file service call."""
+        if not _caller_token_ok(hass, call):
+            return _unauthorized_response(SERVICE_READ_FILE)
         rel_path = call.data["path"]
         tail_lines = call.data.get("tail_lines")
 
@@ -1017,6 +1125,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def handle_write_file(call: ServiceCall) -> ServiceResponse:
         """Handle the write_file service call."""
+        if not _caller_token_ok(hass, call):
+            return _unauthorized_response(SERVICE_WRITE_FILE)
         rel_path = call.data["path"]
         content = call.data["content"]
         overwrite = call.data.get("overwrite", False)
@@ -1083,6 +1193,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def handle_delete_file(call: ServiceCall) -> ServiceResponse:
         """Handle the delete_file service call."""
+        if not _caller_token_ok(hass, call):
+            return _unauthorized_response(SERVICE_DELETE_FILE)
         rel_path = call.data["path"]
 
         # Security check - only allow deletes from specific directories
@@ -1134,6 +1246,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     handle_edit_yaml_config = _build_edit_yaml_config_handler(hass)
 
+    async def handle_get_caller_token(call: ServiceCall) -> ServiceResponse:
+        """Return the caller-auth token to the ha-mcp bootstrap caller.
+
+        Admin-gated explicitly (see `_caller_is_admin`): HA's service
+        registry has no built-in admin requirement, so the gate prevents
+        a non-admin caller from bootstrapping the token. The supported
+        deployments (addon supervisor user, standalone admin LLAT) all
+        pass this gate.
+        """
+        if not await _caller_is_admin(hass, call):
+            return {
+                "success": False,
+                "error_code": "unauthorized",
+                "error": "ha_mcp_tools.get_caller_token requires admin auth.",
+            }
+        domain_data = hass.data.get(DOMAIN)
+        token = (
+            domain_data.get(_HASS_DATA_TOKEN_KEY)
+            if isinstance(domain_data, dict)
+            else None
+        )
+        if not isinstance(token, str) or not token:
+            return {
+                "success": False,
+                "error_code": "not_initialized",
+                "error": (
+                    "Caller token not initialized — integration may not have "
+                    "completed setup. Reload the ha_mcp_tools integration."
+                ),
+            }
+        return {"success": True, "token": token}
+
     # Register all services with response support
     hass.services.async_register(
         DOMAIN,
@@ -1175,6 +1319,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         supports_response=SupportsResponse.ONLY,
     )
 
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_CALLER_TOKEN,
+        handle_get_caller_token,
+        schema=SERVICE_GET_CALLER_TOKEN_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
     _LOGGER.info("HA MCP Tools initialized with file management services")
     return True
 
@@ -1187,4 +1339,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, SERVICE_READ_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_WRITE_FILE)
     hass.services.async_remove(DOMAIN, SERVICE_DELETE_FILE)
+    hass.services.async_remove(DOMAIN, SERVICE_GET_CALLER_TOKEN)
+
+    # Drop the cached token from hass.data so a subsequent setup_entry
+    # re-reads from storage (covers the reload-after-rotate path).
+    domain_data = hass.data.get(DOMAIN)
+    if isinstance(domain_data, dict):
+        domain_data.pop(_HASS_DATA_TOKEN_KEY, None)
     return True
