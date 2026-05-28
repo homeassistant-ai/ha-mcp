@@ -583,3 +583,40 @@ class TestHTTPEntryPoints:
             _get_http_runtime()
 
         assert exc_info.value.code == 1
+
+    def test_run_http_server_invokes_path_warning(self, monkeypatch):
+        """_run_http_server (used by main_web / main_sse) must invoke
+        _warn_if_default_path_exposed so a future refactor that moves,
+        reorders, or accidentally drops the call still fails CI.
+
+        main_oauth bypasses _run_http_server, so the warning correctly
+        never fires for OAuth mode — that exclusion is covered by the
+        helper's own placement (only one call site, here)."""
+        import ha_mcp.__main__ as main_module
+
+        called_with: list[tuple[str, int, str]] = []
+
+        monkeypatch.setattr(
+            main_module,
+            "_warn_if_default_path_exposed",
+            lambda host, port, path: called_with.append((host, port, path)),
+        )
+        monkeypatch.setattr(
+            main_module,
+            "_get_http_runtime",
+            lambda default_port=8086: ("0.0.0.0", default_port, "/mcp"),
+        )
+        monkeypatch.setattr(main_module, "_get_mcp", lambda: object())
+        monkeypatch.setattr(main_module, "_get_server", lambda: object())
+        monkeypatch.setattr(
+            main_module, "register_browser_landing", lambda *a, **kw: None
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui.register_settings_routes",
+            lambda *a, **kw: None,
+        )
+        monkeypatch.setattr(main_module, "_run_entrypoint", lambda *a, **kw: None)
+
+        main_module._run_http_server("http", default_port=8086)
+
+        assert called_with == [("0.0.0.0", 8086, "/mcp")]

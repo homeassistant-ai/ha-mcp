@@ -751,10 +751,20 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
     except ValueError:
         logger.error(f"Invalid MCP_PORT value: {port_str!r}. Must be an integer.")
         sys.exit(1)
-    path = os.getenv("MCP_SECRET_PATH", "/mcp")
+    path = os.getenv("MCP_SECRET_PATH", DEFAULT_MCP_PATH)
     return host, port, path
 
 
+# Default ``MCP_SECRET_PATH`` value, shared by ``_get_http_runtime`` (the
+# read-from-env fallback) and ``_warn_if_default_path_exposed`` (the
+# hardening-nudge predicate). Single source of truth so the two sites
+# can't drift.
+DEFAULT_MCP_PATH = "/mcp"
+
+# Hostname literals (not IP addresses) the warning helper treats as
+# loopback. IP literals — including the whole ``127.0.0.0/8`` block, ``::1``,
+# bracketed forms, zone-suffixed forms, and IPv4-mapped IPv6 — are handled
+# by the ``ipaddress`` branch above the hostname check.
 _LOOPBACK_HOSTNAMES = frozenset({"localhost", "ip6-localhost", "ip6-loopback"})
 
 
@@ -771,16 +781,32 @@ def _warn_if_default_path_exposed(host: str, port: int, path: str) -> None:
     Only called from ``_run_http_server`` (``ha-mcp-web`` / ``ha-mcp-sse``).
     OAuth mode and the add-on entrypoint bypass this call site.
     """
-    if path != "/mcp":
+    if path != DEFAULT_MCP_PATH:
         return
+    # IPv6 hosts may be supplied bracketed (``[::1]``) or with a zone
+    # suffix (``::1%eth0``); strip both before parsing so those forms are
+    # recognized as loopback rather than falling through to the hostname
+    # check. ``(ValueError, TypeError, AttributeError)`` defends against
+    # malformed strings AND a future refactor that hands the helper a
+    # non-string ``host`` — startup keeps the warning surface instead of
+    # crashing.
     try:
-        if ipaddress.ip_address(host).is_loopback:
+        candidate = host.strip("[]").split("%", 1)[0]
+        addr = ipaddress.ip_address(candidate)
+        if addr.is_loopback:
             return
-    except ValueError:
-        # Hostname rather than IP literal. Treat known loopback names as
-        # loopback; everything else (including unresolvable strings) as
-        # non-loopback so the warning surfaces.
-        if host.lower() in _LOOPBACK_HOSTNAMES:
+        # IPv4-mapped IPv6 (``::ffff:127.0.0.1``): ``is_loopback`` returns
+        # False on the IPv6 representation; check the embedded IPv4.
+        if isinstance(addr, ipaddress.IPv6Address):
+            mapped = addr.ipv4_mapped
+            if mapped is not None and mapped.is_loopback:
+                return
+    except (ValueError, TypeError, AttributeError):
+        # Hostname rather than IP literal, or non-string defensively.
+        # Treat known loopback names as loopback; everything else
+        # (including unresolvable strings) as non-loopback so the
+        # warning surfaces.
+        if isinstance(host, str) and host.lower() in _LOOPBACK_HOSTNAMES:
             return
     logger.warning(
         "ha-mcp listening on %s:%s%s with default MCP_SECRET_PATH. "

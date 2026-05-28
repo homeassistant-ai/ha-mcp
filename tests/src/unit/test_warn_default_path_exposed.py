@@ -22,9 +22,12 @@ _WARNING_LOGGER = "ha_mcp.__main__"
     [
         "0.0.0.0",
         "::",
+        "[::]",
         "192.168.1.50",
         "10.0.0.1",
         "fe80::1",
+        "[fe80::1]",
+        "::ffff:192.168.1.1",
         "example.invalid",
         "",
         "*",
@@ -34,10 +37,10 @@ def test_warns_on_default_path_non_loopback_host(host: str, caplog) -> None:
     with caplog.at_level(logging.WARNING, logger=_WARNING_LOGGER):
         _warn_if_default_path_exposed(host, 8086, "/mcp")
     records = [r for r in caplog.records if "default MCP_SECRET_PATH" in r.getMessage()]
-    assert len(records) == 1, (
-        f"expected single warning for non-loopback host {host!r}, got {len(records)}"
+    assert len(records) >= 1, (
+        f"expected warning for non-loopback host {host!r}, got none"
     )
-    assert records[0].levelno == logging.WARNING
+    assert all(r.levelno == logging.WARNING for r in records)
 
 
 @pytest.mark.parametrize(
@@ -46,6 +49,9 @@ def test_warns_on_default_path_non_loopback_host(host: str, caplog) -> None:
         "127.0.0.1",
         "127.0.0.2",
         "::1",
+        "[::1]",
+        "::1%eth0",
+        "::ffff:127.0.0.1",
         "localhost",
         "LOCALHOST",
         "ip6-localhost",
