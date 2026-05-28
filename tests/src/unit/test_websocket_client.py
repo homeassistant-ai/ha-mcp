@@ -4,6 +4,8 @@ These tests verify that the WebSocket client correctly constructs WebSocket URLs
 for both standard Home Assistant installations and Supervisor proxy environments.
 """
 
+import asyncio
+
 import pytest
 
 
@@ -168,7 +170,10 @@ class TestSendCommandErrorContract:
                     "id": message_id,
                     "type": "result",
                     "success": False,
-                    "error": {"code": "unknown_error", "message": "entity not available"},
+                    "error": {
+                        "code": "unknown_error",
+                        "message": "entity not available",
+                    },
                 }
             )
 
@@ -222,7 +227,10 @@ class TestSendCommandErrorContract:
                     "id": message_id,
                     "type": "result",
                     "success": False,
-                    "error": {"code": "unknown_error", "message": "system_health failure"},
+                    "error": {
+                        "code": "unknown_error",
+                        "message": "system_health failure",
+                    },
                 }
             )
 
@@ -430,3 +438,307 @@ class TestSubscribeEventsContract:
             f"Expected pending_requests to be cleaned up after timeout, "
             f"still have: {list(client._state._pending_requests)}"
         )
+
+
+class TestSubscribeCommand:
+    """``subscribe_command``: generic subscribe path used for HACS' ``hacs/subscribe``.
+
+    Distinct from ``subscribe_events`` in two ways:
+    1. Arbitrary command type and kwargs (not just ``subscribe_events``).
+    2. Returns a queue that receives EVERY subsequent event with the
+       subscription id, not just the first one (the one-shot
+       ``_event_responses`` future can't model HACS' continuous stream).
+    """
+
+    @staticmethod
+    def _prepare_client():
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        client = HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123",
+            token="test-token",
+        )
+        client._state.mark_connected()
+        client._state.mark_authenticated()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_returns_message_id_and_queue_on_success(self):
+        """HACS-shape result reply: ``subscribe_command`` returns (id, queue)."""
+        client = self._prepare_client()
+        captured: dict[str, dict] = {}
+
+        async def _resolve(message: dict) -> None:
+            captured["msg"] = message
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+
+        assert sub_id == captured["msg"]["id"]
+        assert captured["msg"]["type"] == "hacs/subscribe"
+        assert captured["msg"]["signal"] == "hacs_dispatch_repository"
+        # Queue must be registered AND empty initially.
+        assert client._state.get_subscription_queue(sub_id) is queue
+        assert queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_failure_unregisters_queue(self):
+        """Failed result must drop the subscription queue (no orphan)."""
+        client = self._prepare_client()
+
+        # Pop the future on resolution to mirror what ``_process_message``
+        # does in production (``resolve_pending_request`` pops the dict
+        # entry before resolving). Without this the pending-requests dict
+        # leaks a stale resolved future in tests only.
+        async def _resolve(message: dict) -> None:
+            future = client._state._pending_requests.pop(message["id"])
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": False,
+                    "error": {"code": "unknown_command", "message": "nope"},
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        from ha_mcp.client.websocket_client import HomeAssistantCommandError
+
+        with pytest.raises(HomeAssistantCommandError):
+            await client.subscribe_command("nope/subscribe")
+
+        # Failure path MUST drop the queue so a retry doesn't leak.
+        assert not client._state._subscription_queues
+
+    @pytest.mark.asyncio
+    async def test_events_for_subscription_routed_to_queue(self):
+        """``_handle_event_message`` must push events into the queue, not drop them."""
+        client = self._prepare_client()
+
+        async def _resolve(message: dict) -> None:
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+
+        # Simulate HACS pushing TWO events on the same subscription id.
+        await client._handle_event_message(
+            {"id": sub_id, "type": "event", "event": {"action": "registration"}},
+            sub_id,
+        )
+        await client._handle_event_message(
+            {"id": sub_id, "type": "event", "event": {"action": "install"}},
+            sub_id,
+        )
+
+        # Both events must be in the queue — the one-shot
+        # ``_event_responses`` future MUST NOT have captured the first one.
+        first = await asyncio.wait_for(queue.get(), timeout=1.0)
+        second = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert first["event"]["action"] == "registration"
+        assert second["event"]["action"] == "install"
+
+    @pytest.mark.asyncio
+    async def test_event_arriving_before_ack_lands_in_queue(self):
+        """The exact race the PR closes: event during the subscribe-ack window.
+
+        ``subscribe_command`` must register the queue BEFORE sending
+        the WS frame so an event dispatched by HACS between
+        ``send_json_message`` and the result-future resolution lands
+        in the queue rather than being lost (or routed to the
+        legacy event-type handler registry that doesn't apply to
+        HACS' anonymous dispatch shape).
+
+        If a future refactor moves ``register_subscription_queue``
+        to AFTER the ack wait, this test fails.
+        """
+        client = self._prepare_client()
+        captured_sub_id: dict[str, int] = {}
+
+        async def _send_then_inject_event_then_resolve(message: dict) -> None:
+            sub_id = message["id"]
+            captured_sub_id["id"] = sub_id
+
+            # Inject the dispatch event RIGHT NOW — before the ack
+            # future is resolved. If the queue isn't registered yet,
+            # the event has nowhere to go and gets dropped (or
+            # mis-routed to the one-shot event_responses future).
+            await client._handle_event_message(
+                {
+                    "id": sub_id,
+                    "type": "event",
+                    "event": {
+                        "action": "registration",
+                        "repository": "test/repo",
+                        "repository_id": 999,
+                    },
+                },
+                sub_id,
+            )
+
+            # Now resolve the ack.
+            future = client._state._pending_requests.get(sub_id)
+            assert future is not None
+            future.set_result(
+                {"id": sub_id, "type": "result", "success": True, "result": None}
+            )
+
+        client.send_json_message = _send_then_inject_event_then_resolve  # type: ignore[method-assign]
+
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+
+        # The event injected during the ack window must be the
+        # first item in the queue. If a regression moves queue
+        # registration to AFTER the ack wait, queue.get() blocks
+        # forever and the wait_for times out.
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event["id"] == sub_id
+        assert event["event"]["repository_id"] == 999
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_command_drops_queue_and_sends_unsubscribe(self):
+        """Cleanup tears down the queue and tells HA to release the subscription."""
+        client = self._prepare_client()
+
+        async def _resolve_subscribe(message: dict) -> None:
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve_subscribe  # type: ignore[method-assign]
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+        assert client._state.get_subscription_queue(sub_id) is queue
+
+        # Track the unsubscribe command issued during teardown.
+        sent: list[dict] = []
+
+        async def _capture_unsub(message: dict) -> None:
+            sent.append(message)
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _capture_unsub  # type: ignore[method-assign]
+
+        await client.unsubscribe_command(sub_id)
+
+        assert client._state.get_subscription_queue(sub_id) is None
+        # Default unsubscribe command targets HA's standard endpoint —
+        # HACS' ``hacs/subscribe`` registers into
+        # ``connection.subscriptions`` so the standard release works.
+        assert any(
+            m["type"] == "unsubscribe_events" and m["subscription"] == sub_id
+            for m in sent
+        )
+
+    @pytest.mark.asyncio
+    async def test_timeout_unregisters_queue(self, monkeypatch):
+        """Subscribe ack timeout must drop the queue (no leak)."""
+        client = self._prepare_client()
+
+        # Drop the message — never resolve the result future.
+        async def _drop(message: dict) -> None:
+            return None
+
+        client.send_json_message = _drop  # type: ignore[method-assign]
+
+        # Patch asyncio.wait_for to fire TimeoutError immediately so
+        # the test doesn't actually wait the configured budget.
+        async def _instant_timeout(_coro, timeout):
+            raise TimeoutError("test-injected timeout")
+
+        monkeypatch.setattr(
+            "ha_mcp.client.websocket_client.asyncio.wait_for", _instant_timeout
+        )
+
+        with pytest.raises(TimeoutError):
+            await client.subscribe_command("hacs/subscribe", signal="x")
+
+        # Queue must be unregistered so the next subscribe doesn't
+        # inherit a stale entry; pending-response future must be
+        # cancelled so a future result delivery doesn't try to
+        # resolve into a dropped future.
+        assert not client._state._subscription_queues
+        assert not client._state._pending_requests
+
+    @pytest.mark.asyncio
+    async def test_reset_connection_wakes_subscription_queue_awaiters(self):
+        """``reset_connection`` shuts subscription queues so blocked
+        ``await queue.get()`` calls raise ``QueueShutDown`` rather
+        than hanging when the WS disconnects mid-wait."""
+        client = self._prepare_client()
+
+        async def _resolve(message: dict) -> None:
+            future = client._state._pending_requests.pop(message["id"])
+            future.set_result(
+                {
+                    "id": message["id"],
+                    "type": "result",
+                    "success": True,
+                    "result": None,
+                }
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+
+        sub_id, queue = await client.subscribe_command(
+            "hacs/subscribe", signal="hacs_dispatch_repository"
+        )
+
+        # Start a waiter that blocks on the queue.
+        get_task = asyncio.create_task(queue.get())
+        # Yield to let the waiter start awaiting.
+        await asyncio.sleep(0)
+
+        # Drop the WS — should shut down all subscription queues.
+        client._state.reset_connection()
+
+        # The waiter must wake with QueueShutDown rather than hanging.
+        with pytest.raises(asyncio.QueueShutDown):
+            await asyncio.wait_for(get_task, timeout=1.0)
+        # The queue must be unregistered.
+        assert client._state.get_subscription_queue(sub_id) is None
