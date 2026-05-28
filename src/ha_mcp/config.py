@@ -368,24 +368,35 @@ AdvancedSection = Literal[
 ]
 
 
-class FeatureFlagField(NamedTuple):
-    """One row of FEATURE_FLAG_FIELDS."""
+class OverrideField(NamedTuple):
+    """One row of an override-style registry (feature flags + backup
+    settings + any future ``(field, env, ftype)`` registry).
+
+    NOTE: adding a field here is a BREAKING change for every positional
+    unpack site (e.g. ``for f, e, t in FEATURE_FLAG_FIELDS:``). Prefer
+    a new NamedTuple over extending this one if a registry needs
+    additional metadata.
+    """
 
     field: str
     env: str
     ftype: RegistryFieldType
 
 
-class BackupOverrideField(NamedTuple):
-    """One row of BACKUP_OVERRIDE_FIELDS."""
-
-    field: str
-    env: str
-    ftype: RegistryFieldType
+# Aliases preserve the readable names callers use at construction sites
+# (``FeatureFlagField(...)`` reads more clearly than ``OverrideField(...)``
+# inside FEATURE_FLAG_FIELDS) while ensuring the two registries can never
+# drift apart at the type level.
+FeatureFlagField = OverrideField
+BackupOverrideField = OverrideField
 
 
 class AdvancedField(NamedTuple):
-    """One row of ADVANCED_SETTINGS_FIELDS."""
+    """One row of ADVANCED_SETTINGS_FIELDS.
+
+    NOTE: adding a field here is a BREAKING change for every positional
+    unpack site (e.g. ``for f, e, t, s, ed in ADVANCED_SETTINGS_FIELDS:``).
+    """
 
     field: str
     env: str
@@ -815,13 +826,16 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
                 continue
             current = getattr(settings, sub, False)
             if current and sub not in _BETA_GATE_LOGGED:
-                # Dedup per-process: cascade-clear was removed so the
-                # file now holds truthy sub-flag values long-term and
-                # this gate runs on every Settings rebuild. Logging
-                # the force-False line every time would spam addon
-                # logs (#1164 follow-up review). First-time-per-process
-                # is enough to leave an audit trail for operators
-                # debugging "why is my beta tool off?".
+                # Dedup per-process: cascade-clear (an earlier #1164
+                # behavior that wrote False to the override file for
+                # every truthy sub-flag whenever the master was saved
+                # off) was removed, so the file now holds truthy
+                # sub-flag values long-term and this gate runs on
+                # every Settings rebuild. Logging the force-False
+                # line every time would spam addon logs (#1164
+                # follow-up review). First-time-per-process is enough
+                # to leave an audit trail for operators debugging
+                # "why is my beta tool off?".
                 logger.info(
                     "Beta master toggle is off; forcing %s=False "
                     "(was True via env/file).",

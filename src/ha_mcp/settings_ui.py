@@ -23,7 +23,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from ._version import is_running_in_addon
+from ._version import get_version, is_running_in_addon
 from .backup_manager import get_backup_manager
 from .client.supervisor_client import make_supervisor_httpx_client
 from .config import (
@@ -612,6 +612,12 @@ _SETTINGS_HTML = (
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--bg); color: var(--text); line-height: 1.5; padding: 16px; }
+  /* Small unobtrusive version label at the bottom of every settings
+     page so an operator can see the running build without leaving
+     the UI. Empty until the /api/settings/info GET populates it. */
+  .version-footer { margin-top: 32px; padding: 12px 0; font-size: 0.75rem;
+    color: var(--text-secondary); text-align: center;
+    border-top: 1px solid var(--border); opacity: 0.7; }
   .header { display: flex; align-items: center; justify-content: space-between;
     padding: 16px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
   .header h1 { font-size: 1.5rem; font-weight: 600; }
@@ -1299,6 +1305,15 @@ async function loadTools() {
         'container, systemd service, or however you launch it) for them ' +
         'to take effect. Disabled tools will be fully removed from the ' +
         'MCP tool list on next startup.';
+    }
+    // Version footer — show the running ha-mcp build at the bottom
+    // of every page. ``info.version`` is whatever
+    // ``HA_MCP_BUILD_VERSION`` the addon's Dockerfile set (e.g.
+    // ``7.5.0`` on stable, ``7.5.0.dev355`` on dev), with a fallback
+    // to package metadata in standalone deployments.
+    if (info.version) {
+      const fEl = document.getElementById('versionFooterText');
+      if (fEl) fEl.textContent = 'ha-mcp ' + info.version;
     }
   } catch (_e) {}
 }
@@ -2342,7 +2357,7 @@ function renderFeatureFlags(flags) {
         // is the server's persisted state — the runtime gate in
         // ``_apply_feature_flag_overrides`` is the only thing that
         // forces sub-flags off when master is off, and it does so
-        // without mutating the saved values. Result: turning the
+        // without mutating the saved file values. Result: turning the
         // master off then back on restores the user's prior sub-flag
         // selections automatically, which is the intended UX for an
         // opt-in beta surface.
@@ -3686,6 +3701,9 @@ loadTools();
   } catch (_) { /* best-effort */ }
 })();
 </script>
+<footer id="versionFooter" class="version-footer">
+  <span id="versionFooterText"></span>
+</footer>
 </body>
 </html>
 """
@@ -4331,12 +4349,25 @@ def build_settings_handlers(
         # instance still answering and the page would reload to the
         # same state.
         addon = False if is_sidecar else is_running_in_addon()
+        # ``version`` surfaces the running ha-mcp version in the UI
+        # footer. ``get_version`` handles the env-override → package
+        # metadata → fallback chain itself, so a read per request is
+        # cheap. ``HA_MCP_BUILD_VERSION`` is set by both stable and
+        # dev addon Dockerfiles, so the version reads correctly on
+        # either channel; standalone Docker / uvx falls back to the
+        # installed package's metadata.
+        try:
+            version = get_version()
+        except Exception:  # pragma: no cover — defensive only
+            logger.warning("get_version() raised; omitting version from info")
+            version = None
         return JSONResponse(
             {
                 "is_addon": addon,
                 "is_sidecar": is_sidecar,
                 "instance_id": _PROCESS_INSTANCE_ID,
                 "started_at": _PROCESS_STARTED_AT,
+                "version": version,
             }
         )
 

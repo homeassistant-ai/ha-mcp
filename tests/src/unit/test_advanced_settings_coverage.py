@@ -83,6 +83,89 @@ def test_advanced_section_values_are_in_known_set() -> None:
     )
 
 
+def test_validate_registries_rejects_phantom_field(monkeypatch) -> None:
+    """``_validate_registries`` must raise when a row references a
+    Settings field that does not exist on the model. Confidence-add for
+    the validator function itself; the production registries pass it on
+    every import, so this proves the *negative* path.
+    """
+    import pytest
+
+    from ha_mcp import config as cfg
+
+    phantom = cfg.FeatureFlagField("field_that_does_not_exist", "PHANTOM_ENV", bool)
+    patched = (*cfg.FEATURE_FLAG_FIELDS, phantom)
+    monkeypatch.setattr(cfg, "FEATURE_FLAG_FIELDS", patched)
+    with pytest.raises(RuntimeError, match="references fields not on Settings"):
+        cfg._validate_registries()
+
+
+def test_validate_registries_rejects_overlap_between_registries(monkeypatch) -> None:
+    """Two registries can't both apply the same field — they'd coerce
+    via potentially divergent type policies."""
+    import pytest
+
+    from ha_mcp import config as cfg
+
+    # Pick a real flag field and inject it into BACKUP_OVERRIDE_FIELDS too.
+    flag = cfg.FEATURE_FLAG_FIELDS[0]
+    dupe = cfg.BackupOverrideField(flag.field, "DUPE_ENV", flag.ftype)
+    patched = (*cfg.BACKUP_OVERRIDE_FIELDS, dupe)
+    monkeypatch.setattr(cfg, "BACKUP_OVERRIDE_FIELDS", patched)
+    with pytest.raises(RuntimeError, match="Registry overlap between"):
+        cfg._validate_registries()
+
+
+def test_validate_registries_rejects_bounds_on_non_numeric_field(
+    monkeypatch,
+) -> None:
+    """``_ADVANCED_SETTINGS_BOUNDS`` entries must point at numeric advanced
+    fields — a bounds rule on a bool/str field is a programming error."""
+    import pytest
+
+    from ha_mcp import config as cfg
+
+    # Find a real str-typed advanced field and pretend bounds apply to it.
+    str_field = next(f for f in cfg.ADVANCED_SETTINGS_FIELDS if f.ftype is str)
+    patched_bounds = {**cfg._ADVANCED_SETTINGS_BOUNDS, str_field.field: (1, 10)}
+    monkeypatch.setattr(cfg, "_ADVANCED_SETTINGS_BOUNDS", patched_bounds)
+    with pytest.raises(RuntimeError, match="non-numeric"):
+        cfg._validate_registries()
+
+
+def test_validate_registries_rejects_choices_on_non_string_field(monkeypatch) -> None:
+    """``_ADVANCED_SETTINGS_CHOICES`` entries must point at str advanced
+    fields — choices on a numeric/bool field is a programming error."""
+    import pytest
+
+    from ha_mcp import config as cfg
+
+    int_field = next(f for f in cfg.ADVANCED_SETTINGS_FIELDS if f.ftype is int)
+    patched_choices = {
+        **cfg._ADVANCED_SETTINGS_CHOICES,
+        int_field.field: ("a", "b"),
+    }
+    monkeypatch.setattr(cfg, "_ADVANCED_SETTINGS_CHOICES", patched_choices)
+    with pytest.raises(RuntimeError, match="non-str"):
+        cfg._validate_registries()
+
+
+def test_validate_registries_rejects_beta_field_not_in_feature_flags(
+    monkeypatch,
+) -> None:
+    """Every BETA_FEATURE_FIELDS entry must also be in FEATURE_FLAG_FIELDS
+    — the master gate writes through ``setattr`` so a phantom beta name
+    would silently land on extras with no runtime effect."""
+    import pytest
+
+    from ha_mcp import config as cfg
+
+    patched_beta = (*cfg.BETA_FEATURE_FIELDS, "phantom_beta_field")
+    monkeypatch.setattr(cfg, "BETA_FEATURE_FIELDS", patched_beta)
+    with pytest.raises(RuntimeError, match="BETA_FEATURE_FIELDS contains names not in"):
+        cfg._validate_registries()
+
+
 def test_advanced_registries_are_name_disjoint() -> None:
     """Each override-file key must be applied by exactly one of
     _apply_feature_flag_overrides or _apply_advanced_overrides. A

@@ -101,6 +101,9 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # master + sub-flags render here, NOT into featuresBody, so the
     # dangerous block sits at the bottom of panel-server.
     "betaBody",
+    # Version footer span — populated from /api/settings/info on
+    # init; without the container element the JS would no-op.
+    "versionFooterText",
 ]
 
 
@@ -226,6 +229,124 @@ def _assert_clean_init(result: HarnessResult) -> None:
 # ---------------------------------------------------------------------------
 # restartAddon() flow
 # ---------------------------------------------------------------------------
+
+
+class TestVersionFooter:
+    """The version footer at the bottom of the settings page reads from
+    /api/settings/info on init and renders ``ha-mcp <version>`` so an
+    operator can see the running build without leaving the UI.
+    """
+
+    def test_version_rendered_from_settings_info(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/info": {
+                "status": 200,
+                "json": {
+                    "is_addon": True,
+                    "is_sidecar": False,
+                    "instance_id": "test-id",
+                    "started_at": 0,
+                    "version": "7.5.0.dev400",
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "ha-mcp 7.5.0.dev400" in result.dom, (
+            f"version footer missing or wrong; dom tail: {result.dom[-1500:]}"
+        )
+
+    def test_version_omitted_when_info_response_lacks_version(
+        self, settings_script: str
+    ) -> None:
+        """Defensive — older standalone deployments without the version
+        field in /api/settings/info must leave the footer empty rather
+        than rendering ``ha-mcp undefined`` or throwing.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/info": {
+                "status": 200,
+                "json": {
+                    "is_addon": False,
+                    "is_sidecar": False,
+                    "instance_id": "test-id",
+                    "started_at": 0,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "ha-mcp undefined" not in result.dom
+
+
+class TestXssGuard:
+    """Defense-in-depth check on the leaf-level escaping discipline of
+    the settings JS. Inject ``<script>`` tags into a setting's value
+    via the fetched API response and assert the resulting DOM holds
+    the text content escaped, not as a live script element.
+    """
+
+    def test_setting_value_with_script_tag_renders_as_text(
+        self, settings_script: str
+    ) -> None:
+        adv_field = {
+            "field": "mcp_server_name",
+            "env_var": "MCP_SERVER_NAME",
+            "value": "<script>window.__xss_pwned = true;</script>",
+            "type": "str",
+            "section": "diagnostics",
+            "origin": "default",
+            "editable": True,
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const probe = document.createElement('div');
+              probe.id = '__xss_probe';
+              probe.dataset.pwned = String(!!window.__xss_pwned);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        # The injected script payload must NOT have executed.
+        probe_match = re.search(
+            r'<div[^>]*id="__xss_probe"[^>]*>',
+            result.dom,
+        )
+        assert probe_match, f"xss probe missing; dom tail: {result.dom[-1500:]}"
+        assert 'data-pwned="false"' in probe_match.group(0), (
+            f"injected <script> executed — escapeHtml regressed: {probe_match.group(0)}"
+        )
+        # The escaped text MUST appear in the DOM as literal text.
+        # ``escapeHtml`` turns ``<`` into ``&lt;`` etc.
+        assert "&lt;script&gt;" in result.dom, "expected escaped <script> string in DOM"
+        # The unescaped ``<script>...`` substring must NOT appear as
+        # raw HTML in the rendered field value.
+        assert "<script>window.__xss_pwned" not in result.dom, (
+            "raw <script> made it into the DOM — escape leak"
+        )
 
 
 class TestRestartAddonFlow:
