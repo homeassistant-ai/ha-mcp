@@ -587,9 +587,11 @@ class TestHacsDownloadRetry:
         tools = McpComponentTools(AsyncMock())
         result = await tools.ha_install_mcp_tools(restart=False)
 
-        # Pulled out of the structured response wrapper.
-        assert result.get("success") is True
-        assert result.get("installed") is True
+        # ``add_timezone_metadata`` wraps the success response in
+        # ``{"data": ..., "metadata": ...}`` so dig into ``data``.
+        data = result.get("data", result)
+        assert data.get("success") is True
+        assert data.get("installed") is True
         # Two backoff sleeps fired between the three attempts (2s, 4s).
         assert sleeps == [2.0, 4.0]
 
