@@ -355,7 +355,7 @@ class ServiceTools:
         **Key behavior:**
         - **wait** (default True): wait for the entity state to change before
           returning. Only applies to state-changing services on a single entity.
-        - **Result compaction (issue #1446, default ON)**: ``result`` is trimmed
+        - **Result compaction (default ON)**: ``result`` is trimmed
           to the targeted entity's record (drops parent-group propagation) and
           stripped of ``context`` / ``last_*`` metadata and heavy attribute
           lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``
@@ -367,6 +367,26 @@ class ServiceTools:
         Common patterns: Use ha_get_state() to check current values before making changes.
         Use ha_search_entities() to find correct entity IDs.
         """
+        # ha_mcp_tools.* services are restricted to the ha-mcp server's
+        # dedicated wrappers (which inject the required caller token). Block
+        # ha_call_service from forwarding to that domain — it would otherwise
+        # be a bypass path around the dedicated tools.
+        # HA core's service registry lowercases the domain on fallback lookup
+        # (homeassistant/core.py ServiceRegistry.async_call), so normalise
+        # here to make sure a mixed-case `HA_MCP_TOOLS` can't slip past this
+        # exact-string check and still resolve downstream.
+        if isinstance(domain, str) and domain.strip().lower() == "ha_mcp_tools":
+            raise_tool_error(
+                create_validation_error(
+                    (
+                        "ha_call_service cannot invoke services in the "
+                        "'ha_mcp_tools' domain. Use the dedicated MCP tool "
+                        "instead: ha_list_files, ha_read_file, ha_write_file, "
+                        "ha_delete_file, or ha_config_set_yaml."
+                    ),
+                    parameter="domain",
+                )
+            )
         try:
             service_data = self._parse_service_data(data, entity_id)
 

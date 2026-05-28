@@ -96,7 +96,13 @@ ignore_missing_imports = true
 [tool.ruff]
 target-version = "py313"
 line-length = 88
-extend-exclude = ["tests/initial_test_state"]
+extend-exclude = [
+    "tests/initial_test_state",
+    # HA integration manifests must be strict JSON (no trailing commas);
+    # ruff 0.15+ formats .json files as JSONC and inserts trailing commas
+    # which makes Python's json.load() reject the file at HA startup.
+    "custom_components/**/*.json",
+]
 
 [tool.ruff.lint]
 select = [
