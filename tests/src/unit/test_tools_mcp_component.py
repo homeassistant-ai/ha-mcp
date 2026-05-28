@@ -662,3 +662,66 @@ class TestHacsDownloadRetry:
         msg = error_data["error"]["message"]
         assert "after 3 attempts" in msg
         assert "Unknown error" in msg
+
+    @pytest.mark.asyncio
+    async def test_non_hacs_error_propagates_without_retry(self, monkeypatch):
+        """A non-``HomeAssistantCommandError`` (e.g. transport drop,
+        programming bug) from ``send_command`` must propagate
+        immediately — the retry catches only the HACS "Unknown error"
+        class so real defects surface on the first occurrence
+        instead of being papered over with backoff sleeps."""
+        from ha_mcp.tools import tools_mcp_component as mod
+
+        sleeps: list[float] = []
+
+        async def _no_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+
+        monkeypatch.setattr(mod.asyncio, "sleep", _no_sleep)
+
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(
+            side_effect=[
+                # _ensure_hacs_ready
+                {"success": True, "result": {}},
+                # repositories/list — repo present
+                {
+                    "success": True,
+                    "result": [
+                        {
+                            "full_name": MCP_TOOLS_REPO,
+                            "id": 99,
+                            "installed": False,
+                        }
+                    ],
+                },
+                # download attempt 1: a non-HACS error (e.g. transport
+                # loss, schema bug). Must propagate without consuming
+                # the second/third side_effect slot.
+                ConnectionError("WS transport dropped"),
+            ]
+        )
+
+        async def _ok():
+            return None
+
+        monkeypatch.setattr("ha_mcp.tools.tools_hacs._assert_hacs_available", _ok)
+        monkeypatch.setattr(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            AsyncMock(return_value=ws_client),
+        )
+
+        client_mock = AsyncMock()
+        client_mock.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        tools = McpComponentTools(client_mock)
+
+        with pytest.raises(ToolError):
+            await tools.ha_install_mcp_tools(restart=False)
+
+        # No backoff sleeps fired — the non-HACS exception bypassed
+        # the retry loop entirely.
+        assert sleeps == []
+        # The retry consumed exactly one download attempt before
+        # propagating, leaving the other two side_effect slots
+        # untouched.
+        assert ws_client.send_command.await_count == 3

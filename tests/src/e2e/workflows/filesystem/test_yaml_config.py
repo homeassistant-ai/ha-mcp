@@ -413,15 +413,16 @@ class TestYamlConfigOperations:
     async def test_add_automation_to_nested_package_path(
         self, mcp_client_with_yaml_config
     ):
-        """Nested ``packages/<subdir>/*.yaml`` is accepted (recursive fnmatch form).
+        """Nested ``packages/<subdir>/*.yaml`` is accepted.
 
-        ``is_package`` is derived from a dual fnmatch — flat
-        ``packages/*.yaml`` AND recursive ``packages/**/*.yaml`` — so
-        files like ``packages/integrations/automations.yaml`` are
-        already accepted. The parametrized happy-path above only
-        exercises the flat form; this pins the recursive branch so a
-        future cleanup that drops ``packages/**/*.yaml`` can't
-        silently break nested user configs.
+        ``is_package`` matches via ``fnmatch.fnmatch(normalized,
+        "packages/*.yaml")``. ``fnmatch``'s ``*`` matches ``/`` too,
+        so the single pattern covers both flat
+        ``packages/foo.yaml`` and nested
+        ``packages/sub/foo.yaml``. This test pins the nested-path
+        behaviour so a future tightening to "flat only" (which
+        ``fnmatch`` can't express directly — would need explicit
+        segment checks) can't silently break nested user configs.
         """
 
         content = (

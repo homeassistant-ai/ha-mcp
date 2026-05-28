@@ -59,17 +59,14 @@ MIN_COMPONENT_VERSION = "0.5.1"
 def _version_tuple(version: str) -> tuple[int, ...]:
     """Parse ``'0.5.1'`` → ``(0, 5, 1)`` for tuple-comparison.
 
-    Non-numeric segments are coerced to ``0`` so a malformed version
-    string sorts BELOW any valid one — i.e. failure mode is "too old"
-    not "implicitly ahead".
+    Raises ``ValueError`` on any non-numeric segment. Coercing a bad
+    segment to ``0`` would not actually achieve the "fail closed"
+    intent: a malformed high-order segment like ``"1.x.0"`` would
+    still parse to ``(1, 0, 0)`` and pass a ``>= (0, 5, 1)`` gate.
+    Caller routes the ValueError through ``_raise_component_too_old``
+    so the actionable update prompt fires.
     """
-    parts: list[int] = []
-    for segment in version.split("."):
-        try:
-            parts.append(int(segment))
-        except ValueError:
-            parts.append(0)
-    return tuple(parts)
+    return tuple(int(segment) for segment in version.split("."))
 
 
 # Weak-keyed by client object to support multi-client setups and self-evict
@@ -175,7 +172,11 @@ async def _fetch_caller_token(client: Any) -> str:
             f"field (pre-{MIN_COMPONENT_VERSION})"
         )
     version: str = raw_version
-    if _version_tuple(version) < _version_tuple(MIN_COMPONENT_VERSION):
+    try:
+        parsed = _version_tuple(version)
+    except ValueError:
+        _raise_component_too_old(f"malformed version: {version!r}")
+    if parsed < _version_tuple(MIN_COMPONENT_VERSION):
         _raise_component_too_old(f"reported version is {version}")
     _CALLER_TOKEN_CACHE[client] = token
     return token

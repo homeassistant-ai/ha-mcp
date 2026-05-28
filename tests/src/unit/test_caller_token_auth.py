@@ -522,6 +522,62 @@ class TestCallMcpToolsServiceInjectsToken:
         # list_files call also went through.
         await call_mcp_tools_service(client, "list_files", {"path": "www"})
 
+    @pytest.mark.asyncio
+    async def test_version_above_minimum_accepted(self):
+        """A component reporting a version strictly ABOVE
+        ``MIN_COMPONENT_VERSION`` is accepted. Guards against a future
+        ``<`` → ``<=`` flip in the gate that would mis-reject
+        legitimate upgrades (the inverse direction of the
+        below-minimum test)."""
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
+            }
+        ]
+        # Hardcoded "0.99.0" so a future MIN bump still sorts BELOW it.
+        client.call_service = AsyncMock(
+            return_value={
+                "service_response": {
+                    "success": True,
+                    "token": "tok-future",
+                    "version": "0.99.0",
+                }
+            }
+        )
+        # No exception ⇒ accepted.
+        await call_mcp_tools_service(client, "list_files", {"path": "www"})
+
+    @pytest.mark.asyncio
+    async def test_malformed_version_string_rejected(self):
+        """A non-numeric version segment (e.g. ``'1.x.0'``) is treated
+        as "too old" — fail-closed rather than letting the integer
+        prefix sneak past the gate (``(1, 0, 0)`` would otherwise
+        compare ``>= (0, 5, 1)`` and falsely accept).
+        """
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "list_files": {}},
+            }
+        ]
+        client.call_service = AsyncMock(
+            return_value={
+                "service_response": {
+                    "success": True,
+                    "token": "tok-bad-version",
+                    "version": "1.x.0",
+                }
+            }
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await call_mcp_tools_service(client, "list_files", {"path": "www"})
+        msg = str(exc_info.value)
+        assert "too old" in msg
+        assert "malformed" in msg
+
 
 # =============================================================================
 # ha_call_service refusal of the ha_mcp_tools domain

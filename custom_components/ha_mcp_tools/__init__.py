@@ -262,10 +262,11 @@ def _is_path_allowed_for_read(config_dir: Path, rel_path: str) -> bool:
     if parts and parts[0] in ALLOWED_READ_DIRS:
         return True
 
-    # Check for packages/*.yaml pattern
+    # Check for packages/*.yaml pattern. ``fnmatch``'s ``*`` matches
+    # ``/`` too, so this pattern alone covers nested paths
+    # (``packages/sub/foo.yaml``) — no explicit recursive variant
+    # needed.
     if fnmatch.fnmatch(normalized, "packages/*.yaml"):
-        return True
-    if fnmatch.fnmatch(normalized, "packages/**/*.yaml"):
         return True
 
     # Check for custom_components/**/*.py pattern
@@ -434,9 +435,12 @@ def _build_edit_yaml_config_handler(hass):
             }
 
         is_config_yaml = normalized in ALLOWED_YAML_CONFIG_FILES
-        is_package = fnmatch.fnmatch(normalized, "packages/*.yaml") or fnmatch.fnmatch(
-            normalized, "packages/**/*.yaml"
-        )
+        # ``fnmatch``'s ``*`` matches ``/`` too, so this single
+        # pattern covers both flat ``packages/foo.yaml`` and nested
+        # ``packages/sub/foo.yaml``. The recursive variant
+        # ``packages/**/*.yaml`` is mathematically a subset of this
+        # one (``**`` reduces to ``*`` in fnmatch), so it's omitted.
+        is_package = fnmatch.fnmatch(normalized, "packages/*.yaml")
         if not is_config_yaml and not is_package:
             return {
                 "success": False,
@@ -1280,13 +1284,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             }
         # Report the manifest version so ha-mcp can enforce a minimum
         # compatible component version. The integration loader reads
-        # ``manifest.json`` once at startup; ``async_get_integration`` is
-        # cheap and avoids hard-coding the version twice.
-        integration = await async_get_integration(hass, DOMAIN)
+        # ``manifest.json`` once at startup; ``async_get_integration``
+        # is cheap and avoids hard-coding the version twice.
+        # Pathological-but-belt-and-suspenders: a corrupted manifest
+        # would otherwise surface as HA's generic handler error rather
+        # than the actionable structured response shape this service
+        # uses everywhere else.
+        try:
+            integration = await async_get_integration(hass, DOMAIN)
+            version = str(integration.version)
+        except Exception as exc:  # pragma: no cover — manifest sanity
+            _LOGGER.warning(
+                "Could not read ha_mcp_tools manifest version for "
+                "get_caller_token response: %s",
+                exc,
+            )
+            return {
+                "success": False,
+                "error_code": "manifest_unreadable",
+                "error": (
+                    "ha_mcp_tools manifest version could not be read. "
+                    "Reinstall the integration via HACS."
+                ),
+            }
         return {
             "success": True,
             "token": token,
-            "version": str(integration.version),
+            "version": version,
         }
 
     # Register all services with response support
