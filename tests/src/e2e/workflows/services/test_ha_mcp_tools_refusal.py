@@ -18,16 +18,12 @@ running inside the dev addon container with the supervisor token):
   gate added to the bootstrap; in container / external HAOS mode the
   user-supplied admin LLAT does the same.
 
-The negative branch of the admin gate (a non-admin auth caller is
-rejected by ``ha_mcp_tools.get_caller_token``) is covered by
-``test_caller_token_auth.py::TestCallerIsAdmin`` at the unit layer — a
-real-user E2E exercise of it would require new non-admin-user fixture
-scaffolding (create user via ``config/auth/create``, register a
-homeassistant-auth-provider credential, log in to mint a refresh token,
-mint an LLAT, route an ``ha_mcp_tools.get_caller_token`` call through
-the non-admin LLAT). Out of scope for this PR; the unit-tier coverage
-plus the cross-lane positive-path E2E above pins both directions of
-the admin-gate behavior.
+The negative branch of the admin gate (a non-admin caller is rejected
+by ``ha_mcp_tools.get_caller_token``) is covered by
+``test_caller_token_auth.py::TestCallerIsAdmin``. ``initial_test_state``
+ships only the system content user + the admin ``mcp`` user, so the
+positive admin path is the only one currently reachable at the E2E
+tier.
 """
 
 from __future__ import annotations
