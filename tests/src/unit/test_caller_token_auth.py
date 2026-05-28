@@ -33,6 +33,7 @@ sys.modules.setdefault("homeassistant.core", MagicMock())
 sys.modules.setdefault("homeassistant.helpers", MagicMock())
 sys.modules.setdefault("homeassistant.helpers.config_validation", MagicMock())
 sys.modules.setdefault("homeassistant.helpers.storage", MagicMock())
+sys.modules.setdefault("homeassistant.loader", MagicMock())
 
 from custom_components.ha_mcp_tools import (  # noqa: E402
     CALLER_TOKEN_FIELD,
