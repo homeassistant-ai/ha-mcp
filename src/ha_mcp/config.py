@@ -108,8 +108,8 @@ class Settings(BaseSettings):
         False, alias="ENABLE_TOOL_SECURITY_POLICIES"
     )
 
-    # Master beta-features toggle (#1164). UI-only — intentionally not in
-    # any addon config.yaml schema. Consumed by the master gate in
+    # Master beta-features toggle. UI-only — intentionally not in any
+    # addon config.yaml schema. Consumed by the master gate in
     # ``_apply_feature_flag_overrides``, which force-sets the five
     # ``BETA_FEATURE_FIELDS`` sub-flags to False whenever this master is
     # off. Dev addon ``start.py`` auto-writes ``ENABLE_BETA_FEATURES=true``
@@ -336,7 +336,7 @@ def validate_settings() -> tuple[bool, str | None]:
 # the override file, addon mode (SUPERVISOR_TOKEN set) ignores the
 # file entirely (start.py owns env vars from config.yaml in that
 # mode), and the pydantic field default is the fallback.
-# ===== Typed registry shapes (#1164 cleanup, type-design recommendation) =====
+# ===== Typed registry shapes =====
 #
 # NamedTuples preserve positional-unpack compatibility (existing
 # ``for fname, env, ftype in FEATURE_FLAG_FIELDS:`` iteration sites keep
@@ -420,10 +420,9 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
         "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION",
         bool,
     ),
-    # ``enable_code_mode`` was not in this tuple prior to #1164 — adding
-    # it here is what makes the override file (and the new web UI Server
-    # Settings tab) able to write the flag. Without this entry, the UI
-    # save logic would have nowhere to land the value.
+    # ``enable_code_mode`` lives in this tuple so the override file (and
+    # the web UI Server Settings tab) can write the flag. Without this
+    # entry, the UI save logic would have nowhere to land the value.
     FeatureFlagField("enable_code_mode", "ENABLE_CODE_MODE", bool),
 )
 
@@ -443,7 +442,7 @@ _FEATURE_FLAG_INT_BOUNDS: dict[str, tuple[int, int]] = {
     "tool_search_max_results": (2, 10),
 }
 
-# Beta sub-flags gated by ``enable_beta_features`` (#1164). Consumed
+# Beta sub-flags gated by ``enable_beta_features``. Consumed
 # by the master gate inside ``_apply_feature_flag_overrides``. Each name
 # is also in ``FEATURE_FLAG_FIELDS`` so the UI's per-field origin / save
 # logic stays unchanged — this tuple is consulted ONLY by the master
@@ -456,7 +455,7 @@ BETA_FEATURE_FIELDS: tuple[str, ...] = (
     "enable_lite_docstrings",
 )
 
-# ===== Advanced settings panel registry (#1164) =====
+# ===== Advanced settings panel registry =====
 #
 # Each entry: (field_name, env_var_name, python_type, section, editable).
 #
@@ -465,7 +464,7 @@ BETA_FEATURE_FIELDS: tuple[str, ...] = (
 #   The 5 beta sub-flags + the master live in a separate "beta" section that
 #   the UI renders below the Advanced section.
 # - ``editable=False`` marks display-only rows. Connection fields are
-#   non-editable from the running server (#1164 chicken-and-egg footgun);
+#   non-editable from the running server (chicken-and-egg footgun);
 #   ``MCP_SERVER_VERSION`` is editable (it has an env alias) but the UI
 #   warns that overriding it can confuse clients.
 # - Fields that already appear in ``FEATURE_FLAG_FIELDS`` (e.g. tool search
@@ -485,9 +484,8 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     # verify_ssl was in the (now-removed) connection section and was
     # always env-locked in addon mode. Moved to operations so it
     # renders in the panel, and added to ADDON_SYNCED_ADVANCED_FIELDS
-    # below so saves in addon mode route through Supervisor (#1164
-    # follow-up — user wants the same sync behaviour the feature
-    # flags already get).
+    # below so saves in addon mode route through Supervisor — the same
+    # sync behaviour the feature flags already get.
     AdvancedField("verify_ssl", "HA_VERIFY_SSL", bool, "operations", True),
     # Search & matching.
     AdvancedField("fuzzy_threshold", "FUZZY_THRESHOLD", int, "search", True),
@@ -569,9 +567,9 @@ _ADVANCED_SETTINGS_CHOICES: dict[str, tuple[str, ...]] = {
 }
 
 
-# Advanced fields that also live in the HA add-on's `config.yaml` schema
-# (#1164 follow-up). In addon mode, their env vars are written by
-# start.py from /data/options.json, so the override file would be
+# Advanced fields that also live in the HA add-on's `config.yaml`
+# schema. In addon mode, their env vars are written by start.py from
+# /data/options.json, so the override file would be
 # ignored at next boot anyway — writes must route through Supervisor
 # /addons/self/options instead. ``_origin_for_advanced_field`` returns
 # ``'addon'`` for these in addon mode; ``_save_advanced_settings``
@@ -605,10 +603,10 @@ def get_feature_flag_origin(env_name: str) -> str:
     - ``"default"``: no env var and no override file entry; the
       pydantic field default applies. Web UI edits create the file.
 
-    Addon-mode handling for the master and beta sub-flags (#1164):
+    Addon-mode handling for the master and beta sub-flags:
 
     - ``ENABLE_BETA_FEATURES`` (master) is in the DEV addon schema
-      only (#1164 follow-up). In dev addon mode, ``start.py`` writes
+      only. In dev addon mode, ``start.py`` writes
       the env var from ``/data/options.json`` when the key is present;
       that signals "Supervisor authoritative" and ``"addon"`` is
       returned here. In stable addon mode the key is absent from
@@ -633,9 +631,9 @@ def get_feature_flag_origin(env_name: str) -> str:
             # → Supervisor is the source of truth, mark addon-editable.
             # Stable addon: env var never written → fall through to
             # file/default. The master moved from "never schema-bound"
-            # to "schema-bound on dev only" in the #1164 follow-up; the
-            # same env-var-presence signal now distinguishes both for
-            # the master and the 5 sub-flags.
+            # to "schema-bound on dev only"; the same env-var-presence
+            # signal now distinguishes both for the master and the 5
+            # sub-flags.
             if os.environ.get(env_name) is not None:
                 return "addon"
             # else: stable / legacy-dev-no-master-key, fall through.
@@ -724,8 +722,8 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
 
     Two behaviors interleave:
 
-    1. **Per-field override-file application** (existing PR #1381 behavior):
-       reads ``feature_flags.json`` and applies values for each
+    1. **Per-field override-file application**: reads
+       ``feature_flags.json`` and applies values for each
        FEATURE_FLAG_FIELDS entry, subject to: explicit env var wins over
        file; addon mode (SUPERVISOR_TOKEN set) normally short-circuits
        this branch because start.py owns env vars from config.yaml.
@@ -738,7 +736,7 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
        stable schema (where the env var is never written, so the file
        is read and applied). In standalone mode neither is addon-routed.
 
-    2. **Beta master gate** (#1164): after the per-field pass, if
+    2. **Beta master gate**: after the per-field pass, if
        ``enable_beta_features`` is False on the resolved Settings,
        force-set the five BETA_FEATURE_FIELDS to False regardless of
        how they currently look. This is the "master toggle" semantics —
@@ -826,16 +824,15 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
                 continue
             current = getattr(settings, sub, False)
             if current and sub not in _BETA_GATE_LOGGED:
-                # Dedup per-process: cascade-clear (an earlier #1164
-                # behavior that wrote False to the override file for
-                # every truthy sub-flag whenever the master was saved
-                # off) was removed, so the file now holds truthy
-                # sub-flag values long-term and this gate runs on
-                # every Settings rebuild. Logging the force-False
-                # line every time would spam addon logs (#1164
-                # follow-up review). First-time-per-process is enough
-                # to leave an audit trail for operators debugging
-                # "why is my beta tool off?".
+                # Dedup per-process: cascade-clear (an earlier behavior
+                # that wrote False to the override file for every truthy
+                # sub-flag whenever the master was saved off) was
+                # removed, so the file now holds truthy sub-flag values
+                # long-term and this gate runs on every Settings
+                # rebuild. Logging the force-False line every time would
+                # spam addon logs. First-time-per-process is enough to
+                # leave an audit trail for operators debugging "why is
+                # my beta tool off?".
                 logger.info(
                     "Beta master toggle is off; forcing %s=False "
                     "(was True via env/file).",
@@ -854,13 +851,13 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
 
 def _apply_advanced_overrides(settings: "Settings") -> None:
     """Patch ``settings`` with advanced-section override values from
-    ``feature_flags.json`` (#1164).
+    ``feature_flags.json``.
 
     Mirrors ``_apply_feature_flag_overrides`` but iterates
     ``ADVANCED_SETTINGS_FIELDS`` and supports float / str in addition
     to bool / int. Display-only fields (``editable=False`` in the
     registry) are NEVER applied — chicken-and-egg safeguard for
-    connection settings (#1164).
+    connection settings.
 
     Addon-mode behavior: two advanced fields are in addon ``config.yaml``
     schemas — ``backup_hint`` and ``verify_ssl`` (both stable and dev).
@@ -962,8 +959,8 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
             setattr(settings, fname, coerced)
         except (ValueError, TypeError):
             # Narrowed from bare ``Exception`` to match the parallel
-            # _apply_feature_flag_overrides handler (#1164 follow-up).
-            # Pydantic validation surfaces failures as ValueError; an
+            # _apply_feature_flag_overrides handler. Pydantic validation
+            # surfaces failures as ValueError; an
             # attribute that doesn't exist on the model would be a
             # programming bug we want to crash, not silently swallow.
             logger.warning(
@@ -980,7 +977,7 @@ _settings: Settings | None = None
 # force-False line for in this process. Used to dedup the gate's
 # INFO log so we don't spam addon logs on every Settings rebuild
 # now that the cascade-clear is gone and the file may carry truthy
-# sub-flag values long-term (#1164 follow-up review). Reset alongside
+# sub-flag values long-term. Reset alongside
 # the Settings singleton in ``_reset_global_settings``.
 _BETA_GATE_LOGGED: set[str] = set()
 
@@ -1268,7 +1265,7 @@ def _reset_global_settings() -> None:
     _BETA_GATE_LOGGED.clear()
 
 
-# Import-time validator for cross-registry invariants (#1164).
+# Import-time validator for cross-registry invariants.
 #
 # Catches a class of silent runtime bugs at module load:
 #  - registry rows referencing fields that don't exist on ``Settings``

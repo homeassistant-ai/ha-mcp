@@ -47,7 +47,7 @@ def test_filesystem_constants_include_dashboards():
 class TestFeatureFlag:
     """Test feature flag functionality.
 
-    ``HAMCP_ENABLE_FILESYSTEM_TOOLS`` is a beta sub-flag (#1164). The
+    ``HAMCP_ENABLE_FILESYSTEM_TOOLS`` is a beta sub-flag. The
     master ``ENABLE_BETA_FEATURES`` gate force-sets it False at runtime
     when the master is off, so every enabling test must set both env
     vars to exercise the sub-flag's bool parsing in isolation.
@@ -110,7 +110,7 @@ class TestFeatureFlag:
             assert is_filesystem_tools_enabled() is True
 
     def test_master_off_forces_sub_flag_off(self):
-        """Master beta gate (#1164) forces this sub-flag False even when
+        """Master beta gate forces this sub-flag False even when
         the sub-flag env var is true. Lock the behavior so a future
         regression in ``_apply_feature_flag_overrides`` would surface
         in the filesystem-tools tests, not just the config tests.
@@ -196,7 +196,14 @@ class TestRegisterFilesystemTools:
         mcp = MagicMock()
         client = MagicMock()
 
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
+        # Master beta gate force-sets the filesystem-tools sub-flag
+        # False when ``ENABLE_BETA_FEATURES`` is unset, so set both
+        # together — otherwise ``register_filesystem_tools`` early-
+        # returns without registering anything.
+        with patch.dict(
+            os.environ,
+            {FEATURE_FLAG: "true", "ENABLE_BETA_FEATURES": "true"},
+        ):
             register_filesystem_tools(mcp, client)
 
         # FilesystemTools exposes 4 @tool methods: list_files, read_file,

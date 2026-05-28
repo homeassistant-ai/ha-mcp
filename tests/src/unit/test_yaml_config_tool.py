@@ -14,9 +14,9 @@ def enable_flag(monkeypatch):
     the cached settings have ENABLE_YAML_CONFIG_EDITING=False and our env var is
     ignored. Reset the cache before AND after to keep tests hermetic.
 
-    The master beta gate (#1164) also force-sets every beta sub-flag
-    False at runtime when ``ENABLE_BETA_FEATURES`` is unset, so set
-    both env vars together — otherwise the cached settings would land
+    The master beta gate also force-sets every beta sub-flag False at
+    runtime when ``ENABLE_BETA_FEATURES`` is unset, so set both env
+    vars together — otherwise the cached settings would land
     with ``enable_yaml_config_editing=False`` regardless of the
     sub-flag env var.
     """

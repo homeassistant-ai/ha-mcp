@@ -513,8 +513,8 @@ class TestSaveToolsValidation:
     async def test_env_pinned_noop_resend_does_not_409(self, monkeypatch, tmp_path):
         """The JS saveConfig() POSTs the entire ``toolStates`` map on every
         change, including env-pinned rows whose values match what the env
-        var dictates. Pre-#1164-follow-up the handler 409'd on any env-
-        pinned name in the payload, breaking every save when
+        var dictates. The handler used to 409 on any env-pinned name
+        in the payload, breaking every save when
         DISABLED_TOOLS / PINNED_TOOLS was non-empty. Accept matches; only
         reject true value mismatches.
         """
@@ -2110,7 +2110,7 @@ class TestFeatureGatedToolsCustomCode:
 
 
 class TestEnvPinnedTools:
-    """Tests for per-tool env-pin enforcement (#1164 addendum)."""
+    """Tests for per-tool env-pin enforcement."""
 
     def test_env_pinned_tools_helper_returns_correct_mapping(self, monkeypatch):
         monkeypatch.setenv("DISABLED_TOOLS", "ha_foo, ha_bar")
@@ -2251,7 +2251,7 @@ class TestEnvPinnedTools:
 
 
 class TestAdvancedSettingsEndpoints:
-    """/api/settings/advanced GET+POST handlers (#1164 Chunk 2a)."""
+    """/api/settings/advanced GET+POST handlers."""
 
     @pytest.mark.asyncio
     async def test_get_advanced_returns_all_registered_fields(self, monkeypatch):
@@ -2493,12 +2493,12 @@ class TestAdvancedSettingsEndpoints:
     async def test_save_advanced_addon_synced_routes_through_supervisor(
         self, monkeypatch
     ):
-        """``backup_hint`` and ``verify_ssl`` are addon-synced (#1164
-        follow-up). In addon mode, their saves must POST to Supervisor
-        via ``_supervisor_merge_and_post_options`` and return
+        """``backup_hint`` and ``verify_ssl`` are addon-synced. In
+        addon mode, their saves must POST to Supervisor via
+        ``_supervisor_merge_and_post_options`` and return
         ``mode='addon'``, NOT write to the override file. Without this
-        the addon-Configuration ↔ web-UI sync the PR promises would be
-        silently file-only.
+        the addon-Configuration ↔ web-UI sync the panel promises would
+        be silently file-only.
         """
         from ha_mcp.config import _reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
@@ -2643,7 +2643,7 @@ class TestAdvancedSettingsEndpoints:
 
 
 class TestBetaMasterGateInSave:
-    """Server-side rejection of beta sub-flag writes when master is off (#1164 Chunk 3a)."""
+    """Server-side rejection of beta sub-flag writes when master is off."""
 
     @pytest.mark.asyncio
     async def test_save_features_rejects_beta_subflag_when_master_off(
@@ -2770,10 +2770,10 @@ class TestBetaMasterGateInSave:
     async def test_save_features_master_off_preserves_subflag_values(
         self, monkeypatch, tmp_path
     ):
-        """Master-off does NOT cascade into sub-flag values (#1164
-        follow-up update). The runtime master gate forces sub-flags off
-        at runtime, but the persisted values stay so flipping the
-        master back on restores the user's prior sub-flag selections.
+        """Master-off does NOT cascade into sub-flag values. The
+        runtime master gate forces sub-flags off at runtime, but the
+        persisted values stay so flipping the master back on restores
+        the user's prior sub-flag selections.
 
         The previous cascade-clear behavior forced users to re-check
         every sub-flag after every master-off/on cycle, which is the

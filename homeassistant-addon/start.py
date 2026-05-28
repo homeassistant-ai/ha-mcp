@@ -196,8 +196,7 @@ _DEV_ADDON_BETA_KEYS = (
 
 def maybe_auto_enable_beta_master(config: dict[str, Any]) -> None:
     """Auto-write ``ENABLE_BETA_FEATURES=true`` when the dev-addon
-    options have at least one of the 5 beta sub-flag keys set to True
-    (#1164).
+    options have at least one of the 5 beta sub-flag keys set to True.
 
     The dev addon's ``config.yaml`` is the only addon schema that
     exposes those keys; the stable addon's ``options.json`` never
@@ -207,7 +206,7 @@ def maybe_auto_enable_beta_master(config: dict[str, Any]) -> None:
     With ``ENABLE_BETA_FEATURES=true`` set, the runtime master gate
     in ``config._apply_feature_flag_overrides`` becomes a no-op for
     dev-addon users — Supervisor options remain the authoritative
-    source for the 5 sub-flags, exactly as before #1164.
+    source for the 5 sub-flags, exactly as in the legacy code.
 
     Truthiness check (``config.get(key) is True``) is deliberate.
     HA Supervisor persists every schema-declared option into
@@ -215,7 +214,7 @@ def maybe_auto_enable_beta_master(config: dict[str, Any]) -> None:
     bare presence check (``key in config``) fired immediately on any
     fresh dev-addon install even when every sub-flag was False —
     locking the master to "on" in the web UI with origin=env, which
-    the user could not unset from anywhere (#1164 follow-up bug).
+    the user could not unset from anywhere.
 
     REMOVAL CANDIDATE: this helper is only called on the legacy
     fallback path in ``main()`` (``beta_master_in_config`` False
@@ -274,17 +273,17 @@ def main() -> int:
     enable_tool_search = False  # default
     enable_tool_security_policies = False  # default
     enable_yaml_config_editing = False  # default
-    yaml_config_in_config = False  # presence flag (#1164 follow-up)
+    yaml_config_in_config = False  # presence flag
     enable_filesystem_tools = False  # default
-    filesystem_tools_in_config = False  # presence flag (#1164 follow-up)
+    filesystem_tools_in_config = False  # presence flag
     enable_custom_component_integration = False  # default
-    custom_component_in_config = False  # presence flag (#1164 follow-up)
+    custom_component_in_config = False  # presence flag
     enable_code_mode = False  # default
-    code_mode_in_config = False  # presence flag (#1164 follow-up)
+    code_mode_in_config = False  # presence flag
     enable_lite_docstrings = False  # default
-    lite_docstrings_in_config = False  # presence flag (#1164 follow-up)
-    # Master beta toggle: present only in the dev addon's schema
-    # (#1164 follow-up). Default to False (stable behaviour); when
+    lite_docstrings_in_config = False  # presence flag
+    # Master beta toggle: present only in the dev addon's schema.
+    # Default to False (stable behaviour); when
     # the dev schema-default merges in, ``beta_master_in_config``
     # flips to True and the actual value comes from the addon options.
     beta_master_in_config = False
@@ -318,8 +317,8 @@ def main() -> int:
                 if isinstance(raw_tool_security_policies, bool)
                 else False
             )
-            # Beta sub-flag presence tracking (#1164 follow-up). On
-            # stable-addon, the 5 beta keys are NOT in config.yaml
+            # Beta sub-flag presence tracking. On stable-addon, the 5
+            # beta keys are NOT in config.yaml
             # schema — options.json carries none of them. If we wrote
             # ENABLE_YAML_CONFIG_EDITING=false (etc.) unconditionally,
             # get_feature_flag_origin would see env-var-set + in_addon
@@ -359,8 +358,8 @@ def main() -> int:
             enable_lite_docstrings = (
                 raw_lite_docstrings if isinstance(raw_lite_docstrings, bool) else False
             )
-            # Master beta toggle is present in the dev-addon schema
-            # (#1164 follow-up). Track presence separately so stable
+            # Master beta toggle is present in the dev-addon schema.
+            # Track presence separately so stable
             # add-on installs (where the key is absent from options.json)
             # do NOT get an explicit ENABLE_BETA_FEATURES=false env var
             # — that would force the web UI to render the master as
@@ -437,7 +436,7 @@ def main() -> int:
         enable_tool_security_policies
     ).lower()
     # Beta sub-flags: only write env vars when the key is actually in
-    # the addon's options.json (#1164 follow-up). On stable addon,
+    # the addon's options.json. On stable addon,
     # none of these keys are in schema, so config.get(...) returned
     # the default False — but explicitly writing the env would mark
     # the field as origin='addon' (Supervisor-managed) in the web UI,
@@ -460,12 +459,12 @@ def main() -> int:
         os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
     if lite_docstrings_in_config:
         os.environ["ENABLE_LITE_DOCSTRINGS"] = str(enable_lite_docstrings).lower()
-    # Dev-upgrade silent-disable warning (#1164 follow-up): if the
-    # master is in options.json and is False, but any sub-flag is
-    # truthy, the runtime gate will force the sub-flag off. Log
-    # loudly so an operator who pre-#1164 had beta tools on, then
-    # toggled the master off after the schema update, can see why
-    # their tools went away.
+    # Dev-upgrade silent-disable warning: if the master is in
+    # options.json and is False, but any sub-flag is truthy, the
+    # runtime gate will force the sub-flag off. Log loudly so an
+    # operator who had beta tools on before the master-in-schema
+    # rollout, then toggled the master off after the update, can see
+    # why their tools went away.
     if beta_master_in_config and enable_beta_features is False:
         gated_off = [
             name

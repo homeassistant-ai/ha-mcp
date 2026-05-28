@@ -98,7 +98,7 @@ class TestBuildSettingsHandlers:
             "policy_post_deny",
             "policy_get_tool_schema",
             "policy_get_value_source",
-            # Advanced settings handlers (#1164).
+            # Advanced settings handlers.
             "get_advanced_settings",
             "save_advanced_settings",
         }

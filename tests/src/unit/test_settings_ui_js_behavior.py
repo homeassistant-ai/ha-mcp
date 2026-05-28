@@ -77,7 +77,7 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # the global-settings save button writes wait_seconds / TTL.
     "policy-master-toggle",
     "policy-save-global-btn",
-    # Advanced settings panel (#1164) — Save button + status text +
+    # Advanced settings panel — Save button + status text +
     # the 5 section containers that loadAdvancedSettings() writes to
     # via innerHTML. Without container divs in MIN_DOM, renderSection
     # silently no-ops (getElementById returns null) and the
@@ -85,19 +85,19 @@ _TOP_LEVEL_ELEMENT_IDS = [
     "advSaveBtn",
     "advSaveStatus",
     "advSaveRow",
-    # Top-of-panel duplicate Save row (#1164 follow-up) — same handler
+    # Top-of-panel duplicate Save row — same handler
     # as the bottom row; status text mirrors between both so the user
     # sees the latest outcome whichever button they used.
     "advSaveBtnTop",
     "advSaveStatusTop",
     "advSaveRowTop",
-    # Connection section was removed from the panel (#1164 follow-up);
+    # Connection section was removed from the panel;
     # advSearch is now the first rendered advanced section.
     "advSearch",
     "advOperations",
     "advToolsSurface",
     "advDiagnostics",
-    # Beta features dedicated container (#1164 follow-up) — beta
+    # Beta features dedicated container — beta
     # master + sub-flags render here, NOT into featuresBody, so the
     # dangerous block sits at the bottom of panel-server.
     "betaBody",
@@ -326,26 +326,43 @@ class TestXssGuard:
               const probe = document.createElement('div');
               probe.id = '__xss_probe';
               probe.dataset.pwned = String(!!window.__xss_pwned);
+              const input = document.querySelector(
+                'input[data-adv-field="mcp_server_name"]'
+              );
+              probe.dataset.inputValue = input ? input.value : '__no_input__';
+              probe.dataset.scriptInDoc = String(
+                document.querySelectorAll('script').length
+              );
               document.body.appendChild(probe);
             """,
         )
         _assert_clean_init(result)
-        # The injected script payload must NOT have executed.
         probe_match = re.search(
             r'<div[^>]*id="__xss_probe"[^>]*>',
             result.dom,
         )
         assert probe_match, f"xss probe missing; dom tail: {result.dom[-1500:]}"
-        assert 'data-pwned="false"' in probe_match.group(0), (
-            f"injected <script> executed — escapeHtml regressed: {probe_match.group(0)}"
+        probe_html = probe_match.group(0)
+        # 1. The injected script payload must NOT have executed.
+        assert 'data-pwned="false"' in probe_html, (
+            f"injected <script> executed — escapeHtml regressed: {probe_html}"
         )
-        # The escaped text MUST appear in the DOM as literal text.
-        # ``escapeHtml`` turns ``<`` into ``&lt;`` etc.
-        assert "&lt;script&gt;" in result.dom, "expected escaped <script> string in DOM"
-        # The unescaped ``<script>...`` substring must NOT appear as
-        # raw HTML in the rendered field value.
-        assert "<script>window.__xss_pwned" not in result.dom, (
-            "raw <script> made it into the DOM — escape leak"
+        # 2. The payload landed in the input's value PROPERTY as a plain
+        #    string (escapeHtml prevented HTML parsing). HTML5 allows ``<``
+        #    in attribute values literally, so DOM serialization of the
+        #    attribute may not re-escape it — checking the IDL value
+        #    property is the unambiguous assertion that the payload was
+        #    treated as text, not parsed as a tag.
+        assert (
+            'data-input-value="&lt;script&gt;window.__xss_pwned' in probe_html
+            or 'data-input-value="<script>window.__xss_pwned' in probe_html
+        ), f"input.value didn't receive payload as text: {probe_html}"
+        # 3. No <script> element should have been parsed into the document
+        #    from the rendered field. The MIN_DOM has no scripts of its
+        #    own, so the count must be 0.
+        assert 'data-script-in-doc="0"' in probe_html, (
+            f"a <script> element was parsed into the document — escape leak: "
+            f"{probe_html}"
         )
 
 
@@ -879,7 +896,7 @@ class TestPolicyTabFlow:
 
 
 # ---------------------------------------------------------------------------
-# Env-pinned tool rows (#1164)
+# Env-pinned tool rows
 # ---------------------------------------------------------------------------
 
 
@@ -1013,7 +1030,7 @@ class TestEnvPinnedToolRows:
 
 
 class TestAdvancedSectionRender:
-    """JSDOM coverage for the new Advanced Settings sections (#1164 Chunk 2b)."""
+    """JSDOM coverage for the Advanced Settings sections."""
 
     def test_locked_field_shows_env_var_name_in_banner(
         self, settings_script: str
@@ -1021,8 +1038,8 @@ class TestAdvancedSectionRender:
         """Env-pinned advanced field renders with a banner naming the env var.
 
         Fixtures a search-section field — the connection section is
-        no longer rendered in the panel (#1164 follow-up), so a
-        section: "connection" field would be silently dropped.
+        no longer rendered in the panel, so a section: "connection"
+        field would be silently dropped.
         """
         fetches = {
             **DEFAULT_FETCHES,
@@ -1155,7 +1172,7 @@ class TestAddonModeLockedBannerCopy:
     Addon operators have no env-var surface to unset — the var was set
     either by start.py (from /data/options.json) or by Supervisor. The
     standalone-mode copy "unset it to edit here" is actively
-    misleading there (#1164 user feedback). When the features /
+    misleading there. When the features /
     advanced / backup endpoints return ``is_addon=true``, the banner
     must point at the addon Configuration tab instead.
     """
@@ -1214,7 +1231,7 @@ class TestAddonModeLockedBannerCopy:
         copy, not "unset env var".
         """
         # Use a search-section field — the connection section is no
-        # longer rendered in the panel (#1164 follow-up), so a fixture
+        # longer rendered in the panel, so a fixture
         # with section: "connection" would be silently dropped by
         # loadAdvancedSettings() and the assertion would fail with an
         # empty body.
@@ -1292,7 +1309,7 @@ class TestAddonModeLockedBannerCopy:
 class TestBetaBlockRendersAtBottom:
     """Beta master + sub-flags render into the dedicated `betaBody` div,
     NOT featuresBody, so the dangerous block sits at the bottom of the
-    Server Settings panel (#1164 follow-up).
+    Server Settings panel.
     """
 
     def _payload(self) -> dict:
@@ -1830,8 +1847,8 @@ class TestBetaBlockRendersAtBottom:
         self, settings_script: str
     ) -> None:
         """`enable_beta_features` help-text must lead with the danger
-        warning per #1164 user feedback — these features can permanently
-        damage HA and users must be told before flipping the master.
+        warning — these features can permanently damage HA and users
+        must be told before flipping the master.
         """
         fetches = {
             **DEFAULT_FETCHES,
@@ -1856,7 +1873,7 @@ class TestBetaBlockRendersAtBottom:
 
 
 class TestBetaMasterToggleLiveRender:
-    """JSDOM coverage for live re-render on master flip (#1164 Chunk 3a)."""
+    """JSDOM coverage for live re-render on master flip."""
 
     def _flags_payload(self, master_value: bool) -> dict:
         return {
@@ -1934,11 +1951,11 @@ class TestBetaMasterToggleLiveRender:
         assert the sub-row goes dimmed + disabled in the same tick,
         WITHOUT visually flipping the sub-flag's checked state. The
         live UI preserves the user's prior sub-flag selection (the
-        server-side cascade-clear was removed in c030148a; the
-        persisted file keeps the truthy values, and the runtime
-        master gate forces sub-flags off at the Settings layer
-        without touching the file) — re-enabling the master later
-        restores the sub-flag values automatically (#1164 follow-up).
+        server-side cascade-clear was removed; the persisted file
+        keeps the truthy values, and the runtime master gate forces
+        sub-flags off at the Settings layer without touching the
+        file) — re-enabling the master later restores the sub-flag
+        values automatically.
         """
         fetches = {
             **DEFAULT_FETCHES,
@@ -2037,7 +2054,7 @@ class TestBetaMasterToggleLiveRender:
 
 class TestCodeModeNesting:
     """JSDOM coverage for code-mode sub-numerics nested under
-    enable_code_mode in the Beta section (#1164 Chunk 3b)."""
+    enable_code_mode in the Beta section."""
 
     def _payloads(self, master_on: bool, code_mode_on: bool) -> dict[str, dict]:
         """Build /api/settings/features + /api/settings/advanced

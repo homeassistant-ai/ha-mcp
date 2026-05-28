@@ -533,8 +533,8 @@ class TestAddonStartup:
 
 
 class TestBetaMasterAutoEnableInDevAddon:
-    """#1164: dev addon keeps the 5 sub-flag keys in its Supervisor
-    options schema (unlike stable). start.py auto-writes
+    """Dev addon keeps the 5 sub-flag keys in its Supervisor options
+    schema (unlike stable). start.py auto-writes
     ``ENABLE_BETA_FEATURES=true`` whenever any of those sub-flag keys
     are present in ``/data/options.json``, so the runtime master gate
     in ``_apply_feature_flag_overrides`` becomes a no-op for dev addon
@@ -570,7 +570,7 @@ class TestBetaMasterAutoEnableInDevAddon:
         not the bare presence of the schema keys. Previously this test
         asserted the opposite (presence alone fires) and the user hit
         the resulting "locked-on master, no sub-flags enabled" bug
-        (#1164 follow-up 2026-05-25)."""
+        """
         monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
         self.addon.maybe_auto_enable_beta_master(
             dict.fromkeys(self._DEV_BETA_KEYS, False)
@@ -648,15 +648,15 @@ class TestBetaMasterAutoEnableInDevAddon:
         )
         for key in self._DEV_BETA_KEYS:
             assert key not in stable_yaml.get("options", {}), (
-                f"{key} must not be in stable addon options (#1164)"
+                f"{key} must not be in stable addon options"
             )
             assert key not in stable_yaml.get("schema", {}), (
-                f"{key} must not be in stable addon schema (#1164)"
+                f"{key} must not be in stable addon schema"
             )
 
     def test_stable_addon_does_not_declare_enable_beta_features(self):
         """Stable's ``config.yaml`` must NOT declare the master toggle
-        either — the master is web-UI-only on stable (#1164 follow-up).
+        either — the master is web-UI-only on stable.
         Schema-declaring it on stable would auto-fill options.json with
         the default on first start, locking the master to env-mode and
         the standalone web UI master path would no longer be the gate.

@@ -791,7 +791,7 @@ _SETTINGS_HTML = (
     color: var(--text); font-size: 0.85rem; }
   .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
   .feature-row.locked .feature-name { color: var(--text-secondary); }
-  /* Beta master toggle + nested sub-rows (#1164). The master row
+  /* Beta master toggle + nested sub-rows. The master row
      ``.beta-master-row`` is visually distinguished as a section
      header. The 5 sub-rows ``.beta-sub`` are indented with a vertical
      connector line on the left; when master is off they get
@@ -806,7 +806,7 @@ _SETTINGS_HTML = (
   .feature-row.beta-sub.dimmed { opacity: 0.55; }
   .feature-row.beta-sub.dimmed input { cursor: not-allowed; }
   /* Code-mode sub-numerics — second-level nesting under the
-     enable_code_mode beta sub-row (#1164 Chunk 3b). Same dimming
+     enable_code_mode beta sub-row. Same dimming
      logic as beta-sub but deeper-indented and gated by
      enable_code_mode rather than the master. */
   .feature-row.codemode-sub { padding-left: 56px; position: relative; }
@@ -814,7 +814,7 @@ _SETTINGS_HTML = (
     left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
   .feature-row.codemode-sub.dimmed { opacity: 0.55; }
   .feature-row.codemode-sub.dimmed input { cursor: not-allowed; }
-  /* Advanced settings sections (#1164) — one row per
+  /* Advanced settings sections — one row per
      ADVANCED_SETTINGS_FIELDS entry, grouped by section. Visually
      matches the .feature-row treatment so the Server Settings tab
      reads as one coherent surface. */
@@ -823,11 +823,11 @@ _SETTINGS_HTML = (
     letter-spacing: 0.05em; }
   /* Beta section header is visually distinct (warning color, slightly
      larger) so the dangerous-features block at the bottom is impossible
-     to miss as a category boundary (#1164 follow-up). */
+     to miss as a category boundary. */
   .adv-section-title.beta-section-title { color: var(--warning);
     font-size: 0.95rem; margin-top: 32px;
     border-top: 1px solid var(--warning); padding-top: 16px; }
-  /* Two-step save note + primary-CTA save button (#1164 follow-up).
+  /* Two-step save note + primary-CTA save button.
      The default <button> in this UI is intentionally small/neutral
      because most surfaces have many of them; the Save row gets a
      dedicated, larger primary style so users don't miss the action.
@@ -962,7 +962,7 @@ _SETTINGS_HTML = (
     to take effect (close + reopen Claude Desktop, restart the add-on, etc.).
   </div>
 
-  <!-- Two-step note + top Save button (#1164 follow-up). The Save +
+  <!-- Two-step note + top Save button. The Save +
        Restart workflow is non-obvious — users have hit the page,
        toggled, and then wondered why nothing took effect because they
        skipped one of the two steps. Display the note prominently and
@@ -979,7 +979,7 @@ _SETTINGS_HTML = (
   </div>
   <div id="featuresBody"></div>
 
-  <!-- Advanced settings sections (#1164). The "Connection
+  <!-- Advanced settings sections. The "Connection
        (display only)" section was removed per user feedback — it
        just listed the read-only HOMEASSISTANT_URL / TOKEN /
        SUPERVISOR_TOKEN fields, which the user can already see in the
@@ -996,15 +996,15 @@ _SETTINGS_HTML = (
   <h3 class="adv-section-title">Diagnostics</h3>
   <div id="advDiagnostics" class="adv-section"></div>
 
-  <!-- Beta features moved to bottom of the panel (#1164 follow-up) —
-       these can damage the HA system, so they sit last so the user
-       sees safer settings first. -->
+  <!-- Beta features sit at the bottom of the panel — these can damage
+       the HA system, so they come last and the user sees safer
+       settings first. -->
   <h3 class="adv-section-title beta-section-title">Beta features (dangerous)</h3>
   <div id="betaBody"></div>
 
   <!-- Bottom Save row sits AFTER the beta block (and any nested
        code-mode sub-numerics) so a user editing those doesn't have
-       to scroll back up past their own changes (#1164 follow-up). -->
+       to scroll back up past their own changes. -->
   <div class="adv-save-note">
     ⚠ Two-step save: <strong>(1) click "Save advanced settings"</strong>
     to persist your changes, then <strong>(2) click "Restart"</strong>
@@ -1248,6 +1248,11 @@ async function loadTools() {
   // toggle reflects current policy.rules. loadPolicyState() never throws
   // — it leaves gatedTools empty on failure.
   await loadPolicyState();
+  // /api/settings/info drives the restart-button mode, restart-notice
+  // copy, and the version footer. Fetch it BEFORE the empty-tools
+  // early return so a sidecar misconfig (toolData=[]) still gets the
+  // build version shown at the bottom of the page.
+  await applyInfoChrome();
   if (toolData.length === 0) {
     // Empty tool list is a sidecar misconfiguration — usually the
     // parent stdio process couldn't dump the metadata cache. Tell
@@ -1265,7 +1270,9 @@ async function loadTools() {
     throw e;
   }
   updateStatus('Loaded');
+}
 
+async function applyInfoChrome() {
   // Show restart button if running as add-on; show Stop Sidecar
   // button only when this page is served by the stdio sidecar
   // (HTTP modes serve the same HTML but is_sidecar=false there, so
@@ -2197,7 +2204,7 @@ let BETA_SUB_FLAGS = new Set();
 // /api/settings/advanced, /api/settings/backup-config) returns
 // ``is_addon`` so the env-locked banner copy can adapt — the addon
 // Configuration UI cannot "unset env vars," so the standalone-mode
-// "unset env var" copy is actively misleading there (#1164).
+// "unset env var" copy is actively misleading there.
 let IS_ADDON_MODE = false;
 
 const ORIGIN_LOCKED_NOTE = {
@@ -2218,7 +2225,7 @@ const ORIGIN_INFO_NOTE = {
 // (and in either case the addon Configuration tab is the place to
 // change it). The master `enable_beta_features` row uses different
 // copy because it's now schema-bound on dev — origin='env' there
-// only fires on the legacy-bridge path (a pre-#1164 install whose
+// only fires on the legacy-bridge path (an older install whose
 // options.json doesn't carry the master key yet, where start.py's
 // truthy-sub-flag fallback wrote ENABLE_BETA_FEATURES=true).
 function envLockedNoteHtml(envVar, fieldName) {
@@ -3357,7 +3364,7 @@ document.addEventListener('click', (e) => {
   activateTab(link.dataset.panelLink);
 });
 
-// ===== Advanced settings (#1164) =====
+// ===== Advanced settings =====
 const ADVANCED_FIELD_META = {
   homeassistant_url:   { label: "Home Assistant URL",          help: "Display only — set via HOMEASSISTANT_URL env var or addon-managed (Supervisor)." },
   homeassistant_token: { label: "Home Assistant token",        help: "Display only — set via HOMEASSISTANT_TOKEN env var. Masked here for security." },
@@ -3409,7 +3416,7 @@ async function loadAdvancedSettings() {
   // HTTP / parse failures in the first section container so the user
   // (and field debuggers reading the page) can see what went wrong.
   // Console-log too so devtools has a stack.
-  // Connection section was removed (#1164 follow-up); fall back to
+  // Connection section was removed; fall back to
   // advSearch — the first remaining section — for error display.
   const errSlot = document.getElementById('advSearch');
   let resp;
@@ -3533,7 +3540,7 @@ function renderAdvancedSection(containerId, fields) {
 
 // Top + bottom save buttons share state — the user can hit either,
 // status text mirrors to both so the one they're looking at always
-// reflects the latest outcome (#1164 follow-up).
+// reflects the latest outcome.
 function _advSaveBtns() {
   return [
     document.getElementById('advSaveBtn'),
@@ -3565,7 +3572,7 @@ async function saveAdvancedSettings() {
     // ``_advancedDirty``. Tool-config pins and backup-config edits
     // also auto-save. Any of those raise ``restartNotice``, but this
     // tab can't tell which one. Keep the hint source-blind: just
-    // point at the Restart button (#1164 follow-up review).
+    // point at the Restart button.
     const restartNotice = document.getElementById('restartNotice');
     const restartShowing =
       restartNotice && restartNotice.classList.contains('show');
@@ -3582,7 +3589,7 @@ async function saveAdvancedSettings() {
   _setAdvSaveDisabled(true);
   _setAdvSaveStatus('Saving…');
   // Partition the dirty fields into addon-routed and file-routed
-  // batches (#1164 follow-up). The server rejects mixed batches with
+  // batches. The server rejects mixed batches with
   // 500 so the UI splits them client-side: addon-synced fields go in
   // their own POST (routes through Supervisor /addons/self/options),
   // file-mode fields go in a separate POST (writes the override file).
@@ -3950,8 +3957,8 @@ _BACKGROUND_RESTART_TASKS: set[asyncio.Task[None]] = set()
 
 # Serialises read-modify-write on the shared override file
 # (``feature_flags.json``) so two concurrent saves can't interleave
-# their reads and clobber each other's persisted state (#1164
-# follow-up). Both ``_save_feature_flags`` and ``_save_advanced_settings``
+# their reads and clobber each other's persisted state. Both
+# ``_save_feature_flags`` and ``_save_advanced_settings``
 # touch the same file; without this lock, request A reading before
 # request B's ``os.replace`` lands would write back a merged dict that
 # misses B's changes. The runtime master gate kept functionality
@@ -4164,9 +4171,9 @@ def build_settings_handlers(
         # Accept no-op re-sends (state matches the env-pinned value)
         # so the periodic save fired by ``saveConfig`` after every UI
         # change doesn't 409 just because the GET payload echoed
-        # env-pinned rows back unchanged (#1164 follow-up — previously
-        # every save with DISABLED_TOOLS / PINNED_TOOLS non-empty
-        # failed because the JS POSTs the whole ``toolStates`` map).
+        # env-pinned rows back unchanged. Previously every save with
+        # DISABLED_TOOLS / PINNED_TOOLS non-empty failed because the JS
+        # POSTs the whole ``toolStates`` map.
         env_pinned = env_pinned_tools()
         rejected = [
             name
@@ -4425,7 +4432,7 @@ def build_settings_handlers(
                 "beta_sub_flags": list(BETA_FEATURE_FIELDS),
                 # Drives addon-aware locked-banner copy in the JS —
                 # "unset env var" is misleading where HA Supervisor
-                # owns the env (#1164).
+                # owns the env.
                 "is_addon": is_running_in_addon(),
             }
         )
@@ -4489,7 +4496,7 @@ def build_settings_handlers(
                 status_code=400,
             )
 
-        # Master beta-gate check (#1164): a sub-flag write is only valid
+        # Master beta-gate check: a sub-flag write is only valid
         # when the master ``enable_beta_features`` is on AFTER the
         # merge. Derive the post-merge master from the payload (if
         # present), otherwise fall back to the live ``Settings`` value.
@@ -4498,7 +4505,7 @@ def build_settings_handlers(
         # would force them False anyway and the user should know the
         # save was a no-op rather than learning at next startup.
         #
-        # Applied in BOTH standalone and addon mode (#1164 follow-up).
+        # Applied in BOTH standalone and addon mode.
         # The earlier "skip in addon mode" carve-out existed because
         # start.py used to auto-write ENABLE_BETA_FEATURES=true from
         # any beta sub-flag presence; that path is now demoted to a
@@ -4624,9 +4631,9 @@ def build_settings_handlers(
                     status_code=400,
                 )
 
-        # Master-off no longer cascades into sub-flag values (#1164
-        # follow-up). The runtime master gate in
-        # ``_apply_feature_flag_overrides`` continues to force every
+        # Master-off no longer cascades into sub-flag values. The
+        # runtime master gate in ``_apply_feature_flag_overrides``
+        # continues to force every
         # beta sub-flag to False whenever the master is off, so the
         # tools stay disabled at runtime regardless of file state.
         # Leaving the sub-flag values in the override file means
@@ -4755,10 +4762,9 @@ def build_settings_handlers(
         #   the file manually.
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
         # Serialise concurrent saves on the shared override file so
-        # two overlapping requests can't interleave their RMW
-        # (#1164 follow-up review — A.2). Lock is held only for the
-        # read+merge+atomic-write window; pure validation above does
-        # not need it.
+        # two overlapping requests can't interleave their RMW. Lock is
+        # held only for the read+merge+atomic-write window; pure
+        # validation above does not need it.
         async with _get_override_file_lock():
             existing: dict[str, Any] = {}
             try:
@@ -5036,7 +5042,7 @@ def build_settings_handlers(
 
     async def _get_advanced_settings(_: Request) -> JSONResponse:
         """Return advanced (non-feature-flag, non-backup) settings + per-field
-        origin + editable flag (#1164).
+        origin + editable flag.
 
         Mirrors ``_get_feature_flags`` / ``_get_backup_config`` but for
         the ``ADVANCED_SETTINGS_FIELDS`` registry. Most advanced fields
@@ -5045,7 +5051,7 @@ def build_settings_handlers(
         (currently ``backup_hint``, ``verify_ssl``) are an exception:
         in addon mode they have ``origin="addon"`` (editable) and saves
         route through Supervisor ``/addons/self/options`` so the addon
-        Configuration tab and the web UI share state (#1164 follow-up).
+        Configuration tab and the web UI share state.
         """
         from .config import (
             _ADVANCED_SETTINGS_BOUNDS,
@@ -5109,8 +5115,8 @@ def build_settings_handlers(
         both the registry and the addon's config.yaml schema (the
         ``ADDON_SYNCED_ADVANCED_FIELDS`` set). For those, writes route
         through Supervisor instead of the override file so the addon
-        Configuration tab and this web UI share state (#1164
-        follow-up). Other env-pinned fields stay ``'env'`` (locked).
+        Configuration tab and this web UI share state. Other
+        env-pinned fields stay ``'env'`` (locked).
 
         Callers iterating ADVANCED_SETTINGS_FIELDS should pass a
         pre-read ``overrides`` dict so the override file isn't re-read
@@ -5140,7 +5146,7 @@ def build_settings_handlers(
         return "default"
 
     async def _save_advanced_settings(request: Request) -> JSONResponse:
-        """Persist UI-edited advanced settings (#1164).
+        """Persist UI-edited advanced settings.
 
         Two persistence sinks depending on field origin:
 
@@ -5223,7 +5229,7 @@ def build_settings_handlers(
             # editable in addon mode even though their env vars are
             # set — start.py rewrites them from /data/options.json on
             # every boot, so we route the user's write through
-            # Supervisor instead of the override file (#1164 follow-up).
+            # Supervisor instead of the override file.
             is_addon_synced = addon_mode and fname in ADDON_SYNCED_ADVANCED_FIELDS
             if is_addon_synced:
                 addon_writes_present = True
@@ -5306,8 +5312,7 @@ def build_settings_handlers(
         # writes from the same call. If a future caller submits both
         # addon-synced and non-addon fields in one batch (none today
         # are non-addon AND non-locked in addon mode), reject loudly
-        # instead of routing them through different sinks (#1164
-        # follow-up).
+        # instead of routing them through different sinks.
         if addon_writes_present:
             if not addon_mode:
                 # Defensive: addon_writes_present should imply addon_mode
@@ -5391,8 +5396,7 @@ def build_settings_handlers(
         # Merge into the existing override file via atomic write (same
         # path used by _save_feature_flags so a single file holds both
         # advanced + feature-flag overrides). Lock-serialised against
-        # concurrent feature-flag saves on the same file (#1164
-        # follow-up review — A.2).
+        # concurrent feature-flag saves on the same file.
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
         async with _get_override_file_lock():
             existing: dict[str, Any] = {}
@@ -5795,7 +5799,7 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/features", methods=["POST"])(
             handlers["save_feature_flags"]
         )
-        # Advanced settings endpoints (#1164)
+        # Advanced settings endpoints
         mcp.custom_route("/api/settings/advanced", methods=["GET"])(
             handlers["get_advanced_settings"]
         )
@@ -5876,7 +5880,7 @@ def register_settings_routes(
         mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["POST"])(
             handlers["save_feature_flags"]
         )
-        # Advanced settings endpoints (#1164)
+        # Advanced settings endpoints
         mcp.custom_route(f"{secret_prefix}/api/settings/advanced", methods=["GET"])(
             handlers["get_advanced_settings"]
         )

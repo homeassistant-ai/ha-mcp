@@ -116,7 +116,7 @@ class TestAddonStructure:
     def test_translations_cover_every_schema_key(self, addon_dir):
         """Every key declared in ``config.yaml``'s ``schema:`` must have a
         matching ``configuration.<key>`` entry in ``translations/en.yaml``
-        with both ``name`` and ``description`` populated. Pre-#1164 the
+        with both ``name`` and ``description`` populated. The
         ``advanced_debug_logging`` schema field was added on stable but
         the translation was forgotten — the addon Configuration UI
         then showed an unlabelled checkbox. Lock the parity so the

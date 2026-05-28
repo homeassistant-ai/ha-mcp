@@ -171,7 +171,7 @@ def test_master_off_forces_beta_subflags_false_even_with_file_overrides(
     isolated_data_dir, monkeypatch
 ) -> None:
     """beta-master OFF + file override saying yaml=True → yaml is forced
-    False at runtime. This is the key #1164 contract: master is the gate."""
+    False at runtime. This is the key master-gate contract."""
     _clear_all_feature_envs(monkeypatch)
 
     (isolated_data_dir / "feature_flags.json").write_text(
@@ -437,7 +437,7 @@ def test_advanced_override_str_field_with_null_byte_rejected(
     assert s.mcp_server_name == "ha-mcp"
 
 
-# Backward-compat tests (#1164 task 6.2b) — file from older version.
+# Backward-compat tests — file from older version.
 
 
 def test_old_override_file_with_subflag_no_master_force_false(
@@ -472,7 +472,7 @@ def test_old_override_file_unknown_keys_ignored(isolated_data_dir, monkeypatch) 
     assert s.enable_beta_features is True
 
 
-# Backup-override new fields (#1164) — coverage gaps caught by review.
+# Backup-override new fields — coverage gaps caught by review.
 
 
 def test_backup_override_dir_rejects_null_byte(isolated_data_dir, monkeypatch) -> None:

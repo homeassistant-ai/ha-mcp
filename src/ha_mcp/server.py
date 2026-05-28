@@ -379,10 +379,10 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         # Surface env-pinned tools at startup so an operator who pinned
         # something via DISABLED_TOOLS / PINNED_TOOLS can see that
-        # those values are overriding whatever's in tool_config.json
-        # (#1164). Silent overlay was the previous behavior — the file
-        # would show "enabled" for a tool, but runtime would treat it
-        # as disabled, and there was no log line to chase.
+        # those values are overriding whatever's in tool_config.json.
+        # Silent overlay was the previous behavior — the file would
+        # show "enabled" for a tool, but runtime would treat it as
+        # disabled, and there was no log line to chase.
         pinned = env_pinned_tools(self.settings)
         if pinned:
             logger.info(

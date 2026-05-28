@@ -1,10 +1,9 @@
-"""Coverage gate (#1164).
+"""Coverage gate for env-aliased Settings fields.
 
 Asserts every env-aliased Settings field is either:
   * in ``ADVANCED_SETTINGS_FIELDS`` (rendered in the Advanced section), OR
-  * in ``FEATURE_FLAG_FIELDS`` (rendered in the Server Settings panel from
-    PR #1381), OR
-  * in ``BACKUP_OVERRIDE_FIELDS`` (rendered on the Backups tab from #1403), OR
+  * in ``FEATURE_FLAG_FIELDS`` (rendered in the Server Settings panel), OR
+  * in ``BACKUP_OVERRIDE_FIELDS`` (rendered on the Backups tab), OR
   * on the explicit allow-list below.
 
 When this test fails after a new env var is added, the contributor must
