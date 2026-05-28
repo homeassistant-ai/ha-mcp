@@ -380,8 +380,13 @@ class TestDegradedPaths:
         would propagate, the outer except in each tool would re-map to
         INTERNAL_ERROR, and the agent would retry an already-committed
         mutation."""
+        # ``get_global_settings`` is imported INSIDE ``build_skill_content``
+        # via ``from ..config import get_global_settings``, so the symbol
+        # isn't bound in ``util_helpers``'s module namespace. Patch at the
+        # source module instead — that's where the function-local import
+        # resolves the name on every call.
         with patch(
-            "ha_mcp.tools.util_helpers.get_global_settings",
+            "ha_mcp.config.get_global_settings",
             side_effect=ValueError("settings broken"),
         ):
             result = build_skill_content(

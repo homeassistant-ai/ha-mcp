@@ -316,11 +316,24 @@ def test_resolve_skill_files_oserror_during_resolve_returns_skipped(
     fake_skills_dir: Path,
 ) -> None:
     """``Path.resolve()`` can raise OSError on the host (e.g. ELOOP from
-    a circular symlink, EACCES from permission-restricted parents). The
-    silent-skip contract requires the loader to swallow it and return
-    the ref omitted — never propagate, because the surrounding write
-    operation has already committed."""
-    with patch.object(Path, "resolve", side_effect=OSError("ELOOP")):
+    a circular symlink, EACCES from permission-restricted parents) inside
+    ``_read_file_safely``. The silent-skip contract requires the loader
+    to swallow it and return the ref omitted — never propagate, because
+    the surrounding write operation has already committed.
+
+    Scope the patch to only the ``.md`` candidate resolution inside
+    ``_read_file_safely`` — a global ``Path.resolve`` patch would also
+    fire on the ``skill_dir.resolve()`` call earlier in
+    ``resolve_skill_files`` (line ~178), which is not the path we're
+    trying to exercise."""
+    real_resolve = Path.resolve
+
+    def selective_resolve(self: Path, *args, **kwargs):
+        if self.suffix == ".md":
+            raise OSError("ELOOP")
+        return real_resolve(self, *args, **kwargs)
+
+    with patch.object(Path, "resolve", selective_resolve):
         result = skill_loader.resolve_skill_files(
             fake_skills_dir,
             "home-assistant-best-practices",
