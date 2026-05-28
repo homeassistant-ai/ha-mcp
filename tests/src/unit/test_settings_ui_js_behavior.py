@@ -337,18 +337,17 @@ class TestXssGuard:
             """,
         )
         _assert_clean_init(result)
-        # The probe div's ``data-input-value`` attribute may contain the
-        # literal ``>`` from the unescaped XSS payload, so the previous
-        # ``<div[^>]*id="__xss_probe"[^>]*>`` regex stopped at the first
-        # inner ``>`` and missed the data-* attributes that come after.
-        # Anchor on the probe's id and grab everything up to the matching
-        # ``</div>`` (or end of body, since the probe is appended last).
-        probe_match = re.search(
-            r'<div [^<]*id="__xss_probe"[^<]*',
-            result.dom,
-        )
-        assert probe_match, f"xss probe missing; dom tail: {result.dom[-1500:]}"
-        probe_html = probe_match.group(0)
+        # The probe div's ``data-input-value`` attribute carries the
+        # full XSS payload as a literal string, containing both ``<``
+        # and ``>``. Slicing a clean substring with a single regex is
+        # fragile — use the probe id as an anchor and slice from there
+        # to the next ``</div>`` (the probe is the last element we
+        # appended, no nested children).
+        anchor = 'id="__xss_probe"'
+        idx = result.dom.find(anchor)
+        assert idx != -1, f"xss probe missing; dom tail: {result.dom[-1500:]}"
+        end = result.dom.find("</div>", idx)
+        probe_html = result.dom[idx : end if end != -1 else len(result.dom)]
         # 1. The injected script payload must NOT have executed.
         assert 'data-pwned="false"' in probe_html, (
             f"injected <script> executed — escapeHtml regressed: {probe_html}"
