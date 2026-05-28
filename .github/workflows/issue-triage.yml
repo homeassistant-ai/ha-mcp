@@ -521,7 +521,7 @@ jobs:
 
             const formatted = candidates.map(c =>
               '#' + c.issue.number + ' [' + c.issue.state + ']: ' + c.issue.title + '\n' +
-              cleanBody(c.issue.body).substring(0, 2500)
+              cleanBody(c.issue.body).substring(0, 4500)
             ).join('\n\n---\n\n');
 
             core.info('BM25 found ' + candidates.length + ' candidates: ' + candidates.map(c => '#' + c.issue.number).join(', '));
@@ -597,7 +597,7 @@ jobs:
               .replace(/\n{3,}/g, '\n\n')
               .trim();
 
-            const issueBody = cleanBody(rawBody).substring(0, 15000);
+            const issueBody = cleanBody(rawBody).substring(0, 16000);
 
             // Parse extracted keywords for context (show top-5 by weight in prompt)
             let keywordSummary = '';
