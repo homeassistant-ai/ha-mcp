@@ -1130,6 +1130,9 @@ def _op_patch(
                 parameter=f"array_patch.operations[{index}].patches",
             )
         )
+    # target.update({}) is a silent no-op — the item would appear in
+    # summary["patched"] with fields: [], giving the caller no signal that
+    # nothing changed. Reject up-front so the mistake surfaces immediately.
     if not patches:
         raise_tool_error(
             create_validation_error(
@@ -1446,16 +1449,22 @@ def _add_http_error_hints(
     addon: dict[str, Any],
     slug: str,
 ) -> None:
-    """Mutate result to add an error key and tailored suggestions for HTTP error responses (4xx and 5xx)."""
+    """Mutate result to add an error key for 4xx/5xx responses, with tailored suggestions for 401 and 403."""
     if response.status_code >= 400:
         result["error"] = f"Add-on API returned HTTP {response.status_code}"
         if response.status_code == 401:
+            # 401 is a credential/session problem — addon_config is not attached
+            # because the network layout is irrelevant; the caller needs to fix
+            # their token or re-establish the ingress session, not reconfigure ports.
             result["suggestion"] = (
                 "Authentication failed. The ingress session may have expired, "
                 "or your HA token may lack the required scope. Verify the "
                 "token has admin rights and try again."
             )
         elif response.status_code == 403:
+            # 403 is typically an Nginx IP ACL blocking direct access — a
+            # network configuration problem. Attach addon_config so the LLM
+            # can see the port mapping and suggest the correct port override.
             ports_dict = addon.get("network") or addon.get("ports") or {}
             unmapped = sorted(k for k, v in ports_dict.items() if v is None)
             result["addon_config"] = {
@@ -1670,7 +1679,12 @@ async def _call_addon_api(
 
 
 class AddOnTools:
-    """Encapsulates add-on management logic for ha_get_addon and ha_manage_addon."""
+    """Encapsulates add-on management logic for ha_get_addon and ha_manage_addon.
+
+    ha_manage_addon supports three mutually exclusive modes: config
+    (options/network/boot/auto_update/watchdog), proxy (path-based HTTP or
+    WebSocket), and array-patch (fetch-modify-post on a JSON array endpoint).
+    """
 
     def __init__(self, client: HomeAssistantClient) -> None:
         self._client = client

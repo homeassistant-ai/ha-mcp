@@ -1,4 +1,4 @@
-"""Unit tests for add-on tools (_call_addon_api, _call_addon_ws, and list_addons)."""
+"""Unit tests for add-on tools (AddOnTools, manage_addon, _validate_addon_access, _call_addon_api, _call_addon_ws, list_addons)."""
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2665,6 +2665,8 @@ class TestCallAddonWsNewParams:
         assert result["error"] == "RESPONSE_TOO_LARGE"
         assert result["truncated"] is True
         assert "hint" in result
+        assert result["closed_by"] == "size_limit"
+        assert result["message_count"] == 1
 
 
 class TestValidateAddonAccessWithPort:
