@@ -36,6 +36,7 @@ sys.modules.setdefault("homeassistant.helpers.storage", MagicMock())
 
 from custom_components.ha_mcp_tools import (  # noqa: E402
     CALLER_TOKEN_FIELD,
+    _caller_is_admin,
     _caller_token_ok,
     _unauthorized_response,
 )
@@ -99,6 +100,59 @@ class TestCallerTokenOk:
         hass = _fake_hass("good-token-xyz")
         call = _fake_call("")
         assert _caller_token_ok(hass, call) is False
+
+    @pytest.mark.parametrize("bad_token", [123, ["good-token-xyz"], {"token": "x"}])
+    def test_rejects_non_string_presented_token(self, bad_token):
+        """isinstance guard must fail-closed on type confusion (the
+        ServiceCall.data dict can contain anything voluptuous coerced)."""
+        hass = _fake_hass("good-token-xyz")
+        call = MagicMock()
+        call.data = {CALLER_TOKEN_FIELD: bad_token}
+        assert _caller_token_ok(hass, call) is False
+
+
+class TestCallerIsAdmin:
+    """Bootstrap service is admin-gated explicitly (HA doesn't gate
+    service calls by default — verified against HA core)."""
+
+    @pytest.mark.asyncio
+    async def test_accepts_admin_user(self):
+        hass = MagicMock()
+        admin = MagicMock(is_admin=True)
+        hass.auth.async_get_user = AsyncMock(return_value=admin)
+        call = MagicMock()
+        call.context.user_id = "admin-uid"
+        assert await _caller_is_admin(hass, call) is True
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_admin_user(self):
+        hass = MagicMock()
+        non_admin = MagicMock(is_admin=False)
+        hass.auth.async_get_user = AsyncMock(return_value=non_admin)
+        call = MagicMock()
+        call.context.user_id = "non-admin-uid"
+        assert await _caller_is_admin(hass, call) is False
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_user_id(self):
+        """async_get_user returning None (deleted user, stale token) → reject."""
+        hass = MagicMock()
+        hass.auth.async_get_user = AsyncMock(return_value=None)
+        call = MagicMock()
+        call.context.user_id = "deleted-uid"
+        assert await _caller_is_admin(hass, call) is False
+
+    @pytest.mark.asyncio
+    async def test_no_user_context_is_trusted(self):
+        """call.context.user_id is None for system-internal events; HA's
+        own async_admin_handler_factory treats these as trusted, so we
+        match that convention rather than locking everyone out."""
+        hass = MagicMock()
+        hass.auth.async_get_user = AsyncMock()
+        call = MagicMock()
+        call.context.user_id = None
+        assert await _caller_is_admin(hass, call) is True
+        hass.auth.async_get_user.assert_not_awaited()
 
 
 class TestUnauthorizedResponse:
@@ -264,7 +318,7 @@ class TestCallMcpToolsServiceInjectsToken:
         # uses it, gets rejected, refetches, and retries.
         from ha_mcp.tools.tools_filesystem import _CALLER_TOKEN_CACHE
 
-        _CALLER_TOKEN_CACHE[id(client)] = "stale-token"
+        _CALLER_TOKEN_CACHE[client] = "stale-token"
 
         result = await call_mcp_tools_service(client, "write_file", {"path": "www/x"})
 
@@ -277,7 +331,9 @@ class TestCallMcpToolsServiceInjectsToken:
     @pytest.mark.asyncio
     async def test_raises_when_bootstrap_returns_no_token(self):
         """Service exists but returns a malformed response (race condition
-        during integration setup, etc.) → RuntimeError."""
+        during integration setup, etc.) → structured ToolError, not a bare
+        RuntimeError (which the wrapper's ``except Exception`` would
+        otherwise re-map to a generic INTERNAL_ERROR)."""
         client = AsyncMock()
         client.get_services.return_value = [
             {
@@ -287,8 +343,48 @@ class TestCallMcpToolsServiceInjectsToken:
         ]
         # Bootstrap returns a malformed response
         client.call_service.return_value = {"service_response": {"success": False}}
-        with pytest.raises(RuntimeError, match="did not return a usable token"):
+        with pytest.raises(ToolError, match="did not return a usable token"):
             await call_mcp_tools_service(client, "list_files", {"path": "www"})
+
+    @pytest.mark.asyncio
+    async def test_second_unauthorized_response_surfaces_no_further_retry(self):
+        """If the refetch+retry path also returns unauthorized (e.g. genuine
+        permanent rejection), the wrapper must NOT loop — it returns the
+        unauthorized response so the caller surfaces a real error rather
+        than spinning forever or silently succeeding."""
+        client = AsyncMock()
+        client.get_services.return_value = [
+            {
+                "domain": MCP_TOOLS_DOMAIN,
+                "services": {CALLER_TOKEN_BOOTSTRAP_SERVICE: {}, "write_file": {}},
+            }
+        ]
+        downstream_attempts = {"n": 0}
+
+        async def fake_call_service(domain, service, payload, **kwargs):
+            if domain == MCP_TOOLS_DOMAIN and service == CALLER_TOKEN_BOOTSTRAP_SERVICE:
+                return {
+                    "service_response": {"success": True, "token": "freshly-fetched"}
+                }
+            downstream_attempts["n"] += 1
+            return {
+                "service_response": {
+                    "success": False,
+                    "error_code": "unauthorized",
+                    "error": "still rejected",
+                }
+            }
+
+        client.call_service.side_effect = fake_call_service
+
+        result = await call_mcp_tools_service(client, "write_file", {"path": "www/x"})
+
+        # Exactly two downstream attempts — one cached, one after refetch.
+        # No third attempt; no silent success.
+        assert downstream_attempts["n"] == 2
+        inner = result["service_response"]
+        assert inner["error_code"] == "unauthorized"
+        assert inner["success"] is False
 
     @pytest.mark.asyncio
     async def test_raises_component_too_old_when_bootstrap_service_missing(self):
@@ -348,6 +444,29 @@ class TestHaCallServiceRefusesMcpToolsDomain:
             for name in ("ha_write_file", "ha_list_files", "ha_config_set_yaml")
         )
         # The downstream client was never touched.
+        tools._client.call_service.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "variant",
+        ["HA_MCP_TOOLS", "Ha_Mcp_Tools", "  ha_mcp_tools  ", " HA_MCP_TOOLS "],
+    )
+    @pytest.mark.asyncio
+    async def test_blocks_case_and_whitespace_variants(self, variant):
+        """HA core's ServiceRegistry.async_call lowercases the domain on its
+        fallback lookup, so a mixed-case `HA_MCP_TOOLS` would otherwise slip
+        past the exact-string refusal and still resolve downstream. The
+        refusal must normalize case + whitespace to match."""
+        from ha_mcp.tools.tools_service import ServiceTools
+
+        tools = ServiceTools.__new__(ServiceTools)
+        tools._client = AsyncMock()
+        tools._device_tools = AsyncMock()
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_call_service(
+                domain=variant, service="write_file", data={"path": "www/x"}
+            )
+        assert "ha_mcp_tools" in str(exc_info.value)
         tools._client.call_service.assert_not_called()
 
     @pytest.mark.asyncio

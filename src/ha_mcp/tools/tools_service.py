@@ -371,7 +371,11 @@ class ServiceTools:
         # dedicated wrappers (which inject the required caller token). Block
         # ha_call_service from forwarding to that domain — it would otherwise
         # be a bypass path around the dedicated tools (see issue #1451).
-        if domain == "ha_mcp_tools":
+        # HA core's service registry lowercases the domain on fallback lookup
+        # (homeassistant/core.py ServiceRegistry.async_call), so normalise
+        # here to make sure a mixed-case `HA_MCP_TOOLS` can't slip past this
+        # exact-string check and still resolve downstream.
+        if isinstance(domain, str) and domain.strip().lower() == "ha_mcp_tools":
             raise_tool_error(
                 create_validation_error(
                     (

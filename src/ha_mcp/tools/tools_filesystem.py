@@ -16,6 +16,7 @@ Feature Flag: Set HAMCP_ENABLE_FILESYSTEM_TOOLS=true to enable these tools.
 import asyncio
 import json
 import logging
+import weakref
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
@@ -46,18 +47,21 @@ MCP_TOOLS_DOMAIN = "ha_mcp_tools"
 # subsequent call comes back unauthorized (covers token rotation).
 CALLER_TOKEN_FIELD = "_ha_mcp_token"
 CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
-# Keyed by id(client) (int) to support multi-client setups.
-_CALLER_TOKEN_CACHE: dict[int, str] = {}
-_CALLER_TOKEN_LOCKS: dict[int, asyncio.Lock] = {}
+# Weak-keyed by client object to support multi-client setups and self-evict
+# when a client is garbage-collected (avoids id() reuse if a freed client's
+# address gets recycled before the unauthorized-retry fires).
+_CALLER_TOKEN_CACHE: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+_CALLER_TOKEN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _get_token_lock(client: Any) -> asyncio.Lock:
     """Per-client lock so concurrent first-callers fetch the token once."""
-    key = id(client)
-    lock = _CALLER_TOKEN_LOCKS.get(key)
+    lock = _CALLER_TOKEN_LOCKS.get(client)
     if lock is None:
         lock = asyncio.Lock()
-        _CALLER_TOKEN_LOCKS[key] = lock
+        _CALLER_TOKEN_LOCKS[client] = lock
     return lock
 
 
@@ -110,23 +114,29 @@ async def _fetch_caller_token(client: Any) -> str:
     unwrapped = unwrap_service_response(result) if isinstance(result, dict) else {}
     token = unwrapped.get("token") if isinstance(unwrapped, dict) else None
     if not isinstance(token, str) or not token:
-        raise RuntimeError(
-            "ha_mcp_tools.get_caller_token did not return a usable token. "
-            "Reload the ha_mcp_tools integration in Home Assistant."
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "ha_mcp_tools.get_caller_token did not return a usable token.",
+                suggestions=[
+                    "Reload the ha_mcp_tools integration in Home Assistant",
+                    "Verify the HA token used by ha-mcp has admin rights",
+                    "Then retry the operation",
+                ],
+            )
         )
-    _CALLER_TOKEN_CACHE[id(client)] = token
+    _CALLER_TOKEN_CACHE[client] = token
     return token
 
 
 async def _ensure_caller_token(client: Any, *, force_refresh: bool = False) -> str:
     """Return a cached or freshly-fetched caller token."""
-    key = id(client)
     if not force_refresh:
-        cached = _CALLER_TOKEN_CACHE.get(key)
+        cached = _CALLER_TOKEN_CACHE.get(client)
         if cached:
             return cached
     async with _get_token_lock(client):
-        cached = _CALLER_TOKEN_CACHE.get(key)
+        cached = _CALLER_TOKEN_CACHE.get(client)
         if cached and not force_refresh:
             return cached
         return await _fetch_caller_token(client)

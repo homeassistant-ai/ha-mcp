@@ -174,12 +174,31 @@ def _caller_token_ok(hass: HomeAssistant, call: ServiceCall) -> bool:
         domain_data.get(_HASS_DATA_TOKEN_KEY) if isinstance(domain_data, dict) else None
     )
     presented = call.data.get(CALLER_TOKEN_FIELD)
-    # Constant-time compare: token is low-entropy enough that timing leaks
-    # don't meaningfully affect the threat model, but secrets.compare_digest
-    # is free and the right reflex.
+    # token_urlsafe(32) is 256-bit; the timing-side-channel risk is already
+    # negligible, but secrets.compare_digest is the right reflex regardless.
     if not isinstance(expected, str) or not isinstance(presented, str):
         return False
     return secrets.compare_digest(expected, presented)
+
+
+async def _caller_is_admin(hass: HomeAssistant, call: ServiceCall) -> bool:
+    """Return True if the caller is an admin user (or a no-user-context call).
+
+    HA's service registry has no built-in admin requirement — `Service`
+    has no admin flag, `async_call` performs no permission check, and
+    WS / REST `call_service` lack `@require_admin`. Gate explicitly here.
+
+    Calls without `context.user_id` (system-internal events) are treated
+    as trusted, matching HA's `async_admin_handler_factory` convention.
+    The supported deployment shapes all use admin tokens: addon's
+    SUPERVISOR_TOKEN maps to HA's `hassio_user`, which HA force-promotes
+    into `GROUP_ID_ADMIN` (hassio/__init__.py); standalone Docker/pip
+    deployments use a user-supplied admin LLAT.
+    """
+    if not call.context.user_id:
+        return True
+    user = await hass.auth.async_get_user(call.context.user_id)
+    return user is not None and bool(user.is_admin)
 
 
 def _is_path_allowed_for_dir(
@@ -1200,11 +1219,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def handle_get_caller_token(call: ServiceCall) -> ServiceResponse:
         """Return the caller-auth token to the ha-mcp bootstrap caller.
 
-        Intentionally unauthenticated beyond HA's default admin requirement:
-        ha-mcp does not know the token on first run, so this is the bootstrap
-        surface. The dangerous services (read/write/delete/edit_yaml) require
-        the token to be presented; this one returns it.
+        Admin-gated explicitly (see `_caller_is_admin`): HA's service
+        registry has no built-in admin requirement, so the gate prevents
+        a non-admin caller from bootstrapping the token. The supported
+        deployments (addon supervisor user, standalone admin LLAT) all
+        pass this gate.
         """
+        if not await _caller_is_admin(hass, call):
+            return {
+                "success": False,
+                "error_code": "unauthorized",
+                "error": "ha_mcp_tools.get_caller_token requires admin auth.",
+            }
         domain_data = hass.data.get(DOMAIN)
         token = (
             domain_data.get(_HASS_DATA_TOKEN_KEY)
@@ -1214,6 +1240,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not isinstance(token, str) or not token:
             return {
                 "success": False,
+                "error_code": "not_initialized",
                 "error": (
                     "Caller token not initialized — integration may not have "
                     "completed setup. Reload the ha_mcp_tools integration."
