@@ -415,11 +415,14 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 | `e2e-tests.yml` | PR to master | Full E2E tests (~3 min) |
 | `publish-dev.yml` | Push to master | Dev release `.devN` |
 | `notify-dev-channel.yml` | Push to master (src/) | Comment on PRs/issues with dev testing instructions |
-| `semver-release.yml` | Biweekly Wed 10:00 UTC | Stable release |
+| `semver-release.yml` | Biweekly Wed 10:00 UTC | Stable release (cuts version tag + GitHub release) |
+| `release-publish.yml` | After SemVer Release (`workflow_run`) or manual dispatch | Publish stable Docker image (`:latest` + `:stable` + semver) + MCP registry |
 | `hotfix-release.yml` | Hotfix PR merged | Immediate patch release |
 | `build-binary.yml` | Release | Linux/macOS/Windows binaries |
 | `addon-publish.yml` | Release | HA add-on update |
 | `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
+
+**Docker image tags** (`ghcr.io/homeassistant-ai/ha-mcp`): stable releases push `:latest` + `:stable` + semver tags (`release-publish.yml`); dev builds push only `:dev` + `:dev-<sha>` (`publish-dev.yml`) — **never `:latest`**, which is reserved for stable. The HA add-on images live in separate repos (`-addon-{arch}`, `-addon-dev-{arch}`) and are selected by an explicit `version:` pin, not by `:latest`.
 
 ## Development Commands
 
