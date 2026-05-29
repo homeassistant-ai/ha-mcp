@@ -74,6 +74,10 @@ class TestAddonStructure:
         assert config.get("ingress_port") == 9583, (
             "ingress_port must be 9583 (the fixed internal MCP/web port)"
         )
+        assert config.get("ingress_stream") is True, (
+            "ingress_stream must be enabled so streamed responses flush through "
+            "the ingress proxy (streamable-HTTP MCP transport)"
+        )
 
         # Verify secret_path configuration (optional advanced override)
         assert "secret_path" not in config["options"], (
