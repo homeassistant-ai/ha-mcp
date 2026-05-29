@@ -12,24 +12,28 @@ parsing. The fix: annotate config as `dict | None`, not `str | dict | None`.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 
-def _get_config_schema(register_fn, tool_name: str) -> dict:
+def _get_config_schema(
+    register_fn: Callable[..., Any], tool_name: str
+) -> dict[str, Any]:
     from fastmcp import FastMCP
 
-    async def _inner():
+    async def _inner() -> dict[str, Any]:
         mcp = FastMCP("test")
         register_fn(mcp, MagicMock())
         tool = await mcp.get_tool(tool_name)
-        return tool.parameters["properties"]["config"]
+        return tool.parameters["properties"]["config"]  # type: ignore[no-any-return]
 
     return asyncio.run(_inner())
 
 
-def _contains_string_type(schema: dict) -> bool:
+def _contains_string_type(schema: dict[str, Any]) -> bool:
     """Return True if the schema allows string values."""
     return schema.get("type") == "string" or any(
         variant.get("type") == "string" for variant in schema.get("anyOf", [])

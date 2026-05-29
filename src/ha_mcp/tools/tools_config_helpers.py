@@ -2297,7 +2297,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         config: Annotated[
-            dict | None,
+            dict[str, Any] | None,
             Field(
                 description=(
                     "Config dict for flow-based helper types and "
