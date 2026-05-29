@@ -550,11 +550,27 @@ class TestCallMcpToolsServiceInjectsToken:
         await call_mcp_tools_service(client, "list_files", {"path": "www"})
 
     @pytest.mark.asyncio
-    async def test_malformed_version_string_rejected(self):
-        """A non-numeric version segment (e.g. ``'1.x.0'``) is treated
-        as "too old" — fail-closed rather than letting the integer
-        prefix sneak past the gate (``(1, 0, 0)`` would otherwise
-        compare ``>= (0, 5, 1)`` and falsely accept).
+    @pytest.mark.parametrize(
+        "bad_version",
+        [
+            "1.x.0",  # non-numeric segment
+            "1.2.3-beta",  # pre-release suffix (most likely real-world case)
+            "v1.2.3",  # git-tag prefix
+            "latest",  # non-numeric placeholder
+        ],
+    )
+    async def test_malformed_version_string_rejected(self, bad_version):
+        """A version _version_tuple can't parse (non-numeric segment like
+        ``'1.x.0'``, a pre-release suffix, a ``v`` prefix, a placeholder)
+        is rejected fail-closed rather than letting an integer prefix sneak
+        past the gate (``'1.x.0'`` → ``(1, 0, 0)`` would otherwise compare
+        ``>= (0, 5, 1)`` and falsely accept). It routes to a distinct
+        "malformed version" error (reinstall / file-issue), NOT the
+        "too old / update via HACS" remediation — updating can't fix a
+        manifest whose version is wrong.
+
+        (The empty string is handled one guard earlier as a missing-version
+        "too old" case, so it never reaches this branch.)
         """
         client = AsyncMock()
         client.get_services.return_value = [
@@ -568,15 +584,18 @@ class TestCallMcpToolsServiceInjectsToken:
                 "service_response": {
                     "success": True,
                     "token": "tok-bad-version",
-                    "version": "1.x.0",
+                    "version": bad_version,
                 }
             }
         )
         with pytest.raises(ToolError) as exc_info:
             await call_mcp_tools_service(client, "list_files", {"path": "www"})
         msg = str(exc_info.value)
-        assert "too old" in msg
-        assert "malformed" in msg
+        assert "malformed version" in msg
+        assert bad_version in msg
+        assert "Reinstall" in msg
+        # Must NOT route to the "too old / update" remediation.
+        assert "too old" not in msg
 
 
 # =============================================================================
