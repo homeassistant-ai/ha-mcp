@@ -77,6 +77,33 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # the global-settings save button writes wait_seconds / TTL.
     "policy-master-toggle",
     "policy-save-global-btn",
+    # Advanced settings panel — Save button + status text +
+    # the 5 section containers that loadAdvancedSettings() writes to
+    # via innerHTML. Without container divs in MIN_DOM, renderSection
+    # silently no-ops (getElementById returns null) and the
+    # behavioural tests find an empty body.
+    "advSaveBtn",
+    "advSaveStatus",
+    "advSaveRow",
+    # Top-of-panel duplicate Save row — same handler
+    # as the bottom row; status text mirrors between both so the user
+    # sees the latest outcome whichever button they used.
+    "advSaveBtnTop",
+    "advSaveStatusTop",
+    "advSaveRowTop",
+    # Connection section was removed from the panel;
+    # advSearch is now the first rendered advanced section.
+    "advSearch",
+    "advOperations",
+    "advToolsSurface",
+    "advDiagnostics",
+    # Beta features dedicated container — beta
+    # master + sub-flags render here, NOT into featuresBody, so the
+    # dangerous block sits at the bottom of panel-server.
+    "betaBody",
+    # Version footer span — populated from /api/settings/info on
+    # init; without the container element the JS would no-op.
+    "versionFooterText",
 ]
 
 
@@ -202,6 +229,146 @@ def _assert_clean_init(result: HarnessResult) -> None:
 # ---------------------------------------------------------------------------
 # restartAddon() flow
 # ---------------------------------------------------------------------------
+
+
+class TestVersionFooter:
+    """The version footer at the bottom of the settings page reads from
+    /api/settings/info on init and renders ``ha-mcp <version>`` so an
+    operator can see the running build without leaving the UI.
+    """
+
+    def test_version_rendered_from_settings_info(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/info": {
+                "status": 200,
+                "json": {
+                    "is_addon": True,
+                    "is_sidecar": False,
+                    "instance_id": "test-id",
+                    "started_at": 0,
+                    "version": "7.5.0.dev400",
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "ha-mcp 7.5.0.dev400" in result.dom, (
+            f"version footer missing or wrong; dom tail: {result.dom[-1500:]}"
+        )
+
+    def test_version_omitted_when_info_response_lacks_version(
+        self, settings_script: str
+    ) -> None:
+        """Defensive — older standalone deployments without the version
+        field in /api/settings/info must leave the footer empty rather
+        than rendering ``ha-mcp undefined`` or throwing.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/info": {
+                "status": 200,
+                "json": {
+                    "is_addon": False,
+                    "is_sidecar": False,
+                    "instance_id": "test-id",
+                    "started_at": 0,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "ha-mcp undefined" not in result.dom
+
+
+class TestXssGuard:
+    """Defense-in-depth check on the leaf-level escaping discipline of
+    the settings JS. Inject ``<script>`` tags into a setting's value
+    via the fetched API response and assert the resulting DOM holds
+    the text content escaped, not as a live script element.
+    """
+
+    def test_setting_value_with_script_tag_renders_as_text(
+        self, settings_script: str
+    ) -> None:
+        adv_field = {
+            "field": "mcp_server_name",
+            "env_var": "MCP_SERVER_NAME",
+            "value": "<script>window.__xss_pwned = true;</script>",
+            "type": "str",
+            "section": "diagnostics",
+            "origin": "default",
+            "editable": True,
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const probe = document.createElement('div');
+              probe.id = '__xss_probe';
+              probe.dataset.pwned = String(!!window.__xss_pwned);
+              const input = document.querySelector(
+                'input[data-adv-field="mcp_server_name"]'
+              );
+              probe.dataset.inputValue = input ? input.value : '__no_input__';
+              probe.dataset.scriptInDoc = String(
+                document.querySelectorAll('script').length
+              );
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        # The probe div's ``data-input-value`` attribute carries the
+        # full XSS payload as a literal string, containing both ``<``
+        # and ``>``. Slicing a clean substring with a single regex is
+        # fragile — use the probe id as an anchor and slice from there
+        # to the next ``</div>`` (the probe is the last element we
+        # appended, no nested children).
+        anchor = 'id="__xss_probe"'
+        idx = result.dom.find(anchor)
+        assert idx != -1, f"xss probe missing; dom tail: {result.dom[-1500:]}"
+        end = result.dom.find("</div>", idx)
+        probe_html = result.dom[idx : end if end != -1 else len(result.dom)]
+        # 1. The injected script payload must NOT have executed.
+        assert 'data-pwned="false"' in probe_html, (
+            f"injected <script> executed — escapeHtml regressed: {probe_html}"
+        )
+        # 2. The payload landed in the input's value PROPERTY as a plain
+        #    string (escapeHtml prevented HTML parsing). HTML5 allows ``<``
+        #    in attribute values literally, so DOM serialization of the
+        #    attribute may not re-escape it — checking the IDL value
+        #    property is the unambiguous assertion that the payload was
+        #    treated as text, not parsed as a tag.
+        assert (
+            "&lt;script&gt;window.__xss_pwned" in probe_html
+            or "<script>window.__xss_pwned" in probe_html
+        ), f"input.value didn't receive payload as text: {probe_html}"
+        # 3. No <script> element should have been parsed into the document
+        #    from the rendered field. The MIN_DOM has no scripts of its
+        #    own, so the count must be 0.
+        assert 'data-script-in-doc="0"' in probe_html, (
+            f"a <script> element was parsed into the document — escape leak: "
+            f"{probe_html}"
+        )
 
 
 class TestRestartAddonFlow:
@@ -731,3 +898,1277 @@ class TestPolicyTabFlow:
             f"expected addon-log message in pending-list snapshot; "
             f"dom contains: {result.dom[-2000:]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Env-pinned tool rows
+# ---------------------------------------------------------------------------
+
+
+class TestEnvPinnedToolRows:
+    """Env-pinned tools (DISABLED_TOOLS / PINNED_TOOLS) must render with
+    disabled inputs and a banner naming the env var so the user knows
+    why the toggles are locked.
+    """
+
+    def test_env_pinned_disabled_tool_renders_locked_with_env_var_label(
+        self, settings_script: str
+    ) -> None:
+        """A tool listed in DISABLED_TOOLS renders with all inputs disabled
+        and shows 'env-pinned via DISABLED_TOOLS' in the row.
+
+        The Tools tab must surface the env-pinned state so the user is not
+        confused by a toggle that silently refuses to save.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_foo",
+                            "title": "Foo",
+                            "primary_tag": "Utilities",
+                            "tags": ["Utilities"],
+                            "description": "Test tool",
+                            "annotations": {},
+                        }
+                    ],
+                    "states": {"ha_foo": "disabled"},
+                    "env_pinned": {"ha_foo": "disabled"},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+
+        # The row must carry the env-pinned class.
+        assert "env-pinned" in result.dom, (
+            f"expected .env-pinned class on locked tool row; "
+            f"dom tail: {result.dom[-3000:]}"
+        )
+        # The banner must name the env var.
+        assert "DISABLED_TOOLS" in result.dom, (
+            f"expected 'DISABLED_TOOLS' in env-pinned banner; "
+            f"dom tail: {result.dom[-3000:]}"
+        )
+        # Specifically: the enabled-toggle input for ha_foo must carry
+        # the HTML `disabled` attribute. Coarse `"disabled" in result.dom`
+        # would also pass on CSS class names elsewhere in the page; pin
+        # the regex to the actual input element.
+        import re
+
+        enabled_input_match = re.search(
+            r'<input[^>]*data-field="enabled"[^>]*>',
+            result.dom,
+        )
+        assert enabled_input_match is not None, (
+            "expected enabled-toggle <input data-field='enabled'> in DOM"
+        )
+        assert " disabled" in enabled_input_match.group(0), (
+            f"expected disabled attribute on enabled-toggle input; got: "
+            f"{enabled_input_match.group(0)}"
+        )
+
+    def test_env_pinned_pinned_tool_renders_locked_with_env_var_label(
+        self, settings_script: str
+    ) -> None:
+        """A tool listed in PINNED_TOOLS renders with toggles disabled
+        and shows 'env-pinned via PINNED_TOOLS' in the row.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_bar",
+                            "title": "Bar",
+                            "primary_tag": "Utilities",
+                            "tags": ["Utilities"],
+                            "description": "Another test tool",
+                            "annotations": {},
+                        }
+                    ],
+                    "states": {},
+                    "env_pinned": {"ha_bar": "pinned"},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+
+        assert "env-pinned" in result.dom, (
+            f"expected .env-pinned class on pinned-via-env tool row; "
+            f"dom tail: {result.dom[-3000:]}"
+        )
+        assert "PINNED_TOOLS" in result.dom, (
+            f"expected 'PINNED_TOOLS' in env-pinned banner; "
+            f"dom tail: {result.dom[-3000:]}"
+        )
+        # Pinned-toggle input for ha_bar must be disabled.
+        import re
+
+        pin_input_match = re.search(
+            r'<input[^>]*data-field="pinned"[^>]*>',
+            result.dom,
+        )
+        assert pin_input_match is not None, (
+            "expected pin-toggle <input data-field='pinned'> in DOM"
+        )
+        assert " disabled" in pin_input_match.group(0), (
+            f"expected disabled attribute on pin-toggle input; got: "
+            f"{pin_input_match.group(0)}"
+        )
+
+
+class TestAdvancedSectionRender:
+    """JSDOM coverage for the Advanced Settings sections."""
+
+    def test_locked_field_shows_env_var_name_in_banner(
+        self, settings_script: str
+    ) -> None:
+        """Env-pinned advanced field renders with a banner naming the env var.
+
+        Fixtures a search-section field — the connection section is
+        no longer rendered in the panel, so a section: "connection"
+        field would be silently dropped.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
+                            "type": "int",
+                            "section": "search",
+                            "origin": "env",
+                            "editable": False,
+                            "min": 1,
+                            "max": 100,
+                        }
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "FUZZY_THRESHOLD" in result.dom, (
+            f"expected env var name in locked-row banner; "
+            f"dom tail: {result.dom[-2000:]}"
+        )
+        assert "adv-row" in result.dom and "locked" in result.dom, (
+            "expected .adv-row.locked class"
+        )
+
+    def test_log_level_renders_as_select_with_choices(
+        self, settings_script: str
+    ) -> None:
+        """str field with choices renders as <select>, not <input>."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "log_level",
+                            "env_var": "LOG_LEVEL",
+                            "value": "INFO",
+                            "type": "str",
+                            "section": "diagnostics",
+                            "origin": "default",
+                            "editable": True,
+                            "choices": [
+                                "DEBUG",
+                                "INFO",
+                                "WARNING",
+                                "ERROR",
+                                "CRITICAL",
+                            ],
+                        }
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        select_match = re.search(
+            r'<select[^>]*data-adv-field="log_level"[^>]*>(.*?)</select>',
+            result.dom,
+            re.DOTALL,
+        )
+        assert select_match is not None, "expected <select> for log_level"
+        assert "DEBUG" in select_match.group(1)
+        assert "CRITICAL" in select_match.group(1)
+
+    def test_int_field_emits_min_max_attrs(self, settings_script: str) -> None:
+        # Same connection-removed migration as test_locked_field above.
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
+                            "type": "int",
+                            "section": "search",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1,
+                            "max": 100,
+                        }
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        m = re.search(
+            r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>',
+            result.dom,
+        )
+        assert m is not None, "expected number input for fuzzy_threshold"
+        assert 'min="1"' in m.group(0)
+        assert 'max="100"' in m.group(0)
+
+
+class TestAddonModeLockedBannerCopy:
+    """Locked-banner copy must avoid 'unset env var' wording in addon mode.
+
+    Addon operators have no env-var surface to unset — the var was set
+    either by start.py (from /data/options.json) or by Supervisor. The
+    standalone-mode copy "unset it to edit here" is actively
+    misleading there. When the features /
+    advanced / backup endpoints return ``is_addon=true``, the banner
+    must point at the addon Configuration tab instead.
+    """
+
+    def test_master_locked_banner_in_addon_mode_points_at_configuration(
+        self, settings_script: str
+    ) -> None:
+        """Master `enable_beta_features` env-locked in addon mode renders
+        copy pointing at addon Configuration toggles, not "unset env var".
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": True,
+                            "origin": "env",
+                            "editable": False,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        }
+                    },
+                    "beta_sub_flags": [
+                        "enable_yaml_config_editing",
+                        "enable_filesystem_tools",
+                        "enable_custom_component_integration",
+                        "enable_code_mode",
+                        "enable_lite_docstrings",
+                    ],
+                    "is_addon": True,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        # Standalone copy must NOT appear.
+        assert "unset it to edit here" not in result.dom, (
+            "addon-mode master banner still shows standalone 'unset env var' copy"
+        )
+        # Addon-aware copy must appear.
+        assert "addon Configuration" in result.dom, (
+            f"expected 'addon Configuration' hint; dom tail: {result.dom[-2000:]}"
+        )
+
+    def test_advanced_locked_banner_in_addon_mode_avoids_unset_copy(
+        self, settings_script: str
+    ) -> None:
+        """Env-pinned advanced field in addon mode renders addon-runtime
+        copy, not "unset env var".
+        """
+        # Use a search-section field — the connection section is no
+        # longer rendered in the panel, so a fixture
+        # with section: "connection" would be silently dropped by
+        # loadAdvancedSettings() and the assertion would fail with an
+        # empty body.
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
+                            "type": "int",
+                            "section": "search",
+                            "origin": "env",
+                            "editable": False,
+                        }
+                    ],
+                    "is_addon": True,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "unset it to edit here" not in result.dom, (
+            "addon-mode advanced banner still shows standalone 'unset env var' copy"
+        )
+        assert "addon runtime environment" in result.dom, (
+            f"expected 'addon runtime environment' wording; "
+            f"dom tail: {result.dom[-2000:]}"
+        )
+
+    def test_standalone_mode_still_uses_unset_copy(self, settings_script: str) -> None:
+        """Regression guard: when is_addon is false (or omitted), the
+        existing standalone "unset env var" copy must still render —
+        the addon branch should NOT take over standalone deployments.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": True,
+                            "origin": "env",
+                            "editable": False,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        }
+                    },
+                    "beta_sub_flags": [],
+                    "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "unset it to edit here" in result.dom, (
+            f"standalone-mode copy regressed; dom tail: {result.dom[-2000:]}"
+        )
+
+
+class TestBetaBlockRendersAtBottom:
+    """Beta master + sub-flags render into the dedicated `betaBody` div,
+    NOT featuresBody, so the dangerous block sits at the bottom of the
+    Server Settings panel.
+    """
+
+    def _payload(self) -> dict:
+        return {
+            "flags": {
+                "enable_tool_search": {
+                    "value": False,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_TOOL_SEARCH",
+                },
+                "enable_beta_features": {
+                    "value": True,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_BETA_FEATURES",
+                },
+                "enable_yaml_config_editing": {
+                    "value": False,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_YAML_CONFIG_EDITING",
+                },
+                "enable_filesystem_tools": {
+                    "value": False,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "HAMCP_ENABLE_FILESYSTEM_TOOLS",
+                },
+            },
+            "beta_sub_flags": [
+                "enable_yaml_config_editing",
+                "enable_filesystem_tools",
+                "enable_custom_component_integration",
+                "enable_code_mode",
+                "enable_lite_docstrings",
+            ],
+            "is_addon": False,
+        }
+
+    def test_non_beta_rows_render_into_featuresBody(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {"status": 200, "json": self._payload()},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const fb = document.getElementById('featuresBody').innerHTML;
+              const bb = document.getElementById('betaBody').innerHTML;
+              window.__bodies = JSON.stringify({fb, bb});
+            """,
+        )
+        _assert_clean_init(result)
+        # Non-beta row goes to featuresBody only.
+        assert "Enable tool search" in result.dom
+        m = re.search(r'<tbody id="featuresBody">(.*?)</tbody>', result.dom, re.DOTALL)
+        assert m is not None, "featuresBody tbody not found in dom"
+        fb_content = m.group(1)
+        assert "Enable tool search" in fb_content, (
+            "tool-search row should land in featuresBody"
+        )
+        assert "Enable beta features" not in fb_content, (
+            "beta master row leaked into featuresBody (should be in betaBody)"
+        )
+
+    def test_beta_rows_render_into_betaBody(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {"status": 200, "json": self._payload()},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              // Read the live container HTML directly; avoids brittle
+              // regex matching against nested <div>s in serialised dom.
+              const bb = document.getElementById('betaBody');
+              const fb = document.getElementById('featuresBody');
+              window.__bb = bb ? bb.innerHTML : '';
+              window.__fb = fb ? fb.innerHTML : '';
+            """,
+        )
+        _assert_clean_init(result)
+        # The harness serialises window globals into result.dom — pick
+        # the recorded innerHTML out of the trailing <script> block the
+        # JSDOM serialiser emits. Easier path: match the betaBody div in
+        # the serialised dom with a balanced-enough heuristic (start tag
+        # to next sibling-level marker).
+        bb_match = re.search(
+            r'<div id="betaBody">(.*?)</div>\s*</body>', result.dom, re.DOTALL
+        )
+        # MIN_DOM places betaBody as the second-to-last body child;
+        # everything between its open tag and the closing body wrapper
+        # is its content (incl. nested children) bar the trailing
+        # </div>.
+        if bb_match is None:
+            # Fallback: search for the rendered master-row marker inside
+            # the betaBody region by anchoring on its class name.
+            assert 'class="feature-row beta-master-row"' in result.dom, (
+                "beta master row never rendered anywhere"
+            )
+            assert 'class="feature-row beta-sub"' in result.dom, (
+                "beta sub-row never rendered anywhere"
+            )
+            # Without a clean container slice we can't prove leakage —
+            # but featuresBody is the only other plausible destination
+            # and renderFeatureFlags wipes both with .innerHTML = ''.
+            fb_match = re.search(
+                r'<tbody id="featuresBody">(.*?)</tbody>', result.dom, re.DOTALL
+            )
+            fb_content = fb_match.group(1) if fb_match else ""
+            assert "Enable beta features" not in fb_content, (
+                "beta master row leaked into featuresBody"
+            )
+            return
+        bb_content = bb_match.group(1)
+        assert "Enable beta features" in bb_content, (
+            "beta master row should land in betaBody"
+        )
+        assert "Enable YAML config editing" in bb_content, (
+            "beta sub-flag should land in betaBody"
+        )
+        assert "Enable tool search" not in bb_content, (
+            "non-beta row leaked into betaBody"
+        )
+
+    def test_beta_section_header_present_with_danger_styling(self) -> None:
+        """Section header reads 'Beta features (dangerous)' so users see
+        the category boundary; styling uses .beta-section-title.
+        Asserted against the production HTML (the header lives in the
+        static panel-server markup, not in any JS-rendered container).
+        """
+        from ha_mcp.settings_ui import _SETTINGS_HTML
+
+        assert "Beta features (dangerous)" in _SETTINGS_HTML, (
+            "beta section heading copy missing or changed in production HTML"
+        )
+        assert "beta-section-title" in _SETTINGS_HTML, (
+            "beta section title class missing in production HTML"
+        )
+
+    def test_top_save_button_posts_same_payload_as_bottom(
+        self, settings_script: str
+    ) -> None:
+        """Clicking either Save button posts to the same endpoint with
+        the same dirty-fields payload, and the disabled+status mirrors
+        to both rows so the user sees state on whichever they used.
+        """
+        adv_field = {
+            "field": "log_level",
+            "env_var": "LOG_LEVEL",
+            "value": "INFO",
+            "type": "str",
+            "section": "diagnostics",
+            "origin": "default",
+            "editable": True,
+            "choices": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+                "responses": [
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                    {"status": 200, "json": {"applied": {"log_level": "DEBUG"}}},
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                ],
+            },
+        }
+        # Mutate the field then click the TOP button. Assert a POST went
+        # out and that both status els carry the same final text.
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const sel = document.querySelector(
+                'select[data-adv-field="log_level"]'
+              );
+              if (sel) {
+                sel.value = 'DEBUG';
+                sel.dispatchEvent(new Event('change'));
+              }
+              document.getElementById('advSaveBtnTop').click();
+              await new Promise(r => setTimeout(r, 200));
+            """,
+        )
+        _assert_clean_init(result)
+        posts = [
+            f
+            for f in result.fetches
+            if "/api/settings/advanced" in f["url"] and f["method"] == "POST"
+        ]
+        assert len(posts) >= 1, (
+            f"top save button did not POST; fetches: {result.fetches}"
+        )
+
+    def test_dual_save_buttons_mirror_disabled_and_status_state(
+        self, settings_script: str
+    ) -> None:
+        """F.42 — clicking either save button must disable both
+        buttons during the in-flight POST and mirror the success
+        status text to both `advSaveStatus` and `advSaveStatusTop`.
+        Without this, the user sees stale state on whichever button
+        they're looking at after clicking the other.
+        """
+        adv_field = {
+            "field": "log_level",
+            "env_var": "LOG_LEVEL",
+            "value": "INFO",
+            "type": "str",
+            "section": "diagnostics",
+            "origin": "default",
+            "editable": True,
+            "choices": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+                "responses": [
+                    {
+                        "status": 200,
+                        "json": {"fields": [adv_field], "is_addon": False},
+                    },
+                    {
+                        "status": 200,
+                        "json": {"applied": {"log_level": "DEBUG"}},
+                    },
+                    {
+                        "status": 200,
+                        "json": {"fields": [adv_field], "is_addon": False},
+                    },
+                ],
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const sel = document.querySelector(
+                'select[data-adv-field="log_level"]'
+              );
+              if (sel) {
+                sel.value = 'DEBUG';
+                sel.dispatchEvent(new Event('change'));
+              }
+              // Synchronously probe the mid-save state. ``click()``
+              // begins running saveAdvancedSettings up to its first
+              // await: the helpers ``_setAdvSaveDisabled(true)`` and
+              // ``_setAdvSaveStatus('Saving…')`` both run BEFORE that
+              // await, so right after click() returns the DOM should
+              // show both buttons disabled + both status els reading
+              // "Saving…". Probing post-completion would catch the
+              // post-reload state where loadAdvancedSettings() blanks
+              // the status text — not the mirror property we want to
+              // lock here.
+              document.getElementById('advSaveBtn').click();
+              const probe = document.createElement('div');
+              probe.id = '__dual_save_probe';
+              probe.dataset.bottomStatus =
+                document.getElementById('advSaveStatus').textContent;
+              probe.dataset.topStatus =
+                document.getElementById('advSaveStatusTop').textContent;
+              probe.dataset.bottomDisabled =
+                String(document.getElementById('advSaveBtn').disabled);
+              probe.dataset.topDisabled =
+                String(document.getElementById('advSaveBtnTop').disabled);
+              document.body.appendChild(probe);
+              // Drain pending microtasks so other in-flight work
+              // doesn't leak into the next test's state.
+              await new Promise(r => setTimeout(r, 250));
+            """,
+        )
+        _assert_clean_init(result)
+        probe_match = re.search(
+            r'<div[^>]*id="__dual_save_probe"[^>]*>',
+            result.dom,
+        )
+        assert probe_match, (
+            f"dual-save probe div missing from dom; dom tail: {result.dom[-2000:]}"
+        )
+        probe_attrs = probe_match.group(0)
+        # Mid-save state: both status els show "Saving…", both
+        # buttons disabled. The mirror invariant is locked even
+        # before the POST resolves.
+        assert (
+            "Saving" in probe_attrs and 'data-bottom-status="Saving' in probe_attrs
+        ), f"bottom status didn't mirror Saving…; probe: {probe_attrs}"
+        assert 'data-top-status="Saving' in probe_attrs, (
+            f"top status didn't mirror Saving…; probe: {probe_attrs}"
+        )
+        assert 'data-bottom-disabled="true"' in probe_attrs, (
+            f"bottom button not disabled mid-save; probe: {probe_attrs}"
+        )
+        assert 'data-top-disabled="true"' in probe_attrs, (
+            f"top button not disabled mid-save; probe: {probe_attrs}"
+        )
+
+    def test_dual_save_buttons_mirror_disabled_and_status_on_post_failure(
+        self, settings_script: str
+    ) -> None:
+        """F.6 — failed-POST branch of the dual-save mirror. After a
+        500 response, both buttons must be re-enabled and both
+        status els must carry the error message — a regression that
+        broke either helper for the error path would still pass the
+        existing success-path mirror test.
+        """
+        adv_field = {
+            "field": "log_level",
+            "env_var": "LOG_LEVEL",
+            "value": "INFO",
+            "type": "str",
+            "section": "diagnostics",
+            "origin": "default",
+            "editable": True,
+            "choices": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+                "responses": [
+                    # Initial GET load.
+                    {
+                        "status": 200,
+                        "json": {"fields": [adv_field], "is_addon": False},
+                    },
+                    # POST → 500 with structured error.
+                    {
+                        "status": 500,
+                        "json": {
+                            "success": False,
+                            "error": {
+                                "code": "INTERNAL_ERROR",
+                                "message": "save failed for test",
+                            },
+                        },
+                    },
+                ],
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const sel = document.querySelector(
+                'select[data-adv-field="log_level"]'
+              );
+              if (sel) {
+                sel.value = 'DEBUG';
+                sel.dispatchEvent(new Event('change'));
+              }
+              document.getElementById('advSaveBtn').click();
+              // Wait for the POST + error-handling to settle.
+              await new Promise(r => setTimeout(r, 250));
+              const probe = document.createElement('div');
+              probe.id = '__failed_save_probe';
+              probe.dataset.bottomStatus =
+                document.getElementById('advSaveStatus').textContent;
+              probe.dataset.topStatus =
+                document.getElementById('advSaveStatusTop').textContent;
+              probe.dataset.bottomDisabled =
+                String(document.getElementById('advSaveBtn').disabled);
+              probe.dataset.topDisabled =
+                String(document.getElementById('advSaveBtnTop').disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe_match = re.search(
+            r'<div[^>]*id="__failed_save_probe"[^>]*>',
+            result.dom,
+        )
+        assert probe_match, (
+            f"failed-save probe div missing; dom tail: {result.dom[-2000:]}"
+        )
+        probe_attrs = probe_match.group(0)
+        # Both buttons must be re-enabled after the error response.
+        assert 'data-bottom-disabled="false"' in probe_attrs, (
+            f"bottom button stuck disabled after failed save; probe: {probe_attrs}"
+        )
+        assert 'data-top-disabled="false"' in probe_attrs, (
+            f"top button stuck disabled after failed save; probe: {probe_attrs}"
+        )
+        # Both status els must carry the server's error message.
+        assert "save failed for test" in probe_attrs, (
+            f"error message did not reach both status els; probe: {probe_attrs}"
+        )
+        # Match on both data-* attrs explicitly.
+        assert 'data-bottom-status="save failed for test"' in probe_attrs, (
+            f"bottom status missing error; probe: {probe_attrs}"
+        )
+        assert 'data-top-status="save failed for test"' in probe_attrs, (
+            f"top status missing error; probe: {probe_attrs}"
+        )
+
+    def test_save_button_nothing_to_save_when_no_dirty_and_no_restart(
+        self, settings_script: str
+    ) -> None:
+        """F.8 — fall-through branch: nothing dirty, no restart pending.
+        Status text reads exactly "Nothing to save."
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              document.getElementById('advSaveBtn').click();
+              await new Promise(r => setTimeout(r, 50));
+              const probe = document.createElement('div');
+              probe.id = '__nothing_save_probe';
+              probe.dataset.bottomStatus =
+                document.getElementById('advSaveStatus').textContent;
+              probe.dataset.topStatus =
+                document.getElementById('advSaveStatusTop').textContent;
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe_match = re.search(r'<div[^>]*id="__nothing_save_probe"[^>]*>', result.dom)
+        assert probe_match, (
+            f"nothing-save probe missing; dom tail: {result.dom[-2000:]}"
+        )
+        probe_attrs = probe_match.group(0)
+        assert 'data-bottom-status="Nothing to save."' in probe_attrs, (
+            f"expected 'Nothing to save.' on bottom status; probe: {probe_attrs}"
+        )
+        assert 'data-top-status="Nothing to save."' in probe_attrs, (
+            f"expected 'Nothing to save.' on top status; probe: {probe_attrs}"
+        )
+
+    def test_save_button_restart_pending_hint_when_dirty_empty_but_restart_showing(
+        self, settings_script: str
+    ) -> None:
+        """F.8 — restart-pending branch: nothing dirty, restartNotice
+        showing. Status hints the user at the Restart button rather
+        than saying nothing changed. Copy is source-blind (doesn't
+        claim a specific source for the pending restart) per the
+        review pass — same banner can be raised by any save in the
+        UI or by a cross-tab broadcast.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              // Simulate a prior save raising the restart banner.
+              document.getElementById('restartNotice').classList.add('show');
+              document.getElementById('advSaveBtn').click();
+              await new Promise(r => setTimeout(r, 50));
+              const probe = document.createElement('div');
+              probe.id = '__restart_pending_probe';
+              probe.dataset.bottomStatus =
+                document.getElementById('advSaveStatus').textContent;
+              probe.dataset.topStatus =
+                document.getElementById('advSaveStatusTop').textContent;
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe_match = re.search(
+            r'<div[^>]*id="__restart_pending_probe"[^>]*>', result.dom
+        )
+        assert probe_match, (
+            f"restart-pending probe missing; dom tail: {result.dom[-2000:]}"
+        )
+        probe_attrs = probe_match.group(0)
+        # Hint must mention restart, must NOT use the plain
+        # "Nothing to save." fall-through.
+        assert "restart is pending" in probe_attrs, (
+            f"hint did not call out the pending restart; probe: {probe_attrs}"
+        )
+        assert 'data-bottom-status="Nothing to save."' not in probe_attrs, (
+            f"fell through to plain 'Nothing to save.'; probe: {probe_attrs}"
+        )
+        # Hint must be source-blind: NOT claim feature-flag toggles
+        # specifically (could have been a tool-pin or backup save).
+        assert "feature-flag toggles already saved" not in probe_attrs, (
+            f"hint hardcoded the source; should be source-blind: {probe_attrs}"
+        )
+
+    def test_two_step_save_note_present(self) -> None:
+        """The two-step save → restart note must render at the top of
+        the Server Settings panel so users know one click is not enough.
+        Asserted against production HTML (static markup in panel-server,
+        not a JS-rendered container).
+        """
+        from ha_mcp.settings_ui import _SETTINGS_HTML
+
+        assert "Two-step save" in _SETTINGS_HTML, (
+            "two-step save note copy missing or changed in production HTML"
+        )
+        # The note must call out both steps.
+        assert "Save advanced settings" in _SETTINGS_HTML, "save step missing"
+        assert "Restart" in _SETTINGS_HTML, "restart step missing"
+        # The CSS class hook the integration relies on.
+        assert "adv-save-note" in _SETTINGS_HTML, "save-note class hook missing"
+
+    def test_beta_master_help_text_contains_danger_warning(
+        self, settings_script: str
+    ) -> None:
+        """`enable_beta_features` help-text must lead with the danger
+        warning — these features can permanently damage HA and users
+        must be told before flipping the master.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {"status": 200, "json": self._payload()},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "PERMANENTLY DAMAGE" in result.dom, (
+            "master beta help-text missing 'PERMANENTLY DAMAGE' warning"
+        )
+        assert "OWN RISK" in result.dom, (
+            "master beta help-text missing 'OWN RISK' framing"
+        )
+        assert "backup" in result.dom.lower(), (
+            "master beta help-text missing backup advice"
+        )
+
+
+class TestBetaMasterToggleLiveRender:
+    """JSDOM coverage for live re-render on master flip."""
+
+    def _flags_payload(self, master_value: bool) -> dict:
+        return {
+            "flags": {
+                "enable_beta_features": {
+                    "value": master_value,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_BETA_FEATURES",
+                },
+                "enable_yaml_config_editing": {
+                    "value": False,
+                    "origin": "default",
+                    "editable": True,
+                    "type": "bool",
+                    "env_var": "ENABLE_YAML_CONFIG_EDITING",
+                },
+            },
+            "beta_sub_flags": ["enable_yaml_config_editing"],
+        }
+
+    def test_master_off_renders_subrow_dimmed(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": self._flags_payload(master_value=False),
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        # The yaml-editing row must carry both beta-sub AND dimmed classes.
+        assert "beta-sub dimmed" in result.dom or (
+            "beta-sub" in result.dom and "dimmed" in result.dom
+        ), f"expected dimmed beta-sub row; dom tail: {result.dom[-3000:]}"
+
+    def test_master_on_renders_subrow_not_dimmed(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": self._flags_payload(master_value=True),
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        # Row has beta-sub class but NOT dimmed.
+        import re
+
+        beta_sub_rows = re.findall(
+            r'<div[^>]*class="[^"]*beta-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert beta_sub_rows, "expected at least one beta-sub row"
+        for row_html in beta_sub_rows:
+            assert "dimmed" not in row_html, (
+                f"unexpected dimmed on master-on row: {row_html}"
+            )
+
+    def test_master_off_click_dims_subrow_live_without_clobbering_value(
+        self, settings_script: str
+    ) -> None:
+        """F.37 — dispatch a real change event on the master toggle and
+        assert the sub-row goes dimmed + disabled in the same tick,
+        WITHOUT visually flipping the sub-flag's checked state. The
+        live UI preserves the user's prior sub-flag selection (the
+        server-side cascade-clear was removed; the persisted file
+        keeps the truthy values, and the runtime master gate forces
+        sub-flags off at the Settings layer without touching the
+        file) — re-enabling the master later restores the sub-flag
+        values automatically.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                # Master ON, sub-flag ON — flipping master off should
+                # dim the sub-row but leave its checkbox checked.
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        },
+                        "enable_yaml_config_editing": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_YAML_CONFIG_EDITING",
+                        },
+                    },
+                    "beta_sub_flags": ["enable_yaml_config_editing"],
+                    "is_addon": False,
+                },
+            },
+            "/save-features": {"status": 200, "json": {"success": True}},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              // Wait for the initial render.
+              await new Promise(r => setTimeout(r, 200));
+              // Find the master checkbox and flip it off.
+              const beta = document.getElementById('betaBody');
+              const masterInput = beta.querySelector(
+                '.beta-master-row input[type="checkbox"]'
+              );
+              masterInput.checked = false;
+              masterInput.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 50));
+              // Probe via JS — JSDOM serialises attributes, not
+              // properties, so input.checked never shows up in the
+              // serialised dom. Stash the .checked property of the
+              // sub-row's checkbox into a probe div for the test to
+              // read.
+              const subInput = document.querySelector(
+                '.feature-row.beta-sub input[type="checkbox"]'
+              );
+              const probe = document.createElement('div');
+              probe.id = '__sub_state_probe';
+              if (!subInput) {
+                // Distinguish "selector missed" from "checkbox value
+                // flipped" so the failure message in the harness
+                // points at the right root cause.
+                probe.dataset.error = 'beta-sub input not in DOM';
+              } else {
+                probe.dataset.subChecked = String(subInput.checked);
+                probe.dataset.subDisabled = String(subInput.disabled);
+              }
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        sub_row_match = re.search(
+            r'<div[^>]*class="feature-row beta-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert sub_row_match, (
+            f"beta-sub row missing after master flip; dom: {result.dom[-3000:]}"
+        )
+        assert "dimmed" in sub_row_match.group(0), (
+            f"sub-row should be dimmed after master-off: {sub_row_match.group(0)}"
+        )
+        # Read probe div for the .checked / .disabled property values.
+        probe_match = re.search(r'<div[^>]*id="__sub_state_probe"[^>]*>', result.dom)
+        assert probe_match, f"sub-state probe missing; dom tail: {result.dom[-2000:]}"
+        probe_attrs = probe_match.group(0)
+        assert "data-error" not in probe_attrs, (
+            f"selector missed beta-sub input — DOM structure changed: {probe_attrs}"
+        )
+        # The checkbox VALUE must stay checked — user's prior
+        # sub-flag selection is preserved.
+        assert 'data-sub-checked="true"' in probe_attrs, (
+            f"sub-row checkbox flipped off — should stay checked: {probe_attrs}"
+        )
+        # Input must be disabled so the user can't fight the master gate.
+        assert 'data-sub-disabled="true"' in probe_attrs, (
+            f"sub-row input should be disabled when master off: {probe_attrs}"
+        )
+
+
+class TestCodeModeNesting:
+    """JSDOM coverage for code-mode sub-numerics nested under
+    enable_code_mode in the Beta section."""
+
+    def _payloads(self, master_on: bool, code_mode_on: bool) -> dict[str, dict]:
+        """Build /api/settings/features + /api/settings/advanced
+        responses for the two-gate matrix."""
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": master_on,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        },
+                        "enable_code_mode": {
+                            "value": code_mode_on,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_CODE_MODE",
+                        },
+                    },
+                    "beta_sub_flags": ["enable_code_mode"],
+                },
+            },
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "code_mode_max_duration",
+                            "env_var": "CODE_MODE_MAX_DURATION",
+                            "value": 30.0,
+                            "type": "float",
+                            "section": "beta_codemode",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1.0,
+                            "max": 300.0,
+                        }
+                    ]
+                },
+            },
+        }
+
+    def test_codemode_subrows_dimmed_when_master_off(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payloads(master_on=False, code_mode_on=True),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        cm_rows = re.findall(
+            r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert cm_rows, f"expected codemode-sub row in DOM; tail: {result.dom[-2000:]}"
+        # All code-mode-sub rows must be dimmed when master is off.
+        for row in cm_rows:
+            assert "dimmed" in row, (
+                f"expected dimmed on codemode-sub row with master off: {row}"
+            )
+
+    def test_codemode_subrows_dimmed_when_code_mode_off(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payloads(master_on=True, code_mode_on=False),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        cm_rows = re.findall(
+            r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert cm_rows, "expected codemode-sub row"
+        for row in cm_rows:
+            assert "dimmed" in row, (
+                f"expected dimmed on codemode-sub row with code_mode off: {row}"
+            )
+
+    def test_codemode_subrows_enabled_when_both_gates_on(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payloads(master_on=True, code_mode_on=True),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        cm_rows = re.findall(
+            r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert cm_rows, "expected codemode-sub row"
+        for row in cm_rows:
+            assert "dimmed" not in row, f"unexpected dimmed when both gates on: {row}"

@@ -3,6 +3,7 @@
 import functools
 import importlib.util
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -76,9 +77,11 @@ class TestSecretPathValidation:
 
     def test_is_valid_secret_path(self):
         assert self.addon._is_valid_secret_path("/private_abc") is True
-        assert self.addon._is_valid_secret_path("/mysecrt") is True   # exactly 8 chars
-        assert self.addon._is_valid_secret_path("/custom") is False   # 7 chars — too short
-        assert self.addon._is_valid_secret_path("/short") is False    # too short
+        assert self.addon._is_valid_secret_path("/mysecrt") is True  # exactly 8 chars
+        assert (
+            self.addon._is_valid_secret_path("/custom") is False
+        )  # 7 chars — too short
+        assert self.addon._is_valid_secret_path("/short") is False  # too short
         assert self.addon._is_valid_secret_path("https://example.com/x") is False
         assert self.addon._is_valid_secret_path("/https://evil.com") is False
         assert self.addon._is_valid_secret_path("no-leading-slash") is False
@@ -148,7 +151,9 @@ class TestPersistAddonOptions:
 
         monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
         with pytest.raises(urllib.error.HTTPError):
-            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
+            self.addon.persist_addon_options(
+                {"secret_path": "/private_x"}, "test-token"
+            )
 
     def test_connection_error_propagates(self, monkeypatch):
         """Network failures propagate to the caller — no silent swallowing."""
@@ -159,7 +164,9 @@ class TestPersistAddonOptions:
 
         monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
         with pytest.raises(urllib.error.URLError):
-            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
+            self.addon.persist_addon_options(
+                {"secret_path": "/private_x"}, "test-token"
+            )
 
 
 class TestMaybePersistSecretPath:
@@ -274,11 +281,16 @@ def _build_addon_image():
     """Build the addon test image via docker CLI (supports BuildKit)."""
     result = subprocess.run(
         [
-            "docker", "build",
-            "-t", IMAGE_TAG,
-            "-f", DOCKERFILE,
-            "--build-arg", "BUILD_VERSION=1.0.0-test",
-            "--build-arg", "BUILD_ARCH=amd64",
+            "docker",
+            "build",
+            "-t",
+            IMAGE_TAG,
+            "-f",
+            DOCKERFILE,
+            "--build-arg",
+            "BUILD_VERSION=1.0.0-test",
+            "--build-arg",
+            "BUILD_ARCH=amd64",
             ".",
         ],
         capture_output=True,
@@ -434,7 +446,10 @@ class TestAddonStartup:
             assert "[INFO] Home Assistant URL: http://supervisor/core" in logs
             assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/private_" in logs
             assert "Secret Path: /private_" in logs
-            assert "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!" in logs
+            assert (
+                "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!"
+                in logs
+            )
 
             # Verify debug messages
             assert "[INFO] Importing ha_mcp module..." in logs
@@ -483,7 +498,10 @@ class TestAddonStartup:
             # Verify custom config is used
             assert "[INFO] Backup hint mode: strong" in logs
             assert "[INFO] Using custom secret path from configuration" in logs
-            assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret" in logs
+            assert (
+                "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret"
+                in logs
+            )
             assert "Secret Path: /my_custom_secret" in logs
 
         finally:
@@ -512,3 +530,187 @@ class TestAddonStartup:
 
         finally:
             container.stop()
+
+
+class TestBetaMasterAutoEnableInDevAddon:
+    """Dev addon keeps the 5 sub-flag keys in its Supervisor options
+    schema (unlike stable). start.py auto-writes
+    ``ENABLE_BETA_FEATURES=true`` whenever any of those sub-flag keys
+    are present in ``/data/options.json``, so the runtime master gate
+    in ``_apply_feature_flag_overrides`` becomes a no-op for dev addon
+    users — Supervisor options remain authoritative for the 5 sub-flags."""
+
+    _DEV_BETA_KEYS = (
+        "enable_yaml_config_editing",
+        "enable_filesystem_tools",
+        "enable_custom_component_integration",
+        "enable_code_mode",
+        "enable_lite_docstrings",
+    )
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_auto_enable_writes_true_when_any_beta_key_truthy(self, monkeypatch):
+        """Dev-addon options with ANY beta sub-flag set to True →
+        ENABLE_BETA_FEATURES=true written to env."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master(
+            {"backup_hint": "normal", "enable_yaml_config_editing": True}
+        )
+        assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
+
+    def test_auto_enable_skips_when_all_beta_keys_false(self, monkeypatch):
+        """HA Supervisor persists every schema-declared option to
+        options.json with its default value on first start, so all 5
+        beta keys land there with ``false`` immediately on a fresh
+        dev-addon install. The auto-enable must NOT fire in that case
+        — the master should follow the user's actual sub-flag choices,
+        not the bare presence of the schema keys. Previously this test
+        asserted the opposite (presence alone fires) and the user hit
+        the resulting "locked-on master, no sub-flags enabled" bug
+        """
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master(
+            dict.fromkeys(self._DEV_BETA_KEYS, False)
+        )
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_fires_when_one_of_many_truthy(self, monkeypatch):
+        """4 sub-flags False, 1 sub-flag True → still fires. Locks the
+        ``any(...)`` semantic so a future change to ``all(...)`` would
+        regress the single-feature-enabled case."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        cfg: dict[str, object] = dict.fromkeys(self._DEV_BETA_KEYS, False)
+        cfg["enable_code_mode"] = True
+        self.addon.maybe_auto_enable_beta_master(cfg)
+        assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
+
+    def test_auto_enable_skips_non_bool_truthy_values(self, monkeypatch):
+        """Defensive: only Python ``True`` triggers, not a truthy
+        non-bool. Supervisor's JSON parsing returns proper bools, but
+        if a future malformed options.json or test fixture passes a
+        truthy string, we want the gate to stay shut rather than
+        silently flip the master on."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master({"enable_yaml_config_editing": "true"})
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_does_not_set_var_when_no_beta_key(self, monkeypatch):
+        """Stable-addon options never carry any beta key → no auto-
+        enable. Master stays at the pydantic default (False) so the
+        UI master toggle remains the gate."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master(
+            {"backup_hint": "normal", "enable_tool_search": True}
+        )
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_does_not_set_var_for_empty_config(self, monkeypatch):
+        """Missing/corrupt options.json yields an empty config → no
+        auto-enable. Defensive: silent feature regression is the
+        worst possible outcome of a bad options.json."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master({})
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry(self):
+        """The 5 keys checked by start.py must exactly match the
+        runtime registry — drift would silently break the auto-enable
+        signal for dev-addon users."""
+        # Import lazily because ha_mcp isn't importable until the
+        # repo's package is on the path. Acceptable here because
+        # this test only asserts a structural invariant.
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(
+            0,
+            str(Path(__file__).parents[2] / "src"),
+        )
+        from ha_mcp.config import BETA_FEATURE_FIELDS
+
+        assert set(self.addon._DEV_ADDON_BETA_KEYS) == set(BETA_FEATURE_FIELDS), (
+            "start.py's _DEV_ADDON_BETA_KEYS drifted from config.BETA_FEATURE_FIELDS"
+        )
+
+    def test_stable_addon_still_does_not_carry_beta_keys(self):
+        """Stable addon's ``config.yaml`` must NOT list any of the 5
+        beta sub-flag keys (their Supervisor-options absence is what
+        makes the master gate the sole gate for stable users)."""
+        import yaml
+
+        stable_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon" / "config.yaml"
+            ).read_text()
+        )
+        for key in self._DEV_BETA_KEYS:
+            assert key not in stable_yaml.get("options", {}), (
+                f"{key} must not be in stable addon options"
+            )
+            assert key not in stable_yaml.get("schema", {}), (
+                f"{key} must not be in stable addon schema"
+            )
+
+    def test_stable_addon_does_not_declare_enable_beta_features(self):
+        """Stable's ``config.yaml`` must NOT declare the master toggle
+        either — the master is web-UI-only on stable.
+        Schema-declaring it on stable would auto-fill options.json with
+        the default on first start, locking the master to env-mode and
+        the standalone web UI master path would no longer be the gate.
+        """
+        import yaml
+
+        stable_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon" / "config.yaml"
+            ).read_text()
+        )
+        assert "enable_beta_features" not in stable_yaml.get("options", {}), (
+            "enable_beta_features must not be in stable addon options"
+        )
+        assert "enable_beta_features" not in stable_yaml.get("schema", {}), (
+            "enable_beta_features must not be in stable addon schema"
+        )
+
+    def test_dev_addon_declares_enable_beta_features_master_in_schema(self):
+        """Dev addon's ``config.yaml`` must declare ``enable_beta_features``
+        in both ``options:`` (default true) and ``schema:`` (bool?), so
+        start.py reads it and writes the env var on every boot. The web
+        UI then surfaces the master row as origin='addon' (editable)
+        and saves route through Supervisor.
+        """
+        import yaml
+
+        dev_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon-dev" / "config.yaml"
+            ).read_text()
+        )
+        assert dev_yaml.get("options", {}).get("enable_beta_features") is True, (
+            "dev addon options must default enable_beta_features=true"
+        )
+        assert "enable_beta_features" in dev_yaml.get("schema", {}), (
+            "dev addon schema must declare enable_beta_features"
+        )
+
+    def test_dev_addon_defaults_every_beta_subflag_to_false(self):
+        """Beta sub-tools default OFF on a fresh dev install — only the
+        master defaults on. Shipping them on would risk damaging fresh
+        installs out of the box.
+        """
+        import yaml
+
+        dev_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon-dev" / "config.yaml"
+            ).read_text()
+        )
+        opts = dev_yaml.get("options", {})
+        for key in self._DEV_BETA_KEYS:
+            assert key in opts, f"dev addon must declare {key} in options"
+            assert opts[key] is False, (
+                f"dev addon must default {key} to False (got {opts[key]!r})"
+            )

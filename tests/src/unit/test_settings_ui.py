@@ -509,6 +509,72 @@ class TestSaveToolsValidation:
         assert body["success"] is False
         assert "HA_MCP_CONFIG_DIR" in str(body)
 
+    @pytest.mark.asyncio
+    async def test_env_pinned_noop_resend_does_not_409(self, monkeypatch, tmp_path):
+        """The JS saveConfig() POSTs the entire ``toolStates`` map on every
+        change, including env-pinned rows whose values match what the env
+        var dictates. The handler used to 409 on any env-pinned name
+        in the payload, breaking every save when
+        DISABLED_TOOLS / PINNED_TOOLS was non-empty. Accept matches; only
+        reject true value mismatches.
+        """
+        config_path = tmp_path / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_pinned_off")
+        monkeypatch.setenv("PINNED_TOOLS", "ha_pinned_on")
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        save = self._capture_handler(monkeypatch)
+        # Payload re-sends the env-pinned values verbatim AND flips an
+        # unrelated tool — must succeed.
+        resp = await save(
+            self._make_request(
+                {
+                    "states": {
+                        "ha_pinned_off": "disabled",
+                        "ha_pinned_on": "pinned",
+                        "ha_unrelated_tool": "disabled",
+                    }
+                }
+            )
+        )
+        assert resp.status_code == 200, json.loads(resp.body)
+        # Env-pinned rows are dropped from the persisted file so env
+        # stays the single source of truth.
+        saved = json.loads(config_path.read_text())
+        assert saved["tools"] == {"ha_unrelated_tool": "disabled"}
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_env_pinned_value_mismatch_still_409s(self, monkeypatch, tmp_path):
+        """Actual attempt to flip an env-pinned tool's value must still
+        be rejected — accepting it would let the UI override DISABLED_TOOLS
+        / PINNED_TOOLS, which is operator-level intent.
+        """
+        config_path = tmp_path / "tool_config.json"
+        monkeypatch.setattr("ha_mcp.settings_ui._get_config_path", lambda: config_path)
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_pinned_off")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+        save = self._capture_handler(monkeypatch)
+        resp = await save(
+            self._make_request(
+                {
+                    "states": {
+                        # Try to enable a tool DISABLED_TOOLS pinned off.
+                        "ha_pinned_off": "enabled",
+                    }
+                }
+            )
+        )
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert "ha_pinned_off" in str(body)
+        _reset_global_settings()
+
 
 class TestRestartAddon:
     """Tests for the `/api/settings/restart` handler — pins the previously
@@ -1681,11 +1747,16 @@ class TestSaveFeatureFlagsAddonMode:
     """Addon-mode ``POST /api/settings/features`` flow.
 
     Mirror of TestSaveBackupConfigAddonMode for feature flags. In addon
-    mode, ``get_feature_flag_origin`` returns ``"addon"`` for every
-    flag (because SUPERVISOR_TOKEN is set), so the handler must route
+    mode, ``get_feature_flag_origin`` returns ``"addon"`` for non-beta
+    flags (because SUPERVISOR_TOKEN is set), so the handler routes
     through Supervisor instead of refusing the write or persisting to
-    the override file (the file is ignored in addon mode anyway —
+    the override file (the file is ignored in addon mode for those —
     ``start.py`` rewrites env vars from ``config.yaml`` on every boot).
+
+    Beta sub-flags in addon mode have channel-dependent behavior (see
+    ``get_feature_flag_origin`` docstring): dev addon → Supervisor;
+    stable addon → file. These tests use ``enable_tool_search`` which
+    is non-beta and routes identically in both channels.
     """
 
     def _make_request(self, body):
@@ -1731,7 +1802,7 @@ class TestSaveFeatureFlagsAddonMode:
         )
 
         resp = await post_handler(
-            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+            self._make_request({"flags": {"enable_tool_search": True}})
         )
 
         assert resp.status_code == 200
@@ -1739,7 +1810,7 @@ class TestSaveFeatureFlagsAddonMode:
         assert body["mode"] == "addon"
         assert body["restart_required"] is True
         assert "restarting" not in body
-        merge_mock.assert_awaited_once_with(True, {"enable_yaml_config_editing": True})
+        merge_mock.assert_awaited_once_with(True, {"enable_tool_search": True})
         schedule_mock.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1775,7 +1846,7 @@ class TestSaveFeatureFlagsAddonMode:
         )
 
         resp = await post_handler(
-            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+            self._make_request({"flags": {"enable_tool_search": True}})
         )
 
         assert resp.status_code == 400
@@ -1810,7 +1881,7 @@ class TestSaveFeatureFlagsAddonMode:
         register_settings_routes(mcp, None, secret_path="/x")
 
         resp = await captured["post"](
-            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+            self._make_request({"flags": {"enable_tool_search": True}})
         )
 
         assert resp.status_code == 500
@@ -1871,7 +1942,7 @@ class TestSaveFeatureFlagsStandaloneMode:
         post_handler = self._capture_post_handler(monkeypatch, tmp_path)
 
         resp = await post_handler(
-            self._make_request({"flags": {"enable_yaml_config_editing": True}})
+            self._make_request({"flags": {"enable_tool_search": True}})
         )
 
         assert resp.status_code == 200
@@ -1879,7 +1950,7 @@ class TestSaveFeatureFlagsStandaloneMode:
         assert body["success"] is True
         assert body["mode"] == "file"
         assert body["restart_required"] is True
-        assert body["applied"] == {"enable_yaml_config_editing": True}
+        assert body["applied"] == {"enable_tool_search": True}
         # Legacy field names from earlier iterations must not creep
         # back in alongside the new shape.
         assert "restarting" not in body
@@ -2036,3 +2107,1036 @@ class TestFeatureGatedToolsCustomCode:
         # Lives in the System group, matching ha_config_set_yaml so the
         # related beta tools render together.
         assert entry["primary_tag"] == "System"
+
+
+class TestEnvPinnedTools:
+    """Tests for per-tool env-pin enforcement."""
+
+    def test_env_pinned_tools_helper_returns_correct_mapping(self, monkeypatch):
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo, ha_bar")
+        monkeypatch.setenv("PINNED_TOOLS", "ha_baz, ha_qux")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import env_pinned_tools
+
+        _reset_global_settings()
+        pinned = env_pinned_tools()
+        assert pinned == {
+            "ha_foo": "disabled",
+            "ha_bar": "disabled",
+            "ha_baz": "pinned",
+            "ha_qux": "pinned",
+        }
+        _reset_global_settings()
+
+    def test_env_pinned_tools_pinned_wins_on_collision(self, monkeypatch):
+        """If a name appears in both DISABLED_TOOLS and PINNED_TOOLS, pinned
+        wins (matches seed semantics in load_tool_config)."""
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.setenv("PINNED_TOOLS", "ha_foo")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import env_pinned_tools
+
+        _reset_global_settings()
+        assert env_pinned_tools() == {"ha_foo": "pinned"}
+        _reset_global_settings()
+
+    def test_env_pinned_disabled_tool_stays_disabled_even_after_file_write(
+        self, monkeypatch, tmp_path
+    ):
+        """DISABLED_TOOLS=ha_foo + tool_config.json says ha_foo='enabled' →
+        runtime sees ha_foo as disabled (env wins per-tool)."""
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_foo": "enabled"}})
+        )
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import effective_tool_config
+
+        _reset_global_settings()
+        cfg = effective_tool_config()
+        assert cfg["tools"]["ha_foo"] == "disabled"
+        get_data_dir.cache_clear()
+
+    def test_env_pinned_pinned_tool_stays_pinned_even_after_file_write(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("PINNED_TOOLS", "ha_bar")
+        monkeypatch.delenv("DISABLED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_bar": ""}})
+        )
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import effective_tool_config
+
+        _reset_global_settings()
+        cfg = effective_tool_config()
+        assert cfg["tools"]["ha_bar"] == "pinned"
+        get_data_dir.cache_clear()
+
+    def test_non_env_pinned_tool_remains_freely_editable(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        (tmp_path / "tool_config.json").write_text(
+            json.dumps({"tools": {"ha_other": "disabled"}})
+        )
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import effective_tool_config
+
+        _reset_global_settings()
+        cfg = effective_tool_config()
+        assert cfg["tools"]["ha_foo"] == "disabled"  # env-pinned
+        assert cfg["tools"]["ha_other"] == "disabled"  # file-set, still editable in UI
+        get_data_dir.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_save_tools_rejects_env_pinned_tool_flip(self, monkeypatch, tmp_path):
+        """POST attempting to flip an env-pinned tool returns 409."""
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        request = MagicMock()
+        request.json = AsyncMock(return_value={"states": {"ha_foo": "enabled"}})
+        resp = await handlers["save_tools"](request)
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert "ha_foo" in str(body)
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_get_tools_includes_env_pinned_map(self, monkeypatch):
+        """GET /api/settings/tools advertises env_pinned status so UI can
+        render locked rows in Chunk 5b."""
+        monkeypatch.setenv("DISABLED_TOOLS", "ha_foo")
+        monkeypatch.delenv("PINNED_TOOLS", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_tools"](MagicMock())
+        body = json.loads(resp.body)
+        assert body["env_pinned"] == {"ha_foo": "disabled"}
+        # Also confirm the overlay is reflected in states / tools.
+        assert body["states"].get("ha_foo") == "disabled"
+        _reset_global_settings()
+
+
+class TestAdvancedSettingsEndpoints:
+    """/api/settings/advanced GET+POST handlers."""
+
+    @pytest.mark.asyncio
+    async def test_get_advanced_returns_all_registered_fields(self, monkeypatch):
+        from ha_mcp.config import (
+            ADVANCED_SETTINGS_FIELDS,
+            _reset_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        # Clear every advanced env var so origins resolve cleanly.
+        for _fname, ename, *_ in ADVANCED_SETTINGS_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        field_names = {f["field"] for f in body["fields"]}
+        assert "homeassistant_url" in field_names
+        assert "log_level" in field_names
+        assert "verify_ssl" in field_names
+
+    @pytest.mark.asyncio
+    async def test_get_advanced_marks_connection_fields_display_only(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        url_row = next(f for f in body["fields"] if f["field"] == "homeassistant_url")
+        assert url_row["editable"] is False
+        assert url_row["section"] == "connection"
+
+    @pytest.mark.asyncio
+    async def test_get_advanced_log_level_has_choices(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        log_row = next(f for f in body["fields"] if f["field"] == "log_level")
+        assert log_row["choices"] == ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+    @pytest.mark.asyncio
+    async def test_get_advanced_masks_token_when_set(self, monkeypatch, tmp_path):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("HOMEASSISTANT_TOKEN", "real-secret-jwt-value")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        token_row = next(
+            f for f in body["fields"] if f["field"] == "homeassistant_token"
+        )
+        assert token_row["value"] == "*****"
+        assert "real-secret-jwt-value" not in str(body)
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_unknown_field(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"made_up_field": 42})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert "made_up_field" in str(body)
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_display_only_field(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"homeassistant_url": "http://attacker"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_env_pinned_field(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("HA_TIMEOUT", "60")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": 90})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert "HA_TIMEOUT" in str(body)
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_out_of_bounds(self, monkeypatch, tmp_path):
+        """Out-of-bounds POST returns 400 AND must NOT write to the
+        override file. A regression that returns 400 while still
+        mutating the file would silently persist bad values."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        monkeypatch.delenv("HA_TIMEOUT", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": -5})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400
+        # File untouched — no -5 in feature_flags.json.
+        assert not (tmp_path / "feature_flags.json").exists()
+        get_data_dir.cache_clear()
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_invalid_choice(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("LOG_LEVEL", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"log_level": "BANANAS"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_happy_path(self, monkeypatch, tmp_path):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.delenv("HA_TIMEOUT", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": 90})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert body["applied"] == {"timeout": 90}
+        assert body["restart_required"] is True
+        # File written and re-readable by Settings on next construct.
+        from ha_mcp.config import get_global_settings
+
+        assert get_global_settings().timeout == 90
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_rejects_null_byte_in_str(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("MCP_SERVER_NAME", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"mcp_server_name": "evil\x00name"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_get_advanced_env_set_field_returns_origin_env_and_editable_false(
+        self, monkeypatch
+    ):
+        """env-pinned advanced field: GET surfaces origin='env' + editable=False
+        so the UI renders the locked banner pointing at the env var."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("HA_TIMEOUT", "60")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        timeout_row = next(f for f in body["fields"] if f["field"] == "timeout")
+        assert timeout_row["origin"] == "env"
+        assert timeout_row["editable"] is False
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_with_corrupt_existing_file_returns_409(
+        self, monkeypatch, tmp_path
+    ):
+        """If feature_flags.json is corrupt, refuse to overwrite — avoid
+        clobbering whatever toggles the user previously persisted past
+        the corruption point."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.delenv("HA_TIMEOUT", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        get_data_dir.cache_clear()
+        (tmp_path / "feature_flags.json").write_text("{not valid json")
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": 90})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 409
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_addon_synced_routes_through_supervisor(
+        self, monkeypatch
+    ):
+        """``backup_hint`` and ``verify_ssl`` are addon-synced. In
+        addon mode, their saves must POST to Supervisor via
+        ``_supervisor_merge_and_post_options`` and return
+        ``mode='addon'``, NOT write to the override file. Without this
+        the addon-Configuration ↔ web-UI sync the panel promises would
+        be silently file-only.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")
+        monkeypatch.setenv("HA_VERIFY_SSL", "true")
+        _reset_global_settings()
+        merge_mock = AsyncMock(return_value=(True, None))
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"backup_hint": "weak"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        body = json.loads(resp.body)
+        assert body["mode"] == "addon"
+        assert body["applied"] == {"backup_hint": "weak"}
+        assert body["restart_required"] is True
+        merge_mock.assert_awaited_once_with(True, {"backup_hint": "weak"})
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_addon_synced_supervisor_4xx_surfaces_validation_failed(
+        self, monkeypatch
+    ):
+        """Supervisor schema rejection of an addon-synced advanced
+        write must propagate as ``CONFIG_VALIDATION_FAILED`` with the
+        actual Supervisor status code preserved, not a generic 502.
+        Mirrors the feature-flag addon-route behaviour.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import (
+            _SupervisorOptionsError,
+            build_settings_handlers,
+        )
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")
+        _reset_global_settings()
+        merge_mock = AsyncMock(
+            return_value=(
+                False,
+                _SupervisorOptionsError(
+                    kind="validation",
+                    message="Supervisor rejected (400): bad value",
+                    status_code=400,
+                ),
+            )
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options", merge_mock
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"backup_hint": "weak"})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 400
+        body = json.loads(resp.body)
+        assert body["success"] is False
+        assert body["error"]["code"] == "CONFIG_VALIDATION_FAILED"
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_origin_for_addon_synced_field_is_addon_in_addon_mode(
+        self, monkeypatch
+    ):
+        """``_origin_for_advanced_field`` returns 'addon' for fields
+        listed in ``ADDON_SYNCED_ADVANCED_FIELDS`` whenever
+        ``SUPERVISOR_TOKEN`` is set, regardless of env-var presence.
+        Standalone mode falls through to env/file/default as usual.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")
+        monkeypatch.setenv("HA_VERIFY_SSL", "true")
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        # backup_hint + verify_ssl come back addon-routed (editable).
+        backup_row = next(f for f in body["fields"] if f["field"] == "backup_hint")
+        verify_row = next(f for f in body["fields"] if f["field"] == "verify_ssl")
+        assert backup_row["origin"] == "addon", (
+            f"expected addon-routed backup_hint, got {backup_row}"
+        )
+        assert backup_row["editable"] is True
+        assert verify_row["origin"] == "addon", (
+            f"expected addon-routed verify_ssl, got {verify_row}"
+        )
+        assert verify_row["editable"] is True
+        # A non-addon-synced env-pinned field (e.g. timeout) stays env-locked.
+        monkeypatch.setenv("HA_TIMEOUT", "60")
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        timeout_row = next(f for f in body["fields"] if f["field"] == "timeout")
+        assert timeout_row["origin"] == "env"
+        assert timeout_row["editable"] is False
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_preserves_prior_feature_flag_entries(
+        self, monkeypatch, tmp_path
+    ):
+        """Advanced + feature-flag overrides share one file. A new
+        advanced save must merge into the existing file, not overwrite
+        prior feature-flag toggles."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.delenv("HA_TIMEOUT", raising=False)
+        monkeypatch.delenv("ENABLE_TOOL_SEARCH", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        get_data_dir.cache_clear()
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps({"enable_tool_search": True})
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": 90})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 200
+        merged = json.loads((tmp_path / "feature_flags.json").read_text())
+        assert merged["enable_tool_search"] is True  # prior preserved
+        assert merged["timeout"] == 90  # new merged in
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+
+class TestBetaMasterGateInSave:
+    """Server-side rejection of beta sub-flag writes when master is off."""
+
+    @pytest.mark.asyncio
+    async def test_save_features_rejects_beta_subflag_when_master_off(
+        self, monkeypatch
+    ):
+        """POST {enable_yaml_config_editing: true} while master is off → 409."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(
+            return_value={"flags": {"enable_yaml_config_editing": True}}
+        )
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 409
+        body = json.loads(resp.body)
+        assert "enable_yaml_config_editing" in str(body)
+
+    @pytest.mark.asyncio
+    async def test_save_features_accepts_master_and_subflag_in_same_batch(
+        self, monkeypatch, tmp_path
+    ):
+        """POST {enable_beta_features: true, enable_yaml_config_editing: true}
+        in one batch succeeds — effective master state is derived AFTER merge."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(
+            return_value={
+                "flags": {
+                    "enable_beta_features": True,
+                    "enable_yaml_config_editing": True,
+                }
+            }
+        )
+        resp = await handlers["save_feature_flags"](req)
+        # Must NOT be 409 — both arrive in one batch so effective master = True.
+        assert resp.status_code == 200
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_allows_subflag_when_master_already_on(
+        self, monkeypatch, tmp_path
+    ):
+        """If feature_flags.json already has master=True, a sub-flag save
+        with no master in the payload succeeds (no 409)."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps({"enable_beta_features": True})
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_filesystem_tools": True}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_rejects_subflag_when_payload_turns_master_off(
+        self, monkeypatch, tmp_path
+    ):
+        """{enable_beta_features: false, enable_yaml_config_editing: true}
+        in one batch → 409. Post-merge effective master is False, so the
+        sub-flag write must be rejected even though master was True
+        before the call."""
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Pre-existing state: master on, no sub-flag yet.
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps({"enable_beta_features": True})
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(
+            return_value={
+                "flags": {
+                    "enable_beta_features": False,
+                    "enable_yaml_config_editing": True,
+                }
+            }
+        )
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 409
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_master_off_preserves_subflag_values(
+        self, monkeypatch, tmp_path
+    ):
+        """Master-off does NOT cascade into sub-flag values. The
+        runtime master gate forces sub-flags off at runtime, but the
+        persisted values stay so flipping the master back on restores
+        the user's prior sub-flag selections.
+
+        The previous cascade-clear behavior forced users to re-check
+        every sub-flag after every master-off/on cycle, which is the
+        wrong UX trade for an opt-in beta surface.
+        """
+        from ha_mcp.config import (
+            BETA_FEATURE_FIELDS,
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Pre-existing state: master on + every beta sub-flag on.
+        prior = {"enable_beta_features": True}
+        for sub in BETA_FEATURE_FIELDS:
+            prior[sub] = True
+        (tmp_path / "feature_flags.json").write_text(json.dumps(prior))
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        # User flips ONLY the master off — no sub-flag entries in payload.
+        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": False}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        # Master is now off in the file.
+        on_disk = json.loads((tmp_path / "feature_flags.json").read_text())
+        assert on_disk["enable_beta_features"] is False
+        # Sub-flag values are PRESERVED so toggling the master back on
+        # later restores them automatically.
+        for sub in BETA_FEATURE_FIELDS:
+            assert on_disk[sub] is True, (
+                f"sub-flag {sub} was clobbered on master-off — should have stayed True"
+            )
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_master_on_restores_runtime_subflag_values(
+        self, monkeypatch, tmp_path
+    ):
+        """Round-trip: master off → master on → previously-truthy sub-flags
+        come back through the runtime master gate (no manual re-toggle).
+        """
+        from ha_mcp.config import (
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+            get_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # File: master off + sub-flags true. Runtime gate forces sub
+        # to False on read.
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps(
+                {
+                    "enable_beta_features": False,
+                    "enable_yaml_config_editing": True,
+                    "enable_filesystem_tools": True,
+                }
+            )
+        )
+        _reset_global_settings()
+        settings = get_global_settings()
+        assert settings.enable_beta_features is False
+        assert settings.enable_yaml_config_editing is False  # gated off
+        assert settings.enable_filesystem_tools is False  # gated off
+        # User flips master back on.
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": True}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        _reset_global_settings()
+        settings = get_global_settings()
+        # Sub-flags resume their prior True state because the file
+        # still has them.
+        assert settings.enable_beta_features is True
+        assert settings.enable_yaml_config_editing is True
+        assert settings.enable_filesystem_tools is True
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_payload_master_false_sub_true_rejected_by_gate(
+        self, monkeypatch, tmp_path
+    ):
+        """In-payload ``{master: false, sub: true}`` is rejected by the
+        master-gate check (effective_master=false → sub-flag write
+        not allowed). The persisted file is unchanged. Sub-flag values
+        are no longer cascade-cleared, so the gate rejection is the
+        only thing preventing the user from landing an inconsistent
+        "sub true while master will be false at runtime" state.
+        """
+        from ha_mcp.config import (
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Pre-existing state: master on, both sub-flags on.
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps(
+                {
+                    "enable_beta_features": True,
+                    "enable_yaml_config_editing": True,
+                    "enable_filesystem_tools": True,
+                }
+            )
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        # Caller's payload tries the inconsistent state — master off
+        # but yaml_config still asserted true. Master-gate check
+        # rejects this first (because beta sub-flag write is gated
+        # behind effective_master), so the response should 409 with
+        # the gate message, NOT silently land the inconsistent state.
+        req.json = AsyncMock(
+            return_value={
+                "flags": {
+                    "enable_beta_features": False,
+                    "enable_yaml_config_editing": True,
+                }
+            }
+        )
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 409, json.loads(resp.body)
+        # Sanity check: file unchanged.
+        on_disk = json.loads((tmp_path / "feature_flags.json").read_text())
+        assert on_disk["enable_yaml_config_editing"] is True
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_acquires_override_file_lock(
+        self, monkeypatch, tmp_path
+    ):
+        """F.5 — pin the lock-acquire site so a regression that removes
+        ``async with _get_override_file_lock():`` from the file-mode
+        write path lands as a test failure. The lock is the only thing
+        preventing two concurrent saves from clobbering each other's
+        persisted state, but the protection is invisible to other
+        tests — they'd still pass without it.
+        """
+        from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Wrap _get_override_file_lock so we can count entries.
+        import ha_mcp.settings_ui as ui_mod
+
+        real_get_lock = ui_mod._get_override_file_lock
+        entries = {"count": 0}
+
+        class CountingLock:
+            def __init__(self, inner):
+                self._inner = inner
+
+            async def __aenter__(self):
+                entries["count"] += 1
+                return await self._inner.__aenter__()
+
+            async def __aexit__(self, *args):
+                return await self._inner.__aexit__(*args)
+
+        def patched_get_lock():
+            return CountingLock(real_get_lock())
+
+        monkeypatch.setattr(ui_mod, "_get_override_file_lock", patched_get_lock)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_tool_search": True}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        assert entries["count"] == 1, (
+            "save_feature_flags must acquire _OVERRIDE_FILE_LOCK exactly once "
+            "in the file-mode write path — regression would silently bypass "
+            "concurrent-save serialisation"
+        )
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_advanced_acquires_override_file_lock(
+        self, monkeypatch, tmp_path
+    ):
+        """F.5 — same lock-acquire pin for the advanced-settings file
+        write path. Both handlers must share the same lock so they
+        can't race against each other on the shared
+        ``feature_flags.json``.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.delenv("HA_TIMEOUT", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        get_data_dir.cache_clear()
+        import ha_mcp.settings_ui as ui_mod
+
+        real_get_lock = ui_mod._get_override_file_lock
+        entries = {"count": 0}
+
+        class CountingLock:
+            def __init__(self, inner):
+                self._inner = inner
+
+            async def __aenter__(self):
+                entries["count"] += 1
+                return await self._inner.__aenter__()
+
+            async def __aexit__(self, *args):
+                return await self._inner.__aexit__(*args)
+
+        def patched_get_lock():
+            return CountingLock(real_get_lock())
+
+        monkeypatch.setattr(ui_mod, "_get_override_file_lock", patched_get_lock)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"timeout": 90})
+        resp = await handlers["save_advanced_settings"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        assert entries["count"] == 1, (
+            "save_advanced_settings must acquire _OVERRIDE_FILE_LOCK in the "
+            "file-mode write path — regression would silently bypass "
+            "concurrent-save serialisation"
+        )
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_master_on_restores_subflag_values_in_addon_mode(
+        self, monkeypatch, tmp_path
+    ):
+        """F.7 — round-trip restore is exercised in standalone mode by
+        ``test_save_features_master_on_restores_runtime_subflag_values``.
+        Mirror for addon mode: the Supervisor merge-and-post must NOT
+        zero out sub-flag values when the user POSTs only the master
+        flip-on. The preserve-on-master-off → restore-on-master-on UX
+        only works in addon mode if Supervisor keeps the merged options
+        intact.
+        """
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        # Dev-addon options.json shape: master + sub-flag both true,
+        # then user flipped master off (sub-flag value preserved).
+        # Supervisor's current options state at fetch time reflects
+        # that shape.
+        current_options = {
+            "enable_beta_features": False,
+            "enable_yaml_config_editing": True,
+            "enable_filesystem_tools": True,
+            "backup_hint": "normal",
+        }
+        # Mock the fetch+post path so we can inspect what gets POSTed.
+        fetch_mock = AsyncMock(return_value=(current_options, None))
+        merge_mock = AsyncMock(return_value=(True, None))
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fetch_mock
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_merge_and_post_options",
+            merge_mock,
+        )
+        # Mark the master env var as set so get_feature_flag_origin
+        # returns 'addon' for it and the save handler picks the
+        # addon-route branch.
+        monkeypatch.setenv("ENABLE_BETA_FEATURES", "false")
+        _reset_global_settings()
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": True}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        # The Supervisor POST got only the master flip. Sub-flag
+        # values are NOT in the call — Supervisor's merge layer
+        # preserves the existing options.json entries for keys not
+        # mentioned in the POST body.
+        merge_mock.assert_awaited_once()
+        posted_args = merge_mock.await_args.args
+        assert posted_args[1] == {"enable_beta_features": True}, (
+            f"addon-route POST must NOT clobber sub-flag values; "
+            f"posted: {posted_args[1]}"
+        )
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_save_features_master_off_applied_dict_contains_only_master(
+        self, monkeypatch, tmp_path
+    ):
+        """Master-off save's ``applied`` dict carries only the master
+        change — no synthetic sub-flag entries from a cascade. Pins
+        the no-cascade behavior so a future regression that re-adds
+        cascade-clear shows up in this test's diff.
+        """
+        from ha_mcp.config import (
+            BETA_FEATURE_FIELDS,
+            FEATURE_FLAG_FIELDS,
+            _reset_global_settings,
+        )
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
+        for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
+            monkeypatch.delenv(ename, raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        (tmp_path / "feature_flags.json").write_text(
+            json.dumps(
+                {"enable_beta_features": True, "enable_yaml_config_editing": True}
+            )
+        )
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"flags": {"enable_beta_features": False}})
+        resp = await handlers["save_feature_flags"](req)
+        assert resp.status_code == 200, json.loads(resp.body)
+        body = json.loads(resp.body)
+        applied = body.get("applied", {})
+        assert applied == {"enable_beta_features": False}, (
+            f"expected applied to contain only the master flip; got {applied}"
+        )
+        # Sub-flag values are NOT touched.
+        for sub in BETA_FEATURE_FIELDS:
+            assert sub not in applied
+        get_data_dir.cache_clear()
+        _reset_global_settings()

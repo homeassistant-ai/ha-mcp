@@ -8,6 +8,7 @@ import os
 # Load environment variables from .env file with HAMCP_ENV_FILE support
 # Use absolute path to ensure .env is found regardless of cwd
 from pathlib import Path
+from typing import Any, Literal, NamedTuple
 
 from dotenv import load_dotenv
 from pydantic import Field, field_validator
@@ -106,6 +107,15 @@ class Settings(BaseSettings):
     enable_tool_security_policies: bool = Field(
         False, alias="ENABLE_TOOL_SECURITY_POLICIES"
     )
+
+    # Master beta-features toggle. UI-only — intentionally not in any
+    # addon config.yaml schema. Consumed by the master gate in
+    # ``_apply_feature_flag_overrides``, which force-sets the five
+    # ``BETA_FEATURE_FIELDS`` sub-flags to False whenever this master is
+    # off. Dev addon ``start.py`` auto-writes ``ENABLE_BETA_FEATURES=true``
+    # whenever any beta sub-flag key is present in ``/data/options.json``
+    # so the dev-addon UX is unchanged.
+    enable_beta_features: bool = Field(False, alias="ENABLE_BETA_FEATURES")
 
     # Managed YAML config editing — allows ha_config_set_yaml to add,
     # replace, or remove top-level keys in configuration.yaml and package
@@ -326,18 +336,94 @@ def validate_settings() -> tuple[bool, str | None]:
 # the override file, addon mode (SUPERVISOR_TOKEN set) ignores the
 # file entirely (start.py owns env vars from config.yaml in that
 # mode), and the pydantic field default is the fallback.
-FEATURE_FLAG_FIELDS: tuple[tuple[str, str, type], ...] = (
-    ("enable_tool_search", "ENABLE_TOOL_SEARCH", bool),
-    ("tool_search_max_results", "TOOL_SEARCH_MAX_RESULTS", int),
-    ("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
-    ("enable_lite_docstrings", "ENABLE_LITE_DOCSTRINGS", bool),
-    ("enable_filesystem_tools", "HAMCP_ENABLE_FILESYSTEM_TOOLS", bool),
-    (
+# ===== Typed registry shapes =====
+#
+# NamedTuples preserve positional-unpack compatibility (existing
+# ``for fname, env, ftype in FEATURE_FLAG_FIELDS:`` iteration sites keep
+# working) AND add attribute access (``f.field`` / ``f.env`` / ``f.ftype``)
+# for new call sites. Literal annotations on closed-set fields (section,
+# python type) give mypy a chance to catch typos at definition time
+# instead of letting them surface as silent runtime no-ops. The
+# ``_validate_registries()`` call at module bottom enforces cross-table
+# invariants at import time (field name exists on Settings, registries
+# are name-disjoint, bounds-on-numeric / choices-on-str).
+
+# Allowed python types for the override-apply machinery in
+# ``_apply_*_overrides``. Anything outside this set silently falls into
+# the ``else: continue`` arm of the type switch and the override is
+# dropped — making the constraint explicit at the type level catches
+# typos like ``ftype=Path`` at definition site.
+RegistryFieldType = type[bool] | type[int] | type[float] | type[str]
+
+# Closed set of UI section names. The advanced renderer in
+# settings_ui.py picks a DOM container per section; a typo would render
+# the row into nothing.
+AdvancedSection = Literal[
+    "connection",
+    "search",
+    "operations",
+    "diagnostics",
+    "tools_surface",
+    "beta_codemode",
+]
+
+
+class OverrideField(NamedTuple):
+    """One row of an override-style registry (feature flags + backup
+    settings + any future ``(field, env, ftype)`` registry).
+
+    NOTE: adding a field here is a BREAKING change for every positional
+    unpack site (e.g. ``for f, e, t in FEATURE_FLAG_FIELDS:``). Prefer
+    a new NamedTuple over extending this one if a registry needs
+    additional metadata.
+    """
+
+    field: str
+    env: str
+    ftype: RegistryFieldType
+
+
+# Aliases preserve the readable names callers use at construction sites
+# (``FeatureFlagField(...)`` reads more clearly than ``OverrideField(...)``
+# inside FEATURE_FLAG_FIELDS) while ensuring the two registries can never
+# drift apart at the type level.
+FeatureFlagField = OverrideField
+BackupOverrideField = OverrideField
+
+
+class AdvancedField(NamedTuple):
+    """One row of ADVANCED_SETTINGS_FIELDS.
+
+    NOTE: adding a field here is a BREAKING change for every positional
+    unpack site (e.g. ``for f, e, t, s, ed in ADVANCED_SETTINGS_FIELDS:``).
+    """
+
+    field: str
+    env: str
+    ftype: RegistryFieldType
+    section: AdvancedSection
+    editable: bool
+
+
+FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
+    FeatureFlagField("enable_beta_features", "ENABLE_BETA_FEATURES", bool),
+    FeatureFlagField("enable_tool_search", "ENABLE_TOOL_SEARCH", bool),
+    FeatureFlagField("tool_search_max_results", "TOOL_SEARCH_MAX_RESULTS", int),
+    FeatureFlagField(
+        "enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool
+    ),
+    FeatureFlagField("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
+    FeatureFlagField("enable_lite_docstrings", "ENABLE_LITE_DOCSTRINGS", bool),
+    FeatureFlagField("enable_filesystem_tools", "HAMCP_ENABLE_FILESYSTEM_TOOLS", bool),
+    FeatureFlagField(
         "enable_custom_component_integration",
         "HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION",
         bool,
     ),
-    ("enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool),
+    # ``enable_code_mode`` lives in this tuple so the override file (and
+    # the web UI Server Settings tab) can write the flag. Without this
+    # entry, the UI save logic would have nowhere to land the value.
+    FeatureFlagField("enable_code_mode", "ENABLE_CODE_MODE", bool),
 )
 
 # Override-file location is the same data dir that holds tool_config.json
@@ -356,6 +442,143 @@ _FEATURE_FLAG_INT_BOUNDS: dict[str, tuple[int, int]] = {
     "tool_search_max_results": (2, 10),
 }
 
+# Beta sub-flags gated by ``enable_beta_features``. Consumed
+# by the master gate inside ``_apply_feature_flag_overrides``. Each name
+# is also in ``FEATURE_FLAG_FIELDS`` so the UI's per-field origin / save
+# logic stays unchanged — this tuple is consulted ONLY by the master
+# gate, never by the per-field iteration.
+BETA_FEATURE_FIELDS: tuple[str, ...] = (
+    "enable_yaml_config_editing",
+    "enable_filesystem_tools",
+    "enable_custom_component_integration",
+    "enable_code_mode",
+    "enable_lite_docstrings",
+)
+
+# ===== Advanced settings panel registry =====
+#
+# Each entry: (field_name, env_var_name, python_type, section, editable).
+#
+# - ``section`` groups fields in the Advanced section of the Server Settings
+#   tab: "connection", "search", "operations", "diagnostics", "tools_surface".
+#   The 5 beta sub-flags + the master live in a separate "beta" section that
+#   the UI renders below the Advanced section.
+# - ``editable=False`` marks display-only rows. Connection fields are
+#   non-editable from the running server (chicken-and-egg footgun);
+#   ``MCP_SERVER_VERSION`` is editable (it has an env alias) but the UI
+#   warns that overriding it can confuse clients.
+# - Fields that already appear in ``FEATURE_FLAG_FIELDS`` (e.g. tool search
+#   toggles, beta flags) are intentionally NOT duplicated here — the UI
+#   continues to source them via ``FEATURE_FLAG_FIELDS`` so the per-field
+#   env-pin / addon-Supervisor routing logic stays unchanged for those rows.
+ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
+    # Connection — URL/token are display-only (chicken-and-egg: if you
+    # could break the connection from the UI you couldn't use the same
+    # UI to fix it). timeout / max_retries / verify_ssl are editable.
+    AdvancedField("homeassistant_url", "HOMEASSISTANT_URL", str, "connection", False),
+    AdvancedField(
+        "homeassistant_token", "HOMEASSISTANT_TOKEN", str, "connection", False
+    ),
+    AdvancedField("timeout", "HA_TIMEOUT", int, "connection", True),
+    AdvancedField("max_retries", "HA_MAX_RETRIES", int, "connection", True),
+    # verify_ssl was in the (now-removed) connection section and was
+    # always env-locked in addon mode. Moved to operations so it
+    # renders in the panel, and added to ADDON_SYNCED_ADVANCED_FIELDS
+    # below so saves in addon mode route through Supervisor — the same
+    # sync behaviour the feature flags already get.
+    AdvancedField("verify_ssl", "HA_VERIFY_SSL", bool, "operations", True),
+    # Search & matching.
+    AdvancedField("fuzzy_threshold", "FUZZY_THRESHOLD", int, "search", True),
+    AdvancedField("entity_search_limit", "ENTITY_SEARCH_LIMIT", int, "search", True),
+    # Operations.
+    AdvancedField("backup_hint", "BACKUP_HINT", str, "operations", True),
+    AdvancedField("enable_websocket", "ENABLE_WEBSOCKET", bool, "operations", True),
+    AdvancedField(
+        "enabled_tool_modules", "ENABLED_TOOL_MODULES", str, "tools_surface", True
+    ),
+    AdvancedField(
+        "enable_dashboard_partial_tools",
+        "ENABLE_DASHBOARD_PARTIAL_TOOLS",
+        bool,
+        "tools_surface",
+        True,
+    ),
+    # Diagnostics.
+    AdvancedField("mcp_server_name", "MCP_SERVER_NAME", str, "diagnostics", True),
+    AdvancedField("mcp_server_version", "MCP_SERVER_VERSION", str, "diagnostics", True),
+    AdvancedField("environment", "ENVIRONMENT", str, "diagnostics", True),
+    AdvancedField("log_level", "LOG_LEVEL", str, "diagnostics", True),
+    AdvancedField("debug", "DEBUG", bool, "diagnostics", True),
+    # NOTE: ``auto_backup_dir`` and ``auto_backup_calendar_lookahead_days``
+    # are NOT in this tuple. They are in ``BACKUP_OVERRIDE_FIELDS`` (defined
+    # below) so they persist to ``backup_settings.json`` alongside the
+    # other auto-backup settings.
+    # Code-mode sub-numerics (only meaningful when enable_code_mode is on).
+    # editable=True but the UI nests them under the beta section's
+    # enable_code_mode row, dimmed and disabled when code mode is off.
+    AdvancedField(
+        "code_mode_max_duration", "CODE_MODE_MAX_DURATION", float, "beta_codemode", True
+    ),
+    AdvancedField(
+        "code_mode_max_memory", "CODE_MODE_MAX_MEMORY", int, "beta_codemode", True
+    ),
+    AdvancedField(
+        "code_mode_max_recursion", "CODE_MODE_MAX_RECURSION", int, "beta_codemode", True
+    ),
+    AdvancedField(
+        "code_mode_max_invocations",
+        "CODE_MODE_MAX_INVOCATIONS",
+        int,
+        "beta_codemode",
+        True,
+    ),
+    AdvancedField(
+        "code_mode_saved_tools_path",
+        "CODE_MODE_SAVED_TOOLS_PATH",
+        str,
+        "beta_codemode",
+        True,
+    ),
+)
+
+
+# Per-field validation bounds for non-bool advanced fields.
+# Bounds present on the Settings field today (mirrored):
+#   fuzzy_threshold (validator 0-100), code_mode_* (Field ge/le).
+# Bounds added purely as UI/POST guardrails (no Field constraint):
+#   timeout, max_retries, entity_search_limit.
+_ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
+    "timeout": (1, 600),
+    "max_retries": (0, 20),
+    "fuzzy_threshold": (0, 100),
+    "entity_search_limit": (1, 1000),
+    "code_mode_max_duration": (1.0, 300.0),
+    "code_mode_max_memory": (1_048_576, 268_435_456),
+    "code_mode_max_recursion": (1, 10_000),
+    "code_mode_max_invocations": (1, 10_000),
+}
+
+
+# Allowed-values for enum-like string fields (renders as <select> in UI).
+_ADVANCED_SETTINGS_CHOICES: dict[str, tuple[str, ...]] = {
+    "backup_hint": ("strong", "normal", "weak", "auto"),
+    "log_level": ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+    "environment": ("development", "production"),
+}
+
+
+# Advanced fields that also live in the HA add-on's `config.yaml`
+# schema. In addon mode, their env vars are written by start.py from
+# /data/options.json, so the override file would be
+# ignored at next boot anyway — writes must route through Supervisor
+# /addons/self/options instead. ``_origin_for_advanced_field`` returns
+# ``'addon'`` for these in addon mode; ``_save_advanced_settings``
+# batches addon-origin writes and POSTs them via Supervisor.
+ADDON_SYNCED_ADVANCED_FIELDS: tuple[str, ...] = (
+    "backup_hint",
+    "verify_ssl",
+)
+
 
 def get_feature_flag_origin(env_name: str) -> str:
     """Return where the live value for ``env_name`` is sourced from.
@@ -363,13 +586,11 @@ def get_feature_flag_origin(env_name: str) -> str:
     Used by the web UI to label each feature-flag field with its
     source and decide whether the field is editable from the web UI:
 
-    - ``"addon"``: running inside the HA add-on. ``start.py`` always
-      writes these env vars from ``config.yaml`` on every addon
-      start; the override file is ignored. Web UI edits are routed
-      through Supervisor ``/addons/self/options`` so ``config.yaml``
-      stays authoritative. (The current PR exposes flags read-only
-      in addon mode; routing addon edits through Supervisor is
-      tracked separately.)
+    - ``"addon"``: running inside the HA add-on AND the env var is
+      currently set. ``start.py`` writes env vars from ``config.yaml``
+      on every addon start; the override file is ignored. Web UI
+      edits are routed through Supervisor ``/addons/self/options`` so
+      ``config.yaml`` stays authoritative.
     - ``"env"``: env var explicitly set in the process environment
       (includes values loaded from ``.env`` via ``load_dotenv`` at
       module import — those land in ``os.environ`` and are
@@ -381,15 +602,45 @@ def get_feature_flag_origin(env_name: str) -> str:
       file in place.
     - ``"default"``: no env var and no override file entry; the
       pydantic field default applies. Web UI edits create the file.
+
+    Addon-mode handling for the master and beta sub-flags:
+
+    - ``ENABLE_BETA_FEATURES`` (master) is in the DEV addon schema
+      only. In dev addon mode, ``start.py`` writes
+      the env var from ``/data/options.json`` when the key is present;
+      that signals "Supervisor authoritative" and ``"addon"`` is
+      returned here. In stable addon mode the key is absent from
+      schema, ``start.py`` doesn't write the env var, and the master
+      falls through to env / file / default precedence so the
+      standalone web UI master path remains the gate.
+    - The five ``BETA_FEATURE_FIELDS`` (sub-flags) follow the same
+      shape — present in dev addon schema, absent from stable. Same
+      env-var-presence signal distinguishes them at runtime.
     """
-    if os.environ.get("SUPERVISOR_TOKEN"):
-        return "addon"
-    if os.environ.get(env_name) is not None:
-        return "env"
     field_name = next(
         (fname for fname, ename, _ in FEATURE_FLAG_FIELDS if ename == env_name),
         None,
     )
+    is_master = field_name == "enable_beta_features"
+    is_beta_sub = field_name in BETA_FEATURE_FIELDS
+    in_addon = bool(os.environ.get("SUPERVISOR_TOKEN"))
+
+    if in_addon:
+        if is_master or is_beta_sub:
+            # Dev addon: start.py wrote the env var from options.json
+            # → Supervisor is the source of truth, mark addon-editable.
+            # Stable addon: env var never written → fall through to
+            # file/default. The master moved from "never schema-bound"
+            # to "schema-bound on dev only"; the same env-var-presence
+            # signal now distinguishes both for the master and the 5
+            # sub-flags.
+            if os.environ.get(env_name) is not None:
+                return "addon"
+            # else: stable / legacy-dev-no-master-key, fall through.
+        else:
+            return "addon"
+    if os.environ.get(env_name) is not None:
+        return "env"
     if field_name is None:
         return "default"
     overrides = _read_feature_flag_override_file()
@@ -467,24 +718,45 @@ def _read_feature_flag_override_file() -> dict[str, object]:
 
 
 def _apply_feature_flag_overrides(settings: "Settings") -> None:
-    """Patch ``settings`` with values from the override file, in place.
+    """Patch ``settings`` with override-file values + apply the master beta gate.
 
-    Honors the "env var wins" contract: a field whose env var is set
-    in the process environment is never overwritten. Addon mode
-    short-circuits — ``start.py`` already wrote env vars from
-    ``config.yaml`` and the override file is ignored. Range / type
-    coercion mirrors the pydantic Field bounds so a corrupt file
-    can't push values out of range; out-of-range or untypable
-    entries are logged at WARNING and skipped rather than crashing
-    every consumer of ``get_global_settings()``.
+    Two behaviors interleave:
+
+    1. **Per-field override-file application**: reads
+       ``feature_flags.json`` and applies values for each
+       FEATURE_FLAG_FIELDS entry, subject to: explicit env var wins over
+       file; addon mode (SUPERVISOR_TOKEN set) normally short-circuits
+       this branch because start.py owns env vars from config.yaml.
+
+       EXCEPTION: the beta-master + beta-sub-flag fields skip the
+       addon-mode short-circuit. The master isn't in any addon schema;
+       the five sub-flags are in the dev-addon schema (where ``start.py``
+       writes the env var from options.json — env-var-wins skips the
+       file read here, leaving Supervisor authoritative) but NOT in the
+       stable schema (where the env var is never written, so the file
+       is read and applied). In standalone mode neither is addon-routed.
+
+    2. **Beta master gate**: after the per-field pass, if
+       ``enable_beta_features`` is False on the resolved Settings,
+       force-set the five BETA_FEATURE_FIELDS to False regardless of
+       how they currently look. This is the "master toggle" semantics —
+       even a power user who sets ENABLE_YAML_CONFIG_EDITING=true via
+       env var still needs to flip the master before the flag takes
+       effect.
     """
-    if os.environ.get("SUPERVISOR_TOKEN"):
-        return
+    in_addon = bool(os.environ.get("SUPERVISOR_TOKEN"))
     overrides = _read_feature_flag_override_file()
-    if not overrides:
-        return
-    for field_name, env_name, ftype in FEATURE_FLAG_FIELDS:
+
+    known = {fname: (ename, ftype) for fname, ename, ftype in FEATURE_FLAG_FIELDS}
+    beta_fields = {"enable_beta_features", *BETA_FEATURE_FIELDS}
+
+    for field_name, (env_name, ftype) in known.items():
+        is_beta = field_name in beta_fields
+        if in_addon and not is_beta:
+            # Non-beta addon mode: start.py owns it. Skip.
+            continue
         if os.environ.get(env_name) is not None:
+            # Explicit env var wins over file for that field.
             continue
         if field_name not in overrides:
             continue
@@ -501,9 +773,6 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
             coerced = bool(raw)
         elif ftype is int:
             if isinstance(raw, bool) or not isinstance(raw, int):
-                # Reject bool-typed ints (since ``bool`` subclasses
-                # ``int``, a stray ``true`` would otherwise coerce to
-                # ``1``).
                 logger.warning(
                     "Override for %r is %s; expected int — ignoring.",
                     field_name,
@@ -523,24 +792,194 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
                 continue
         else:
             continue
+        if not hasattr(settings, field_name):
+            logger.warning(
+                "Override for %r (value=%r) targets a field that does "
+                "not exist on Settings; ignoring. Likely a stale entry "
+                "after a field was renamed/removed.",
+                field_name,
+                coerced,
+            )
+            continue
         try:
             setattr(settings, field_name, coerced)
-        except Exception:
-            # Pydantic field validators may raise types other than the
-            # ones we expect (ValidationError is a ValueError subclass
-            # but mode='before' validators can route weird shapes
-            # through arbitrary code). Log at WARNING and skip rather
-            # than letting a malformed override crash every consumer of
-            # ``get_global_settings()``.
+        except (ValueError, TypeError) as err:
             logger.warning(
-                "Override for %r could not be applied to Settings; ignoring.",
+                "Override for %r (value=%r) rejected by Settings (%s); ignoring.",
                 field_name,
+                coerced,
+                err,
+            )
+
+    # === Master beta gate ===
+    if not getattr(settings, "enable_beta_features", False):
+        for sub in BETA_FEATURE_FIELDS:
+            if not hasattr(settings, sub):
+                logger.warning(
+                    "Beta gate: %s is not a Settings attribute; "
+                    "BETA_FEATURE_FIELDS may have drifted from the "
+                    "model. Skipping.",
+                    sub,
+                )
+                continue
+            current = getattr(settings, sub, False)
+            if current and sub not in _BETA_GATE_LOGGED:
+                # Dedup per-process: cascade-clear (an earlier behavior
+                # that wrote False to the override file for every truthy
+                # sub-flag whenever the master was saved off) was
+                # removed, so the file now holds truthy sub-flag values
+                # long-term and this gate runs on every Settings
+                # rebuild. Logging the force-False line every time would
+                # spam addon logs. First-time-per-process is enough to
+                # leave an audit trail for operators debugging "why is
+                # my beta tool off?".
+                logger.info(
+                    "Beta master toggle is off; forcing %s=False "
+                    "(was True via env/file).",
+                    sub,
+                )
+                _BETA_GATE_LOGGED.add(sub)
+            try:
+                setattr(settings, sub, False)
+            except (ValueError, TypeError) as err:
+                logger.warning(
+                    "Could not force %s=False via master gate (%s); ignoring.",
+                    sub,
+                    err,
+                )
+
+
+def _apply_advanced_overrides(settings: "Settings") -> None:
+    """Patch ``settings`` with advanced-section override values from
+    ``feature_flags.json``.
+
+    Mirrors ``_apply_feature_flag_overrides`` but iterates
+    ``ADVANCED_SETTINGS_FIELDS`` and supports float / str in addition
+    to bool / int. Display-only fields (``editable=False`` in the
+    registry) are NEVER applied — chicken-and-egg safeguard for
+    connection settings.
+
+    Addon-mode behavior: two advanced fields are in addon ``config.yaml``
+    schemas — ``backup_hint`` and ``verify_ssl`` (both stable and dev).
+    For those, ``start.py`` exports the env var on every boot and the
+    env-var-wins check below correctly skips them. All other advanced
+    fields (code_mode_* sub-numerics, mcp_server_*, log_level, debug,
+    enabled_tool_modules, fuzzy_threshold, etc.) are NOT in any addon
+    schema; the override file is the authoritative source and applies
+    in either deployment mode.
+    """
+    overrides = _read_feature_flag_override_file()
+    if not overrides:
+        return
+    for fname, env_name, ftype, _section, editable in ADVANCED_SETTINGS_FIELDS:
+        if not editable:
+            # Display-only field somehow landed in the override file (UI
+            # POST guard at /api/settings/advanced blocks this, so the
+            # only way in is direct hand-edit or upgrade-time drift).
+            # Log so the operator can see why the value is being ignored.
+            if fname in overrides:
+                logger.warning(
+                    "Override for %r is ignored: field is marked "
+                    "display-only in ADVANCED_SETTINGS_FIELDS (set via "
+                    "env var or addon configuration instead).",
+                    fname,
+                )
+            continue
+        if os.environ.get(env_name) is not None:
+            continue
+        if fname not in overrides:
+            continue
+        raw = overrides[fname]
+        coerced: Any
+        if ftype is bool:
+            if not isinstance(raw, bool | int):
+                logger.warning(
+                    "Advanced override for %r is %s; expected bool — ignoring.",
+                    fname,
+                    type(raw).__name__,
+                )
+                continue
+            coerced = bool(raw)
+        elif ftype is int:
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                logger.warning(
+                    "Advanced override for %r is %s; expected int — ignoring.",
+                    fname,
+                    type(raw).__name__,
+                )
+                continue
+            coerced = int(raw)
+        elif ftype is float:
+            if isinstance(raw, bool) or not isinstance(raw, int | float):
+                logger.warning(
+                    "Advanced override for %r is %s; expected float — ignoring.",
+                    fname,
+                    type(raw).__name__,
+                )
+                continue
+            coerced = float(raw)
+        elif ftype is str:
+            if not isinstance(raw, str):
+                logger.warning(
+                    "Advanced override for %r is %s; expected str — ignoring.",
+                    fname,
+                    type(raw).__name__,
+                )
+                continue
+            if "\x00" in raw:
+                logger.warning(
+                    "Advanced override for %r contains null byte; ignoring.",
+                    fname,
+                )
+                continue
+            coerced = raw
+        else:
+            continue
+
+        bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+        if bounds is not None and not (bounds[0] <= coerced <= bounds[1]):
+            logger.warning(
+                "Advanced override for %r is %s, outside %s-%s — ignoring.",
+                fname,
+                coerced,
+                bounds[0],
+                bounds[1],
+            )
+            continue
+        choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
+        if choices is not None and coerced not in choices:
+            logger.warning(
+                "Advanced override for %r is %r, not in %s — ignoring.",
+                fname,
+                coerced,
+                choices,
+            )
+            continue
+        try:
+            setattr(settings, fname, coerced)
+        except (ValueError, TypeError):
+            # Narrowed from bare ``Exception`` to match the parallel
+            # _apply_feature_flag_overrides handler. Pydantic validation
+            # surfaces failures as ValueError; an
+            # attribute that doesn't exist on the model would be a
+            # programming bug we want to crash, not silently swallow.
+            logger.warning(
+                "Advanced override for %r could not be applied; ignoring.",
+                fname,
                 exc_info=True,
             )
 
 
 # Global settings instance
 _settings: Settings | None = None
+
+# Names of beta sub-flags the master gate has already logged a
+# force-False line for in this process. Used to dedup the gate's
+# INFO log so we don't spam addon logs on every Settings rebuild
+# now that the cascade-clear is gone and the file may carry truthy
+# sub-flag values long-term. Reset alongside
+# the Settings singleton in ``_reset_global_settings``.
+_BETA_GATE_LOGGED: set[str] = set()
 
 
 # Auto-backup runtime-editable fields (#1288 web UI editor). Each entry
@@ -550,10 +989,20 @@ _settings: Settings | None = None
 # validate incoming writes. Keep aligned with the matching ``Settings``
 # fields above — adding a fourth runtime-editable setting means a new
 # tuple entry plus matching addon ``config.yaml`` schema mirror.
-BACKUP_OVERRIDE_FIELDS: tuple[tuple[str, str, type], ...] = (
-    ("enable_auto_backup", "ENABLE_AUTO_BACKUP", bool),
-    ("auto_backup_throttle_minutes", "AUTO_BACKUP_THROTTLE_MINUTES", int),
-    ("auto_backup_retain_per_entity", "AUTO_BACKUP_RETAIN_PER_ENTITY", int),
+BACKUP_OVERRIDE_FIELDS: tuple[BackupOverrideField, ...] = (
+    BackupOverrideField("enable_auto_backup", "ENABLE_AUTO_BACKUP", bool),
+    BackupOverrideField(
+        "auto_backup_throttle_minutes", "AUTO_BACKUP_THROTTLE_MINUTES", int
+    ),
+    BackupOverrideField(
+        "auto_backup_retain_per_entity", "AUTO_BACKUP_RETAIN_PER_ENTITY", int
+    ),
+    BackupOverrideField("auto_backup_dir", "HAMCP_BACKUP_DIR", str),
+    BackupOverrideField(
+        "auto_backup_calendar_lookahead_days",
+        "HAMCP_AUTO_BACKUP_CALENDAR_LOOKAHEAD_DAYS",
+        int,
+    ),
 )
 
 # Override-file location is the same data dir that holds tool_config.json
@@ -691,6 +1140,7 @@ def _apply_backup_overrides(settings: "Settings") -> None:
         if field_name not in overrides:
             continue
         raw = overrides[field_name]
+        coerced: bool | int | str
         if ftype is bool:
             if not isinstance(raw, bool | int):
                 logger.warning(
@@ -699,9 +1149,9 @@ def _apply_backup_overrides(settings: "Settings") -> None:
                     type(raw).__name__,
                 )
                 continue
-            coerced: bool | int = bool(raw)
+            coerced = bool(raw)
         elif ftype is int:
-            if not isinstance(raw, bool | int):
+            if isinstance(raw, bool) or not isinstance(raw, int):
                 logger.warning(
                     "backup_settings.json: %s expects int, got %s; ignoring",
                     field_name,
@@ -737,6 +1187,31 @@ def _apply_backup_overrides(settings: "Settings") -> None:
                     coerced,
                 )
                 continue
+            if (
+                field_name == "auto_backup_calendar_lookahead_days"
+                and not 1 <= coerced <= 365
+            ):
+                logger.warning(
+                    "backup_settings.json: auto_backup_calendar_lookahead_days=%d out of "
+                    "range 1..365; ignoring",
+                    coerced,
+                )
+                continue
+        elif ftype is str:
+            if not isinstance(raw, str):
+                logger.warning(
+                    "backup_settings.json: %s expects str, got %s; ignoring",
+                    field_name,
+                    type(raw).__name__,
+                )
+                continue
+            if "\x00" in raw:
+                logger.warning(
+                    "backup_settings.json: %s contains null byte; ignoring",
+                    field_name,
+                )
+                continue
+            coerced = raw
         else:
             continue
         try:
@@ -767,6 +1242,7 @@ def get_global_settings() -> Settings:
         _settings = get_settings()
         _apply_feature_flag_overrides(_settings)
         _apply_backup_overrides(_settings)
+        _apply_advanced_overrides(_settings)
     return _settings
 
 
@@ -782,3 +1258,99 @@ def _reset_global_settings() -> None:
     """
     global _settings
     _settings = None
+    # Drop the gate-log dedup set too — once Settings has been
+    # rebuilt, an operator who's re-investigating "why is my beta
+    # tool off?" should see the next gate fire logged. This keeps
+    # the dedup tight to the lifetime of one cached Settings.
+    _BETA_GATE_LOGGED.clear()
+
+
+# Import-time validator for cross-registry invariants.
+#
+# Catches a class of silent runtime bugs at module load:
+#  - registry rows referencing fields that don't exist on ``Settings``
+#    (rename / removal drift)
+#  - registries overlapping by name (same field applied by two
+#    ``_apply_*_overrides`` functions with potentially divergent
+#    coercion policies)
+#  - bounds entries pointing at non-numeric fields (would silently
+#    no-op in the apply loop)
+#  - choices entries pointing at non-str fields (same)
+#  - ``BETA_FEATURE_FIELDS`` referencing names not in
+#    ``FEATURE_FLAG_FIELDS`` (master gate would write to phantom
+#    Settings attributes)
+def _validate_registries() -> None:
+    settings_fields = set(Settings.model_fields.keys())
+
+    advanced_names = {f.field for f in ADVANCED_SETTINGS_FIELDS}
+    flag_names = {f.field for f in FEATURE_FLAG_FIELDS}
+    backup_names = {f.field for f in BACKUP_OVERRIDE_FIELDS}
+
+    # Every row must reference a real Settings field.
+    for registry_name, names in (
+        ("ADVANCED_SETTINGS_FIELDS", advanced_names),
+        ("FEATURE_FLAG_FIELDS", flag_names),
+        ("BACKUP_OVERRIDE_FIELDS", backup_names),
+    ):
+        missing = names - settings_fields
+        if missing:
+            raise RuntimeError(
+                f"{registry_name} references fields not on Settings: {sorted(missing)}"
+            )
+
+    # Registries must be name-disjoint to avoid double-apply with
+    # divergent policies.
+    overlaps = {
+        ("advanced", "flags"): advanced_names & flag_names,
+        ("advanced", "backup"): advanced_names & backup_names,
+        ("flags", "backup"): flag_names & backup_names,
+    }
+    for (a, b), shared in overlaps.items():
+        if shared:
+            raise RuntimeError(
+                f"Registry overlap between {a} and {b}: {sorted(shared)}. "
+                "Each field must be applied by exactly one of "
+                "_apply_feature_flag_overrides / _apply_advanced_overrides "
+                "/ _apply_backup_overrides."
+            )
+
+    # _ADVANCED_SETTINGS_BOUNDS keys must be advanced fields AND numeric.
+    advanced_by_name = {f.field: f for f in ADVANCED_SETTINGS_FIELDS}
+    for name in _ADVANCED_SETTINGS_BOUNDS:
+        if name not in advanced_by_name:
+            raise RuntimeError(
+                f"_ADVANCED_SETTINGS_BOUNDS[{name!r}] is not in "
+                "ADVANCED_SETTINGS_FIELDS"
+            )
+        if advanced_by_name[name].ftype not in (int, float):
+            raise RuntimeError(
+                f"_ADVANCED_SETTINGS_BOUNDS[{name!r}] is on a non-numeric "
+                f"field (type={advanced_by_name[name].ftype.__name__})"
+            )
+
+    # _ADVANCED_SETTINGS_CHOICES keys must be advanced fields AND str.
+    for name in _ADVANCED_SETTINGS_CHOICES:
+        if name not in advanced_by_name:
+            raise RuntimeError(
+                f"_ADVANCED_SETTINGS_CHOICES[{name!r}] is not in "
+                "ADVANCED_SETTINGS_FIELDS"
+            )
+        if advanced_by_name[name].ftype is not str:
+            raise RuntimeError(
+                f"_ADVANCED_SETTINGS_CHOICES[{name!r}] is on a non-str "
+                f"field (type={advanced_by_name[name].ftype.__name__})"
+            )
+
+    # BETA_FEATURE_FIELDS must be a subset of FEATURE_FLAG_FIELDS
+    # (the master gate writes to them via setattr; phantom names would
+    # silently land on extras with no effect on the runtime gate).
+    beta_set = set(BETA_FEATURE_FIELDS)
+    not_in_flags = beta_set - flag_names
+    if not_in_flags:
+        raise RuntimeError(
+            f"BETA_FEATURE_FIELDS contains names not in FEATURE_FLAG_FIELDS: "
+            f"{sorted(not_in_flags)}"
+        )
+
+
+_validate_registries()

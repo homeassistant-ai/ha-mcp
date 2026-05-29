@@ -16,9 +16,10 @@ The dev add-on uses the same configuration as the stable version. See the main a
 | `secret_path` | Custom secret path (optional) | auto-generated |
 | `enable_tool_search` | Replace full tool catalog with search-based discovery (~46K → ~5K tokens). ⚠️ Do NOT enable for Claude Sonnet/Opus — their built-in tool search conflicts with ha-mcp's. Disable one or the other. | `false` |
 | `enable_tool_security_policies` | Gate high-stakes tool calls (lock/alarm control, automation writes, etc.) behind user approval. Guarded calls block until the user clicks Approve in the Tool Security Policies tab of the web UI. Per-tool rules with optional argument conditions are configured in that same tab. | `false` |
-| `enable_yaml_config_editing` *(beta)* | Enables `ha_config_set_yaml` for editing `configuration.yaml` directly. Requires `ha_mcp_tools` custom component. | `false` |
-| `enable_filesystem_tools` *(beta)* | Enables file read/write tools (`ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`). Requires `ha_mcp_tools` custom component. | `false` |
-| `enable_custom_component_integration` *(beta)* | Enables `ha_install_mcp_tools` installer tool for the `ha_mcp_tools` custom component. | `false` |
+| `enable_beta_features` *(master)* | Master gate for the 5 beta sub-flags below. Sub-flags are ignored at runtime while this is off — even when explicitly set to true. Mirrored to the web settings UI under "Beta features (dangerous)". | `true` |
+| `enable_yaml_config_editing` *(beta)* | Enables `ha_config_set_yaml` for editing `configuration.yaml` directly. Requires `ha_mcp_tools` custom component. Gated by the master above. | `false` |
+| `enable_filesystem_tools` *(beta)* | Enables file read/write tools (`ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file`). Requires `ha_mcp_tools` custom component. Gated by the master above. | `false` |
+| `enable_custom_component_integration` *(beta)* | Enables `ha_install_mcp_tools` installer tool for the `ha_mcp_tools` custom component. Gated by the master above. | `false` |
 | `tool_search_max_results` | Max results from `ha_search_tools` (range 2-10) | `5` |
 | `disabled_tools` | Comma-separated list of tool names to disable (seed value; web UI is primary) | empty |
 | `pinned_tools` | Comma-separated list of tool names to pin when tool search is enabled (seed value; web UI is primary) | empty |
@@ -27,6 +28,8 @@ The dev add-on uses the same configuration as the stable version. See the main a
 *Removed in 7.4.x:* `enable_skills` *and* `enable_skills_as_tools`*. Bundled skills are now always served via* `skill://` *resources (for resource-capable clients) and via the* `ha_get_skill_guide` *tool (for tool-only clients).*
 
 Beta options are hidden under "Show unused optional configuration options" in the add-on Configuration tab. See [beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for details.
+
+> ⚠️ **DANGER — beta toggles can permanently damage your Home Assistant installation.** They write to your YAML config, your filesystem, install custom components, and run arbitrary sandboxed Python. There is no warranty and no support guarantee — you enable these at your **own risk**. Take a Home Assistant backup before turning any of them on, and never enable in production without one.
 
 ### Permissions
 
