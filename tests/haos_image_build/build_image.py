@@ -1175,6 +1175,13 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
                 "secret_path": HA_MCP_TEST_SECRET_PATH,
                 "enable_tool_search": False,
                 "enable_yaml_config_editing": True,
+                # Per-key sub-gates default OFF; the E2E suite covers the
+                # whole packages/*.yaml surface (automation/script/scene),
+                # so enable all three — mirrors the env-var setup in
+                # conftest's ha_container_with_fresh_config fixture.
+                "enable_yaml_packages_automation": True,
+                "enable_yaml_packages_script": True,
+                "enable_yaml_packages_scene": True,
                 "enable_code_mode": True,
                 "enable_lite_docstrings": False,
                 "enable_filesystem_tools": True,

@@ -68,6 +68,33 @@ configuration:
       "Enable beta features" toggle above (and in the web UI) to be
       on — otherwise this sub-flag is ignored at runtime regardless
       of its value here.
+  enable_yaml_packages_automation:
+    name: Allow automation in packages/*.yaml
+    description: >-
+      Sub-toggle of YAML config editing. When on, ha_config_set_yaml
+      accepts yaml_path='automation' inside packages/*.yaml. When off,
+      the call is rejected both client-side and server-side. The
+      storage-mode tool (ha_config_set_automation) is unaffected.
+      Default OFF; only takes effect when "Enable YAML config editing"
+      above is also on.
+  enable_yaml_packages_script:
+    name: Allow script in packages/*.yaml
+    description: >-
+      Sub-toggle of YAML config editing. When on, ha_config_set_yaml
+      accepts yaml_path='script' inside packages/*.yaml. When off, the
+      call is rejected both client-side and server-side. The
+      storage-mode tool (ha_config_set_script) is unaffected. Default
+      OFF; only takes effect when "Enable YAML config editing" above is
+      also on.
+  enable_yaml_packages_scene:
+    name: Allow scene in packages/*.yaml
+    description: >-
+      Sub-toggle of YAML config editing. When on, ha_config_set_yaml
+      accepts yaml_path='scene' inside packages/*.yaml. When off, the
+      call is rejected both client-side and server-side. The
+      storage-mode tool (ha_config_set_scene) is unaffected. Default
+      OFF; only takes effect when "Enable YAML config editing" above is
+      also on.
   enable_code_mode:
     name: Enable custom tool sandbox (beta)
     description: >-
