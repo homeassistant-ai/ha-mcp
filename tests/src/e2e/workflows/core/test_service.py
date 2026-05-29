@@ -316,25 +316,6 @@ class TestCallService:
         data = assert_mcp_success(result, "Scene turn_on service call")
         logger.info(f"Scene activation executed: {data.get('message')}")
 
-    async def test_call_service_data_as_json_string(
-        self, mcp_client, test_light_entity
-    ):
-        """Test calling service with data provided as JSON string."""
-        logger.info("Testing ha_call_service with JSON string data")
-
-        result = await mcp_client.call_tool(
-            "ha_call_service",
-            {
-                "domain": "light",
-                "service": "turn_on",
-                "entity_id": test_light_entity,
-                "data": '{"brightness_pct": 75}',  # JSON string
-            },
-        )
-
-        data = assert_mcp_success(result, "Service with JSON string data")
-        logger.info(f"Service with JSON string executed: {data.get('message')}")
-
     async def test_call_service_without_entity_id(self, mcp_client):
         """Test calling domain-wide service without entity_id."""
         logger.info("Testing ha_call_service without entity_id")

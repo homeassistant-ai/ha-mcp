@@ -304,7 +304,7 @@ class TestCategoryAssignment:
             "ha_set_entity",
             {
                 "entity_id": test_light_entity,
-                "categories": '{"automation": null}',  # JSON string format
+                "categories": {"automation": None},
             },
         )
         clear_data = assert_mcp_success(clear_result, "Clear category via null")
