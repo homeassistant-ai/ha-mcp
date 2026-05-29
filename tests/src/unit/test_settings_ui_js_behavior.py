@@ -2294,3 +2294,55 @@ class TestYamlPackagesSubFlagNesting:
         assert rows
         for row in rows:
             assert "dimmed" not in row, f"unexpected dimmed when both gates on: {row}"
+
+    def test_subrow_input_disabled_when_parent_off(self, settings_script: str) -> None:
+        """The ``dimmed`` class is cosmetic — assert the actual <input>
+        ``.disabled`` PROPERTY is true when the parent is off, so a dimmed
+        sub-row genuinely can't be toggled. (JSDOM serialises attributes, not
+        live properties, so probe the property directly.)"""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(master_on=True, parent_on=False),
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const row = document.querySelector('.yaml-packages-sub');
+              const input = row.querySelector('input[type="checkbox"]');
+              const probe = document.createElement('div');
+              probe.id = 'pkgProbe';
+              probe.dataset.disabled = String(input.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'id="pkgProbe"[^>]*data-disabled="([^"]*)"', result.dom)
+        assert m is not None, f"probe div missing; tail: {result.dom[-1500:]}"
+        assert m.group(1) == "true", (
+            "sub-row <input> must be .disabled when the parent is off"
+        )
+
+    def test_subrow_input_enabled_when_both_gates_on(
+        self, settings_script: str
+    ) -> None:
+        """With master + parent both on, the sub-row <input> is actually
+        interactive (``.disabled === false``)."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(master_on=True, parent_on=True),
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const row = document.querySelector('.yaml-packages-sub');
+              const input = row.querySelector('input[type="checkbox"]');
+              const probe = document.createElement('div');
+              probe.id = 'pkgProbe';
+              probe.dataset.disabled = String(input.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'id="pkgProbe"[^>]*data-disabled="([^"]*)"', result.dom)
+        assert m is not None, f"probe div missing; tail: {result.dom[-1500:]}"
+        assert m.group(1) == "false", (
+            "sub-row <input> must be interactive when both gates are on"
+        )

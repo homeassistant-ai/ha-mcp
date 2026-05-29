@@ -11,7 +11,9 @@ The tools will gracefully fail with installation instructions if the component i
 Feature Flag: Set ENABLE_YAML_CONFIG_EDITING=true to enable.
 """
 
+import fnmatch
 import logging
+import os
 from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
@@ -40,8 +42,10 @@ _LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
 # Maps a per-key Settings flag onto the yaml_path top-level segment it
 # gates. Keep in lockstep with the custom component's
 # PACKAGES_ONLY_YAML_KEYS — every key in that frozenset must appear
-# here, otherwise a default-False flag would silently leave that key
-# unreachable through the wrapper.
+# here, otherwise a key would silently be unreachable through the
+# wrapper. The parity invariant (keys == PACKAGES_ONLY_YAML_KEYS, and
+# every value is a real Settings field) is enforced by
+# test_yaml_config_tool.py::test_flag_map_matches_packages_only_keys.
 _YAML_PACKAGES_FLAG_BY_KEY = {
     "automation": "enable_yaml_packages_automation",
     "script": "enable_yaml_packages_script",
@@ -56,11 +60,15 @@ def _disabled_packages_keys(settings: Any) -> list[str]:
     Sorted so the value is deterministic in service payloads and test
     assertions; the custom component treats it as a set so order is
     irrelevant on the wire.
+
+    Uses ``getattr`` without a default so a future rename that breaks the
+    ``_YAML_PACKAGES_FLAG_BY_KEY`` → ``Settings`` mapping raises loudly
+    instead of silently treating the key as disabled (a dead toggle).
     """
     return sorted(
         key
         for key, flag in _YAML_PACKAGES_FLAG_BY_KEY.items()
-        if not getattr(settings, flag, False)
+        if not getattr(settings, flag)
     )
 
 
@@ -259,10 +267,19 @@ class YamlConfigTools:
             settings = get_global_settings()
             disabled_keys = _disabled_packages_keys(settings)
             top_key = yaml_path.split(".", 1)[0] if yaml_path else ""
-            normalized_file = file.replace("\\", "/")
-            is_packages_target = normalized_file.startswith(
-                "packages/"
-            ) and normalized_file.endswith(".yaml")
+            # Classify the target exactly like the custom component does
+            # (os.path.normpath + fnmatch against "packages/*.yaml") so the
+            # wrapper's early reject fires for precisely the paths the
+            # component treats as a package — e.g. "./packages/x.yaml" and
+            # "packages/sub/x.yaml" both normalise/match. Any other target
+            # (configuration.yaml, a non-package path) falls through to the
+            # component, which rejects these keys with its own storage-mode-
+            # tools advisory.
+            # os.path.normpath is a pure string transform (no I/O), so the
+            # ASYNC240 blocking-call lint doesn't apply — same suppression the
+            # component uses on its identical normpath classification.
+            normalized_target = os.path.normpath(file)  # noqa: ASYNC240
+            is_packages_target = fnmatch.fnmatch(normalized_target, "packages/*.yaml")
             if is_packages_target and top_key in disabled_keys:
                 raise_tool_error(
                     create_error_response(
@@ -274,6 +291,13 @@ class YamlConfigTools:
                             f"this key, or use the storage-mode tool "
                             f"(ha_config_set_{top_key})."
                         ),
+                        suggestions=[
+                            f"Enable 'Allow {top_key} in packages/*.yaml' under "
+                            "YAML config editing in the ha-mcp Server Settings "
+                            "panel, then retry.",
+                            f"Or use the storage-mode tool ha_config_set_{top_key} "
+                            "instead of editing packages YAML directly.",
+                        ],
                         context={
                             "yaml_path": yaml_path,
                             "disabled_key": top_key,

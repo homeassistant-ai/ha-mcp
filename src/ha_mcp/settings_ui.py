@@ -2509,6 +2509,16 @@ function renderYamlPackagesSubRows(flags, parentEl, masterOn, parentOn) {
     input.checked = !!f.value;
     input.disabled = !f.editable || lockedByGate;
     input.addEventListener('change', () => {
+      // Keep the cached flag value in sync (parity with the parent/master
+      // row handlers) so a later parent flip — which re-renders from
+      // _lastFeatureFlags — reflects this sub-row's current state rather
+      // than a stale value.
+      if (_lastFeatureFlags[fieldName]) {
+        _lastFeatureFlags[fieldName] = {
+          ..._lastFeatureFlags[fieldName],
+          value: input.checked,
+        };
+      }
       saveFeatureFlag(fieldName, input.checked);
     });
     const slider = document.createElement('span');
@@ -4293,6 +4303,11 @@ def build_settings_handlers(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     f"Refusing to flip env-pinned tools: {', '.join(rejected)}. "
                     "Unset DISABLED_TOOLS / PINNED_TOOLS first.",
+                    suggestions=[
+                        "Unset the DISABLED_TOOLS / PINNED_TOOLS environment "
+                        "variables (or remove them from your addon/Docker "
+                        "config), then restart to edit these tools from the UI.",
+                    ],
                     context={"rejected": rejected},
                 ),
                 status_code=409,
@@ -4646,6 +4661,12 @@ def build_settings_handlers(
                         "enable_beta_features=true in the same save, or "
                         "flip the master on first."
                     ),
+                    suggestions=[
+                        "Include enable_beta_features=true in the same save "
+                        "payload as the sub-flag(s).",
+                        "Or turn on the master 'Enable beta features' toggle "
+                        "first, then enable the sub-flag(s).",
+                    ],
                     context={"rejected": beta_sub_writes},
                 ),
                 status_code=409,
@@ -4811,6 +4832,13 @@ def build_settings_handlers(
                         create_error_response(
                             ErrorCode.INTERNAL_ERROR,
                             "Supervisor helper returned ok=False with no error",
+                            suggestions=[
+                                "Check the Home Assistant Supervisor logs and "
+                                "the add-on logs for the underlying failure.",
+                                "Report this at "
+                                "https://github.com/homeassistant-ai/ha-mcp/issues "
+                                "if it persists — this indicates an internal bug.",
+                            ],
                         ),
                         status_code=500,
                     )
@@ -5346,6 +5374,11 @@ def build_settings_handlers(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"{fname!r} is set via {env_name} env var — "
                         "unset it to edit here.",
+                        suggestions=[
+                            f"Unset the {env_name} environment variable (or "
+                            "remove it from your addon/Docker config), then "
+                            "restart to edit this setting from the UI.",
+                        ],
                         context={"env_var": env_name},
                     ),
                     status_code=409,
@@ -5386,6 +5419,10 @@ def build_settings_handlers(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"{fname!r} must be between {bounds[0]} and "
                         f"{bounds[1]} (got {coerced}).",
+                        suggestions=[
+                            f"Provide a value for {fname} within the range "
+                            f"{bounds[0]}–{bounds[1]}.",
+                        ],
                     ),
                     status_code=400,
                 )
@@ -5395,6 +5432,9 @@ def build_settings_handlers(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"{fname!r} must be one of {list(choices)} (got {coerced!r}).",
+                        suggestions=[
+                            f"Set {fname} to one of: {', '.join(map(str, choices))}.",
+                        ],
                     ),
                     status_code=400,
                 )
@@ -5445,6 +5485,11 @@ def build_settings_handlers(
                             "writes in one batch; the UI should split these "
                             f"into separate POSTs ({sorted(file_only)})."
                         ),
+                        suggestions=[
+                            "Submit addon-synced fields (e.g. backup_hint, "
+                            "verify_ssl) and override-file fields in separate "
+                            "save requests.",
+                        ],
                     ),
                     status_code=500,
                 )
@@ -5470,6 +5515,13 @@ def build_settings_handlers(
                         create_error_response(
                             ErrorCode.INTERNAL_ERROR,
                             "Supervisor helper returned ok=False with no error",
+                            suggestions=[
+                                "Check the Home Assistant Supervisor logs and "
+                                "the add-on logs for the underlying failure.",
+                                "Report this at "
+                                "https://github.com/homeassistant-ai/ha-mcp/issues "
+                                "if it persists — this indicates an internal bug.",
+                            ],
                         ),
                         status_code=500,
                     )
@@ -5569,6 +5621,9 @@ def build_settings_handlers(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"{fname!r} expects {ftype.__name__}, got {type(raw).__name__}.",
+                suggestions=[
+                    f"Send {fname} as a {ftype.__name__} value.",
+                ],
             ),
             status_code=400,
         )

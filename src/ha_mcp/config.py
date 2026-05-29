@@ -127,9 +127,11 @@ class Settings(BaseSettings):
     # PACKAGES_ONLY_YAML_KEYS unconditionally; ha-mcp's UI exposes a
     # toggle per key so an operator who wants YAML-managed
     # automations/scripts/scenes in packages but not the others can
-    # narrow the surface. ha_config_set_yaml rejects calls for a
-    # disabled key client-side, and passes the disabled set to the
-    # custom component so the underlying service rejects too. Each
+    # narrow the surface. ha_config_set_yaml rejects packages/*.yaml
+    # writes for a disabled key client-side, and passes the disabled set
+    # to the custom component so the underlying service rejects too
+    # (writes of these keys to configuration.yaml are rejected
+    # independently of these flags). Each
     # toggle is meaningful only when ``enable_yaml_config_editing`` is
     # on; the UI nests these rows under that parent and dims them when
     # the parent is off.
