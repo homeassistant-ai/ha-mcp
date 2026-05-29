@@ -267,6 +267,71 @@ def test_master_in_addon_mode_reads_override_file(
     assert s.enable_tool_search is False
 
 
+def test_yaml_packages_subflags_read_from_override_file_in_addon_mode(
+    isolated_data_dir, monkeypatch
+) -> None:
+    """Regression: the per-key yaml-packages sub-flags must be in
+    BETA_FEATURE_FIELDS so the addon-mode override path applies them.
+
+    They are NOT in any STABLE add-on config.yaml schema, so the web-UI
+    toggle (→ feature_flags.json) is the only way to set them on the
+    stable add-on. If they were treated as non-beta, the addon-mode
+    short-circuit would skip the file and the toggle would be dead on
+    stable (reachable only via the dev add-on). This pins the fix."""
+    _clear_all_feature_envs(monkeypatch)
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-token-for-test")
+
+    (isolated_data_dir / "feature_flags.json").write_text(
+        json.dumps(
+            {
+                "enable_beta_features": True,
+                "enable_yaml_config_editing": True,
+                "enable_yaml_packages_automation": True,
+                "enable_yaml_packages_script": True,
+            }
+        )
+    )
+
+    from ha_mcp.config import _reset_global_settings, get_global_settings
+
+    _reset_global_settings()
+    s = get_global_settings()
+
+    assert s.enable_yaml_config_editing is True
+    # Applied from the override file even in addon mode (the fix).
+    assert s.enable_yaml_packages_automation is True
+    assert s.enable_yaml_packages_script is True
+    # Not in the file → stays at its default.
+    assert s.enable_yaml_packages_scene is False
+
+
+def test_yaml_packages_subflags_forced_off_when_master_off(
+    isolated_data_dir, monkeypatch
+) -> None:
+    """The master gate force-clears the per-key sub-flags too: even with
+    the parent + sub-flags True in the file, a False master wins."""
+    _clear_all_feature_envs(monkeypatch)
+
+    (isolated_data_dir / "feature_flags.json").write_text(
+        json.dumps(
+            {
+                "enable_beta_features": False,
+                "enable_yaml_config_editing": True,
+                "enable_yaml_packages_automation": True,
+            }
+        )
+    )
+
+    from ha_mcp.config import _reset_global_settings, get_global_settings
+
+    _reset_global_settings()
+    s = get_global_settings()
+
+    assert s.enable_beta_features is False
+    assert s.enable_yaml_config_editing is False
+    assert s.enable_yaml_packages_automation is False
+
+
 def test_get_feature_flag_origin_beta_in_addon_mode_returns_file(
     isolated_data_dir, monkeypatch
 ) -> None:

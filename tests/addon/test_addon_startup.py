@@ -533,15 +533,18 @@ class TestAddonStartup:
 
 
 class TestBetaMasterAutoEnableInDevAddon:
-    """Dev addon keeps the 5 sub-flag keys in its Supervisor options
+    """Dev addon keeps the beta sub-flag keys in its Supervisor options
     schema (unlike stable). start.py auto-writes
     ``ENABLE_BETA_FEATURES=true`` whenever any of those sub-flag keys
     are present in ``/data/options.json``, so the runtime master gate
     in ``_apply_feature_flag_overrides`` becomes a no-op for dev addon
-    users — Supervisor options remain authoritative for the 5 sub-flags."""
+    users — Supervisor options remain authoritative for the beta sub-flags."""
 
     _DEV_BETA_KEYS = (
         "enable_yaml_config_editing",
+        "enable_yaml_packages_automation",
+        "enable_yaml_packages_script",
+        "enable_yaml_packages_scene",
         "enable_filesystem_tools",
         "enable_custom_component_integration",
         "enable_code_mode",
@@ -616,7 +619,7 @@ class TestBetaMasterAutoEnableInDevAddon:
         assert "ENABLE_BETA_FEATURES" not in os.environ
 
     def test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry(self):
-        """The 5 keys checked by start.py must exactly match the
+        """The keys checked by start.py must exactly match the
         runtime registry — drift would silently break the auto-enable
         signal for dev-addon users."""
         # Import lazily because ha_mcp isn't importable until the
@@ -636,7 +639,7 @@ class TestBetaMasterAutoEnableInDevAddon:
         )
 
     def test_stable_addon_still_does_not_carry_beta_keys(self):
-        """Stable addon's ``config.yaml`` must NOT list any of the 5
+        """Stable addon's ``config.yaml`` must NOT list any of the
         beta sub-flag keys (their Supervisor-options absence is what
         makes the master gate the sole gate for stable users)."""
         import yaml

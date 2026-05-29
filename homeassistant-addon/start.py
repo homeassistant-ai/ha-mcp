@@ -187,6 +187,13 @@ def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool
 
 _DEV_ADDON_BETA_KEYS = (
     "enable_yaml_config_editing",
+    # Per-key sub-gates of enable_yaml_config_editing. Kept in lockstep
+    # with config.BETA_FEATURE_FIELDS (enforced by
+    # test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry) so the
+    # auto-enable bridge covers exactly the runtime beta set.
+    "enable_yaml_packages_automation",
+    "enable_yaml_packages_script",
+    "enable_yaml_packages_scene",
     "enable_filesystem_tools",
     "enable_custom_component_integration",
     "enable_code_mode",

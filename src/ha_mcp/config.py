@@ -110,7 +110,7 @@ class Settings(BaseSettings):
 
     # Master beta-features toggle. UI-only — intentionally not in any
     # addon config.yaml schema. Consumed by the master gate in
-    # ``_apply_feature_flag_overrides``, which force-sets the five
+    # ``_apply_feature_flag_overrides``, which force-sets the
     # ``BETA_FEATURE_FIELDS`` sub-flags to False whenever this master is
     # off. Dev addon ``start.py`` auto-writes ``ENABLE_BETA_FEATURES=true``
     # whenever any beta sub-flag key is present in ``/data/options.json``
@@ -435,10 +435,11 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
     ),
     FeatureFlagField("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
     # Per-key sub-gates beneath enable_yaml_config_editing. Nested in
-    # the UI, dimmed when the parent is off. Not in BETA_FEATURE_FIELDS
-    # because the master-off → parent-off → these-are-irrelevant
-    # cascade is transitive; an independent master-cascade would be
-    # redundant.
+    # the UI, dimmed when the parent is off. Also listed in
+    # BETA_FEATURE_FIELDS so they follow the same master-gate +
+    # addon-mode override path as the other beta flags — that is what
+    # makes the web-UI toggle take effect on the stable add-on (where
+    # they are not in config.yaml). See that tuple for the rationale.
     FeatureFlagField(
         "enable_yaml_packages_automation",
         "ENABLE_YAML_PACKAGES_AUTOMATION",
@@ -484,6 +485,16 @@ _FEATURE_FLAG_INT_BOUNDS: dict[str, tuple[int, int]] = {
 # gate, never by the per-field iteration.
 BETA_FEATURE_FIELDS: tuple[str, ...] = (
     "enable_yaml_config_editing",
+    # Per-key sub-gates of enable_yaml_config_editing. Included here so
+    # they ride the same master gate + addon-mode override path as the
+    # other beta flags. Without this, the addon-mode short-circuit in
+    # ``_apply_feature_flag_overrides`` (and the ``get_feature_flag_origin``
+    # logic) would leave them dead on the stable add-on — reachable only
+    # via the dev add-on's config.yaml options. They still render NESTED
+    # under their parent in the web UI (not as separate beta-sub rows).
+    "enable_yaml_packages_automation",
+    "enable_yaml_packages_script",
+    "enable_yaml_packages_scene",
     "enable_filesystem_tools",
     "enable_custom_component_integration",
     "enable_code_mode",
@@ -496,8 +507,9 @@ BETA_FEATURE_FIELDS: tuple[str, ...] = (
 #
 # - ``section`` groups fields in the Advanced section of the Server Settings
 #   tab: "connection", "search", "operations", "diagnostics", "tools_surface".
-#   The 5 beta sub-flags + the master live in a separate "beta" section that
-#   the UI renders below the Advanced section.
+#   The beta sub-flags + the master live in a separate "beta" section that
+#   the UI renders below the Advanced section (the per-key yaml-packages
+#   sub-flags render nested under enable_yaml_config_editing within it).
 # - ``editable=False`` marks display-only rows. Connection fields are
 #   non-editable from the running server (chicken-and-egg footgun);
 #   ``MCP_SERVER_VERSION`` is editable (it has an env alias) but the UI
@@ -648,7 +660,7 @@ def get_feature_flag_origin(env_name: str) -> str:
       schema, ``start.py`` doesn't write the env var, and the master
       falls through to env / file / default precedence so the
       standalone web UI master path remains the gate.
-    - The five ``BETA_FEATURE_FIELDS`` (sub-flags) follow the same
+    - The ``BETA_FEATURE_FIELDS`` (sub-flags) follow the same
       shape — present in dev addon schema, absent from stable. Same
       env-var-presence signal distinguishes them at runtime.
     """
@@ -667,8 +679,8 @@ def get_feature_flag_origin(env_name: str) -> str:
             # Stable addon: env var never written → fall through to
             # file/default. The master moved from "never schema-bound"
             # to "schema-bound on dev only"; the same env-var-presence
-            # signal now distinguishes both for the master and the 5
-            # sub-flags.
+            # signal now distinguishes both for the master and the
+            # beta sub-flags.
             if os.environ.get(env_name) is not None:
                 return "addon"
             # else: stable / legacy-dev-no-master-key, fall through.
@@ -765,7 +777,7 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
 
        EXCEPTION: the beta-master + beta-sub-flag fields skip the
        addon-mode short-circuit. The master isn't in any addon schema;
-       the five sub-flags are in the dev-addon schema (where ``start.py``
+       the sub-flags are in the dev-addon schema (where ``start.py``
        writes the env var from options.json — env-var-wins skips the
        file read here, leaving Supervisor authoritative) but NOT in the
        stable schema (where the env var is never written, so the file
@@ -773,7 +785,7 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
 
     2. **Beta master gate**: after the per-field pass, if
        ``enable_beta_features`` is False on the resolved Settings,
-       force-set the five BETA_FEATURE_FIELDS to False regardless of
+       force-set the BETA_FEATURE_FIELDS to False regardless of
        how they currently look. This is the "master toggle" semantics —
        even a power user who sets ENABLE_YAML_CONFIG_EDITING=true via
        env var still needs to flip the master before the flag takes

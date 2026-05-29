@@ -2218,7 +2218,17 @@ class TestYamlPackagesSubFlagNesting:
                             "ENABLE_YAML_PACKAGES_SCENE",
                         ),
                     },
-                    "beta_sub_flags": ["enable_yaml_config_editing"],
+                    # The backend now sends the per-key flags in
+                    # beta_sub_flags (they're in BETA_FEATURE_FIELDS); the
+                    # main render pass still skips them via
+                    # YAML_PACKAGES_SUB_FLAGS, so they render nested rather
+                    # than as top-level beta-sub rows.
+                    "beta_sub_flags": [
+                        "enable_yaml_config_editing",
+                        "enable_yaml_packages_automation",
+                        "enable_yaml_packages_script",
+                        "enable_yaml_packages_scene",
+                    ],
                 },
             },
         }
