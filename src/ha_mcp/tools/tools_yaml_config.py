@@ -250,14 +250,21 @@ class YamlConfigTools:
 
             # Per-key gate: reject before the custom-component round
             # trip when the yaml_path top-level segment matches a
-            # disabled PACKAGES_ONLY key. ``add`` / ``replace`` /
-            # ``remove`` all gate the same way; the disabled set is
-            # also passed to the service call below so the component
-            # rejects again as defense-in-depth.
+            # disabled PACKAGES_ONLY key AND the target file is under
+            # packages/. The keys (automation / script / scene) are
+            # only ACCEPTED in packages/*.yaml in the first place, so
+            # writes to configuration.yaml must fall through here and
+            # let the component-side reject with its own message that
+            # lists the storage-mode tools to use instead.
             settings = get_global_settings()
             disabled_keys = _disabled_packages_keys(settings)
             top_key = yaml_path.split(".", 1)[0] if yaml_path else ""
-            if top_key in disabled_keys:
+            normalized_file = file.replace("\\", "/")
+            is_packages_target = (
+                normalized_file.startswith("packages/")
+                and normalized_file.endswith(".yaml")
+            )
+            if is_packages_target and top_key in disabled_keys:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -271,6 +278,7 @@ class YamlConfigTools:
                         context={
                             "yaml_path": yaml_path,
                             "disabled_key": top_key,
+                            "file": file,
                         },
                     )
                 )

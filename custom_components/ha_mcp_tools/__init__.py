@@ -444,18 +444,6 @@ def _build_edit_yaml_config_handler(hass):
             for key in call.data.get("disabled_packages_keys", [])
             if key in PACKAGES_ONLY_YAML_KEYS
         }
-        top_segment = yaml_path.split(".", 1)[0] if yaml_path else ""
-        if top_segment in disabled_packages_keys:
-            return {
-                "success": False,
-                "error": (
-                    f"yaml_path key {top_segment!r} is disabled by the "
-                    f"caller's runtime configuration. Re-enable it in the "
-                    f"caller (the ha-mcp Server Settings → YAML config "
-                    f"editing → 'Allow {top_segment} in packages/*.yaml' "
-                    f"toggle), or use the storage-mode equivalent."
-                ),
-            }
 
         # Validate file path — only configuration.yaml and packages/*.yaml
         normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
@@ -478,6 +466,23 @@ def _build_edit_yaml_config_handler(hass):
                 "error": (
                     f"File '{rel_path}' is not allowed. "
                     f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)} and packages/*.yaml are supported."
+                ),
+            }
+
+        # Per-key gate fires only for packages/*.yaml writes. Writes to
+        # configuration.yaml fall through to ``_parse_and_validate_yaml_path``
+        # which rejects PACKAGES_ONLY_YAML_KEYS with the storage-mode-
+        # tools advisory regardless of this flag.
+        top_segment = yaml_path.split(".", 1)[0] if yaml_path else ""
+        if is_package and top_segment in disabled_packages_keys:
+            return {
+                "success": False,
+                "error": (
+                    f"yaml_path key {top_segment!r} is disabled by the "
+                    f"caller's runtime configuration. Re-enable it in the "
+                    f"caller (the ha-mcp Server Settings → YAML config "
+                    f"editing → 'Allow {top_segment} in packages/*.yaml' "
+                    f"toggle), or use the storage-mode equivalent."
                 ),
             }
 
