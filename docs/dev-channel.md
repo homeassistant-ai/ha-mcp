@@ -16,6 +16,8 @@ Want to test the latest changes before the biweekly stable release? The dev chan
 | **Dev** | Every push to master | `ha-mcp-dev` / `:dev` |
 | **Stable** | Biweekly (Wednesday 10:00 UTC) | `ha-mcp` / `:latest` |
 
+> **Docker tags:** Each stable release publishes the same image under both `:latest` (the default tag pulled when none is specified) and `:stable`. They point at identical bits — use `:stable` if you want "stable only" to be unambiguous in a compose file or config. The dev channel is `:dev` (rolling, every master push) plus `:dev-<sha>` (pinned to one dev build). `:latest` only ever tracks stable, never dev.
+
 ## Installation Methods
 
 ### uvx (Recommended)
