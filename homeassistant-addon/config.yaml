@@ -14,6 +14,8 @@ boot: manual
 # Expose the web Settings UI via Supervisor ingress (the "Open Web UI" button).
 # start.py mounts the settings routes for the ingress proxy and binds 0.0.0.0;
 # this declaration is what makes Supervisor render the button and proxy to it.
+# ingress_stream keeps the proxy streaming responses (required for the
+# streamable-HTTP MCP transport / settings UI flush behaviour).
 # Must be set here too — the release pipeline syncs only version/changelog, not
 # functional config, so ingress is NOT auto-mirrored from
 # homeassistant-addon-dev/config.yaml.

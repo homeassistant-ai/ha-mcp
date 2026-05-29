@@ -854,8 +854,9 @@ Before adding docs to tool descriptions, test what models already know using a n
 add-ons with *separate* `config.yaml` files.
 
 **Functional config is NOT auto-synced between them.** The release pipeline
-(`semver-release.yml` → `update-addon-config`) only syncs the *version* and
-*changelog* into `homeassistant-addon/`. Functional keys — `ingress`, `ports`,
+only syncs the *version* (the `update-addon-config` job) and the *changelog*
+(the `Copy changelog to addon directory` step in `semver-release.yml`) into
+`homeassistant-addon/`. Functional keys — `ingress`, `ports`,
 `host_network`, `options`/`schema`, etc. — must be edited **by hand** in each
 flavor. When you add a non-beta capability to the dev add-on that should also
 ship on stable (e.g. `ingress` for the web Settings UI / "Open Web UI" button),

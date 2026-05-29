@@ -321,6 +321,22 @@ Per-tool rules (including argument conditions like `args.domain in ['lock', 'ala
 
 ---
 
+## Tool Settings Web UI
+
+The add-on exposes a web-based settings page for managing which tools are available to AI assistants. Click **"Open Web UI"** on the add-on info page to access it.
+
+Features:
+- **Enable/disable individual tools** — toggle each tool on or off
+- **Pin tools** — keep tools always visible when `enable_tool_search` is on
+- **Per-group master toggle** — enable/disable all tools in a group (HACS, System, etc.) with one click
+- **Search** — filter tools by name or title
+- **Mandatory tools** — `ha_search_entities`, `ha_get_overview`, `ha_get_state`, `ha_report_issue` are always enabled and cannot be disabled
+- **Tool Security Policies tab** — when `enable_tool_security_policies` is on, approve held tool calls and manage per-tool rules here
+- **Advanced settings** — an advanced panel with a beta master toggle (plus per-feature sub-toggles) for opting into beta tools such as raw YAML editing, filesystem tools, and code mode. See [Beta Features](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md)
+- **In-UI restart** — a "Restart Add-on" button appears after saving to apply changes with one click
+
+**Important:** Tool configuration changes require an add-on restart to take effect. The UI will prompt you to restart after saving.
+
 ## Security
 
 ### Auto-Generated Secret Paths
