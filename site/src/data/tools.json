@@ -1062,7 +1062,7 @@
           "default": null
         },
         "options": {
-          "type": "Annotated[str | dict[str, dict[str, Any]] | None, Field(description='Per-domain entity registry options (e.g. sensor \\'display_precision\\', weather \\'forecast_type\\'). Pass a dict mapping domain to a sub-dict, e.g. {\"sensor\": {\"display_precision\": 2}}. JSON-string form also accepted. Multiple domains are sent as separate registry updates. For \\'Show As\\' use the dedicated `device_class` parameter — that is what the HA UI Show As dropdown writes. Voice-assistant exposure is stored under `options.<assistant>.should_expose` but must be managed via the dedicated `expose_to` parameter, not this options dict. Single entity only.', default=None)]",
+          "type": "Annotated[dict[str, dict[str, Any]] | None, Field(description='Per-domain entity registry options (e.g. sensor \\'display_precision\\', weather \\'forecast_type\\'). Pass a dict mapping domain to a sub-dict, e.g. {\"sensor\": {\"display_precision\": 2}}. Multiple domains are sent as separate registry updates. For \\'Show As\\' use the dedicated `device_class` parameter — that is what the HA UI Show As dropdown writes. Voice-assistant exposure is stored under `options.<assistant>.should_expose` but must be managed via the dedicated `expose_to` parameter, not this options dict. Single entity only.', default=None)]",
           "default": null
         },
         "enabled": {
@@ -1078,7 +1078,7 @@
           "default": null
         },
         "categories": {
-          "type": "Annotated[str | dict[str, str | None] | None, Field(description='Category assignment as a dict mapping scope to category_id. Example: {\"automation\": \"category_id_here\"}. Use null value to clear: {\"automation\": null}. Single entity only.', default=None)]",
+          "type": "Annotated[dict[str, str | None] | None, Field(description='Category assignment as a dict mapping scope to category_id. Example: {\"automation\": \"category_id_here\"}. Use null value to clear: {\"automation\": null}. Single entity only.', default=None)]",
           "default": null
         },
         "labels": {
@@ -1090,7 +1090,7 @@
           "default": "set"
         },
         "expose_to": {
-          "type": "Annotated[str | dict[str, bool] | None, Field(description='Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. Valid assistants: \\'conversation\\' (Assist), \\'cloud.alexa\\', \\'cloud.google_assistant\\'. Example: {\"conversation\": true, \"cloud.alexa\": false}. Supports bulk operations.', default=None)]",
+          "type": "Annotated[dict[str, bool] | None, Field(description='Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. Valid assistants: \\'conversation\\' (Assist), \\'cloud.alexa\\', \\'cloud.google_assistant\\'. Example: {\"conversation\": true, \"cloud.alexa\": false}. Supports bulk operations.', default=None)]",
           "default": null
         },
         "new_entity_id": {
@@ -2619,7 +2619,7 @@
           "type": "str"
         },
         "data": {
-          "type": "str | dict[str, Any] | None",
+          "type": "dict[str, Any] | None",
           "default": null
         }
       },
@@ -2653,7 +2653,7 @@
           "default": null
         },
         "data": {
-          "type": "str | dict[str, Any] | None",
+          "type": "dict[str, Any] | None",
           "default": null
         },
         "return_response": {
