@@ -126,6 +126,71 @@ class TestConfigEntryFlow:
             {"target": entry_id, "confirm": True},
         )
 
+    async def test_get_entity_config_entry_id_and_options_optimal_path(
+        self, mcp_client
+    ):
+        """End-to-end of the issue #1457 optimal read sequence:
+
+            ha_get_entity(entity_id)                  -> config_entry_id
+            ha_get_integration(entry_id,
+                               include_options=True)  -> template body
+
+        Covers the two read paths that previously had only unit coverage:
+        ``ha_get_entity`` surfacing ``config_entry_id``, and
+        ``include_options`` surfacing a UI template helper's body via
+        ``description.suggested_value``.
+        """
+        body_marker = "optimalpathtemplatebody8829"
+        name = "e2e optimal path template"
+        # HA derives a template helper's entity_id from its name (slugified),
+        # e.g. "Weather Message" -> sensor.weather_message (issue #1457).
+        entity_id = "sensor.e2e_optimal_path_template"
+        config = {
+            "next_step_id": "sensor",
+            "name": name,
+            "state": "{{ states('sensor." + body_marker + "') }}",
+        }
+        entry_id = await _create_config_entry_helper(
+            mcp_client, "template", config, "template sensor (optimal path)"
+        )
+        try:
+            # Change #2: ha_get_entity surfaces the parent config_entry_id, so
+            # an agent can jump straight to ha_get_integration without scanning
+            # a domain list. Poll because the template entity registers shortly
+            # after its config entry; the predicate also asserts the field.
+            ge_data = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_entity",
+                arguments={"entity_id": entity_id},
+                predicate=lambda d: (
+                    (d.get("entity_entry") or {}).get("config_entry_id") == entry_id
+                ),
+                timeout=60,
+                description="ha_get_entity surfaces config_entry_id",
+            )
+            assert ge_data["entity_entry"]["config_entry_id"] == entry_id, (
+                "ha_get_entity must surface the parent config_entry_id"
+            )
+
+            # Optimal read path: include_options surfaces the template body via
+            # the options-flow probe (description.suggested_value).
+            gi = await mcp_client.call_tool(
+                "ha_get_integration",
+                {"entry_id": entry_id, "include_options": True},
+            )
+            gi_data = assert_mcp_success(gi, "get integration include_options")
+            assert body_marker in str(gi_data), (
+                "include_options should surface the template body for a "
+                "UI-created template helper"
+            )
+            logger.info("✅ optimal read sequence verified end-to-end")
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
+
     async def test_update_min_max_helper(self, mcp_client):
         """Update an existing min_max helper via options flow (upsert with entry_id)."""
         config = {

@@ -1189,6 +1189,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           via the ha_set_entity(expose_to=...) parameter, not the options dict.
         - platform: Integration platform (e.g., "hue", "zwave_js")
         - device_id: Associated device ID (null if standalone)
+        - config_entry_id: Parent config entry's ID (null for YAML-only
+          entities). When non-null — e.g. for UI-created template/group/
+          utility_meter/derivative/... helpers — pass it to
+          ``ha_get_integration(entry_id=..., include_options=True)`` to read the
+          helper's current config (template body, group members, etc.) without
+          scanning a domain list.
         - unique_id: Integration's unique identifier
         """
         try:
@@ -1254,6 +1260,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "options": entry.get("options", {}),
                     "platform": entry.get("platform"),
                     "device_id": entry.get("device_id"),
+                    "config_entry_id": entry.get("config_entry_id"),
                     "unique_id": entry.get("unique_id"),
                 }
 
