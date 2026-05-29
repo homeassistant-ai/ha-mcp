@@ -1059,3 +1059,68 @@ class TestDashboardsDirectoryAllowlist:
             {"path": path, "confirm": True},
         )
         assert delete_data.get("success") is True, delete_data
+
+
+@pytest.mark.filesystem
+class TestYamlConfigSkillContentDelivery:
+    """E2E: ha_config_set_yaml participates in the write-tool skill_content
+    delivery feature (#1182) — the sixth write tool exposing MandatoryBPS.
+
+    Lives here (not in workflows/automation/test_skill_content_delivery.py
+    with the other five tools) because ha_config_set_yaml is feature-flag
+    + custom-component gated and needs the mcp_client_with_yaml_config
+    fixture owned by this module.
+    """
+
+    _TEMPLATE_SENSOR = "- sensor:\n    - name: E2E Skill Sensor\n      state: 'ok'"
+
+    async def test_default_on_attaches_skill_content(self, mcp_client_with_yaml_config):
+        """MandatoryBPS defaults to True → template-guidelines.md ships
+        under skill_content with the hint as the first response key."""
+        result = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "template",
+                "action": "add",
+                "content": self._TEMPLATE_SENSOR,
+                "file": "packages/_e2e_skill_bps_on.yaml",
+                "backup": False,
+            },
+        )
+        assert result.get("success") is True, f"yaml add failed: {result}"
+
+        keys = list(result.keys())
+        assert keys[0] == "skill_content_hint", (
+            f"skill_content_hint must be the first response key, got {keys}"
+        )
+        skill_content = result.get("skill_content") or {}
+        assert skill_content, "skill_content must be non-empty"
+        assert "template-guidelines.md" in "\n".join(skill_content.keys()), (
+            f"expected template-guidelines.md among {list(skill_content.keys())}"
+        )
+
+    async def test_mandatorybps_false_suppresses_skill_content(
+        self, mcp_client_with_yaml_config
+    ):
+        """Explicit MandatoryBPS=False suppresses both skill_content and the
+        hint on the yaml tool."""
+        result = await safe_call_tool(
+            mcp_client_with_yaml_config,
+            TOOL_NAME,
+            {
+                "yaml_path": "template",
+                "action": "add",
+                "content": self._TEMPLATE_SENSOR,
+                "file": "packages/_e2e_skill_bps_off.yaml",
+                "backup": False,
+                "MandatoryBPS": False,
+            },
+        )
+        assert result.get("success") is True, f"yaml add failed: {result}"
+        assert "skill_content" not in result, (
+            "MandatoryBPS=False must suppress skill_content"
+        )
+        assert "skill_content_hint" not in result, (
+            "MandatoryBPS=False must suppress skill_content_hint"
+        )

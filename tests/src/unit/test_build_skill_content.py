@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from ha_mcp.tools.util_helpers import (
     _SKILL_CONTENT_OPTOUT_HINT,
@@ -21,6 +22,21 @@ from ha_mcp.tools.util_helpers import (
     augment_tool_error_with_skill_content,
     build_skill_content,
 )
+
+
+def _make_validation_error() -> ValidationError:
+    """Construct a real ``pydantic.ValidationError`` — the realistic
+    config-load failure ``Settings()`` raises, which the narrowed
+    ``except ValidationError`` in build/attach_skill_content degrades on."""
+
+    class _M(BaseModel):
+        x: int
+
+    try:
+        _M(x="not-an-int")  # type: ignore[arg-type]
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("expected ValidationError")  # pragma: no cover
 
 
 @pytest.fixture
@@ -374,12 +390,16 @@ class TestDegradedPaths:
 
     def test_settings_load_raises_returns_empty(self, patched_get_skills_dir):
         """build_skill_content must silently degrade to {} when
-        get_global_settings() raises — the documented contract is "skill
-        content is opportunistic; never fail the surrounding write".
-        Without this defensive wrap, a settings-validation regression
-        would propagate, the outer except in each tool would re-map to
-        INTERNAL_ERROR, and the agent would retry an already-committed
-        mutation."""
+        get_global_settings() raises a config-validation error — the
+        documented contract is "skill content is opportunistic; never
+        fail the surrounding write". Without this guard, a settings-
+        validation regression would propagate, the outer except in each
+        tool would re-map to INTERNAL_ERROR, and the agent would retry
+        an already-committed mutation.
+
+        The except is narrowed to ``pydantic.ValidationError`` (the
+        realistic Settings() config-load failure), so a genuine config
+        problem degrades gracefully here."""
         # ``get_global_settings`` is imported INSIDE ``build_skill_content``
         # via ``from ..config import get_global_settings``, so the symbol
         # isn't bound in ``util_helpers``'s module namespace. Patch at the
@@ -387,7 +407,7 @@ class TestDegradedPaths:
         # resolves the name on every call.
         with patch(
             "ha_mcp.config.get_global_settings",
-            side_effect=ValueError("settings broken"),
+            side_effect=_make_validation_error(),
         ):
             result = build_skill_content(
                 MandatoryBPS=True,
@@ -395,6 +415,24 @@ class TestDegradedPaths:
                 referenced_files=None,
             )
         assert result == {}
+
+    def test_settings_load_propagates_unexpected_error(self, patched_get_skills_dir):
+        """A NON-config error (programming bug: AttributeError/ImportError/
+        etc.) must NOT be swallowed — the except is deliberately narrowed
+        to ValidationError so real bugs surface instead of being masked on
+        every write (Patch76 review; repo narrow-except convention)."""
+        with (
+            patch(
+                "ha_mcp.config.get_global_settings",
+                side_effect=AttributeError("real bug, not a config issue"),
+            ),
+            pytest.raises(AttributeError),
+        ):
+            build_skill_content(
+                MandatoryBPS=True,
+                canonical_files=("references/automation-patterns.md",),
+                referenced_files=None,
+            )
 
     def test_trailing_hash_resolves_to_whole_file(self, patched_get_skills_dir):
         """A trailing ``#`` with empty anchor (``"path#"``) must produce

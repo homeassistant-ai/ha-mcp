@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, overload
 
 from fastmcp.exceptions import ToolError
+from pydantic import ValidationError
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -2018,10 +2019,14 @@ def build_skill_content(
     # a successful write into a tool-level INTERNAL_ERROR (which would
     # then prompt the agent to retry, double-applying the mutation).
     # Silent degrade to "no skill_content" is the documented contract.
+    # Narrowed to ValidationError (the realistic config-load failure from
+    # Settings()) so genuine bugs (AttributeError/ImportError/etc.) still
+    # surface instead of being masked on every write — per the repo's
+    # narrow-except convention.
     try:
         if not get_global_settings().enable_mandatory_bps:
             return {}
-    except Exception:
+    except ValidationError:
         logger.warning("skill_content settings lookup failed; omitting", exc_info=True)
         return {}
 
@@ -2146,10 +2151,14 @@ def attach_skill_content(
     #    Benign — return silently.
     # 3. Something was requested but the vendor submodule is missing.
     #    Degraded — append a warning so operators notice.
+    # Narrowed to ValidationError (see build_skill_content). On a settings
+    # lookup failure we can't know the master state, so default master_on
+    # to False — that suppresses the vendor-missing warning rather than
+    # emitting a misleading one whose real cause was the settings fetch.
     try:
         master_on = get_global_settings().enable_mandatory_bps
-    except Exception:
-        master_on = True
+    except ValidationError:
+        master_on = False
     requested_anything = MandatoryBPS or referenced_files
     if master_on and requested_anything and get_skills_dir() is None:
         response.setdefault("warnings", []).append(_SKILLS_VENDOR_MISSING_WARNING)

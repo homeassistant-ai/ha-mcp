@@ -175,3 +175,128 @@ class TestSkillContentDelivery:
         assert section_body.lstrip().startswith("##"), (
             "section body should start with a markdown heading"
         )
+
+    # ------------------------------------------------------------------
+    # Coverage across the other write tools (script / scene / helper /
+    # dashboard). Automation is covered explicitly above; yaml — which is
+    # feature-flagged and custom-component-gated — is covered in
+    # tests/src/e2e/workflows/filesystem/test_yaml_config.py, which owns
+    # the mcp_client_with_yaml_config fixture. Together these exercise all
+    # six write tools that expose the MandatoryBPS parameter, each of
+    # which has a distinct success-return shape (spread dicts, helper
+    # subentry paths, dashboard metadata) where an ordering or wrong-dict
+    # bug would slip past the structural AST test.
+    # ------------------------------------------------------------------
+
+    def _build_create(self, tool: str, light: str, suffix: str):
+        """Return (tool_name, args, expected_skill_substrings) for a
+        minimal valid create on each write tool."""
+        if tool == "script":
+            return (
+                "ha_config_set_script",
+                {
+                    "script_id": f"e2e_skill_script_{suffix}",
+                    "config": {
+                        "alias": f"E2E Skill Script {suffix}",
+                        "sequence": [
+                            {
+                                "service": "light.turn_on",
+                                "target": {"entity_id": light},
+                            }
+                        ],
+                    },
+                },
+                ["automation-patterns.md", "template-guidelines.md"],
+            )
+        if tool == "scene":
+            return (
+                "ha_config_set_scene",
+                {
+                    "scene_id": f"e2e_skill_scene_{suffix}",
+                    "config": {
+                        "name": f"E2E Skill Scene {suffix}",
+                        "entities": {light: {"state": "on"}},
+                    },
+                },
+                ["SKILL.md"],
+            )
+        if tool == "helper":
+            return (
+                "ha_config_set_helper",
+                {
+                    "helper_type": "input_boolean",
+                    "name": f"E2E Skill Helper {suffix}",
+                },
+                ["helper-selection.md"],
+            )
+        if tool == "dashboard":
+            return (
+                "ha_config_set_dashboard",
+                {
+                    "url_path": f"e2e-skill-dashboard-{suffix}",
+                    "title": f"E2E Skill Dash {suffix}",
+                    "config": {"views": [{"title": "V", "cards": []}]},
+                },
+                ["dashboard-guide.md", "dashboard-cards.md"],
+            )
+        raise AssertionError(f"unknown tool {tool}")
+
+    def _track(self, cleanup_tracker, tool: str, args: dict, result: dict) -> None:
+        """Best-effort cleanup registration for the created entity."""
+        entity_id = result.get("entity_id")
+        if tool == "script":
+            cleanup_tracker.track("script", entity_id or f"script.{args['script_id']}")
+        elif tool == "scene":
+            cleanup_tracker.track("scene", entity_id or f"scene.{args['scene_id']}")
+        elif tool == "helper":
+            if entity_id:
+                cleanup_tracker.track("input_boolean", entity_id)
+        elif tool == "dashboard":
+            cleanup_tracker.track("dashboard", args["url_path"])
+
+    @pytest.mark.parametrize("tool", ["script", "scene", "helper", "dashboard"])
+    async def test_default_on_attaches_skill_content_all_tools(
+        self, mcp_client, cleanup_tracker, tool
+    ):
+        """Default MandatoryBPS=True attaches canonical skill_content with
+        the hint as the FIRST response key, for every write tool — not
+        just automation."""
+        light = await self._find_test_light_entity(mcp_client)
+        tool_name, args, expected = self._build_create(tool, light, "on")
+        result = await safe_call_tool(mcp_client, tool_name, args)
+        assert result.get("success"), f"{tool} create failed: {result}"
+        self._track(cleanup_tracker, tool, args, result)
+
+        keys = list(result.keys())
+        assert keys[0] == "skill_content_hint", (
+            f"{tool}: skill_content_hint must be the first response key, got {keys}"
+        )
+        skill_content = result.get("skill_content") or {}
+        assert skill_content, f"{tool}: skill_content must be non-empty"
+        joined = "\n".join(skill_content.keys())
+        for sub in expected:
+            assert sub in joined, (
+                f"{tool}: expected {sub!r} among skill_content keys "
+                f"{list(skill_content.keys())}"
+            )
+
+    @pytest.mark.parametrize("tool", ["script", "scene", "helper", "dashboard"])
+    async def test_mandatorybps_false_suppresses_all_tools(
+        self, mcp_client, cleanup_tracker, tool
+    ):
+        """Explicit MandatoryBPS=False suppresses both skill_content and the
+        hint, for every write tool."""
+        light = await self._find_test_light_entity(mcp_client)
+        tool_name, args, _ = self._build_create(tool, light, "off")
+        result = await safe_call_tool(
+            mcp_client, tool_name, {**args, "MandatoryBPS": False}
+        )
+        assert result.get("success"), f"{tool} create failed: {result}"
+        self._track(cleanup_tracker, tool, args, result)
+
+        assert "skill_content" not in result, (
+            f"{tool}: MandatoryBPS=False must suppress skill_content"
+        )
+        assert "skill_content_hint" not in result, (
+            f"{tool}: MandatoryBPS=False must suppress skill_content_hint"
+        )

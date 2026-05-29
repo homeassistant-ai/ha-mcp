@@ -103,6 +103,23 @@ def test_resolve_skill_files_rejects_traversal(fake_skills_dir: Path) -> None:
     assert result == {}
 
 
+def test_resolve_skill_files_rejects_absolute_path(fake_skills_dir: Path) -> None:
+    """An absolute path passed directly is refused.
+
+    ``skill_dir / "/etc/passwd"`` collapses to ``/etc/passwd`` under
+    pathlib (absolute RHS wins), which then fails the
+    ``is_relative_to(skill_root)`` guard. Guards against a future
+    refactor to a naive string-prefix check that would let an absolute
+    path slip through. Input is hardcoded today, so this is
+    defense-in-depth — but cheap to pin."""
+    result = skill_loader.resolve_skill_files(
+        fake_skills_dir,
+        "home-assistant-best-practices",
+        ["/etc/passwd"],
+    )
+    assert result == {}
+
+
 def test_resolve_skill_files_rejects_unknown_skill(fake_skills_dir: Path) -> None:
     """A skill name with no corresponding directory returns empty."""
     result = skill_loader.resolve_skill_files(
