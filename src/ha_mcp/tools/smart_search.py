@@ -2005,10 +2005,10 @@ class SmartSearchTools:
         entity, etc. — is searchable.
 
         Cost: 1 REST call + one options-flow probe per flow-helper config
-        entry, parallelised under ``semaphore``. The probe is skipped only
-        when the title alone already scores a perfect 100 (the deeper probe
-        can only raise the total, never lower it, so anything below 100 is
-        still worth probing for accurate scoring and ``match_in_config``).
+        entry, parallelised under ``semaphore``. The probe is skipped when
+        the title alone already scores the maximum (a deeper config match can
+        only raise the total, never lower it); any title that leaves headroom
+        is still probed for accurate scoring and ``match_in_config``.
         """
         try:
             response = await self.client._request("GET", "/config/config_entries/entry")
@@ -2112,7 +2112,12 @@ class SmartSearchTools:
             if isinstance(item, dict):
                 out.append(item)
             elif isinstance(item, Exception):
-                logger.debug(f"flow-helper scoring failed: {item}")
+                # The probe swallows its own transient/API errors, so anything
+                # reaching here is a scoring/extraction bug (e.g. a shape
+                # assumption breaking on a future HA version). Log at warning so
+                # it's discoverable — one bad entry must not sink the whole
+                # multi-source deep_search, so we drop it and keep going.
+                logger.warning(f"flow-helper scoring failed: {item!r}")
         return out
 
     def _score_deep_match(

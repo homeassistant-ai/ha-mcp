@@ -1305,6 +1305,17 @@ class TestOptionsFromFormFlow:
             == {"state": "{{ 1 + 1 }}"}
         )
 
+    def test_malformed_data_schema_not_list_returns_empty(self) -> None:
+        # HA should never return a non-list data_schema, but a malformed
+        # response must degrade to {} rather than iterating a string
+        # character-by-character (which would AttributeError on str.get).
+        assert options_from_form_flow({"data_schema": "not-a-list"}) == {}
+
+    def test_malformed_field_not_dict_is_skipped(self) -> None:
+        # A non-dict entry inside data_schema is skipped, not crashed on.
+        flow = {"data_schema": ["garbage", {"name": "state", "default": "kept"}]}
+        assert options_from_form_flow(flow) == {"state": "kept"}
+
 
 class TestFetchEntryOptions:
     """``fetch_entry_options`` module-level probe (issue #1457)."""
@@ -1362,3 +1373,13 @@ class TestFetchEntryOptions:
         ):
             assert await fetch_entry_options(client, "entry_w") == {}
         client.abort_options_flow.assert_awaited_once_with("f3")
+
+    async def test_returns_empty_when_form_has_no_flow_id(self) -> None:
+        # A form response missing flow_id yields {} and skips the abort —
+        # there's no flow_id to abort — without raising.
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(return_value={"type": "form"})
+        client.abort_options_flow = AsyncMock()
+
+        assert await fetch_entry_options(client, "entry_nf") == {}
+        client.abort_options_flow.assert_not_awaited()

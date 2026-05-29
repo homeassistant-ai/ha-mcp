@@ -113,7 +113,15 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     a missing or ``None`` value are skipped.
     """
     out: dict[str, Any] = {}
-    for field in flow.get("data_schema") or []:
+    # Defensive: HA should always return a list of dict fields, but guard
+    # against malformed shapes so a bad response degrades to {} instead of
+    # raising AttributeError (e.g. a string data_schema would iterate chars).
+    data_schema = flow.get("data_schema")
+    if not isinstance(data_schema, list):
+        return out
+    for field in data_schema:
+        if not isinstance(field, dict):
+            continue
         name = field.get("name")
         if name is None:
             continue
@@ -163,7 +171,7 @@ async def fetch_entry_options(
         flow_id = flow.get("flow_id")
         flow_type = flow.get("type")
         if flow_type != "form":
-            logger.debug(
+            log_probe_failure(
                 f"OptionsFlow for {entry_id} returned type={flow_type!r}, "
                 f"not a form — cannot extract option defaults"
             )

@@ -10,6 +10,7 @@ storage-based helpers.
 """
 
 import asyncio
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -279,9 +280,12 @@ class TestFlowHelperDeepSearch:
         )
         assert [r["entry_id"] for r in results] == ["01HXTEMPLATEOK"]
 
-    async def test_probe_failure_on_one_entry_does_not_break_search(self) -> None:
-        # One entry's options probe blowing up must not drop the healthy
-        # sibling (fetch_entry_options swallows to {}; gather isolates faults).
+    async def test_probe_swallow_does_not_drop_other_entries(self) -> None:
+        # start_options_flow raising for one entry is swallowed inside
+        # fetch_entry_options (→ {}) *before* score_entry runs, so that entry
+        # simply doesn't match while the healthy sibling is still returned.
+        # The gather-level isolation path (a bug inside score_entry) is covered
+        # by test_score_entry_crash_is_isolated_and_logged.
         client = MagicMock()
         client._request = AsyncMock(
             return_value=[
@@ -316,6 +320,78 @@ class TestFlowHelperDeepSearch:
             include_config=False,
         )
         assert [r["entry_id"] for r in results] == ["01HXGOOD"]
+
+    async def test_score_entry_crash_is_isolated_and_logged(self, caplog) -> None:
+        # A real bug inside score_entry (not a swallowed probe/API error) is
+        # isolated by gather: the bad entry is dropped and logged at WARNING
+        # (discoverable, per review), the healthy entry is still returned, and
+        # the multi-source search does not crash.
+        client = MagicMock()
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXGOOD",
+                    "domain": "template",
+                    "title": "Good",
+                    "supports_options": True,
+                },
+                {
+                    "entry_id": "01HXBOOM",
+                    "domain": "template",
+                    "title": "Boom",
+                    "supports_options": True,
+                },
+            ]
+        )
+        client.start_options_flow = AsyncMock(return_value=_make_flow_form("{{ x }}"))
+        client.abort_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        def scorer(entity_id, friendly_name, *args, **kwargs):
+            if friendly_name == "Boom":
+                raise TypeError("scoring blew up")
+            return (100, 100, True)
+
+        with (
+            patch.object(tools, "_score_deep_match", side_effect=scorer),
+            caplog.at_level(logging.WARNING, logger="ha_mcp.tools.smart_search"),
+        ):
+            results = await tools._search_flow_helpers(
+                "good",
+                exact_match=True,
+                semaphore=asyncio.Semaphore(8),
+                include_config=False,
+            )
+
+        assert [r["entry_id"] for r in results] == ["01HXGOOD"]
+        assert "flow-helper scoring failed" in caplog.text
+
+    async def test_below_threshold_score_filters_entry(self) -> None:
+        # A non-zero score below the threshold is filtered via
+        # `if total_score < threshold: return None`.
+        client = MagicMock()
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXLOW",
+                    "domain": "template",
+                    "title": "Low Score",
+                    "supports_options": True,
+                }
+            ]
+        )
+        client.start_options_flow = AsyncMock(return_value=_make_flow_form("{{ x }}"))
+        client.abort_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        with patch.object(tools, "_score_deep_match", return_value=(50, 100, False)):
+            results = await tools._search_flow_helpers(
+                "x",
+                exact_match=True,
+                semaphore=asyncio.Semaphore(8),
+                include_config=False,
+            )
+        assert results == []
 
     async def test_fuzzy_mode_probes_when_title_below_perfect_score(self) -> None:
         # Regression guard for the probe-skip threshold. In fuzzy mode a title
