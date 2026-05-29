@@ -378,6 +378,133 @@ async def test_deep_search_finds_ui_template_helper(mcp_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "helper_type,name,config",
+    [
+        pytest.param(
+            "group",
+            "Deep Search Group E2E",
+            {
+                "group_type": "light",
+                "name": "Deep Search Group E2E",
+                "entities": [],
+                "hide_members": False,
+            },
+            id="group",
+        ),
+        pytest.param(
+            "min_max",
+            "Deep Search MinMax E2E",
+            {
+                "name": "Deep Search MinMax E2E",
+                "entity_ids": [
+                    "sensor.demo_temperature",
+                    "sensor.demo_outside_temperature",
+                ],
+                "type": "min",
+            },
+            id="min_max",
+        ),
+    ],
+)
+async def test_deep_search_finds_non_template_flow_helpers(
+    mcp_client, helper_type, name, config
+):
+    """deep_search surfaces non-template flow-based helpers too (issue #1457).
+
+    The flow-helper branch lists config entries for every domain in
+    ``FLOW_HELPER_TYPES``, so a group (menu-rooted flow) and a min_max (single
+    form) must be findable by name alongside template helpers — not just the
+    ``template`` domain.
+    """
+    logger.info(f"🔍 Testing deep search for {helper_type} flow-helper")
+
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": helper_type, "name": name, "config": config},
+    )
+    create_data = assert_mcp_success(create_result, f"Create {helper_type} helper")
+    entry_id = create_data.get("entry_id")
+    assert entry_id, f"Create should return entry_id for {helper_type}"
+
+    try:
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={"query": name, "search_types": ["helper"], "limit": 10},
+            predicate=lambda d: any(
+                h.get("entry_id") == entry_id for h in d.get("helpers", [])
+            ),
+            description=f"deep search finds {helper_type} helper",
+        )
+        match = next(h for h in data["helpers"] if h.get("entry_id") == entry_id)
+        assert match.get("helper_type") == helper_type, (
+            f"helper_type should be {helper_type!r}, got {match.get('helper_type')!r}"
+        )
+        assert match.get("match_in_name") is True, "should match on the name"
+        logger.info(f"✅ Found {helper_type} flow-helper via deep_search")
+    finally:
+        await safe_call_tool(
+            mcp_client,
+            "ha_remove_helpers_integrations",
+            {"target": entry_id, "confirm": True},
+        )
+
+
+@pytest.mark.asyncio
+async def test_deep_search_flow_helper_fuzzy_probes_config(mcp_client):
+    """Fuzzy (``exact_match=False``) deep_search still probes flow-helper config.
+
+    The query is a token inside the template body but NOT the name, so the name
+    scores below 100 and — even in fuzzy mode — the options flow must be probed
+    for the body to be searchable. Exercises the fuzzy branch of the flow-helper
+    search end-to-end (only the exact-match path had E2E coverage before).
+    """
+    logger.info("🔍 Testing fuzzy deep search probes flow-helper config")
+
+    body_marker = "fuzzyflowbodymarker7788"
+    config = {
+        "next_step_id": "sensor",
+        "name": "Deep Search Fuzzy Template",
+        "state": "{{ states('sensor." + body_marker + "') }}",
+    }
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "template", "name": config["name"], "config": config},
+    )
+    create_data = assert_mcp_success(create_result, "Create fuzzy template helper")
+    entry_id = create_data.get("entry_id")
+    assert entry_id, "Create should return the config entry_id"
+
+    try:
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={
+                "query": body_marker,
+                "search_types": ["helper"],
+                "exact_match": False,
+                "limit": 10,
+            },
+            predicate=lambda d: any(
+                h.get("entry_id") == entry_id for h in d.get("helpers", [])
+            ),
+            description="fuzzy deep search finds template helper by body",
+        )
+        match = next(h for h in data["helpers"] if h.get("entry_id") == entry_id)
+        assert match.get("match_in_config") is True, (
+            "fuzzy search must surface the template body via the options probe"
+        )
+        logger.info("✅ Fuzzy deep search found template helper by body content")
+    finally:
+        await safe_call_tool(
+            mcp_client,
+            "ha_remove_helpers_integrations",
+            {"target": entry_id, "confirm": True},
+        )
+
+
+@pytest.mark.asyncio
 async def test_deep_search_all_types(mcp_client):
     """Test deep search across all types simultaneously."""
     logger.info("🔍 Testing deep search across all types")
