@@ -73,16 +73,6 @@ SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
         vol.Required("yaml_path"): cv.string,
         vol.Optional("content"): cv.string,
         vol.Optional("backup", default=True): cv.boolean,
-        # Caller-provided list of PACKAGES_ONLY_YAML_KEYS that the
-        # caller wants the component to reject. Empty list (the
-        # default) means no extra restrictions on top of the
-        # component's existing allowlist. ha-mcp populates this from
-        # its per-key Settings flags so the wrapper and the component
-        # stay symmetric — if ha-mcp's flag is off, the component also
-        # refuses, defending against bypass attempts.
-        vol.Optional("disabled_packages_keys", default=list): vol.All(
-            cv.ensure_list, [cv.string]
-        ),
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
@@ -435,15 +425,6 @@ def _build_edit_yaml_config_handler(hass):
         yaml_path = call.data["yaml_path"]
         content = call.data.get("content")
         do_backup = call.data.get("backup", True)
-        # Caller-provided per-key opt-out for PACKAGES_ONLY_YAML_KEYS.
-        # Filter to the recognised set so a caller that types
-        # ``automatoin`` doesn't accidentally pass through; only
-        # actually-known keys count.
-        disabled_packages_keys = {
-            key
-            for key in call.data.get("disabled_packages_keys", [])
-            if key in PACKAGES_ONLY_YAML_KEYS
-        }
 
         # Validate file path — only configuration.yaml and packages/*.yaml
         normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
@@ -466,23 +447,6 @@ def _build_edit_yaml_config_handler(hass):
                 "error": (
                     f"File '{rel_path}' is not allowed. "
                     f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)} and packages/*.yaml are supported."
-                ),
-            }
-
-        # Per-key gate fires only for packages/*.yaml writes. Writes to
-        # configuration.yaml fall through to ``_parse_and_validate_yaml_path``
-        # which rejects PACKAGES_ONLY_YAML_KEYS with the storage-mode-
-        # tools advisory regardless of this flag.
-        top_segment = yaml_path.split(".", 1)[0] if yaml_path else ""
-        if is_package and top_segment in disabled_packages_keys:
-            return {
-                "success": False,
-                "error": (
-                    f"yaml_path key {top_segment!r} is disabled by the "
-                    f"caller's runtime configuration. Re-enable it in the "
-                    f"caller (the ha-mcp Server Settings → YAML config "
-                    f"editing → 'Allow {top_segment} in packages/*.yaml' "
-                    f"toggle), or use the storage-mode equivalent."
                 ),
             }
 

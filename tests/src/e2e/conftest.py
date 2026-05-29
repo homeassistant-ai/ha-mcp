@@ -1191,11 +1191,6 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             # Beta sub-flags require the master to be on too.
             os.environ["ENABLE_BETA_FEATURES"] = "true"
             os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
-            # Per-key sub-toggles default OFF; the E2E suite covers the
-            # whole packages/*.yaml surface so enable all three.
-            os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = "true"
-            os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
-            os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
             os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
             os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
             _reset_ha_in_process_caches()
@@ -1601,11 +1596,6 @@ def ha_container_with_fresh_config(_blueprint_http_server):
         # the master to also be on.
         os.environ["ENABLE_BETA_FEATURES"] = "true"
         os.environ["ENABLE_YAML_CONFIG_EDITING"] = "true"
-        # Per-key sub-toggles default OFF; the E2E suite covers the
-        # whole packages/*.yaml surface so enable all three.
-        os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = "true"
-        os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = "true"
-        os.environ["ENABLE_YAML_PACKAGES_SCENE"] = "true"
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = "true"
         os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = "true"
 

@@ -37,32 +37,6 @@ logger = logging.getLogger(__name__)
 
 _LOVELACE_DASHBOARD_PREFIX = "lovelace.dashboards."
 
-# Maps a per-key Settings flag onto the yaml_path top-level segment it
-# gates. Keep in lockstep with the custom component's
-# PACKAGES_ONLY_YAML_KEYS — every key in that frozenset must appear
-# here, otherwise a default-False flag would silently leave that key
-# unreachable through the wrapper.
-_YAML_PACKAGES_FLAG_BY_KEY = {
-    "automation": "enable_yaml_packages_automation",
-    "script": "enable_yaml_packages_script",
-    "scene": "enable_yaml_packages_scene",
-}
-
-
-def _disabled_packages_keys(settings: Any) -> list[str]:
-    """Return the sorted list of PACKAGES_ONLY_YAML_KEYS whose Settings
-    flag is currently False.
-
-    Sorted so the value is deterministic in service payloads and test
-    assertions; the custom component treats it as a set so order is
-    irrelevant on the wire.
-    """
-    return sorted(
-        key
-        for key, flag in _YAML_PACKAGES_FLAG_BY_KEY.items()
-        if not getattr(settings, flag, False)
-    )
-
 
 async def _check_storage_mode_dashboard_collision(client: Any, yaml_path: str) -> None:
     """Raise a ToolError if a storage-mode dashboard already owns the requested
@@ -248,41 +222,6 @@ class YamlConfigTools:
             # Coerce boolean parameter
             backup_bool = coerce_bool_param(backup, "backup", default=True)
 
-            # Per-key gate: reject before the custom-component round
-            # trip when the yaml_path top-level segment matches a
-            # disabled PACKAGES_ONLY key AND the target file is under
-            # packages/. The keys (automation / script / scene) are
-            # only ACCEPTED in packages/*.yaml in the first place, so
-            # writes to configuration.yaml must fall through here and
-            # let the component-side reject with its own message that
-            # lists the storage-mode tools to use instead.
-            settings = get_global_settings()
-            disabled_keys = _disabled_packages_keys(settings)
-            top_key = yaml_path.split(".", 1)[0] if yaml_path else ""
-            normalized_file = file.replace("\\", "/")
-            is_packages_target = (
-                normalized_file.startswith("packages/")
-                and normalized_file.endswith(".yaml")
-            )
-            if is_packages_target and top_key in disabled_keys:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        (
-                            f"yaml_path key {top_key!r} is disabled. Enable "
-                            f"'Allow {top_key} in packages/*.yaml' under "
-                            f"YAML config editing in Server Settings to use "
-                            f"this key, or use the storage-mode tool "
-                            f"(ha_config_set_{top_key})."
-                        ),
-                        context={
-                            "yaml_path": yaml_path,
-                            "disabled_key": top_key,
-                            "file": file,
-                        },
-                    )
-                )
-
             # Storage-mode dashboard collision check (only for lovelace.dashboards.*).
             # Skip on `remove` so users can clean up YAML entries that conflict
             # with a storage-mode dashboard (e.g., during a migration).
@@ -298,7 +237,6 @@ class YamlConfigTools:
                 "action": action,
                 "yaml_path": yaml_path,
                 "backup": backup_bool,
-                "disabled_packages_keys": disabled_keys,
             }
             if content is not None:
                 service_data["content"] = content

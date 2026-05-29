@@ -814,15 +814,6 @@ _SETTINGS_HTML = (
     left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
   .feature-row.codemode-sub.dimmed { opacity: 0.55; }
   .feature-row.codemode-sub.dimmed input { cursor: not-allowed; }
-  /* YAML packages per-key sub-rows — second-level nested under
-     enable_yaml_config_editing. Same dimming logic as codemode-sub
-     but gated by enable_yaml_config_editing (the parent flag) rather
-     than enable_code_mode. */
-  .feature-row.yaml-packages-sub { padding-left: 56px; position: relative; }
-  .feature-row.yaml-packages-sub::before { content: ""; position: absolute;
-    left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
-  .feature-row.yaml-packages-sub.dimmed { opacity: 0.55; }
-  .feature-row.yaml-packages-sub.dimmed input { cursor: not-allowed; }
   /* Advanced settings sections — one row per
      ADVANCED_SETTINGS_FIELDS entry, grouped by section. Visually
      matches the .feature-row treatment so the Server Settings tab
@@ -2185,18 +2176,6 @@ const FEATURE_META = {
     label: "Enable YAML config editing (beta)",
     help: "Beta feature — disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
   },
-  enable_yaml_packages_automation: {
-    label: "Allow automation in packages/*.yaml",
-    help: "Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts yaml_path='automation' inside packages/*.yaml. When off, the wrapper rejects the call client-side AND the custom component rejects it server-side. Storage-mode tools (ha_config_set_automation) cover the UI-managed path and are unaffected. Disabled by default.",
-  },
-  enable_yaml_packages_script: {
-    label: "Allow script in packages/*.yaml",
-    help: "Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts yaml_path='script' inside packages/*.yaml. When off, the wrapper rejects the call client-side AND the custom component rejects it server-side. Storage-mode tools (ha_config_set_script) cover the UI-managed path and are unaffected. Disabled by default.",
-  },
-  enable_yaml_packages_scene: {
-    label: "Allow scene in packages/*.yaml",
-    help: "Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts yaml_path='scene' inside packages/*.yaml. When off, the wrapper rejects the call client-side AND the custom component rejects it server-side. Storage-mode tools (ha_config_set_scene) cover the UI-managed path and are unaffected. Disabled by default.",
-  },
   enable_filesystem_tools: {
     label: "Enable filesystem tools (beta)",
     help: "Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write access to your Home Assistant filesystem. WARNING: This gives the MCP server sensitive direct file access to your system. Only enable if you trust the AI assistant with file operations. Requires restart to take effect.",
@@ -2220,16 +2199,6 @@ const FEATURE_META = {
 // response so the JS stays in sync with Python's
 // ``config.BETA_FEATURE_FIELDS`` without duplicating the name list here.
 let BETA_SUB_FLAGS = new Set();
-
-// Sub-flags of ``enable_yaml_config_editing``. Rendered nested beneath
-// the parent in renderFeatureFlags so the dependency is visually
-// obvious. They are NOT in BETA_SUB_FLAGS — the parent is the gate,
-// and the master-off → parent-off cascade transitively covers them.
-const YAML_PACKAGES_SUB_FLAGS = [
-  'enable_yaml_packages_automation',
-  'enable_yaml_packages_script',
-  'enable_yaml_packages_scene',
-];
 
 // Cached add-on flag. Each settings endpoint (/api/settings/features,
 // /api/settings/advanced, /api/settings/backup-config) returns
@@ -2340,10 +2309,6 @@ function renderFeatureFlags(flags) {
   Object.keys(FEATURE_META).forEach(fieldName => {
     const f = flags[fieldName];
     if (!f) return;
-    // Skip yaml-packages sub-rows in the main pass — they're rendered
-    // by renderYamlPackagesSubRows below right after their parent so
-    // the nesting reads in source order.
-    if (YAML_PACKAGES_SUB_FLAGS.includes(fieldName)) return;
     const meta = FEATURE_META[fieldName];
     const isMaster = fieldName === 'enable_beta_features';
     const isBetaSub = BETA_SUB_FLAGS.has(fieldName);
@@ -2412,20 +2377,6 @@ function renderFeatureFlags(flags) {
             renderFeatureFlags(_lastFeatureFlags);
           }
         }
-        // Re-render on enable_yaml_config_editing flip so the 3
-        // packages sub-rows dim/undim immediately. Same pattern as the
-        // master flip above — value is mutated in the live cache and
-        // the panel re-renders synchronously while the save POST runs
-        // in the background.
-        if (fieldName === 'enable_yaml_config_editing') {
-          if (_lastFeatureFlags[fieldName]) {
-            _lastFeatureFlags[fieldName] = {
-              ..._lastFeatureFlags[fieldName],
-              value: input.checked,
-            };
-            renderFeatureFlags(_lastFeatureFlags);
-          }
-        }
         saveFeatureFlag(fieldName, input.checked);
       });
       const slider = document.createElement('span');
@@ -2462,64 +2413,6 @@ function renderFeatureFlags(flags) {
       const codeModeOn = !!f.value;
       renderCodeModeSubRows(targetBody, masterOn, codeModeOn);
     }
-    // After rendering the enable_yaml_config_editing parent, inject
-    // its 3 per-key sub-rows (automation/script/scene). Dimmed when
-    // either the master beta is off (parent forced off) or the parent
-    // itself is off.
-    if (fieldName === 'enable_yaml_config_editing') {
-      const parentOn = !!f.value;
-      renderYamlPackagesSubRows(flags, targetBody, masterOn, parentOn);
-    }
-  });
-}
-
-function renderYamlPackagesSubRows(flags, parentEl, masterOn, parentOn) {
-  YAML_PACKAGES_SUB_FLAGS.forEach(fieldName => {
-    const f = flags[fieldName];
-    if (!f) return;
-    const meta = FEATURE_META[fieldName] || { label: fieldName, help: '' };
-    const lockedByGate = !masterOn || !parentOn;
-    const row = document.createElement('div');
-    row.className = 'feature-row yaml-packages-sub' + (lockedByGate ? ' dimmed' : '');
-
-    const info = document.createElement('div');
-    info.className = 'feature-info';
-    const lockedNote = !f.editable
-      ? `<div class="feature-locked-note">` +
-        (f.origin === 'env'
-          ? envLockedNoteHtml(f.env_var, fieldName)
-          : escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')) +
-        `</div>`
-      : '';
-    const infoNote = f.editable && ORIGIN_INFO_NOTE[f.origin]
-      ? `<div class="feature-locked-note">` +
-        `${escapeHtml(ORIGIN_INFO_NOTE[f.origin])}</div>`
-      : '';
-    info.innerHTML =
-      `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
-      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
-      lockedNote + infoNote;
-
-    const control = document.createElement('div');
-    control.className = 'feature-control';
-    const label = document.createElement('label');
-    label.className = 'switch';
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.checked = !!f.value;
-    input.disabled = !f.editable || lockedByGate;
-    input.addEventListener('change', () => {
-      saveFeatureFlag(fieldName, input.checked);
-    });
-    const slider = document.createElement('span');
-    slider.className = 'slider';
-    label.appendChild(input);
-    label.appendChild(slider);
-    control.appendChild(label);
-
-    row.appendChild(info);
-    row.appendChild(control);
-    parentEl.appendChild(row);
   });
 }
 
