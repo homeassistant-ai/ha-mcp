@@ -383,7 +383,7 @@
     "inputSchema": {
       "properties": {
         "config": {
-          "type": "Annotated[str | dict[str, Any] | None, Field(description=\"Complete automation configuration with required fields: 'alias', 'trigger', 'action'. Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'. Mutually exclusive with python_transform.\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, Field(description=\"Complete automation configuration with required fields: 'alias', 'trigger', 'action'. Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'. Mutually exclusive with python_transform.\", default=None)]",
           "default": null
         },
         "identifier": {
@@ -726,7 +726,7 @@
           "type": "Annotated[str, Field(description=\"Dashboard URL path (e.g., 'my-dashboard'). Use 'default' or 'lovelace' for the default dashboard. New dashboards must use a hyphenated path.\")]"
         },
         "config": {
-          "type": "Annotated[str | dict[str, Any] | None, Field(description='Dashboard configuration with views and cards. Can be dict or JSON string. Omit or set to None to create dashboard without initial config. Mutually exclusive with python_transform.')]",
+          "type": "Annotated[dict[str, Any] | None, Field(description='Dashboard configuration with views and cards. Omit or set to None to create dashboard without initial config. Mutually exclusive with python_transform.')]",
           "default": null
         },
         "python_transform": {
@@ -1615,7 +1615,7 @@
           "default": null
         },
         "config": {
-          "type": "Annotated[str | dict | None, Field(description=\"Config dict for flow-based helper types and helper_type='config_subentry' (template, group, utility_meter, derivative, min_max, threshold, integration, statistics, trend, random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat). Accepts JSON string or dict. Ignored for simple helper types. Field set is delivered as data_schema on the first validation error.\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, Field(description=\"Config dict for flow-based helper types and helper_type='config_subentry' (template, group, utility_meter, derivative, min_max, threshold, integration, statistics, trend, random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat). Ignored for simple helper types. Field set is delivered as data_schema on the first validation error.\", default=None)]",
           "default": null
         },
         "wait": {
@@ -2263,7 +2263,7 @@
           "type": "Annotated[str, Field(description=\"Scene identifier (e.g., 'movie_night')\")]"
         },
         "config": {
-          "type": "Annotated[str | dict[str, Any] | None, Field(description=\"Scene configuration dictionary. Must include 'entities' (a dict keyed by entity_id, NOT a list). Optional fields: 'name' (defaults to scene_id), 'icon', 'id'. Mutually exclusive with python_transform.\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, Field(description=\"Scene configuration dictionary. Must include 'entities' (a dict keyed by entity_id, NOT a list). Optional fields: 'name' (defaults to scene_id), 'icon', 'id'. Mutually exclusive with python_transform.\", default=None)]",
           "default": null
         },
         "python_transform": {
@@ -2355,7 +2355,7 @@
           "type": "Annotated[str, Field(description=\"Script identifier — bare storage key ('morning_routine') or entity_id form ('script.morning_routine'); a leading 'script.' prefix is stripped before lookup.\")]"
         },
         "config": {
-          "type": "Annotated[str | dict[str, Any] | None, Field(description=\"Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'. Mutually exclusive with python_transform.\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, Field(description=\"Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'. Mutually exclusive with python_transform.\", default=None)]",
           "default": null
         },
         "python_transform": {
