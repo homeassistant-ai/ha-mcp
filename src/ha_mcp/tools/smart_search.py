@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import time
 from typing import Any
 
@@ -2004,9 +2005,10 @@ class SmartSearchTools:
         entity, etc. — is searchable.
 
         Cost: 1 REST call + one options-flow probe per flow-helper config
-        entry, parallelised under ``semaphore``. Options probes are skipped
-        for entries whose title alone already exact-matches the query (no
-        added information from the deeper probe).
+        entry, parallelised under ``semaphore``. The probe is skipped only
+        when the title alone already scores a perfect 100 (the deeper probe
+        can only raise the total, never lower it, so anything below 100 is
+        still worth probing for accurate scoring and ``match_in_config``).
         """
         try:
             response = await self.client._request("GET", "/config/config_entries/entry")
@@ -2029,19 +2031,29 @@ class SmartSearchTools:
 
         async def score_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
             entry_id = entry.get("entry_id")
-            domain = entry.get("domain", "")
-            title = entry.get("title") or entry_id or ""
             if not isinstance(entry_id, str):
                 return None
+            domain = entry.get("domain", "")
+            title = entry.get("title") or entry_id
 
-            # Title-only quick path: an exact title match doesn't need an
-            # options probe — the deeper config can't lower the score.
-            title_pseudo_eid = f"{domain}.{entry_id}"
+            # Score the name against a title-derived slug, never the opaque
+            # config-entry ULID: a random ULID substring would otherwise
+            # produce false-positive name matches (e.g. a 3-char query that
+            # happens to occur inside the base32 id). The slug mirrors the
+            # storage-helper path, which scores a name-derived id rather than
+            # an opaque key. entry_id is still returned to the caller; it just
+            # isn't a search target.
+            title_slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+            title_pseudo_eid = f"{domain}.{title_slug}" if title_slug else domain
             name_score = self.fuzzy_searcher._calculate_entity_score(
                 title_pseudo_eid, title, domain, query_lower
             )
 
             options: dict[str, Any] = {}
+            # Only a perfect title match (score 100) makes the deeper options
+            # probe redundant — the probe can only raise the total, never lower
+            # it, so anything below 100 is worth probing (in both exact and
+            # fuzzy modes) for accurate scoring and ``match_in_config``.
             need_probe = include_config or (
                 self._score_deep_match(
                     title_pseudo_eid,
@@ -2051,16 +2063,20 @@ class SmartSearchTools:
                     query_lower,
                     exact_match,
                 )[0]
-                < (100 if exact_match else self.settings.fuzzy_threshold)
+                < 100
             )
             if need_probe:
                 async with semaphore:
-                    options = await fetch_entry_options(self.client, entry_id)
+                    options = await fetch_entry_options(
+                        self.client, entry_id, quiet=True
+                    )
 
+            # Search the title, domain, and probed options — but not the opaque
+            # entry_id (it would match random ULID substrings; it is returned
+            # in the result for the caller regardless).
             haystack: dict[str, Any] = {
                 "title": title,
                 "domain": domain,
-                "entry_id": entry_id,
                 "options": options,
             }
             config_score = self._search_in_dict(haystack, query_lower, exact_match)

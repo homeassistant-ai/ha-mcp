@@ -173,7 +173,7 @@ class TestFlowHelperDeepSearch:
 
         tools = _make_tools(client)
         results = await tools._search_flow_helpers(
-            "Match",
+            "match",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
             include_config=False,
