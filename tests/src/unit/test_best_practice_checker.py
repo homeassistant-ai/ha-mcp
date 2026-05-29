@@ -1740,3 +1740,47 @@ class TestDurationMathDetector:
         assert _has_warning_containing(warnings, "last_changed/last_updated", "for:"), (
             "Duration math inside numeric_state value_template should be flagged"
         )
+
+    def test_condition_reversed_comparison_last_changed_math(self):
+        """Reversed form ``X.last_changed < now()`` in a condition is flagged.
+
+        The regex's second alternation exists to catch the comparison written
+        the other way round; without a positive test a later refactor could
+        drop it silently. Asserting exactly one warning also guards against the
+        two alternations double-flagging the same template.
+        """
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states.binary_sensor.motion.last_changed < now() }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        duration_warnings = [
+            w for w in warnings if "last_changed/last_updated" in w and "for:" in w
+        ]
+        assert len(duration_warnings) == 1, (
+            "Reversed-form duration math in a condition should fire exactly one warning"
+        )
+
+    def test_trigger_reversed_comparison_last_updated_math(self):
+        """Reversed form ``X.last_updated < now() - ...`` in a trigger value_template is flagged."""
+        config = {
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ states.sensor.temp.last_updated < now() - timedelta(minutes=5) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        duration_warnings = [
+            w for w in warnings if "last_changed/last_updated" in w and "for:" in w
+        ]
+        assert len(duration_warnings) == 1, (
+            "Reversed-form duration math in a trigger value_template should fire exactly one warning"
+        )
