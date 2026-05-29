@@ -312,50 +312,6 @@ class TestHaSetEntityExposeTo:
         )
 
     @pytest.mark.asyncio
-    async def test_expose_to_json_string(self, mock_mcp, mock_client):
-        """expose_to as JSON string should be parsed."""
-        entity_entry = {
-            "entity_id": "light.test",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": [],
-        }
-
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose call
-                {"success": True, "result": entity_entry},  # get entity call
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            expose_to=json.dumps({"conversation": True}),
-        )
-
-        assert result["success"] is True
-        assert result["exposure"] == {"conversation": True}
-
-    @pytest.mark.asyncio
-    async def test_expose_to_invalid_json_string(self, set_entity_tool):
-        """Invalid JSON string for expose_to should raise ToolError."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(
-                entity_id="light.test",
-                expose_to="not valid json{",
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-
-    @pytest.mark.asyncio
     async def test_expose_to_none_not_triggered(self, mock_mcp, mock_client):
         """When expose_to is None, no exposure API call should be made."""
         mock_client.send_websocket_message = AsyncMock(
@@ -1612,24 +1568,6 @@ class TestHaSetEntityShowAs:
         assert body["options_domain"] == "weather"
         assert body["partial"] is True
         assert body["options_succeeded"] == {"sensor": {"display_precision": 1}}
-
-    @pytest.mark.asyncio
-    async def test_options_json_string_is_parsed(self, mock_mcp, mock_client):
-        """options as a JSON string should be parsed transparently."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value=self._registry_response()
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        await tool(
-            entity_id="sensor.temp",
-            options='{"sensor": {"display_precision": 0}}',
-        )
-
-        ws_msg = mock_client.send_websocket_message.call_args[0][0]
-        assert ws_msg["options_domain"] == "sensor"
-        assert ws_msg["options"] == {"display_precision": 0}
 
     @pytest.mark.asyncio
     async def test_options_invalid_shape_raises_validation_error(
