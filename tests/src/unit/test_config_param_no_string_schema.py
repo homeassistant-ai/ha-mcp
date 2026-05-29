@@ -120,9 +120,7 @@ _ALL_TOOLS = _CONFIG_TOOLS + _SERVICE_AND_ENTITY_TOOLS
     ("module", "register_fn", "tool_name", "param_name"),
     _ALL_TOOLS,
 )
-def test_param_does_not_advertise_string(
-    module: str, register_fn: str, tool_name: str, param_name: str
-) -> None:
+def test_param_does_not_advertise_string(module, register_fn, tool_name, param_name):
     """Object/dict parameter schema must not include type:string."""
     import importlib
 
@@ -138,9 +136,7 @@ def test_param_does_not_advertise_string(
     ("module", "register_fn", "tool_name", "param_name"),
     _ALL_TOOLS,
 )
-def test_param_advertises_object(
-    module: str, register_fn: str, tool_name: str, param_name: str
-) -> None:
+def test_param_advertises_object(module, register_fn, tool_name, param_name):
     """Object/dict parameter schema must include type:object."""
     import importlib
 
