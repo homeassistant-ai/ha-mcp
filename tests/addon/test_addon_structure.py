@@ -62,6 +62,23 @@ class TestAddonStructure:
         assert "ports" in config, "ports section required for HTTP transport"
         assert "9583/tcp" in config["ports"], "port 9583/tcp must be exposed"
 
+        # Verify ingress is enabled so the stable add-on exposes the web
+        # Settings UI ("Open Web UI" button). This must stay declared here —
+        # the release pipeline syncs version/changelog only, not functional
+        # config, so ingress is not auto-mirrored from the dev add-on. Locks
+        # the regression where stable shipped without the button.
+        assert config.get("ingress") is True, (
+            "ingress must be enabled so the 'Open Web UI' button / web Settings "
+            "UI is reachable on the stable add-on"
+        )
+        assert config.get("ingress_port") == 9583, (
+            "ingress_port must be 9583 (the fixed internal MCP/web port)"
+        )
+        assert config.get("ingress_stream") is True, (
+            "ingress_stream must be enabled so streamed responses flush through "
+            "the ingress proxy (streamable-HTTP MCP transport)"
+        )
+
         # Verify secret_path configuration (optional advanced override)
         assert "secret_path" not in config["options"], (
             "secret_path should be optional and omitted so Supervisor treats it as advanced"

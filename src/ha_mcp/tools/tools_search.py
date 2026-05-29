@@ -1473,6 +1473,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **NOTE:** Dashboards and badges are NOT searched by default. Add 'dashboard' to
         search_types to include them.
 
+        The 'helper' search covers both input_* helpers (input_boolean, input_number, ...)
+        and UI-created flow-based helpers (template, group, utility_meter, derivative, ...).
+        For flow-helpers, results carry the parent config entry id under ``entry_id``.
+        When ``include_config=False`` (the default), pair with
+        ``ha_get_integration(entry_id=..., include_options=True)`` to retrieve the full
+        config; set ``include_config=True`` to get it inline in one call.
+
         Args:
             query: Search query (exact substring by default, or fuzzy with exact_match=False)
             search_types: Types to search (default: ["automation", "script", "scene", "helper"])

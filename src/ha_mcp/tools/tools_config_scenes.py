@@ -435,7 +435,7 @@ class ConfigSceneTools:
             str, Field(description="Scene identifier (e.g., 'movie_night')")
         ],
         config: Annotated[
-            str | dict[str, Any] | None,
+            dict[str, Any] | None,
             Field(
                 description=(
                     "Scene configuration dictionary. Must include 'entities' "

@@ -874,10 +874,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             ),
         ],
         config: Annotated[
-            str | dict[str, Any] | None,
+            dict[str, Any] | None,
             Field(
                 description="Dashboard configuration with views and cards. "
-                "Can be dict or JSON string. "
                 "Omit or set to None to create dashboard without initial config. "
                 "Mutually exclusive with python_transform."
             ),

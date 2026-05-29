@@ -2326,7 +2326,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         config: Annotated[
-            str | dict | None,
+            dict[str, Any] | None,
             Field(
                 description=(
                     "Config dict for flow-based helper types and "
@@ -2334,7 +2334,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "(template, group, utility_meter, derivative, min_max, threshold, "
                     "integration, statistics, trend, random, filter, tod, "
                     "generic_thermostat, switch_as_x, generic_hygrostat). "
-                    "Accepts JSON string or dict. Ignored for simple helper types. "
+                    "Ignored for simple helper types. "
                     "Field set is delivered as data_schema on the first validation error."
                 ),
                 default=None,
