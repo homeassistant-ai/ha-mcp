@@ -146,3 +146,13 @@ delete_file:
       example: "www/old-file.css"
       selector:
         text:
+
+get_caller_token:
+  name: Get Caller Token (Internal)
+  description: >-
+    Internal bootstrap service used by the ha-mcp server. Returns the auth
+    token that the other ha_mcp_tools.* services require in their
+    `_ha_mcp_token` field. The token is generated on first integration setup
+    and persisted to .storage. Not intended for direct invocation from
+    automations or scripts.
+  fields: {}

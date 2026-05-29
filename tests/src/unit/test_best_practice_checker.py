@@ -1755,3 +1755,198 @@ class TestTwoRouteWarningSuffix:
         assert "automation-patterns.md#native-conditions" in msg
         # Tool route: bare file path, no anchor
         assert "file='references/automation-patterns.md'" in msg
+
+
+# ---------------------------------------------------------------------------
+# Duration math / for: field detector
+# ---------------------------------------------------------------------------
+
+
+class TestDurationMathDetector:
+    """Detects now() - X.last_changed patterns and suggests native for:."""
+
+    def test_condition_last_changed_math(self):
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now() - states.binary_sensor.motion.last_changed > timedelta(minutes=5) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_condition_last_updated_math(self):
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now() - states.sensor.temp.last_updated > timedelta(minutes=10) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_trigger_template_last_changed_math(self):
+        config = {
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ now() - trigger.last_changed > timedelta(seconds=30) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_state_trigger_with_for_field_no_warning(self):
+        config = {
+            "trigger": [
+                {
+                    "platform": "state",
+                    "entity_id": "binary_sensor.motion",
+                    "to": "off",
+                    "for": {"minutes": 5},
+                }
+            ],
+            "action": [
+                {"service": "light.turn_off", "target": {"entity_id": "light.hall"}}
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert not _has_warning_containing(warnings, "last_changed", "for:")
+
+    def test_warning_contains_skill_ref(self):
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now() - states.sensor.x.last_changed > timedelta(hours=1) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config, skill_prefix=SKILL_PREFIX)
+        assert _has_warning_containing(
+            warnings, "automation-patterns.md#native-conditions"
+        )
+
+    def test_no_generic_fallback_when_duration_fires(self):
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now() - states.binary_sensor.door.last_changed > timedelta(minutes=1) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        generic_warnings = [
+            w for w in warnings if "if this maps to a native option" in w
+        ]
+        assert not generic_warnings, (
+            "Generic fallback should not fire alongside specific detector"
+        )
+
+    def test_trigger_warning_uses_trigger_types_anchor(self):
+        """Trigger-specific warning links to trigger-types, not native-conditions."""
+        config = {
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ (now() - states.sensor.x.last_updated).total_seconds() > 60 }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config, skill_prefix=SKILL_PREFIX)
+        assert _has_warning_containing(
+            warnings, "automation-patterns.md#trigger-types"
+        ), "Trigger warning should reference #trigger-types anchor"
+
+    def test_no_false_positive_bare_last_changed_variable(self):
+        """A Jinja variable literally named ``last_changed`` must not trigger the detector."""
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    # Bare variable — not an entity attribute; should not match.
+                    "value_template": "{{ last_changed < now() }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert not _has_warning_containing(
+            warnings, "last_changed/last_updated", "for:"
+        ), (
+            "Bare Jinja variable 'last_changed' should not be mistaken for an entity attribute"
+        )
+
+    def test_numeric_state_trigger_value_template_duration_math(self):
+        """numeric_state trigger value_template containing duration math is also flagged."""
+        config = {
+            "trigger": [
+                {
+                    "platform": "numeric_state",
+                    "entity_id": "sensor.motion",
+                    "value_template": "{{ (now() - states.sensor.motion.last_changed).total_seconds() }}",
+                    "above": 300,
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:"), (
+            "Duration math inside numeric_state value_template should be flagged"
+        )
+
+    def test_condition_reversed_comparison_last_changed_math(self):
+        """Reversed form ``X.last_changed < now()`` in a condition is flagged.
+
+        The regex's second alternation exists to catch the comparison written
+        the other way round; without a positive test a later refactor could
+        drop it silently. Asserting exactly one warning also guards against the
+        two alternations double-flagging the same template.
+        """
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states.binary_sensor.motion.last_changed < now() }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        duration_warnings = [
+            w for w in warnings if "last_changed/last_updated" in w and "for:" in w
+        ]
+        assert len(duration_warnings) == 1, (
+            "Reversed-form duration math in a condition should fire exactly one warning"
+        )
+
+    def test_trigger_reversed_comparison_last_updated_math(self):
+        """Reversed form ``X.last_updated < now() - ...`` in a trigger value_template is flagged."""
+        config = {
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ states.sensor.temp.last_updated < now() - timedelta(minutes=5) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        duration_warnings = [
+            w for w in warnings if "last_changed/last_updated" in w and "for:" in w
+        ]
+        assert len(duration_warnings) == 1, (
+            "Reversed-form duration math in a trigger value_template should fire exactly one warning"
+        )

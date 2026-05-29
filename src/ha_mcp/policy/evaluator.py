@@ -84,7 +84,14 @@ def _op_matches(val: Any, op: str, pv: Any) -> bool:
         case "contains":
             if isinstance(val, str) and isinstance(pv, str):
                 return pv.lower() in val.lower()
-            return isinstance(val, (list, tuple, set)) and pv in val
+            # Mirror the case-insensitive treatment that ``eq`` / ``in`` /
+            # ``not_in`` already apply: a rule listing ``["light.kitchen"]``
+            # must match an LLM passing ``"Light.Kitchen"``. Per-element
+            # ``_ci`` guards non-string entries so mixed-type collections
+            # (e.g. ``[1, "two"]``) keep their natural equality semantics.
+            return isinstance(val, (list, tuple, set)) and any(
+                _ci(pv) == _ci(x) for x in val
+            )
         case "gt":
             try:
                 return bool(val > pv)

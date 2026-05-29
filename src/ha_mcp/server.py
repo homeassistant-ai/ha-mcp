@@ -374,9 +374,26 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         path; that keeps the routes inert in stdio mode and behind the
         same auth posture as the MCP endpoint in HTTP mode.
         """
-        from .settings_ui import apply_tool_visibility, load_tool_config
+        from .settings_ui import (
+            apply_tool_visibility,
+            effective_tool_config,
+            env_pinned_tools,
+        )
 
-        config = load_tool_config(self.settings)
+        # Surface env-pinned tools at startup so an operator who pinned
+        # something via DISABLED_TOOLS / PINNED_TOOLS can see that
+        # those values are overriding whatever's in tool_config.json.
+        # Silent overlay was the previous behavior — the file would
+        # show "enabled" for a tool, but runtime would treat it as
+        # disabled, and there was no log line to chase.
+        pinned = env_pinned_tools(self.settings)
+        if pinned:
+            logger.info(
+                "Env-pinned tools active (DISABLED_TOOLS / PINNED_TOOLS): %s",
+                ", ".join(f"{name}={state}" for name, state in sorted(pinned.items())),
+            )
+
+        config = effective_tool_config(self.settings)
         # When tool_config.json is absent (fresh install), `config` is falsy
         # and we leave self._user_enabled_tools at its __init__ default (empty
         # set). That yields no defaults filtered in _apply_tool_search, which

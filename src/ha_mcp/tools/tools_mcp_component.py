@@ -8,6 +8,7 @@ that are not available through standard Home Assistant APIs.
 Feature Flag: Set HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true to enable this tool.
 """
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -15,6 +16,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import HomeAssistantCommandError
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -62,47 +64,31 @@ class McpComponentTools:
         return None
 
     @staticmethod
-    async def _poll_for_repo_id(ws_client: Any) -> str | None:
-        """Poll HACS repository list until the MCP tools repo ID is available."""
-        import asyncio
-
-        max_attempts = 10
-        poll_interval = 1.0  # seconds
-
-        for attempt in range(max_attempts):
-            logger.debug(
-                f"Polling for repository ID (attempt {attempt + 1}/{max_attempts})"
-            )
-            list_response = await ws_client.send_command("hacs/repositories/list")
-            repos = list_response.get("result", [])
-            for repo in repos:
-                if repo.get("full_name", "").lower() == MCP_TOOLS_REPO.lower():
-                    repo_id = str(repo.get("id"))
-                    logger.info(
-                        f"Found repository ID: {repo_id} after {attempt + 1} attempts"
-                    )
-                    return repo_id
-
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(poll_interval)
-
-        return None
-
-    @staticmethod
     async def _resolve_repo_id(
         ws_client: Any, existing_repo: dict[str, Any] | None
     ) -> str:
-        """Resolve the HACS repository ID, polling if necessary."""
+        """Resolve the HACS repository ID, waiting on HACS' dispatch signal if needed."""
         repo_id = str(existing_repo.get("id")) if existing_repo else None
 
         if not repo_id:
-            repo_id = await McpComponentTools._poll_for_repo_id(ws_client)
+            # Late import — ``tools_hacs`` pulls fastmcp-decorated tool
+            # classes at module load, so an import-time edge from this
+            # module would create a heavier-than-needed dependency chain
+            # for callers that never touch the installer flow.
+            from .tools_hacs import wait_for_repo_registration
+
+            repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+            if repo is not None:
+                repo_id = str(repo.get("id"))
 
         if not repo_id:
+            from .tools_hacs import HACS_REPO_REGISTRATION_TIMEOUT
+
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    "Could not find repository ID after adding (timed out after 10 attempts)",
+                    "Could not find repository ID after adding "
+                    f"(timed out after {HACS_REPO_REGISTRATION_TIMEOUT:.0f}s)",
                     suggestions=[
                         "HACS may be processing the request - try again in a few seconds",
                         "Check HACS logs for errors",
@@ -262,22 +248,54 @@ class McpComponentTools:
             repo_id = await self._resolve_repo_id(ws_client, existing_repo)
 
             logger.info(f"Installing {MCP_TOOLS_REPO} (ID: {repo_id})")
-            download_response = await ws_client.send_command(
-                "hacs/repository/download",
-                repository=repo_id,
-            )
-
-            if not download_response.get("success"):
+            # HACS' download often returns a generic "Command failed:
+            # Unknown error" on transient GitHub hiccups (rate-limit,
+            # tarball stream interruption). Retry the download with
+            # exponential backoff so a one-shot transient doesn't
+            # surface as an installation failure to the caller.
+            # ``send_command`` raises ``HomeAssistantCommandError`` on
+            # ``success: False`` responses, so the retry catches that
+            # specific class — programming bugs / connection errors
+            # propagate normally.
+            max_attempts = 3
+            backoff_seconds = 2.0
+            last_error: HomeAssistantCommandError | None = None
+            download_response: dict[str, Any] | None = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    download_response = await ws_client.send_command(
+                        "hacs/repository/download",
+                        repository=repo_id,
+                    )
+                    last_error = None
+                    break
+                except HomeAssistantCommandError as e:
+                    last_error = e
+                    if attempt < max_attempts:
+                        wait_for = backoff_seconds * (2 ** (attempt - 1))
+                        logger.warning(
+                            "hacs/repository/download attempt %d/%d failed (%s); "
+                            "retrying in %.1fs",
+                            attempt,
+                            max_attempts,
+                            e,
+                            wait_for,
+                        )
+                        await asyncio.sleep(wait_for)
+            if last_error is not None:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to download repository: {download_response}",
+                        f"Failed to download repository after {max_attempts} "
+                        f"attempts: {last_error}",
                         suggestions=[
                             "Check HACS logs for errors",
                             "Verify GitHub is accessible",
+                            "HACS may be rate-limited; wait a minute and retry",
                         ],
                     )
                 )
+            assert download_response is not None  # narrowing for type checker
 
             result: dict[str, Any] = {
                 "success": True,

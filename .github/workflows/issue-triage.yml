@@ -1,0 +1,956 @@
+name: '🤖 Issue Triage'
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to triage'
+        required: true
+        type: number
+
+concurrency:
+  group: 'triage-${{ github.event.issue.number || inputs.issue_number }}'
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  models: read
+
+jobs:
+  should_run:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Check if workflow should run
+        id: check
+        uses: actions/github-script@v9
+        with:
+          script: |
+            let issue;
+            let comment;
+            let issueNumber;
+
+            // Handle manual workflow dispatch
+            if (context.eventName === 'workflow_dispatch') {
+              issueNumber = context.payload.inputs.issue_number;
+              issue = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              }).then(r => r.data);
+              core.info(`Manual trigger for issue #${issueNumber}`);
+            } else {
+              issue = context.payload.issue;
+              issueNumber = issue.number;
+              comment = context.payload.comment;
+            }
+
+            // Don't run on pull requests
+            if (issue.pull_request) {
+              core.info('Skipping: This is a pull request');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Skip maintainer-created issues in production (not in the dev/test repo)
+            const isDevRepo = context.repo.repo === 'ha-mcp-workflows-dev';
+            if (!isDevRepo && context.eventName !== 'workflow_dispatch') {
+              let isMaintainer = false;
+              try {
+                await github.rest.teams.getMembershipForUserInOrg({
+                  org: context.repo.owner,
+                  team_slug: 'maintainers',
+                  username: issue.user.login,
+                });
+                isMaintainer = true;
+              } catch (err) {
+                if (err.status !== 404) {
+                  // Non-404 means auth/config problem — fail closed (skip triage) rather than
+                  // accidentally triaging a maintainer's issue.
+                  core.warning(`Maintainer team check failed (HTTP ${err.status}) — skipping triage to be safe`);
+                  core.setOutput('should_run', 'false');
+                  return;
+                }
+              }
+              if (isMaintainer) {
+                core.info(`Skipping: Issue created by maintainer (${issue.user.login})`);
+                core.setOutput('should_run', 'false');
+                return;
+              }
+            }
+
+            // Check if already triaged (has triaged label)
+            const hasTriagedLabel = issue.labels.some(l => l.name === 'triaged');
+            if (hasTriagedLabel && context.eventName !== 'workflow_dispatch') {
+              core.info('Skipping: Already triaged (has triaged label)');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Circuit breaker: if a previous triage attempt posted the
+            // generic "temporarily unavailable" notice, the failure path
+            // applied `triage-failed`. Stop auto-retriggering on every
+            // subsequent comment — without this gate, large issues that
+            // exceed maxSessionTurns or otherwise consistently fail end
+            // up with a stack of identical "temporarily unavailable"
+            // notices, one per author comment. Maintainers can use
+            // workflow_dispatch to retry manually once the underlying
+            // cause is fixed; the success path also removes this label.
+            const hasTriageFailedLabel = issue.labels.some(l => l.name === 'triage-failed');
+            if (hasTriageFailedLabel && context.eventName !== 'workflow_dispatch') {
+              core.info('Skipping: Previous triage failed (has triage-failed label). Use workflow_dispatch to retry.');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Don't run if bot commented. Broad `type === 'Bot'` (not just
+            // `github-actions[bot]`) is intentional here — we want to ignore
+            // retriggers from any bot, including Dependabot/Renovate update
+            // comments. The orphan-cleanup logic uses the narrower
+            // `login === 'github-actions[bot]'` check because *that* code
+            // deletes comments and must avoid hijacking other bots' work.
+            if (comment && comment.user.type === 'Bot') {
+              core.info('Skipping: Comment is from a bot');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // For manual dispatch, always run
+            if (context.eventName === 'workflow_dispatch') {
+              core.info('Manual trigger: Running triage');
+              core.setOutput('should_run', 'true');
+              return;
+            }
+
+            // For new issues, always run
+            if (context.eventName === 'issues') {
+              core.info('Running: New issue created');
+              core.setOutput('should_run', 'true');
+              return;
+            }
+
+            // For comments, only run if from issue author
+            if (comment && comment.user.login === issue.user.login) {
+              core.info('Running: Comment from issue author — re-checking');
+              core.setOutput('should_run', 'true');
+              return;
+            }
+
+            core.info('Skipping: Comment not from issue author');
+            core.setOutput('should_run', 'false');
+
+  triage:
+    runs-on: ubuntu-latest
+    needs: should_run
+    if: needs.should_run.outputs.should_run == 'true'
+    timeout-minutes: 8
+    steps:
+      - name: Get issue number
+        id: issue_number
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const issueNumber = context.payload.inputs?.issue_number || context.issue.number;
+            core.setOutput('number', issueNumber);
+            return issueNumber;
+
+      - name: Fetch full issue thread
+        id: issue_data
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
+        with:
+          script: |
+            const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
+            const issue = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
+
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
+
+            const issueTitle = issue.data.title;
+            const issueBody = issue.data.body || '';
+            const labels = issue.data.labels.map(l => l.name);
+
+            // Build type detection maps from actual issue templates (prod repo, always up-to-date)
+            const TEMPLATE_OWNER = 'homeassistant-ai';
+            const TEMPLATE_REPO = 'ha-mcp';
+            const labelToTypes = {};  // label → [typeName, ...]  (may be shared across templates)
+            const headerToType = {};  // "### label text" → typeName
+
+            try {
+              const dirResp = await github.rest.repos.getContent({
+                owner: TEMPLATE_OWNER, repo: TEMPLATE_REPO,
+                path: '.github/ISSUE_TEMPLATE',
+              });
+              const yamlFiles = dirResp.data.filter(f => f.type === 'file' && /\.ya?ml$/.test(f.name));
+
+              const fileContents = await Promise.all(
+                yamlFiles.map(f => github.rest.repos.getContent({
+                  owner: TEMPLATE_OWNER, repo: TEMPLATE_REPO, path: f.path,
+                }).catch(e => { core.warning(`Failed to fetch template ${f.name}: ${e.message}`); return null; }))
+              );
+
+              for (let i = 0; i < yamlFiles.length; i++) {
+                if (!fileContents[i]) continue;
+                const typeName = yamlFiles[i].name.replace(/\.ya?ml$/, '').replace(/_/g, '-');
+                const content = Buffer.from(fileContents[i].data.content, 'base64').toString('utf-8');
+
+                // Parse template labels (inline array or block list)
+                let templateLabels = [];
+                const inlineMatch = content.match(/^labels:\s*\[([^\]]*)\]/m);
+                if (inlineMatch) {
+                  templateLabels = inlineMatch[1].split(',')
+                    .map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+                } else {
+                  const blockMatch = content.match(/^labels:\s*\n((?:[ \t]+-[ \t]+.+\n?)+)/m);
+                  if (blockMatch) {
+                    templateLabels = blockMatch[1].split('\n')
+                      .map(s => s.replace(/^\s*-\s*/, '').trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+                  }
+                }
+                for (const label of templateLabels) {
+                  if (!labelToTypes[label]) labelToTypes[label] = [];
+                  if (!labelToTypes[label].includes(typeName)) labelToTypes[label].push(typeName);
+                }
+
+                // Find the first textarea/input label — this is what appears as "### <label>" in submitted bodies
+                let inBody = false, inTextarea = false, firstHeader = null;
+                for (const line of content.split('\n')) {
+                  if (line.trim() === 'body:') { inBody = true; continue; }
+                  if (!inBody) continue;
+                  if (/^\s+-\s+type:\s+(textarea|input)\s*$/.test(line)) { inTextarea = true; continue; }
+                  if (/^\s+-\s+type:/.test(line)) { inTextarea = false; continue; }
+                  if (inTextarea && /^\s+label:\s+/.test(line)) {
+                    firstHeader = line.replace(/^\s+label:\s+/, '').trim().replace(/^["']|["']$/g, '');
+                    break;
+                  }
+                }
+                if (firstHeader) headerToType[firstHeader] = typeName;
+              }
+              core.info('Template maps: ' + JSON.stringify({ labelToType: labelToTypes, headerToType }));
+            } catch (e) {
+              core.error('Template fetch failed — all issues will triage as type=unknown: ' + e.message);
+            }
+
+            // Labels shared across multiple templates are ambiguous — drop them from the map
+            const labelToType = Object.fromEntries(
+              Object.entries(labelToTypes)
+                .filter(([, types]) => types.length === 1)
+                .map(([label, types]) => [label, types[0]])
+            );
+
+            // Detect issue type: specific label first, then body section header fallback
+            let issueType = 'unknown';
+            for (const label of labels) {
+              if (labelToType[label]) { issueType = labelToType[label]; break; }
+            }
+            if (issueType === 'unknown') {
+              for (const [header, type] of Object.entries(headerToType)) {
+                if (issueBody.includes('### ' + header)) { issueType = type; break; }
+              }
+            }
+
+            // Format author comments for prompt
+            const issueAuthor = issue.data.user.login;
+            const authorComments = comments.data
+              .filter(c => c.user.login === issueAuthor && c.user.type !== 'Bot')
+              .map((c, idx) => `**Comment ${idx + 1}:**\n${c.body}`)
+              .join('\n\n---\n\n');
+
+            core.setOutput('issue_title', issueTitle);
+            core.setOutput('issue_body', issueBody);
+            core.setOutput('issue_author', issueAuthor);
+            core.setOutput('issue_type', issueType);
+            core.setOutput('author_comments', authorComments || '');
+
+      - name: Fetch tool list
+        id: tool_list
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TOOLS=$(gh api "repos/homeassistant-ai/ha-mcp/contents/site/src/data/tools.json" \
+            --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | \
+            python3 -c "import json,sys; tools=json.load(sys.stdin); print('\n'.join(t['name']+': '+(t.get('description') or '')[:80].rstrip() for t in tools))" \
+            2>/dev/null || echo "")
+          if [ -z "$TOOLS" ]; then
+            echo "::warning::Failed to fetch tool list — keyword extraction and priority assessment will be degraded"
+          fi
+          {
+            echo "tools<<EOF"
+            echo "$TOOLS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Extract discriminative keywords
+        id: keywords
+        continue-on-error: true
+        uses: actions/github-script@v9
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
+          ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
+          TOOL_LIST: ${{ steps.tool_list.outputs.tools }}
+        with:
+          script: |
+            const issueTitle = process.env.ISSUE_TITLE || '';
+            const cleanBody = t => (t || '')
+              .replace(/^###\s+.+$/gm, '')
+              .replace(/^_No response_$/gim, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+            const issueBody = cleanBody(process.env.ISSUE_BODY || '').substring(0, 3000);
+            const toolList = process.env.TOOL_LIST || '';
+            const token = process.env.GH_TOKEN;
+
+            const systemPrompt = [
+              'You extract specific discriminative search keywords from GitHub issues for ha-mcp (Home Assistant MCP Server).',
+              'The project exposes these tools to AI assistants:',
+              toolList,
+              '',
+              'Rules:',
+              '- INCLUDE: exact tool names from the list above, HTTP/Python error codes, specific entity domain names (light, switch, sensor, climate, media_player), operation types, verbatim error message fragments',
+              '- EXCLUDE all generic/ubiquitous terms: home assistant, ha, mcp, entity, automation, integration, service, tool, error, bug, issue, problem, not working, broken, fail, update, version, server, client, response, request, returns, getting, using',
+              '- Add synonyms and alternate phrasings as additional entries with lower weight',
+            ].join('\n');
+
+            const userPrompt = [
+              'Issue title: ' + issueTitle,
+              '',
+              'Issue body:',
+              issueBody,
+              '',
+              'Extract 8-14 discriminative keywords ordered by specificity (most unique first).',
+              'Include synonyms and alternate phrasings.',
+              'Return ONLY a JSON array: [{"term":"ha_call_service","weight":1.0},{"term":"service call","weight":0.7}]',
+            ].join('\n');
+
+            const payload = {
+              model: 'openai/gpt-4.1-nano',
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt },
+              ],
+              max_tokens: 400,
+              temperature: 0.1,
+            };
+
+            let resp;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              try {
+                resp = await fetch('https://models.github.ai/inference/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload),
+                });
+              } catch (e) {
+                core.warning(`Keyword extraction network error (attempt ${attempt}/3): ${e.message}`);
+                core.setOutput('response', '');
+                return;
+              }
+              if (resp.status < 500) break;
+              if (attempt < 3) {
+                const delay = attempt * 2000;
+                core.warning(`HTTP ${resp.status} on attempt ${attempt}/3, retrying in ${delay / 1000}s`);
+                await new Promise(r => setTimeout(r, delay));
+              }
+            }
+
+            if (!resp.ok) {
+              const text = await resp.text();
+              core.warning(`GitHub Models API error: ${resp.status} — ${text.substring(0, 200)}`);
+              core.setOutput('response', '');
+              return;
+            }
+
+            const data = await resp.json();
+            const content = data.choices?.[0]?.message?.content || '';
+            core.info('Extracted keywords: ' + content.substring(0, 300));
+            core.setOutput('response', content);
+
+      - name: BM25 candidate retrieval
+        id: bm25
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
+          ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
+          ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
+          EXTRACTED_KEYWORDS: ${{ steps.keywords.outputs.response }}
+        with:
+          script: |
+            const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
+            const issueTitle = process.env.ISSUE_TITLE || '';
+
+            // Strip template boilerplate before tokenizing — section headers like
+            // "### 💬 What Happened?" appear in nearly every bug report, making them
+            // high-frequency tokens that inflate false-similarity scores.
+            const cleanBody = t => (t || '')
+              .replace(/^###\s+.+$/gm, '')
+              .replace(/^_No response_$/gim, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+
+            const issueBody = cleanBody(process.env.ISSUE_BODY || '').substring(0, 4000);
+
+            // Fetch up to 500 recent issues (open + closed), excluding PRs and current issue
+            const allIssues = [];
+            try {
+              for (let page = 1; page <= 5; page++) {
+                const resp = await github.rest.issues.listForRepo({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'all',
+                  per_page: 100,
+                  page: page,
+                  sort: 'created',
+                  direction: 'desc',
+                });
+                if (resp.data.length === 0) break;
+                allIssues.push(...resp.data.filter(i => !i.pull_request && i.number !== issueNumber));
+                if (resp.data.length < 100) break;
+              }
+            } catch (e) {
+              core.warning(`BM25 corpus fetch failed: ${e.message} — skipping duplicate check`);
+              core.setOutput('candidates', '');
+              return;
+            }
+
+            core.info(`BM25 corpus: ${allIssues.length} issues`);
+            if (allIssues.length === 0) {
+              core.warning('BM25 corpus is empty — no issues found, skipping duplicate check');
+              core.setOutput('candidates', '');
+              return;
+            }
+
+            // Inline BM25 (Robertson & Zaragoza, k1=1.5, b=0.75)
+            function tokenize(text) {
+              return (text || '').toLowerCase()
+                .replace(/[^\w\s]/g, ' ')
+                .split(/\s+/)
+                .filter(t => t.length > 2);
+            }
+
+            const corpus = allIssues.map(i => tokenize(i.title + ' ' + cleanBody(i.body)));
+            const N = corpus.length;
+            const avgDocLen = corpus.reduce((s, d) => s + d.length, 0) / N;
+
+            // Use LLM-extracted discriminative keywords when available; fall back to full-text.
+            // Keywords are ordered by weight (1.0 = most specific/unique).
+            let queryTerms;
+            const termWeights = {};
+            const rawKeywords = process.env.EXTRACTED_KEYWORDS || '';
+            let usingKeywords = false;
+            if (rawKeywords) {
+              try {
+                const parsed = JSON.parse(
+                  rawKeywords.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+                );
+                const validKeywords = Array.isArray(parsed)
+                  ? parsed.filter(k => k && typeof k.term === 'string')
+                  : [];
+                if (validKeywords.length > 0) {
+                  usingKeywords = true;
+                  for (const kw of validKeywords) {
+                    for (const tok of tokenize(kw.term)) {
+                      termWeights[tok] = Math.max(termWeights[tok] || 0, kw.weight || 1.0);
+                    }
+                  }
+                  queryTerms = Object.keys(termWeights);
+                  core.info(`Using ${validKeywords.length} extracted keywords → ${queryTerms.length} query tokens`);
+                } else {
+                  core.warning('Keyword schema invalid or empty; falling back to full-text BM25');
+                }
+              } catch (e) {
+                core.info('Could not parse extracted keywords; falling back to full-text BM25');
+              }
+            }
+            if (!usingKeywords) {
+              queryTerms = [...new Set(tokenize(issueTitle + ' ' + issueBody))];
+              core.info(`Full-text BM25 fallback: ${queryTerms.length} query tokens`);
+            }
+
+            const idfMap = {};
+            for (const term of queryTerms) {
+              const df = corpus.filter(doc => doc.includes(term)).length;
+              idfMap[term] = Math.log((N - df + 0.5) / (df + 0.5) + 1);
+            }
+
+            const k1 = 1.5, b = 0.75;
+            const scored = allIssues.map((issue, i) => {
+              const doc = corpus[i];
+              let score = 0;
+              for (const term of queryTerms) {
+                const tf = doc.filter(t => t === term).length;
+                if (tf === 0) continue;
+                const idf = idfMap[term] || 0;
+                const weight = usingKeywords ? (termWeights[term] || 0.5) : 1.0;
+                score += weight * idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * doc.length / avgDocLen));
+              }
+              return { issue, score };
+            });
+
+            // Thresholds calibrated via sub-agent testing across a sample of real ha-mcp issues:
+            // - full-text=60: typical noise floor for unrelated issues sharing common HA vocabulary
+            //   (words like "entity", "automation", "service" saturate IDF, so true matches score much higher)
+            // - keyword=1.0: extracted keywords are already specific/discriminative, so any above-noise
+            //   match is meaningful; a low threshold avoids discarding weak-but-relevant candidates
+            const THRESHOLD = usingKeywords ? 1.0 : 60;
+            const candidates = scored
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 6)
+              .filter(x => x.score >= THRESHOLD);
+
+            if (candidates.length === 0) {
+              core.info('No BM25 candidates above threshold — skipping duplicate check');
+              core.setOutput('candidates', '');
+              return;
+            }
+
+            const formatted = candidates.map(c =>
+              '#' + c.issue.number + ' [' + c.issue.state + ']: ' + c.issue.title + '\n' +
+              cleanBody(c.issue.body).substring(0, 3500)
+            ).join('\n\n---\n\n');
+
+            core.info('BM25 found ' + candidates.length + ' candidates: ' + candidates.map(c => '#' + c.issue.number).join(', '));
+            core.setOutput('candidates', formatted);
+
+      - name: Fetch changelogs
+        id: changelogs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PROD_REPO="homeassistant-ai/ha-mcp"
+
+          # Get the 3 most recent stable tags (vX.Y.Z pattern)
+          TAGS=$(gh api "repos/${PROD_REPO}/tags" --jq '[.[].name | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | .[0:3][]' 2>/dev/null || true)
+          LATEST_TAG=$(echo "$TAGS" | head -1)
+
+          CHANGELOG_CONTEXT=""
+
+          # Unreleased changes: commits on master since the latest stable tag
+          if [ -n "$LATEST_TAG" ]; then
+            UNRELEASED=$(gh api "repos/${PROD_REPO}/compare/${LATEST_TAG}...master" \
+              --jq '[.commits[] | .commit.message | split("\n")[0] | select(test("^(feat|fix)"))] | .[0:20] | join("\n")' 2>/dev/null || true)
+            if [ -n "$UNRELEASED" ]; then
+              CHANGELOG_CONTEXT="## Unreleased (since ${LATEST_TAG})\n${UNRELEASED}\n\n"
+            fi
+          fi
+
+          # Last 3 stable releases from CHANGELOG.md at each tag
+          for TAG in $TAGS; do
+            SECTION=$(gh api "repos/${PROD_REPO}/contents/CHANGELOG.md?ref=${TAG}" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | head -50 || true)
+            if [ -n "$SECTION" ]; then
+              CHANGELOG_CONTEXT="${CHANGELOG_CONTEXT}## Changes in ${TAG}\n${SECTION}\n\n"
+            fi
+          done
+
+          if [ -z "$CHANGELOG_CONTEXT" ]; then
+            echo "::warning::Failed to fetch changelogs — regression detection will be degraded"
+          fi
+          {
+            echo "changelog_context<<EOF"
+            printf '%b' "$CHANGELOG_CONTEXT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build unified triage prompt
+        id: build_prompt
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
+          ISSUE_TYPE: ${{ steps.issue_data.outputs.issue_type }}
+          ISSUE_TITLE: ${{ steps.issue_data.outputs.issue_title }}
+          ISSUE_BODY: ${{ steps.issue_data.outputs.issue_body }}
+          ISSUE_AUTHOR_COMMENTS: ${{ steps.issue_data.outputs.author_comments }}
+          BM25_CANDIDATES: ${{ steps.bm25.outputs.candidates }}
+          CHANGELOG_CONTEXT: ${{ steps.changelogs.outputs.changelog_context }}
+          TOOL_LIST: ${{ steps.tool_list.outputs.tools }}
+          EXTRACTED_KEYWORDS: ${{ steps.keywords.outputs.response }}
+        with:
+          script: |
+            const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
+            const issueType = process.env.ISSUE_TYPE || 'unknown';
+            const issueTitle = process.env.ISSUE_TITLE || '';
+            const rawBody = process.env.ISSUE_BODY || '';
+            const authorComments = process.env.ISSUE_AUTHOR_COMMENTS || '';
+            const bm25Candidates = process.env.BM25_CANDIDATES || '';
+            const changelog = process.env.CHANGELOG_CONTEXT || 'No changelog available.';
+            const toolList = process.env.TOOL_LIST || '';
+
+            // Keep section headers (### ...) so the model can see structure and assess completeness.
+            // Only strip _No response_ placeholders and collapse blank runs.
+            const cleanBody = t => (t || '')
+              .replace(/^_No response_$/gim, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+
+            const issueBody = cleanBody(rawBody).substring(0, 16000);
+
+            // Parse extracted keywords for context (show top-5 by weight in prompt)
+            let keywordSummary = '';
+            try {
+              const kws = JSON.parse(
+                (process.env.EXTRACTED_KEYWORDS || '').replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+              );
+              if (Array.isArray(kws) && kws.length > 0) {
+                const top = kws.slice(0, 5).map(k => k.term).join(', ');
+                keywordSummary = `\nSearch keywords extracted from this issue: ${top}\n`;
+              }
+            } catch (e) { core.info('Keyword summary parse failed: ' + e.message); }
+
+            const authorSection = authorComments
+              ? `\nAuthor follow-up comments:\n${authorComments}\n`
+              : '';
+
+            const duplicateSection = bm25Candidates
+              ? `\n## Possible Duplicate Candidates (BM25 pre-filtered)\nCheck each candidate — mark DUPLICATE only if high confidence.\n\n${bm25Candidates}\n`
+              : '';
+
+            const toolSection = toolList
+              ? `\n## Available ha-mcp Tools (for priority/size assessment)\n${toolList}\n`
+              : '';
+
+            const jsonSchema = '{"completeness":"complete|incomplete","classification":"bug|enhancement|question|invalid",'
+              + '"missing_info":[],"duplicate_of":null,"duplicate_confidence":"high|medium|low","related":[],'
+              + '"priority":"Urgent|High|Medium|Low|null","effort":"Low|Medium|High|null","good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}';
+
+            const prompt = [
+              'You are triaging a GitHub issue for ha-mcp.',
+              '',
+              '## What is ha-mcp',
+              'ha-mcp is a Model Context Protocol (MCP) server. MCP is a standard that exposes tool calls to LLM',
+              'agents (Claude, ChatGPT, Gemini, etc.). ha-mcp wraps the Home Assistant REST and WebSocket APIs',
+              'into ~92 named tools, each with a name, description, and parameter schema that guide the agent on',
+              'when and how to use it. A user runs ha-mcp alongside their AI assistant; the assistant calls these',
+              'tools to read entity states, trigger automations, control devices, manage dashboards, and more.',
+              '',
+              '## Two distinct bug classes',
+              '1. Code bug — a tool crashes, returns wrong data, fails to call the HA API correctly, or produces',
+              '   a malformed response. The fix is in Python code.',
+              '2. Agent-behavior bug — the tool description or parameter schema misleads the agent: wrong tool',
+              '   gets selected, parameters are misunderstood, the agent loops or gives up unnecessarily. The fix',
+              '   is in text (docstring, description, example), not code. This is still a real bug.',
+              '   The repo has a dedicated "AI Agent Behavior Feedback" template for this class. Issues with the',
+              '   agent-behavior label or describing the AI doing the wrong thing (even with no error thrown)',
+              '   are bugs, not questions.',
+              '',
+              'Evaluate ONLY on the text below. Respond with ONLY a JSON object — no prose, no markdown, no code block.',
+              '',
+              '## Issue #' + issueNumber + ': ' + issueTitle,
+              'Type: ' + issueType,
+              keywordSummary,
+              'Body:',
+              issueBody,
+              authorSection,
+              duplicateSection,
+              toolSection,
+              '## Recent Release Context (for regression detection)',
+              changelog,
+              '',
+              '## Evaluation Tasks',
+              '',
+              '### 1. Completeness',
+              'Is there enough information to take action? Be lenient:',
+              '- question or enhancement: always complete (no info requirements)',
+              '- 3 of 4 requirements present, or clear error/stack trace: complete',
+              'Requirements per type:',
+              '- runtime-bug: error message, ha-mcp version, install method (uvx/pip/docker/addon), which tool',
+              '- startup-bug: error details, ha-mcp version, install method, client app, OS',
+              '- agent-behavior: (1) clear description of what the agent did wrong AND what correct behavior',
+              '  looks like, (2) conversation paste or tool call history showing the problematic interaction',
+              '',
+              '### 2. Classification (pick one)',
+              '- bug: broken or incorrect behavior — includes code bugs (crash, wrong output) AND agent-behavior',
+              '  bugs (wrong tool chosen, bad parameters, misleading description). Both are bugs.',
+              '- enhancement: new feature or improvement that does not exist yet',
+              '- question: asking how to do something; no clear bug or feature request',
+              '- invalid: off-topic, spam, not actionable',
+              '',
+              '### 3. Missing info (only if incomplete)',
+              'Array of strings — each item: "What is missing: how the reporter can get it"',
+              'Keep each item concise. Empty array if complete.',
+              '',
+              '### 4. Duplicate detection (only check candidates if provided; otherwise leave null)',
+              'Compare the issue against each candidate. Set duplicate_of to the candidate number if confident',
+              'it is a duplicate. related = candidates that touch the same area but are not duplicates.',
+              '',
+              '### 5. Priority (bugs only; null for all others)',
+              'Core features (regression blocking any = Urgent; partial outage of one = High):',
+              '- HA connection / authentication',
+              '- Service calls / device control (ha_call_service, ha_bulk_control)',
+              '- Entity state access (ha_get_state, ha_search_entities, ha_deep_search)',
+              '- Automation management (create/edit/delete/enable/disable)',
+              '- Script management (create/execute)',
+              '- Dashboard management (create/modify Lovelace)',
+              '- Template evaluation (ha_eval_template)',
+              '- Automation / script tracing (ha_get_automation_traces)',
+              '',
+              'Urgent: regression in recent release AND blocks a core feature, OR affects multiple core features',
+              'High: one tool broken but workaround exists, or affects subset (specific install method / HA version)',
+              'Medium: minor edge case, wrong error message, agent-behavior bug',
+              '  (agent-behavior bugs are Medium by default unless they block a core feature)',
+              'Low: cosmetic only, rarely-hit path, typo, no functional impact',
+              '',
+              '### 6. Effort (enhancements only; null for all others)',
+              'Low: one tool/parameter/setting, ~1 file',
+              'Medium: new tool or significant change to existing tool, multiple files',
+              'High: new subsystem, new integration pattern, architectural change',
+              '',
+              '### 7. good_first_issue',
+              'true if Low or Medium priority bug OR Low effort enhancement (well-scoped, good for new contributors)',
+              '',
+              'Respond with ONLY this JSON (fill all fields; use null where not applicable):',
+              jsonSchema,
+            ].join('\n');
+
+            core.setOutput('prompt', prompt);
+
+      - name: Evaluate
+        id: evaluate
+        continue-on-error: true
+        uses: actions/github-script@v9
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROMPT: ${{ steps.build_prompt.outputs.prompt }}
+        with:
+          script: |
+            const token = process.env.GH_TOKEN;
+            const prompt = process.env.PROMPT;
+
+            const call = async (model) => {
+              const resp = await fetch('https://models.github.ai/inference/chat/completions', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  model,
+                  messages: [{ role: 'user', content: prompt }],
+                  max_tokens: 800,
+                  temperature: 0,
+                }),
+              });
+              const text = await resp.text();
+              let data;
+              try { data = JSON.parse(text); } catch { data = { error: text }; }
+              return { status: resp.status, data };
+            };
+
+            // Retry primary model on 5xx with exponential backoff; fall back to mini on 429.
+            let result;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              result = await call('openai/gpt-4.1');
+              if (result.status === 429) {
+                core.warning('gpt-4.1 rate limited, falling back to gpt-4.1-mini');
+                result = await call('openai/gpt-4.1-mini');
+                break;
+              }
+              if (result.status < 500) break;
+              if (attempt < 3) {
+                const delay = attempt * 2000;
+                core.warning(`HTTP ${result.status} on attempt ${attempt}/3, retrying in ${delay / 1000}s`);
+                await new Promise(r => setTimeout(r, delay));
+              }
+            }
+            if (result.status !== 200) {
+              core.setFailed(`Model call failed: HTTP ${result.status} — ${JSON.stringify(result.data)}`);
+              return;
+            }
+            const text = result.data.choices[0].message.content;
+            core.setOutput('summary', text);
+
+      - name: Post result, apply labels and set fields
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@v9
+        env:
+          EVALUATE_RESULT: ${{ steps.evaluate.outputs.summary }}
+          EVALUATE_OUTCOME: ${{ steps.evaluate.outcome }}
+          ISSUE_NUMBER_ENV: ${{ steps.issue_number.outputs.number }}
+        with:
+          script: |
+            const evaluateResult = process.env.EVALUATE_RESULT || '';
+            const evaluateOutcome = process.env.EVALUATE_OUTCOME || '';
+            const issueNumber = parseInt(process.env.ISSUE_NUMBER_ENV);
+
+            // Native org issue fields — field IDs from: gh api /orgs/homeassistant-ai/issue-fields
+            // value is the option *name* (string), not the numeric option ID.
+            const PRIORITY_FIELD_ID = 36564402;
+            const EFFORT_FIELD_ID = 36564405;
+            const VALID_PRIORITIES = new Set(['Urgent', 'High', 'Medium', 'Low']);
+            const VALID_EFFORTS    = new Set(['Low', 'Medium', 'High']);
+
+            const GENERIC_FAILURE_BODY = `⚠️ **Triage bot temporarily unavailable.**\n\nYour issue will be triaged manually — no action needed on your part.\n\n*🤖 Automated triage by Issue Bot*`;
+
+            const addLabels = async (labels) => {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels,
+              });
+            };
+            const postComment = async (body) => {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body,
+              });
+            };
+            const removeLabel = async (name) => {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  name,
+                });
+              } catch (err) {
+                if (err.status !== 404) core.warning(`Failed to remove label '${name}': ${err.message}`);
+              }
+            };
+
+            // Set native org issue fields via REST API (requires only issues: write).
+            // issue_field_values is an undocumented/preview param — failures are surfaced as
+            // job failures so silent Priority/Effort drift is caught in the workflow run log.
+            const setIssueFields = async (fields) => {
+              try {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  issue_field_values: fields,
+                });
+              } catch (err) {
+                core.setFailed('Failed to set issue fields: ' + err.message);
+              }
+            };
+
+            // --- Handle evaluate step failure ---
+            if (evaluateOutcome && evaluateOutcome !== 'success' && evaluateOutcome !== 'skipped') {
+              core.error(`Evaluate step failed (outcome=${evaluateOutcome}); posting generic notice.`);
+              await postComment(GENERIC_FAILURE_BODY);
+              await addLabels(['triage-failed']);
+              core.setFailed(`Evaluate step outcome: ${evaluateOutcome}`);
+              return;
+            }
+
+            // --- Parse unified JSON output ---
+            let result;
+            try {
+              const cleaned = evaluateResult
+                .replace(/```json\n?/g, '')
+                .replace(/```\n?/g, '')
+                .trim();
+              result = JSON.parse(cleaned);
+            } catch (e) {
+              core.error('Could not parse evaluate output as JSON: ' + e.message);
+              core.error('Raw output: ' + evaluateResult.substring(0, 500));
+              await postComment(GENERIC_FAILURE_BODY);
+              await addLabels(['triage-failed']);
+              core.setFailed('Evaluate output was not valid JSON.');
+              return;
+            }
+
+            const VALID_CLASSIFICATIONS = ['bug', 'enhancement', 'question', 'invalid'];
+            const classification = VALID_CLASSIFICATIONS.includes(result.classification)
+              ? result.classification
+              : null;
+            const completeness = result.completeness || 'incomplete';
+            const isDuplicate = result.duplicate_of !== null &&
+              result.duplicate_of !== undefined &&
+              result.duplicate_confidence === 'high';
+            const duplicateNumber = result.duplicate_of;
+            const relatedNumbers = Array.isArray(result.related) ? result.related.filter(n => typeof n === 'number') : [];
+            const missingInfo = Array.isArray(result.missing_info) ? result.missing_info.filter(s => typeof s === 'string') : [];
+            const priority = VALID_PRIORITIES.has(result.priority) ? result.priority : null;
+            if (result.priority && !priority) core.warning(`Unrecognised priority value: "${result.priority}" — skipping field`);
+            const effort = VALID_EFFORTS.has(result.effort) ? result.effort : null;
+            if (result.effort && !effort) core.warning(`Unrecognised effort value: "${result.effort}" — skipping field`);
+            const goodFirstIssue = result.good_first_issue || false;
+
+            core.info('Triage result: ' + JSON.stringify({
+              completeness, classification, isDuplicate,
+              duplicateNumber, priority, effort, goodFirstIssue
+            }));
+
+            // === FLOW DECISION ===
+
+            // (A) High-confidence duplicate — flag for maintainer review
+            if (isDuplicate) {
+              const labels = ['needs-info', 'duplicate'];
+              if (classification) labels.push(classification);
+              try { await addLabels(labels); } catch (err) { core.warning('addLabels failed: ' + err.message); }
+              await removeLabel('triage-failed');
+              const body = '## 🔄 Possible Duplicate\n\n' +
+                'This issue looks like a duplicate of #' + duplicateNumber + '.\n\n' +
+                'A maintainer will verify and close if confirmed. If this is **not** a duplicate, ' +
+                'please comment to explain the difference.\n\n' +
+                '*🤖 Automated triage by Issue Bot*\n<!-- triage-bot:duplicate -->';
+              await postComment(body);
+              core.info('Issue flagged as likely duplicate of #' + duplicateNumber);
+              return;
+            }
+
+            // (B) Complete — issue has enough info
+            if (completeness === 'complete') {
+              const labels = ['triaged', ...(classification ? [classification] : [])];
+              if (goodFirstIssue) labels.push('good first issue');
+              core.info('Issue is complete; adding labels: ' + labels.join(', '));
+              try { await addLabels(labels); } catch (err) { core.warning('addLabels failed: ' + err.message); }
+              await removeLabel('triage-failed');
+              await removeLabel('needs-info');
+              const fieldUpdates = [];
+              if (priority) {
+                fieldUpdates.push({ field_id: PRIORITY_FIELD_ID, value: priority });
+                core.info('Setting Priority = ' + priority);
+              }
+              if (effort) {
+                fieldUpdates.push({ field_id: EFFORT_FIELD_ID, value: effort });
+                core.info('Setting Effort = ' + effort);
+              }
+              if (fieldUpdates.length) await setIssueFields(fieldUpdates);
+              await postComment('✅ Thanks for the report — this issue has enough information and has been added to the backlog.\n\n*🤖 Automated triage by Issue Bot*');
+              return;
+            }
+
+            // (C) Incomplete — post Information Needed comment
+            const relatedText = relatedNumbers.length > 0
+              ? '\n\n🔗 **Related issues**: ' + relatedNumbers.map(n => '#' + n).join(', ')
+              : '';
+
+            const missingText = missingInfo.length > 0
+              ? missingInfo.map(item => `* ${item}`).join('\n')
+              : '* Please provide more details about your issue.';
+
+            const isBug = classification === 'bug';
+            const reportIssueTip = isBug
+              ? '\n\n> 💡 **Two ways to provide this**: either run the `ha_report_issue` tool in the ha-mcp agent and paste its output here, **or** reply manually with the details above.'
+              : '';
+
+            const body = '## ℹ️ Information Needed\n\n' + missingText + relatedText + reportIssueTip +
+              '\n\n---\n\n💬 **Please reply to this issue** with the requested information.\n\n' +
+              '*🤖 Automated triage by Issue Bot*\n<!-- triage-bot:info-needed -->';
+            try {
+              if (classification) await addLabels([classification]);
+              await addLabels(['needs-info']);
+            } catch (err) { core.warning('addLabels failed: ' + err.message); }
+            await removeLabel('triage-failed');
+            await postComment(body);
+
+      - name: Fail job if evaluate step failed
+        if: ${{ !cancelled() && steps.evaluate.outcome != 'success' && steps.evaluate.outcome != 'skipped' }}
+        run: |
+          echo "::error::Evaluate step did not succeed (outcome=${{ steps.evaluate.outcome }}). Check the step logs above for the underlying CLI error."
+          exit 1

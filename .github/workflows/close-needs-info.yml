@@ -1,0 +1,135 @@
+name: '🤖 Close needs-info Issues'
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # Daily at 09:00 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  group: close-needs-info
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  close_needs_info:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close stale needs-info issues
+        uses: actions/github-script@v9
+        with:
+          script: |
+            // HTML anchors embedded by issue-triage.yml — drift-resistant vs matching display text
+            const BOT_COMMENT_MARKER = '<!-- triage-bot:info-needed -->';
+            const DUPLICATE_COMMENT_MARKER = '<!-- triage-bot:duplicate -->';
+            const BOT_LOGIN = 'github-actions[bot]';
+            const DAYS_BEFORE_CLOSE = 10;
+            const MS_PER_DAY = 86400000;
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'needs-info',
+              per_page: 100,
+            });
+
+            core.info(`Found ${issues.length} open issues with needs-info label`);
+
+            for (const issue of issues) {
+              const issueNumber = issue.number;
+              core.info(`Checking issue #${issueNumber}: ${issue.title}`);
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 100,
+              });
+
+              // Find the most recent bot triage comment (info needed or duplicate flag)
+              const botComments = comments.filter(c =>
+                c.user.login === BOT_LOGIN &&
+                (c.body.includes(BOT_COMMENT_MARKER) || c.body.includes(DUPLICATE_COMMENT_MARKER))
+              );
+
+              if (botComments.length === 0) {
+                core.info(`  No bot triage comment found — skipping`);
+                continue;
+              }
+
+              const botComment = botComments[botComments.length - 1];
+              const botCommentDate = new Date(botComment.created_at);
+              const daysSinceBot = (Date.now() - botCommentDate.getTime()) / MS_PER_DAY;
+
+              core.info(`  Bot comment is ${daysSinceBot.toFixed(1)} days old`);
+
+              // Only the issue author replying resets the clock — matches issue-triage.yml which
+              // only re-runs triage on author comments. A maintainer/bystander comment must not
+              // remove needs-info without triggering re-triage, or the issue silently escapes
+              // the stale-close path with the requested info still missing.
+              const repliesAfterBot = comments.filter(c =>
+                c.user.type !== 'Bot' &&
+                c.user.login === issue.user.login &&
+                new Date(c.created_at) > botCommentDate
+              );
+
+              if (repliesAfterBot.length > 0) {
+                // Author replied — remove needs-info; triage will re-evaluate on next comment
+                core.info(`  Author comment found after bot comment — removing needs-info`);
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    name: 'needs-info',
+                  });
+                } catch (err) {
+                  if (err.status !== 404) core.warning(`  Failed to remove needs-info: ${err.message}`);
+                }
+                continue;
+              }
+
+              if (daysSinceBot >= DAYS_BEFORE_CLOSE) {
+                core.info(`  Closing issue #${issueNumber} — ${DAYS_BEFORE_CLOSE} days without reply`);
+
+                let commented = false;
+                try {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    body: `Hi @${issue.user.login} — closing this issue as we haven't received the requested information after ${DAYS_BEFORE_CLOSE} days.\n\nFeel free to open a new issue once you have the details ready.\n\n*🤖 Automated by Issue Bot*`,
+                  });
+                  commented = true;
+                } catch (err) {
+                  core.warning(`  Failed to post closing comment on #${issueNumber}: ${err.message} — skipping close`);
+                }
+
+                if (!commented) continue;
+
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    name: 'needs-info',
+                  });
+                } catch (err) {
+                  if (err.status !== 404) core.warning(`  Failed to remove needs-info on #${issueNumber}: ${err.message}`);
+                }
+
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  state: 'closed',
+                  state_reason: 'not_planned',
+                });
+
+                core.info(`  Closed issue #${issueNumber}`);
+              } else {
+                core.info(`  ${(DAYS_BEFORE_CLOSE - daysSinceBot).toFixed(1)} days remaining — leaving open`);
+              }
+            }

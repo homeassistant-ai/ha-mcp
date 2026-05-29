@@ -263,9 +263,11 @@ class TestSystemTools:
         # Some core components should always be reloadable
         assert len(reloaded) > 0, "Should have reloaded at least one component"
 
-        # Log any warnings
-        if data.get("warnings"):
-            logger.warning(f"Reload warnings: {data['warnings']}")
+        # A clean container should produce no reload warnings — any warning
+        # here means RELOAD_TARGETS lists a target whose reload service does
+        # not exist (e.g. issue #1453: `counter.reload`).
+        warnings = data.get("warnings") or []
+        assert not warnings, f"Reload all produced unexpected warnings: {warnings}"
 
         logger.info("Reload all test completed successfully")
 

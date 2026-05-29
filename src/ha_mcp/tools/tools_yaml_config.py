@@ -28,8 +28,8 @@ from .helpers import (
 )
 from .tools_config_dashboards import fetch_dashboards_list
 from .tools_filesystem import (
-    MCP_TOOLS_DOMAIN,
     _assert_mcp_tools_available,
+    call_mcp_tools_service,
 )
 from .util_helpers import (
     attach_skill_content,
@@ -119,9 +119,13 @@ class YamlConfigTools:
                     "For YAML-mode dashboards, "
                     "use the dotted form 'lovelace.dashboards.<url_path>' where "
                     "<url_path> is lowercase, hyphenated, and not a reserved HA "
-                    "route. No other dotted paths are supported. Not for template "
-                    "sensors (use ha_config_set_helper), automations, scripts, "
-                    "scenes, or input_* helpers — those have dedicated tools."
+                    "route. No other multi-segment paths are supported. "
+                    "'automation', 'script', and 'scene' are accepted only when "
+                    "file is under packages/*.yaml; in configuration.yaml use "
+                    "the dedicated storage-mode tools "
+                    "(ha_config_set_automation, ha_config_set_script, "
+                    "ha_config_set_scene). Not for template sensors or "
+                    "input_* helpers — those have dedicated tools."
                 ),
             ),
         ],
@@ -177,9 +181,9 @@ class YamlConfigTools:
 
         - Template sensors (state-based or trigger-based) ->
           ha_config_set_helper(helper_type='template')
-        - Automations -> ha_config_set_automation
-        - Scripts -> ha_config_set_script
-        - Scenes -> ha_config_set_scene
+        - Automations (storage-mode) -> ha_config_set_automation
+        - Scripts (storage-mode) -> ha_config_set_script
+        - Scenes (storage-mode) -> ha_config_set_scene
         - All 28 helper types (input_*, counter, timer, schedule, zone, person,
           tag, group, min_max, threshold, derivative, statistics, utility_meter,
           trend, filter, switch_as_x, etc.) -> ha_config_set_helper
@@ -189,10 +193,16 @@ class YamlConfigTools:
         for integrations with significant YAML-only configuration (knx
         entities in package files), and for registering YAML-mode dashboards via
         ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys).
+        Also accepts ``automation``, ``script``, and ``scene`` keys when
+        ``file`` is a ``packages/*.yaml`` — for git-managed YAML configs
+        that track these alongside templates and other YAML items. Writes
+        to ``configuration.yaml`` for those three keys remain rejected so
+        storage-mode and YAML-mode collections don't collide; use the
+        dedicated storage-mode tools instead.
         Check ``post_action`` in the response: most keys need a full HA
-        restart; template, mqtt, and group support reload. Preserves YAML
-        comments and HA tags (``!include``, ``!secret``) on round-trip;
-        ``replace`` swaps the subtree as-is.
+        restart; template, mqtt, group, automation, script, and scene
+        support reload. Preserves YAML comments and HA tags (``!include``,
+        ``!secret``) on round-trip; ``replace`` swaps the subtree as-is.
 
         ``template-guidelines.md`` ships in this response under ``skill_content``
         by default — YAML packages frequently include
@@ -250,12 +260,11 @@ class YamlConfigTools:
             if content is not None:
                 service_data["content"] = content
 
-            # Call the custom component service
-            result = await self._client.call_service(
-                MCP_TOOLS_DOMAIN,
+            # Call the custom component service (token injected by helper)
+            result = await call_mcp_tools_service(
+                self._client,
                 "edit_yaml_config",
                 service_data,
-                return_response=True,
             )
 
             if isinstance(result, dict):

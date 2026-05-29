@@ -23,7 +23,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from ._version import is_running_in_addon
+from ._version import get_version, is_running_in_addon
 from .backup_manager import get_backup_manager
 from .client.supervisor_client import make_supervisor_httpx_client
 from .config import (
@@ -287,6 +287,44 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
         logger.info("Seeded tool config from env vars (%d entries)", len(tools))
         return config
     return {}
+
+
+def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
+    """Return {tool_name: "disabled" | "pinned"} for every tool named
+    in the DISABLED_TOOLS or PINNED_TOOLS env vars.
+
+    Used by the UI to render env-pinned rows as read-only and by the
+    save handler to reject flips. PINNED_TOOLS wins ties (matches the
+    existing seed semantics in load_tool_config).
+    """
+    if settings is None:
+        settings = get_global_settings()
+    pinned: dict[str, str] = {}
+    for name in (settings.disabled_tools or "").split(","):
+        name = name.strip()
+        if name:
+            pinned[name] = "disabled"
+    for name in (settings.pinned_tools or "").split(","):
+        name = name.strip()
+        if name:
+            pinned[name] = "pinned"
+    return pinned
+
+
+def effective_tool_config(settings: Settings | None = None) -> dict[str, Any]:
+    """Return the runtime tool config: file values overlaid by env-
+    pinned tools (the latter always win, never overwritten by file).
+
+    Use this for any "what is the runtime state?" computation. Keep
+    ``load_tool_config`` as the pure file reader (no env overlay) for
+    cases that need just the file's contents (e.g. for displaying
+    "user-set" status separately from "env-pinned" status).
+    """
+    if settings is None:
+        settings = get_global_settings()
+    cfg = load_tool_config(settings)
+    tools = {**cfg.get("tools", {}), **env_pinned_tools(settings)}
+    return {**cfg, "tools": tools}
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -574,6 +612,12 @@ _SETTINGS_HTML = (
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--bg); color: var(--text); line-height: 1.5; padding: 16px; }
+  /* Small unobtrusive version label at the bottom of every settings
+     page so an operator can see the running build without leaving
+     the UI. Empty until the /api/settings/info GET populates it. */
+  .version-footer { margin-top: 32px; padding: 12px 0; font-size: 0.75rem;
+    color: var(--text-secondary); text-align: center;
+    border-top: 1px solid var(--border); opacity: 0.7; }
   .header { display: flex; align-items: center; justify-content: space-between;
     padding: 16px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
   .header h1 { font-size: 1.5rem; font-weight: 600; }
@@ -604,6 +648,7 @@ _SETTINGS_HTML = (
     padding: 10px 16px; border-bottom: 1px solid var(--border); }
   .tool:last-child { border-bottom: none; }
   .tool.hidden { display: none; }
+  .tool.env-pinned .tool-name { color: var(--text-secondary); }
   .tool-info { flex: 1; min-width: 0; }
   .tool-name { font-size: 0.9rem; font-weight: 500; }
   .tool-meta { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
@@ -746,6 +791,84 @@ _SETTINGS_HTML = (
     color: var(--text); font-size: 0.85rem; }
   .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
   .feature-row.locked .feature-name { color: var(--text-secondary); }
+  /* Beta master toggle + nested sub-rows. The master row
+     ``.beta-master-row`` is visually distinguished as a section
+     header. The 5 sub-rows ``.beta-sub`` are indented with a vertical
+     connector line on the left; when master is off they get
+     ``.dimmed`` (reduced opacity + disabled inputs) to make the
+     gated state visible without removing rows from the DOM. */
+  .feature-row.beta-master-row { font-weight: 600; padding-top: 16px;
+    border-top: 2px solid var(--border); margin-top: 8px; }
+  .feature-row.beta-master-row .feature-help { font-weight: 400; }
+  .feature-row.beta-sub { padding-left: 32px; position: relative; }
+  .feature-row.beta-sub::before { content: ""; position: absolute;
+    left: 12px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.beta-sub.dimmed { opacity: 0.55; }
+  .feature-row.beta-sub.dimmed input { cursor: not-allowed; }
+  /* Code-mode sub-numerics — second-level nesting under the
+     enable_code_mode beta sub-row. Same dimming
+     logic as beta-sub but deeper-indented and gated by
+     enable_code_mode rather than the master. */
+  .feature-row.codemode-sub { padding-left: 56px; position: relative; }
+  .feature-row.codemode-sub::before { content: ""; position: absolute;
+    left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.codemode-sub.dimmed { opacity: 0.55; }
+  .feature-row.codemode-sub.dimmed input { cursor: not-allowed; }
+  /* Advanced settings sections — one row per
+     ADVANCED_SETTINGS_FIELDS entry, grouped by section. Visually
+     matches the .feature-row treatment so the Server Settings tab
+     reads as one coherent surface. */
+  .adv-section-title { font-size: 0.85rem; font-weight: 600;
+    color: var(--text-secondary); margin: 20px 0 4px; text-transform: uppercase;
+    letter-spacing: 0.05em; }
+  /* Beta section header is visually distinct (warning color, slightly
+     larger) so the dangerous-features block at the bottom is impossible
+     to miss as a category boundary. */
+  .adv-section-title.beta-section-title { color: var(--warning);
+    font-size: 0.95rem; margin-top: 32px;
+    border-top: 1px solid var(--warning); padding-top: 16px; }
+  /* Two-step save note + primary-CTA save button.
+     The default <button> in this UI is intentionally small/neutral
+     because most surfaces have many of them; the Save row gets a
+     dedicated, larger primary style so users don't miss the action.
+     Duplicated at top and bottom so scrolling either way reaches it. */
+  .adv-save-note { background: rgba(255, 152, 0, 0.08);
+    border-left: 3px solid var(--warning); padding: 10px 14px;
+    border-radius: 6px; margin: 12px 0; color: var(--text);
+    font-size: 0.85rem; line-height: 1.4; }
+  .adv-save-note strong { color: var(--warning); }
+  .adv-save-row { display: flex; align-items: center; gap: 12px;
+    margin: 16px 0; padding: 8px 0; }
+  .adv-save-btn { padding: 10px 22px; font-size: 1rem; font-weight: 600;
+    border: none; border-radius: 8px; background: var(--accent);
+    color: white; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    transition: background 0.15s ease, transform 0.05s ease; }
+  .adv-save-btn:hover { background: var(--accent-hover); }
+  .adv-save-btn:active { transform: translateY(1px); }
+  .adv-save-btn:disabled { opacity: 0.55; cursor: not-allowed;
+    box-shadow: none; }
+  .adv-section { border-top: 1px solid var(--border); }
+  .adv-row { display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .adv-row:first-child { border-top: none; }
+  .adv-row.locked .adv-name { color: var(--text-secondary); }
+  .adv-info { flex: 1; min-width: 0; }
+  .adv-name { font-size: 0.9rem; font-weight: 500; }
+  .adv-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;
+    line-height: 1.4; }
+  .adv-help code { background: #111; padding: 1px 5px; border-radius: 4px;
+    font-size: 0.72rem; }
+  .adv-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px;
+    font-style: italic; }
+  .adv-control { flex-shrink: 0; display: flex; align-items: center; }
+  .adv-control input[type="text"],
+  .adv-control input[type="number"],
+  .adv-control select { padding: 4px 8px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+    font-size: 0.85rem; min-width: 120px; }
+  .adv-control input:disabled,
+  .adv-control select:disabled { opacity: 0.4; cursor: not-allowed; }
+  .adv-control input[type="checkbox"]:disabled { opacity: 0.4; cursor: not-allowed; }
   /* Tool Security Policies — per-tool card layout.
      Cards reuse the surface/border variables already in use elsewhere
      so they read consistently with backup-row / group blocks. */
@@ -824,11 +947,10 @@ _SETTINGS_HTML = (
     addon restart. Changes require an MCP-host restart to apply.
   </div>
   <div class="pin-notice show" id="pinNotice">
-    Pin toggles only take effect when Tool Search is enabled — either
-    in the Server Settings tab or, for add-on users, the add-on
-    Configuration page (same setting either way). Without Tool Search,
-    all enabled tools are always visible and pinning has no extra
-    effect.
+    Tools listed in the <code>DISABLED_TOOLS</code> or <code>PINNED_TOOLS</code>
+    env vars are locked read-only — unset the env var to edit them here.
+    Pin toggles only take effect when Tool Search is enabled (Server Settings tab
+    or add-on Configuration page).
   </div>
   <div class="summary" id="summary"></div>
   <input type="text" class="search" id="search" placeholder="Search tools...">
@@ -836,10 +958,63 @@ _SETTINGS_HTML = (
 </div>
 <div class="panel" id="panel-server">
   <div class="features-sub">
-    Tool Search, beta-flagged features. Changes require an MCP-host restart
+    Tool Search, advanced settings. Changes require an MCP-host restart
     to take effect (close + reopen Claude Desktop, restart the add-on, etc.).
   </div>
+
+  <!-- Two-step note + top Save button. The Save +
+       Restart workflow is non-obvious — users have hit the page,
+       toggled, and then wondered why nothing took effect because they
+       skipped one of the two steps. Display the note prominently and
+       duplicate the Save button at the top so a user scrolling either
+       end of the panel can hit it. -->
+  <div class="adv-save-note">
+    ⚠ Two-step save: <strong>(1) click "Save advanced settings"</strong>
+    to persist your changes, then <strong>(2) click "Restart"</strong>
+    above to apply them. Neither step alone is enough.
+  </div>
+  <div id="advSaveRowTop" class="adv-save-row" style="display:none;">
+    <button id="advSaveBtnTop" class="adv-save-btn">💾 Save advanced settings</button>
+    <span id="advSaveStatusTop" class="status"></span>
+  </div>
   <div id="featuresBody"></div>
+
+  <!-- Advanced settings sections. The "Connection
+       (display only)" section was removed per user feedback — it
+       just listed the read-only HOMEASSISTANT_URL / TOKEN /
+       SUPERVISOR_TOKEN fields, which the user can already see in the
+       addon's own logs and configuration. Registry entries for the
+       connection section remain in ADVANCED_SETTINGS_FIELDS so the
+       API still returns them (env-pin debugging, future surfaces),
+       but they are not rendered into a panel here. -->
+  <h3 class="adv-section-title">Search &amp; matching</h3>
+  <div id="advSearch" class="adv-section"></div>
+  <h3 class="adv-section-title">Operations</h3>
+  <div id="advOperations" class="adv-section"></div>
+  <h3 class="adv-section-title">Tool surface</h3>
+  <div id="advToolsSurface" class="adv-section"></div>
+  <h3 class="adv-section-title">Diagnostics</h3>
+  <div id="advDiagnostics" class="adv-section"></div>
+
+  <!-- Beta features sit at the bottom of the panel — these can damage
+       the HA system, so they come last and the user sees safer
+       settings first. -->
+  <h3 class="adv-section-title beta-section-title">Beta features (dangerous)</h3>
+  <div id="betaBody"></div>
+
+  <!-- Bottom Save row sits AFTER the beta block (and any nested
+       code-mode sub-numerics) so a user editing those doesn't have
+       to scroll back up past their own changes. -->
+  <div class="adv-save-note">
+    ⚠ Two-step save: <strong>(1) click "Save advanced settings"</strong>
+    to persist your changes, then <strong>(2) click "Restart"</strong>
+    above to apply them. Neither step alone is enough.
+  </div>
+  <div id="advSaveRow" class="adv-save-row" style="display:none;">
+    <button id="advSaveBtn" class="adv-save-btn">💾 Save advanced settings</button>
+    <span id="advSaveStatus" class="status"></span>
+  </div>
+
   <div id="sidecarStopRow" style="display:none; margin: 16px 0; text-align: right;">
     <button class="danger-btn" id="stopSidecarBtn"
             title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
@@ -960,6 +1135,10 @@ window.addEventListener('unhandledrejection', (e) => {
 
 let toolData = [];
 let toolStates = {};
+// Map of tool name → "disabled" | "pinned" for env-var-pinned tools.
+// Populated from data.env_pinned in loadTools(); read by render() to
+// lock rows and show the env-var name banner.
+let toolEnvPinned = {};
 let saveTimer = null;
 let openGroups = new Set();
 
@@ -1064,10 +1243,16 @@ async function loadTools() {
   }
   toolData = data.tools || [];
   toolStates = data.states || {};
+  toolEnvPinned = data.env_pinned || {};
   // Load policy state before the first render so the "security gated"
   // toggle reflects current policy.rules. loadPolicyState() never throws
   // — it leaves gatedTools empty on failure.
   await loadPolicyState();
+  // /api/settings/info drives the restart-button mode, restart-notice
+  // copy, and the version footer. Fetch it BEFORE the empty-tools
+  // early return so a sidecar misconfig (toolData=[]) still gets the
+  // build version shown at the bottom of the page.
+  await applyInfoChrome();
   if (toolData.length === 0) {
     // Empty tool list is a sidecar misconfiguration — usually the
     // parent stdio process couldn't dump the metadata cache. Tell
@@ -1085,7 +1270,9 @@ async function loadTools() {
     throw e;
   }
   updateStatus('Loaded');
+}
 
+async function applyInfoChrome() {
   // Show restart button if running as add-on; show Stop Sidecar
   // button only when this page is served by the stdio sidecar
   // (HTTP modes serve the same HTML but is_sidecar=false there, so
@@ -1125,6 +1312,15 @@ async function loadTools() {
         'container, systemd service, or however you launch it) for them ' +
         'to take effect. Disabled tools will be fully removed from the ' +
         'MCP tool list on next startup.';
+    }
+    // Version footer — show the running ha-mcp build at the bottom
+    // of every page. ``info.version`` is whatever
+    // ``HA_MCP_BUILD_VERSION`` the addon's Dockerfile set (e.g.
+    // ``7.5.0`` on stable, ``7.5.0.dev355`` on dev), with a fallback
+    // to package metadata in standalone deployments.
+    if (info.version) {
+      const fEl = document.getElementById('versionFooterText');
+      if (fEl) fEl.textContent = 'ha-mcp ' + info.version;
     }
   } catch (_e) {}
 }
@@ -1391,10 +1587,12 @@ function render() {
     const group = document.createElement('div');
     group.className = 'group';
 
-    // Per-group toggle state: enabled if ANY non-mandatory/non-gated tool is enabled
-    const toggleable = tools.filter(t => !MANDATORY.includes(t.name) && !t.disabled_by);
+    // Per-group toggle state: enabled if ANY non-mandatory/non-gated/non-env-pinned tool is enabled
+    const toggleable = tools.filter(t =>
+      !MANDATORY.includes(t.name) && !t.disabled_by && !toolEnvPinned[t.name]);
     const anyEnabled = toggleable.some(t => getState(t.name) !== 'disabled');
     const groupEnabled = tools.filter(t => {
+      if (toolEnvPinned[t.name]) return toolEnvPinned[t.name] !== 'disabled';
       const s = getState(t.name);
       return MANDATORY.includes(t.name) || (!t.disabled_by && s !== 'disabled');
     }).length;
@@ -1453,23 +1651,38 @@ function render() {
       const isMandatory = MANDATORY.includes(t.name);
       const disabledBy = t.disabled_by || null;
       const isFeatureGated = disabledBy !== null;
+      // env_pinned: "disabled" | "pinned" | undefined — operator-level lock
+      // via DISABLED_TOOLS / PINNED_TOOLS env vars. When set, all inputs are
+      // disabled and a banner names the env var. Takes precedence over
+      // isMandatory / isFeatureGated for the lock calculation.
+      const envPinKind = toolEnvPinned[t.name]; // "disabled" | "pinned" | undefined
+      const isEnvPinned = !!envPinKind;
+      const envPinVar = envPinKind === 'disabled' ? 'DISABLED_TOOLS' :
+                        envPinKind === 'pinned'   ? 'PINNED_TOOLS'   : '';
       const ann = t.annotations || {};
       const isReadOnly = ann.readOnlyHint === true;
       const isDestructive = ann.destructiveHint === true;
 
       total++;
-      if (isFeatureGated) disabledCount++;
+      if (isEnvPinned) {
+        if (envPinKind === 'disabled') disabledCount++;
+        else { enabledCount++; pinnedCount++; }
+      } else if (isFeatureGated) disabledCount++;
       else if (state === 'disabled') disabledCount++;
       else if (state === 'pinned') { enabledCount++; pinnedCount++; }
       else enabledCount++;
 
-      const isEnabled = isFeatureGated ? false : (isMandatory || state !== 'disabled');
-      const isPinned = isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name));
-      const lockEnabled = isMandatory || isFeatureGated;
-      const lockPinned = isMandatory || isFeatureGated || !isEnabled;
+      const isEnabled = isEnvPinned
+        ? (envPinKind !== 'disabled')
+        : (isFeatureGated ? false : (isMandatory || state !== 'disabled'));
+      const isPinned = isEnvPinned
+        ? (envPinKind === 'pinned')
+        : (isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name)));
+      const lockEnabled = isEnvPinned || isMandatory || isFeatureGated;
+      const lockPinned = isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
 
       const div = document.createElement('div');
-      div.className = 'tool';
+      div.className = isEnvPinned ? 'tool env-pinned' : 'tool';
       div.dataset.name = t.name.toLowerCase();
       div.dataset.title = (t.title || '').toLowerCase();
 
@@ -1483,12 +1696,16 @@ function render() {
       const gatedNote = disabledBy
         ? `<div class="disabled-by-note">Beta — set <code>${escapeHtml(disabledBy)}</code> in the dev add-on config or the matching env var (see docs/beta.md).</div>`
         : '';
+      const envPinnedNote = isEnvPinned
+        ? `<div class="feature-locked-note">env-pinned via <code>${envPinVar}</code> — unset the env var to edit here.</div>`
+        : '';
 
       div.innerHTML = `<div class="tool-info">` +
         `<div class="tool-name">${escapeHtml(title)}${badges}</div>` +
         `<div class="tool-meta">${escapeHtml(t.name)}</div>` +
         (desc ? `<div class="tool-desc">${escapeHtml(desc)}</div>` : '') +
         gatedNote +
+        envPinnedNote +
         `</div>` +
         `<div class="tool-toggles">` +
           `<div class="toggle-group">` +
@@ -1646,6 +1863,14 @@ const BACKUP_FIELD_LABELS = {
     label: 'Retain per entity',
     help: 'Maximum snapshots kept per entity (1–10000). Older ones rotate out.',
   },
+  auto_backup_dir: {
+    label: 'Backup directory override',
+    help: 'Empty = default (/data/ha_mcp_backups in the add-on, $XDG_DATA_HOME/ha_mcp/backups otherwise). Override with an absolute path.',
+  },
+  auto_backup_calendar_lookahead_days: {
+    label: 'Calendar lookahead (days)',
+    help: 'How far ahead to query for calendar events when capturing pre-edit snapshots. Range 1–365.',
+  },
 };
 
 const BACKUP_ORIGIN_LABELS = {
@@ -1667,6 +1892,9 @@ async function loadBackupConfig() {
     }
     const data = await resp.json();
     backupConfigFields = data.fields || [];
+    if (typeof data.is_addon === 'boolean') {
+      IS_ADDON_MODE = data.is_addon;
+    }
   } catch (_e) {
     formEl.innerHTML = '<div class="backup-empty">Backup settings unavailable.</div>';
     actionsEl.style.display = 'none';
@@ -1686,14 +1914,19 @@ function renderBackupConfig() {
     let controlHtml;
     if (typeof f.value === 'boolean') {
       controlHtml = `<input type="checkbox" data-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+    } else if (typeof f.value === 'string') {
+      // Path / freeform string fields (auto_backup_dir).
+      controlHtml = `<input type="text" data-field="${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
     } else {
-      const min = f.field === 'auto_backup_throttle_minutes' ? 0 : 1;
-      const max = f.field === 'auto_backup_throttle_minutes' ? 1440 : 10000;
+      let min = 1;
+      let max = 10000;
+      if (f.field === 'auto_backup_throttle_minutes') { min = 0; max = 1440; }
+      else if (f.field === 'auto_backup_calendar_lookahead_days') { min = 1; max = 365; }
       controlHtml = `<input type="number" data-field="${escapeHtml(f.field)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
     }
     let originMsg;
     if (f.origin === 'env') {
-      originMsg = `Set via env var <code>${escapeHtml(f.env_var)}</code> — unset it to edit here.`;
+      originMsg = envLockedNoteHtml(f.env_var, f.field);
     } else {
       originMsg = BACKUP_ORIGIN_LABELS[f.origin] || '';
     }
@@ -1717,6 +1950,8 @@ async function saveBackupConfig() {
     if (!input) return;
     if (input.type === 'checkbox') {
       payload[f.field] = input.checked;
+    } else if (input.type === 'text') {
+      payload[f.field] = input.value;
     } else {
       const n = parseInt(input.value, 10);
       if (!isNaN(n)) payload[f.field] = n;
@@ -1926,17 +2161,24 @@ const FEATURE_META = {
     label: "Tool search max results",
     help: "Maximum number of tools returned by ha_search_tools when tool search is enabled. Lower values (2-3) save context tokens but may miss relevant tools. Range: 2-10. Requires restart.",
   },
-  enable_yaml_config_editing: {
-    label: "Enable YAML config editing (beta)",
-    help: "Beta feature — disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
-  },
-  enable_lite_docstrings: {
-    label: "Enable lite tool docstrings (beta)",
-    help: "Beta feature — disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
+  enable_tool_security_policies: {
+    label: "Enable Tool Security Policies",
+    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
     help: "Master switch for the write-tool skill content delivery feature (issue #1182). When enabled (default), the six config write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant best-practice reference files under skill_content on every successful write, plus auto-embed any reference sections cited by best-practice warnings. Each tool also exposes a per-call MandatoryBPS parameter the agent can set to false on subsequent calls once it has the content. When this master switch is off, NO skill_content goes out regardless of the per-call parameter or BP warnings. Leave on if your LLM benefits from inline guidance; turn off to minimise tokens when using an LLM that has the best-practice files indexed via skills or another retrieval path. Requires restart to take effect.",
+  },
+  // Master beta toggle — gates the 5 sub-flags below at runtime
+  // (see config.py:_apply_feature_flag_overrides master gate). UI
+  // dims sub-rows when this is off and re-renders live on flip.
+  enable_beta_features: {
+    label: "Enable beta features",
+    help: "⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee — you enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master toggle for the 5 experimental tools below; sub-toggles are dimmed and ignored at runtime while this is off (even a sub-flag set via env var is forced off until the master is on). Requires restart to take effect.",
+  },
+  enable_yaml_config_editing: {
+    label: "Enable YAML config editing (beta)",
+    help: "Beta feature — disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
   },
   enable_filesystem_tools: {
     label: "Enable filesystem tools (beta)",
@@ -1946,11 +2188,28 @@ const FEATURE_META = {
     label: "Enable custom component integration (beta)",
     help: "Sets HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true. Enables the ha_install_mcp_tools installer tool, which can help install the ha_mcp_tools custom component. This setting does not control whether the MCP server loads or interacts with the custom component, and it is not required for filesystem tools to function. Only enable if you want to allow the AI assistant to use the installer tool. Requires restart to take effect.",
   },
-  enable_tool_security_policies: {
-    label: "Enable Tool Security Policies",
-    help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
+  enable_code_mode: {
+    label: "Enable code-mode sandbox (beta)",
+    help: "Beta feature — disabled by default. Enables ha_manage_custom_tool, a sandboxed Python interpreter (pydantic-monty) that lets AI assistants write/run/save/delete custom tools when no built-in tool covers the request. Sandbox cannot touch the filesystem or arbitrary network, but CAN call any registered MCP tool, hit the HA REST API, or send HA WebSocket commands — effectively 'do whatever existing tools allow you to do, in any combination'. See docs/beta.md for known limitations. Requires restart to take effect.",
+  },
+  enable_lite_docstrings: {
+    label: "Enable lite tool docstrings (beta)",
+    help: "Beta feature — disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
   },
 };
+
+// The 5 beta sub-flag fields gated by the master beta toggle. Populated
+// from the ``beta_sub_flags`` array in the /api/settings/features
+// response so the JS stays in sync with Python's
+// ``config.BETA_FEATURE_FIELDS`` without duplicating the name list here.
+let BETA_SUB_FLAGS = new Set();
+
+// Cached add-on flag. Each settings endpoint (/api/settings/features,
+// /api/settings/advanced, /api/settings/backup-config) returns
+// ``is_addon`` so the env-locked banner copy can adapt — the addon
+// Configuration UI cannot "unset env vars," so the standalone-mode
+// "unset env var" copy is actively misleading there.
+let IS_ADDON_MODE = false;
 
 const ORIGIN_LOCKED_NOTE = {
   env: 'Set via environment variable — unset it to edit here.',
@@ -1963,11 +2222,41 @@ const ORIGIN_INFO_NOTE = {
   addon: 'Synced to the add-on Configuration tab — restart required after save.',
 };
 
+// Compose the env-locked banner text for one field. Addon-mode copy
+// avoids the misleading "unset it to edit here" — operators in HA
+// addon mode have no env-var surface to unset; the var was set
+// either by start.py from /data/options.json or by Supervisor itself
+// (and in either case the addon Configuration tab is the place to
+// change it). The master `enable_beta_features` row uses different
+// copy because it's now schema-bound on dev — origin='env' there
+// only fires on the legacy-bridge path (an older install whose
+// options.json doesn't carry the master key yet, where start.py's
+// truthy-sub-flag fallback wrote ENABLE_BETA_FEATURES=true).
+function envLockedNoteHtml(envVar, fieldName) {
+  const envVarTag = `<code>${escapeHtml(envVar)}</code>`;
+  if (!IS_ADDON_MODE) {
+    return `Set via env var ${envVarTag} — unset it to edit here.`;
+  }
+  if (fieldName === 'enable_beta_features') {
+    return (
+      `Auto-enabled in addon mode (legacy bridge — your options.json ` +
+      `predates the master toggle schema entry). Set ` +
+      `<code>enable_beta_features</code> explicitly in the addon ` +
+      `Configuration tab to take direct control. (env: ${envVarTag})`
+    );
+  }
+  return (
+    `Set by the addon runtime environment — managed by Home Assistant ` +
+    `Supervisor; cannot be changed from this web UI. (env: ${envVarTag})`
+  );
+}
+
 async function loadFeatureFlags() {
   let resp;
   try {
     resp = await fetch('./api/settings/features');
-  } catch (_e) {
+  } catch (err) {
+    console.error('loadFeatureFlags fetch failed:', err);
     // Surface as a row inside the panel rather than the page status —
     // the panel is collapsible and the user can ignore this if they
     // do not care about feature flags right now.
@@ -1986,36 +2275,65 @@ async function loadFeatureFlags() {
   let data;
   try {
     data = await resp.json();
-  } catch (_e) {
+  } catch (err) {
+    console.error('loadFeatureFlags JSON parse failed:', err);
     document.getElementById('featuresBody').innerHTML =
       '<div class="feature-row"><div class="feature-help">' +
       'Feature flags response was not valid JSON.</div></div>';
     return;
   }
+  if (Array.isArray(data.beta_sub_flags)) {
+    BETA_SUB_FLAGS = new Set(data.beta_sub_flags);
+  }
+  if (typeof data.is_addon === 'boolean') {
+    IS_ADDON_MODE = data.is_addon;
+  }
   renderFeatureFlags(data.flags || {});
 }
 
+// Cache of last-fetched flags so we can re-render synchronously when
+// the user flips the master beta toggle (without round-tripping to the
+// server). Server-side master-off rejection still applies on save.
+let _lastFeatureFlags = {};
+
 function renderFeatureFlags(flags) {
+  _lastFeatureFlags = flags;
   const body = document.getElementById('featuresBody');
+  const betaBody = document.getElementById('betaBody');
   body.innerHTML = '';
+  if (betaBody) betaBody.innerHTML = '';
+  // Master beta state — drives the .dimmed class on sub-rows. Read
+  // from the live cache so we get the post-flip value if the user
+  // just toggled the master.
+  const masterOn = !!(flags.enable_beta_features && flags.enable_beta_features.value);
   // Render in the order FEATURE_META declares — gives consistent
-  // grouping (Tool Search rows together, beta toggles together)
-  // regardless of dict iteration order returned by the server.
+  // grouping (Tool Search rows together, master then beta sub-rows
+  // together) regardless of dict iteration order returned by the
+  // server.
   Object.keys(FEATURE_META).forEach(fieldName => {
     const f = flags[fieldName];
     if (!f) return;
     const meta = FEATURE_META[fieldName];
+    const isMaster = fieldName === 'enable_beta_features';
+    const isBetaSub = BETA_SUB_FLAGS.has(fieldName);
+    // Beta rows render into the dedicated bottom-of-panel betaBody
+    // container so the dangerous block sits below the safer
+    // settings. Fallback to the main body if the dedicated container
+    // is missing (tests that don't include it in MIN_DOM).
+    const targetBody = (isMaster || isBetaSub) && betaBody ? betaBody : body;
     const row = document.createElement('div');
-    row.className = 'feature-row' + (f.editable ? '' : ' locked');
+    let cls = 'feature-row' + (f.editable ? '' : ' locked');
+    if (isMaster) cls += ' beta-master-row';
+    if (isBetaSub) cls += ' beta-sub' + (masterOn ? '' : ' dimmed');
+    row.className = cls;
 
     const info = document.createElement('div');
     info.className = 'feature-info';
-    const envVarSuffix = f.origin === 'env'
-      ? ` (<code>${escapeHtml(f.env_var)}</code>)`
-      : '';
     const lockedNote = !f.editable
       ? `<div class="feature-locked-note">` +
-        `${escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')}${envVarSuffix}` +
+        (f.origin === 'env'
+          ? envLockedNoteHtml(f.env_var, fieldName)
+          : escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')) +
         `</div>`
       : '';
     const infoNote = f.editable && ORIGIN_INFO_NOTE[f.origin]
@@ -2029,16 +2347,42 @@ function renderFeatureFlags(flags) {
 
     const control = document.createElement('div');
     control.className = 'feature-control';
+    // Beta sub-flags are disabled at the input level when the master
+    // is off, in addition to the .dimmed class on the row. Server-
+    // side rejection (409 in _save_feature_flags) is the
+    // authoritative guard; this is UX feedback.
+    const lockedByMaster = isBetaSub && !masterOn;
     if (f.type === 'bool') {
       const label = document.createElement('label');
       label.className = 'switch';
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.checked = !!f.value;
-      input.disabled = !f.editable;
-      input.addEventListener('change', () =>
-        saveFeatureFlag(fieldName, input.checked)
-      );
+      input.disabled = !f.editable || lockedByMaster;
+      input.addEventListener('change', () => {
+        // Master flip → re-render the panel synchronously so the
+        // sub-row dimming reflects the new state immediately. The
+        // save POST still proceeds in the background.
+        //
+        // Sub-flag VALUES are intentionally NOT flipped here. Neither
+        // is the server's persisted state — the runtime gate in
+        // ``_apply_feature_flag_overrides`` is the only thing that
+        // forces sub-flags off when master is off, and it does so
+        // without mutating the saved file values. Result: turning the
+        // master off then back on restores the user's prior sub-flag
+        // selections automatically, which is the intended UX for an
+        // opt-in beta surface.
+        if (isMaster) {
+          if (_lastFeatureFlags[fieldName]) {
+            _lastFeatureFlags[fieldName] = {
+              ..._lastFeatureFlags[fieldName],
+              value: input.checked,
+            };
+            renderFeatureFlags(_lastFeatureFlags);
+          }
+        }
+        saveFeatureFlag(fieldName, input.checked);
+      });
       const slider = document.createElement('span');
       slider.className = 'slider';
       label.appendChild(input);
@@ -2060,7 +2404,88 @@ function renderFeatureFlags(flags) {
 
     row.appendChild(info);
     row.appendChild(control);
-    body.appendChild(row);
+    targetBody.appendChild(row);
+
+    // Chunk 3b — after rendering the enable_code_mode row, inject the
+    // 5 code_mode_* sub-numeric rows from the advanced cache. These
+    // are second-level-nested (under enable_code_mode, which is itself
+    // beta-sub-nested under the master), dimmed when either the master
+    // is off or code_mode itself is off. Sub-rows go into the same
+    // target body as the parent so the beta block stays grouped at
+    // bottom.
+    if (fieldName === 'enable_code_mode') {
+      const codeModeOn = !!f.value;
+      renderCodeModeSubRows(targetBody, masterOn, codeModeOn);
+    }
+  });
+}
+
+function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
+  const cmRows = (_advancedFields || []).filter(x => x.section === 'beta_codemode');
+  cmRows.forEach(f => {
+    const meta = ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' };
+    const row = document.createElement('div');
+    const lockedByGate = !masterOn || !codeModeOn;
+    const dimmed = lockedByGate;
+    row.className = 'feature-row codemode-sub' + (dimmed ? ' dimmed' : '');
+
+    const info = document.createElement('div');
+    info.className = 'feature-info';
+    const lockedNote = f.origin === 'env'
+      ? `<div class="feature-locked-note">Set via env var <code>${escapeHtml(f.env_var)}</code> — unset it to edit here.</div>`
+      : '';
+    info.innerHTML =
+      `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
+      lockedNote;
+
+    const control = document.createElement('div');
+    control.className = 'feature-control';
+    const disabled = !f.editable || lockedByGate;
+    let inputEl;
+    if (f.type === 'int' || f.type === 'float') {
+      inputEl = document.createElement('input');
+      inputEl.type = 'number';
+      inputEl.value = f.value;
+      if (typeof f.min === 'number') inputEl.min = f.min;
+      if (typeof f.max === 'number') inputEl.max = f.max;
+      if (f.type === 'float') inputEl.step = '0.1';
+    } else {
+      inputEl = document.createElement('input');
+      inputEl.type = 'text';
+      inputEl.value = String(f.value ?? '');
+    }
+    inputEl.disabled = disabled;
+    inputEl.dataset.advField = f.field;
+    inputEl.addEventListener('change', () => {
+      let v;
+      if (f.type === 'int') v = parseInt(inputEl.value, 10);
+      else if (f.type === 'float') v = parseFloat(inputEl.value);
+      else v = inputEl.value;
+      if (typeof v === 'number' && Number.isNaN(v)) return;
+      _advancedDirty[f.field] = v;
+      // Surface a hint that there are unsaved code-mode-numeric
+      // changes — they share the Save button(s) under the Advanced
+      // sections. Mirror to both top and bottom rows.
+      const status = document.getElementById('advSaveStatus');
+      if (status) {
+        status.textContent = 'Unsaved changes — click "Save advanced settings".';
+      }
+      const statusTop = document.getElementById('advSaveStatusTop');
+      if (statusTop) {
+        statusTop.textContent =
+          'Unsaved changes — click "Save advanced settings".';
+      }
+      const saveRow = document.getElementById('advSaveRow');
+      if (saveRow) saveRow.style.display = '';
+      const saveRowTop = document.getElementById('advSaveRowTop');
+      if (saveRowTop) saveRowTop.style.display = '';
+    });
+    control.appendChild(inputEl);
+
+    row.appendChild(info);
+    row.appendChild(control);
+    parentEl.appendChild(row);
   });
 }
 
@@ -2943,7 +3368,322 @@ document.addEventListener('click', (e) => {
   activateTab(link.dataset.panelLink);
 });
 
+// ===== Advanced settings =====
+const ADVANCED_FIELD_META = {
+  homeassistant_url:   { label: "Home Assistant URL",          help: "Display only — set via HOMEASSISTANT_URL env var or addon-managed (Supervisor)." },
+  homeassistant_token: { label: "Home Assistant token",        help: "Display only — set via HOMEASSISTANT_TOKEN env var. Masked here for security." },
+  timeout:             { label: "HA request timeout (s)",      help: "Per-request HTTP timeout. Range 1–600. Restart required." },
+  max_retries:         { label: "HA request max retries",      help: "Retry budget per failed REST call. Range 0–20. Restart required." },
+  verify_ssl:          { label: "Verify SSL certificates",     help: "Skip TLS verification only on trusted networks (self-signed certs, hostname mismatch). Restart required." },
+  fuzzy_threshold:     { label: "Fuzzy-search threshold",      help: "Lower = looser entity match. Range 0–100." },
+  entity_search_limit: { label: "Entity search result limit",  help: "Max entities returned by ha_search_entities. Range 1–1000." },
+  backup_hint:         { label: "Backup-hint level",           help: "Tunes how strongly the LLM is prompted to take a full-HA snapshot before risky writes." },
+  enable_websocket:    { label: "Enable WebSocket",            help: "WebSocket-based state monitoring. Disabling falls back to polling — many tools degrade. Restart required." },
+  enabled_tool_modules: { label: "Enabled tool modules",       help: "Comma-separated module names, or 'all'. Restricts which tool registry modules load at startup. Restart required." },
+  enable_dashboard_partial_tools: { label: "Dashboard partial-update tools", help: "Token-efficient partial dashboard tools. Disable for clients with programmatic tool use." },
+  mcp_server_name:     { label: "MCP server name",             help: "Reported in MCP handshake. Restart required." },
+  mcp_server_version:  { label: "MCP server version",          help: "Defaults to the package version. Overriding can confuse clients that key on this string. Restart required." },
+  environment:         { label: "Environment",                 help: "'development' or 'production'. Affects logging verbosity. Restart required." },
+  log_level:           { label: "Log level",                   help: "DEBUG/INFO/WARNING/ERROR/CRITICAL. Set once at startup — restart required." },
+  debug:               { label: "Debug mode",                  help: "Verbose request logging. Implies sensitive data in logs — do not enable in production. Restart required." },
+  code_mode_max_duration:    { label: "Code-mode max duration (s)",   help: "Wall-clock budget per sandbox run. Range 1–300. Restart required." },
+  code_mode_max_memory:      { label: "Code-mode max memory (bytes)", help: "RSS cap per sandbox run. Range 1 MB–256 MB. Restart required." },
+  code_mode_max_recursion:   { label: "Code-mode max recursion",      help: "Recursion-depth cap per sandbox run. Restart required." },
+  code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
+  code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
+};
+
+// Fields that require an MCP-host restart to take effect when changed
+// from this surface. Used to surface the restart-required banner on save.
+// REST client construction (timeout / verify_ssl / max_retries) is cached
+// once at startup so those need restart even though the underlying call
+// is per-request.
+const ADVANCED_RESTART_REQUIRED = new Set([
+  "timeout", "max_retries", "verify_ssl",
+  "enabled_tool_modules", "enable_websocket",
+  "log_level", "debug",
+  "mcp_server_name", "mcp_server_version", "environment",
+  // fuzzy_threshold is read once by SmartSearchTools at the
+  // lazy-init singleton (tools/smart_search.py) — changes
+  // need restart to rebuild the searcher.
+  "fuzzy_threshold",
+  "code_mode_max_duration", "code_mode_max_memory",
+  "code_mode_max_recursion", "code_mode_max_invocations",
+  "code_mode_saved_tools_path",
+]);
+
+let _advancedFields = [];
+let _advancedDirty = {};  // {field: newValue} for unsaved edits
+
+async function loadAdvancedSettings() {
+  // Mirrors loadFeatureFlags' 3-arm error handling: surface network /
+  // HTTP / parse failures in the first section container so the user
+  // (and field debuggers reading the page) can see what went wrong.
+  // Console-log too so devtools has a stack.
+  // Connection section was removed; fall back to
+  // advSearch — the first remaining section — for error display.
+  const errSlot = document.getElementById('advSearch');
+  let resp;
+  try {
+    resp = await fetch('./api/settings/advanced');
+  } catch (err) {
+    console.error('loadAdvancedSettings fetch failed:', err);
+    if (errSlot) errSlot.innerHTML =
+      '<div class="adv-row"><div class="adv-help">' +
+      'Advanced settings unavailable (network error reaching ' +
+      '/api/settings/advanced).</div></div>';
+    return;
+  }
+  if (!resp.ok) {
+    if (errSlot) errSlot.innerHTML =
+      `<div class="adv-row"><div class="adv-help">` +
+      `Advanced settings unavailable (HTTP ${resp.status}).</div></div>`;
+    return;
+  }
+  let data;
+  try {
+    data = await resp.json();
+  } catch (err) {
+    console.error('loadAdvancedSettings JSON parse failed:', err);
+    if (errSlot) errSlot.innerHTML =
+      '<div class="adv-row"><div class="adv-help">' +
+      'Advanced settings response was not valid JSON.</div></div>';
+    return;
+  }
+  _advancedFields = data.fields || [];
+  if (typeof data.is_addon === 'boolean') {
+    IS_ADDON_MODE = data.is_addon;
+  }
+  _advancedDirty = {};
+  const bySection = {};
+  _advancedFields.forEach(f => {
+    (bySection[f.section] ||= []).push(f);
+  });
+  // Render each section into its dedicated container. Sections from
+  // ADVANCED_SETTINGS_FIELDS that are NOT in the Server Settings tab
+  // (e.g. "beta_codemode" is rendered under the Beta master toggle by
+  // Chunk 3b, not here, and "connection" was removed from the panel
+  // per user feedback) are skipped at this surface — they have no
+  // container in panel-server. renderAdvancedSection is a no-op when
+  // its target container is missing.
+  renderAdvancedSection('advSearch', bySection.search || []);
+  renderAdvancedSection('advOperations', bySection.operations || []);
+  renderAdvancedSection('advToolsSurface', bySection.tools_surface || []);
+  renderAdvancedSection('advDiagnostics', bySection.diagnostics || []);
+  document.getElementById('advSaveRow').style.display = '';
+  const topRow = document.getElementById('advSaveRowTop');
+  if (topRow) topRow.style.display = '';
+  document.getElementById('advSaveStatus').textContent = '';
+  const topStatus = document.getElementById('advSaveStatusTop');
+  if (topStatus) topStatus.textContent = '';
+  // Re-render feature flags so the code_mode sub-numerics show up
+  // beneath enable_code_mode (race: loadFeatureFlags may have run
+  // before _advancedFields was populated). Cheap no-op if feature
+  // flags haven't loaded yet.
+  if (Object.keys(_lastFeatureFlags).length > 0) {
+    renderFeatureFlags(_lastFeatureFlags);
+  }
+}
+
+function renderAdvancedSection(containerId, fields) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '';
+  fields.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'adv-row' + (f.editable ? '' : ' locked');
+    const meta = ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' };
+    let controlHtml;
+    if (f.choices) {
+      controlHtml = `<select data-adv-field="${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>` +
+        f.choices.map(c =>
+          `<option value="${escapeHtml(c)}" ${String(f.value) === c ? 'selected' : ''}>${escapeHtml(c)}</option>`
+        ).join('') +
+        '</select>';
+    } else if (f.type === 'bool') {
+      controlHtml = `<input type="checkbox" data-adv-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+    } else if (f.type === 'int' || f.type === 'float') {
+      controlHtml = `<input type="number" data-adv-field="${escapeHtml(f.field)}" value="${Number(f.value)}" ` +
+        (f.min !== undefined ? `min="${f.min}" ` : '') +
+        (f.max !== undefined ? `max="${f.max}" ` : '') +
+        (f.type === 'float' ? 'step="0.1" ' : '') +
+        (f.editable ? '' : 'disabled') + '>';
+    } else {
+      // str
+      controlHtml = `<input type="text" data-adv-field="${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
+    }
+    let originMsg = '';
+    if (f.origin === 'env') {
+      originMsg = envLockedNoteHtml(f.env_var, f.field);
+    } else if (!f.editable) {
+      originMsg = 'Display only — modify via env var or addon settings.';
+    }
+    row.innerHTML =
+      `<div class="adv-info">` +
+        `<div class="adv-name">${escapeHtml(meta.label)}</div>` +
+        `<div class="adv-help">${escapeHtml(meta.help)}</div>` +
+        (originMsg ? `<div class="adv-locked-note">${originMsg}</div>` : '') +
+      `</div>` +
+      `<div class="adv-control">${controlHtml}</div>`;
+    el.appendChild(row);
+  });
+  // Wire change handlers so we can batch unsaved edits.
+  el.querySelectorAll('[data-adv-field]').forEach(input => {
+    input.addEventListener('change', () => {
+      const fname = input.dataset.advField;
+      const f = _advancedFields.find(x => x.field === fname);
+      if (!f) return;
+      let v;
+      if (input.type === 'checkbox') v = input.checked;
+      else if (input.type === 'number') v = (f.type === 'float') ? parseFloat(input.value) : parseInt(input.value, 10);
+      else v = input.value;
+      _advancedDirty[fname] = v;
+    });
+  });
+}
+
+// Top + bottom save buttons share state — the user can hit either,
+// status text mirrors to both so the one they're looking at always
+// reflects the latest outcome.
+function _advSaveBtns() {
+  return [
+    document.getElementById('advSaveBtn'),
+    document.getElementById('advSaveBtnTop'),
+  ].filter(Boolean);
+}
+function _advSaveStatusEls() {
+  return [
+    document.getElementById('advSaveStatus'),
+    document.getElementById('advSaveStatusTop'),
+  ].filter(Boolean);
+}
+function _setAdvSaveStatus(text) {
+  _advSaveStatusEls().forEach(el => { el.textContent = text; });
+}
+function _setAdvSaveDisabled(disabled) {
+  _advSaveBtns().forEach(b => { b.disabled = disabled; });
+}
+
+async function saveAdvancedSettings() {
+  const btns = _advSaveBtns();
+  if (!btns.length) {
+    console.error('saveAdvancedSettings: no save buttons in DOM');
+    return;
+  }
+  if (Object.keys(_advancedDirty).length === 0) {
+    // Feature-flag toggles (master beta, Tool Search, etc.) auto-save
+    // on click via ``saveFeatureFlag`` — they don't pass through
+    // ``_advancedDirty``. Tool-config pins and backup-config edits
+    // also auto-save. Any of those raise ``restartNotice``, but this
+    // tab can't tell which one. Keep the hint source-blind: just
+    // point at the Restart button.
+    const restartNotice = document.getElementById('restartNotice');
+    const restartShowing =
+      restartNotice && restartNotice.classList.contains('show');
+    if (restartShowing) {
+      _setAdvSaveStatus(
+        'No advanced changes to save — a restart is pending. Click ' +
+        'Restart above to apply your prior changes.'
+      );
+    } else {
+      _setAdvSaveStatus('Nothing to save.');
+    }
+    return;
+  }
+  _setAdvSaveDisabled(true);
+  _setAdvSaveStatus('Saving…');
+  // Partition the dirty fields into addon-routed and file-routed
+  // batches. The server rejects mixed batches with
+  // 500 so the UI splits them client-side: addon-synced fields go in
+  // their own POST (routes through Supervisor /addons/self/options),
+  // file-mode fields go in a separate POST (writes the override file).
+  // Both batches must succeed for the save to count.
+  const addonDirty = {};
+  const fileDirty = {};
+  Object.entries(_advancedDirty).forEach(([fname, val]) => {
+    const f = _advancedFields.find(x => x.field === fname);
+    if (f && f.origin === 'addon') {
+      addonDirty[fname] = val;
+    } else {
+      fileDirty[fname] = val;
+    }
+  });
+  const batches = [];
+  if (Object.keys(fileDirty).length) batches.push(fileDirty);
+  if (Object.keys(addonDirty).length) batches.push(addonDirty);
+  const restartFields = Object.keys(_advancedDirty);
+  try {
+    for (const payload of batches) {
+      const resp = await fetch('./api/settings/advanced', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      // JSON parse can fail on a 200 with mangled body (proxy
+      // injection, truncated response). Default to
+      // ``{restart_required: true}`` on success-with-garbage so the
+      // user still gets the restart banner; surface "save returned
+      // non-JSON" on non-OK.
+      let data;
+      try {
+        data = await resp.json();
+      } catch (parseErr) {
+        console.error('saveAdvancedSettings JSON parse failed:', parseErr);
+        if (resp.ok) {
+          data = {restart_required: true};
+        } else {
+          _setAdvSaveDisabled(false);
+          _setAdvSaveStatus(`Save failed (HTTP ${resp.status}, non-JSON body)`);
+          return;
+        }
+      }
+      if (!resp.ok) {
+        _setAdvSaveDisabled(false);
+        let msg = 'Save failed';
+        if (data && data.error) {
+          if (typeof data.error === 'string') msg = data.error;
+          else if (data.error.message) msg = data.error.message;
+        }
+        _setAdvSaveStatus(msg);
+        return;
+      }
+    }
+    _setAdvSaveDisabled(false);
+    _setAdvSaveStatus('Saved.');
+    const needsRestart = restartFields.some(
+      f => ADVANCED_RESTART_REQUIRED.has(f)
+    );
+    if (needsRestart) {
+      document.getElementById('restartNotice').classList.add('show');
+      if (typeof restartChannel !== 'undefined' && restartChannel) {
+        restartChannel.postMessage({type: 'restart-required'});
+      }
+    }
+    _advancedDirty = {};
+    // Refresh display so origins update (default → file, etc.). Await
+    // so a reload failure surfaces in the same status line as the save
+    // — otherwise the user sees "Saved." while the panel silently
+    // reverts to stale data.
+    try {
+      await loadAdvancedSettings();
+    } catch (reloadErr) {
+      console.error('post-save reload failed:', reloadErr);
+      _setAdvSaveStatus('Saved (reload failed — refresh to verify).');
+    }
+  } catch (err) {
+    _setAdvSaveDisabled(false);
+    _setAdvSaveStatus('Network error: ' + String(err));
+  }
+}
+
+document.getElementById('advSaveBtn').addEventListener('click', saveAdvancedSettings);
+{
+  const topBtn = document.getElementById('advSaveBtnTop');
+  if (topBtn) topBtn.addEventListener('click', saveAdvancedSettings);
+}
+
 loadFeatureFlags();
+loadAdvancedSettings();
 loadTools();
 
 // Auto-activate tab from ?tab=<name> query string (used by approval URLs
@@ -2972,6 +3712,9 @@ loadTools();
   } catch (_) { /* best-effort */ }
 })();
 </script>
+<footer id="versionFooter" class="version-footer">
+  <span id="versionFooterText"></span>
+</footer>
 </body>
 </html>
 """
@@ -3216,6 +3959,36 @@ async def _supervisor_merge_and_post_options(
 # Tasks remove themselves via ``add_done_callback`` when they finish.
 _BACKGROUND_RESTART_TASKS: set[asyncio.Task[None]] = set()
 
+# Serialises read-modify-write on the shared override file
+# (``feature_flags.json``) so two concurrent saves can't interleave
+# their reads and clobber each other's persisted state. Both
+# ``_save_feature_flags`` and ``_save_advanced_settings``
+# touch the same file; without this lock, request A reading before
+# request B's ``os.replace`` lands would write back a merged dict that
+# misses B's changes. The runtime master gate kept functionality
+# correct even when this raced, but the persisted state lied about the
+# user's intent — surfacing as "I set the flag and it came back off"
+# after a restart.
+_OVERRIDE_FILE_LOCK: asyncio.Lock | None = None
+
+
+def _get_override_file_lock() -> asyncio.Lock:
+    """Lazy lock construction. ``asyncio.Lock()`` on Python 3.10+ no
+    longer takes a ``loop=`` argument and only binds to a loop on
+    first ``acquire()`` via ``asyncio.get_event_loop()``. Either eager
+    or lazy module-level construction works for this project's
+    single-uvicorn-loop deployment; we keep the lazy pattern so a
+    future test fixture that spins up its own loop doesn't lock in
+    the import-time loop. Assumes a single asyncio event loop for the
+    process lifetime — a multi-loop deployment (e.g. threaded handler
+    dispatch) would race here.
+    """
+    global _OVERRIDE_FILE_LOCK
+    if _OVERRIDE_FILE_LOCK is None:
+        _OVERRIDE_FILE_LOCK = asyncio.Lock()
+    return _OVERRIDE_FILE_LOCK
+
+
 # Delay (seconds) before the background self-restart task fires the
 # supervisor POST. Picked to give Starlette + uvicorn time to serialize
 # the JSONResponse onto the socket and have HA ingress flush it to the
@@ -3345,12 +4118,13 @@ def build_settings_handlers(
                     "metadata cache' from ha_mcp.__main__.",
                     _get_tool_metadata_cache_path(),
                 )
-        config = load_tool_config()
+        config = effective_tool_config()
         states = config.get("tools", {})
+        pinned = env_pinned_tools()
         for name in DEFAULT_PINNED_TOOLS:
             if name not in states:
                 states[name] = "pinned"
-        return JSONResponse({"tools": tools, "states": states})
+        return JSONResponse({"tools": tools, "states": states, "env_pinned": pinned})
 
     async def _save_tools(request: Request) -> JSONResponse:
         try:
@@ -3394,6 +4168,39 @@ def build_settings_handlers(
             if state not in _VALID_STATES:
                 continue
             states[name] = state
+
+        # Reject attempts to flip env-pinned tools. DISABLED_TOOLS /
+        # PINNED_TOOLS are operator-level constraints that cannot be
+        # overridden via the UI; callers must unset the env var first.
+        # Accept no-op re-sends (state matches the env-pinned value)
+        # so the periodic save fired by ``saveConfig`` after every UI
+        # change doesn't 409 just because the GET payload echoed
+        # env-pinned rows back unchanged. Previously every save with
+        # DISABLED_TOOLS / PINNED_TOOLS non-empty failed because the JS
+        # POSTs the whole ``toolStates`` map.
+        env_pinned = env_pinned_tools()
+        rejected = [
+            name
+            for name, state in states.items()
+            if name in env_pinned and env_pinned[name] != state
+        ]
+        if rejected:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Refusing to flip env-pinned tools: {', '.join(rejected)}. "
+                    "Unset DISABLED_TOOLS / PINNED_TOOLS first.",
+                    context={"rejected": rejected},
+                ),
+                status_code=409,
+            )
+        # Drop env-pinned entries from the persisted file so the env
+        # vars stay the single source of truth — preserving them in
+        # tool_config.json would let a future env-var unset leave the
+        # old env-pinned values mis-applied as user-set state.
+        states = {
+            name: state for name, state in states.items() if name not in env_pinned
+        }
 
         config = load_tool_config()
         config["tools"] = states
@@ -3553,12 +4360,25 @@ def build_settings_handlers(
         # instance still answering and the page would reload to the
         # same state.
         addon = False if is_sidecar else is_running_in_addon()
+        # ``version`` surfaces the running ha-mcp version in the UI
+        # footer. ``get_version`` handles the env-override → package
+        # metadata → fallback chain itself, so a read per request is
+        # cheap. ``HA_MCP_BUILD_VERSION`` is set by both stable and
+        # dev addon Dockerfiles, so the version reads correctly on
+        # either channel; standalone Docker / uvx falls back to the
+        # installed package's metadata.
+        try:
+            version = get_version()
+        except Exception:  # pragma: no cover — defensive only
+            logger.warning("get_version() raised; omitting version from info")
+            version = None
         return JSONResponse(
             {
                 "is_addon": addon,
                 "is_sidecar": is_sidecar,
                 "instance_id": _PROCESS_INSTANCE_ID,
                 "started_at": _PROCESS_STARTED_AT,
+                "version": version,
             }
         )
 
@@ -3608,7 +4428,18 @@ def build_settings_handlers(
                 if bounds is not None:
                     entry["min"], entry["max"] = bounds
             flags[field_name] = entry
-        return JSONResponse({"flags": flags})
+        from .config import BETA_FEATURE_FIELDS
+
+        return JSONResponse(
+            {
+                "flags": flags,
+                "beta_sub_flags": list(BETA_FEATURE_FIELDS),
+                # Drives addon-aware locked-banner copy in the JS —
+                # "unset env var" is misleading where HA Supervisor
+                # owns the env.
+                "is_addon": is_running_in_addon(),
+            }
+        )
 
     async def _save_feature_flags(request: Request) -> JSONResponse:
         """Persist UI-edited feature-flag values.
@@ -3667,6 +4498,54 @@ def build_settings_handlers(
                     "'flags' must be an object mapping field names to values",
                 ),
                 status_code=400,
+            )
+
+        # Master beta-gate check: a sub-flag write is only valid
+        # when the master ``enable_beta_features`` is on AFTER the
+        # merge. Derive the post-merge master from the payload (if
+        # present), otherwise fall back to the live ``Settings`` value.
+        # Reject sub-flag writes that try to enable a beta when the
+        # resulting master state would still be off — the runtime gate
+        # would force them False anyway and the user should know the
+        # save was a no-op rather than learning at next startup.
+        #
+        # Applied in BOTH standalone and addon mode.
+        # The earlier "skip in addon mode" carve-out existed because
+        # start.py used to auto-write ENABLE_BETA_FEATURES=true from
+        # any beta sub-flag presence; that path is now demoted to a
+        # one-cycle legacy bridge. On dev addon, start.py writes the
+        # master env var from the schema-bound options key. On stable
+        # addon, the master is not in schema and the standalone
+        # web-UI master path remains the gate (the gate read below
+        # falls through to the override-file value). Either way the
+        # gate is sound to apply uniformly.
+        from .config import (
+            BETA_FEATURE_FIELDS as _BETA_SUB,
+        )
+
+        effective_master = bool(
+            raw_flags.get(
+                "enable_beta_features",
+                getattr(get_global_settings(), "enable_beta_features", False),
+            )
+        )
+        beta_sub_writes = [
+            k for k in raw_flags if k in _BETA_SUB and bool(raw_flags[k])
+        ]
+        if beta_sub_writes and not effective_master:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    (
+                        "Cannot enable beta sub-flag(s) "
+                        f"{', '.join(beta_sub_writes)} while the master "
+                        "'Enable beta features' toggle is off. Include "
+                        "enable_beta_features=true in the same save, or "
+                        "flip the master on first."
+                    ),
+                    context={"rejected": beta_sub_writes},
+                ),
+                status_code=409,
             )
 
         # Build the validated override dict. Reject unknown fields and
@@ -3756,6 +4635,24 @@ def build_settings_handlers(
                     status_code=400,
                 )
 
+        # Master-off no longer cascades into sub-flag values. The
+        # runtime master gate in ``_apply_feature_flag_overrides``
+        # continues to force every
+        # beta sub-flag to False whenever the master is off, so the
+        # tools stay disabled at runtime regardless of file state.
+        # Leaving the sub-flag values in the override file means
+        # re-enabling the master restores the user's prior sub-flag
+        # selections automatically — without it the user had to
+        # re-check each sub-flag individually after every
+        # master-off / master-on cycle, which is the wrong UX trade
+        # for an opt-in beta surface.
+        #
+        # The master-gate check above still rejects payloads that try
+        # to enable a sub-flag while the effective master is off, so
+        # users can't land a "sub=true while master=false in same
+        # payload" inconsistency. Pre-existing sub-flag truthy values
+        # in the file are kept verbatim.
+
         # Addon-mode writes go to Supervisor instead of the override file:
         # ``start.py`` reads ``config.yaml`` options on every boot and
         # writes the env vars that Settings consumes, so the override
@@ -3803,7 +4700,17 @@ def build_settings_handlers(
                 server.settings.verify_ssl, new_overrides
             )
             if not ok:
-                assert err is not None
+                if err is None:
+                    # ``ok=False`` with no error is a contract bug —
+                    # bail with INTERNAL_ERROR rather than letting an
+                    # AttributeError leak under ``python -O``.
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            "Supervisor helper returned ok=False with no error",
+                        ),
+                        status_code=500,
+                    )
                 logger.warning(
                     "Supervisor feature-flag update failed (%s): %s",
                     err.kind,
@@ -3858,68 +4765,77 @@ def build_settings_handlers(
         #   Return a clear error so the user can inspect / delete
         #   the file manually.
         path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
-        existing: dict[str, Any] = {}
-        try:
-            existing_raw = path.read_text()
-        except FileNotFoundError:
-            existing_raw = None
-        except OSError as exc:
-            logger.warning("Cannot read %s", path, exc_info=True)
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    (
-                        f"Could not read existing feature flags "
-                        f"({type(exc).__name__}: {exc}); refusing to "
-                        "overwrite to avoid losing prior toggles. "
-                        "Check filesystem permissions and retry."
-                    ),
-                ),
-                status_code=500,
-            )
-        if existing_raw is not None:
+        # Serialise concurrent saves on the shared override file so
+        # two overlapping requests can't interleave their RMW. Lock is
+        # held only for the read+merge+atomic-write window; pure
+        # validation above does not need it.
+        async with _get_override_file_lock():
+            existing: dict[str, Any] = {}
             try:
-                parsed = json.loads(existing_raw)
-            except json.JSONDecodeError as exc:
-                logger.warning("Existing %s is corrupt: %s", path, exc, exc_info=True)
+                existing_raw = path.read_text()
+            except FileNotFoundError:
+                existing_raw = None
+            except OSError as exc:
+                logger.warning("Cannot read %s", path, exc_info=True)
                 return JSONResponse(
                     create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        ErrorCode.INTERNAL_ERROR,
                         (
-                            f"Existing override file at {path} is not "
-                            f"valid JSON ({exc}); refusing to overwrite "
-                            "to avoid losing prior toggles. Inspect or "
-                            "delete the file manually and retry."
+                            f"Could not read existing feature flags "
+                            f"({type(exc).__name__}: {exc}); refusing to "
+                            "overwrite to avoid losing prior toggles. "
+                            "Check filesystem permissions and retry."
                         ),
                     ),
-                    status_code=409,
+                    status_code=500,
                 )
-            if isinstance(parsed, dict):
-                existing = parsed
-            # else: non-dict JSON (list, scalar) — treat as empty;
-            # we're about to write a dict either way and there's no
-            # prior toggle state to preserve from a non-object root.
-        existing.update(new_overrides)
+            if existing_raw is not None:
+                try:
+                    parsed = json.loads(existing_raw)
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "Existing %s is corrupt: %s", path, exc, exc_info=True
+                    )
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            (
+                                f"Existing override file at {path} is not "
+                                f"valid JSON ({exc}); refusing to overwrite "
+                                "to avoid losing prior toggles. Inspect or "
+                                "delete the file manually and retry."
+                            ),
+                        ),
+                        status_code=409,
+                    )
+                if isinstance(parsed, dict):
+                    existing = parsed
+                # else: non-dict JSON (list, scalar) — treat as empty;
+                # we're about to write a dict either way and there's
+                # no prior toggle state to preserve from a non-object
+                # root.
+            existing.update(new_overrides)
 
-        # Atomic write: tmp + rename. ``path.write_text`` is O_TRUNC +
-        # write — a crash mid-write leaves an empty/truncated file
-        # that the next ``_read_feature_flag_override_file`` call
-        # would refuse, losing every prior toggle.
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        try:
-            tmp.write_text(json.dumps(existing, indent=2))
-            os.replace(tmp, path)
-        except OSError as exc:
-            logger.warning("Could not write %s", path, exc_info=True)
-            with contextlib.suppress(FileNotFoundError, OSError):
-                tmp.unlink()
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    f"Could not persist feature flags: {exc}",
-                ),
-                status_code=500,
-            )
+            # Atomic write: tmp + rename. ``path.write_text`` is
+            # O_TRUNC + write — a crash mid-write leaves an empty /
+            # truncated file that the next
+            # ``_read_feature_flag_override_file`` call would refuse,
+            # losing every prior toggle.
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            try:
+                tmp.write_text(json.dumps(existing, indent=2))
+                os.replace(tmp, path)
+            except OSError as exc:
+                logger.warning("Could not write %s", path, exc_info=True)
+                with contextlib.suppress(FileNotFoundError, OSError):
+                    tmp.unlink()
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        f"Could not persist feature flags: {exc}",
+                    ),
+                    status_code=500,
+                )
 
         # Publish the change so the same process picks it up on the
         # next ``get_global_settings()`` call. The cached singleton
@@ -4128,6 +5044,432 @@ def build_settings_handlers(
             }
         )
 
+    async def _get_advanced_settings(_: Request) -> JSONResponse:
+        """Return advanced (non-feature-flag, non-backup) settings + per-field
+        origin + editable flag.
+
+        Mirrors ``_get_feature_flags`` / ``_get_backup_config`` but for
+        the ``ADVANCED_SETTINGS_FIELDS`` registry. Most advanced fields
+        write to ``feature_flags.json`` via the shared override file in
+        either deployment mode. ``ADDON_SYNCED_ADVANCED_FIELDS``
+        (currently ``backup_hint``, ``verify_ssl``) are an exception:
+        in addon mode they have ``origin="addon"`` (editable) and saves
+        route through Supervisor ``/addons/self/options`` so the addon
+        Configuration tab and the web UI share state.
+        """
+        from .config import (
+            _ADVANCED_SETTINGS_BOUNDS,
+            _ADVANCED_SETTINGS_CHOICES,
+            ADVANCED_SETTINGS_FIELDS,
+            OAUTH_MODE_TOKEN,
+            _read_feature_flag_override_file,
+            get_global_settings,
+        )
+
+        settings = get_global_settings()
+        # Read the override file ONCE for this GET — origin lookup is
+        # called per field, and re-reading the file 17+ times would
+        # produce duplicate WARNINGs on a corrupt file (one per field).
+        overrides = _read_feature_flag_override_file()
+        fields: list[dict[str, Any]] = []
+        for (
+            fname,
+            env_name,
+            ftype,
+            section,
+            registry_editable,
+        ) in ADVANCED_SETTINGS_FIELDS:
+            origin = _origin_for_advanced_field(env_name, overrides=overrides)
+            value: Any = getattr(settings, fname, None)
+            # Mask the token: never echo the actual long-lived access
+            # token to the UI. The OAuth-mode sentinel survives so
+            # operators can tell connection mode at a glance.
+            if fname == "homeassistant_token":
+                value = "*****" if value and value != OAUTH_MODE_TOKEN else value
+            row: dict[str, Any] = {
+                "field": fname,
+                "env_var": env_name,
+                "value": value,
+                "type": ftype.__name__,
+                "section": section,
+                "origin": origin,
+                # Env-pin makes the field read-only regardless of the
+                # registry's ``editable`` flag. Display-only rows from
+                # the registry (homeassistant_url / _token) stay locked
+                # forever.
+                "editable": registry_editable and origin != "env",
+            }
+            bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+            if bounds is not None:
+                row["min"], row["max"] = bounds
+            choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
+            if choices is not None:
+                row["choices"] = list(choices)
+            fields.append(row)
+        return JSONResponse({"fields": fields, "is_addon": is_running_in_addon()})
+
+    def _origin_for_advanced_field(
+        env_name: str, overrides: dict[str, Any] | None = None
+    ) -> str:
+        """Origin for an ADVANCED_SETTINGS_FIELDS entry.
+
+        Returns ``'addon' | 'env' | 'file' | 'default'``.
+
+        ``'addon'`` is returned in addon mode for fields that live in
+        both the registry and the addon's config.yaml schema (the
+        ``ADDON_SYNCED_ADVANCED_FIELDS`` set). For those, writes route
+        through Supervisor instead of the override file so the addon
+        Configuration tab and this web UI share state. Other
+        env-pinned fields stay ``'env'`` (locked).
+
+        Callers iterating ADVANCED_SETTINGS_FIELDS should pass a
+        pre-read ``overrides`` dict so the override file isn't re-read
+        N times per page render.
+        """
+        from .config import (
+            ADDON_SYNCED_ADVANCED_FIELDS,
+            ADVANCED_SETTINGS_FIELDS,
+            _read_feature_flag_override_file,
+        )
+
+        fname = next(
+            (f for f, e, *_ in ADVANCED_SETTINGS_FIELDS if e == env_name), None
+        )
+        if (
+            is_running_in_addon()
+            and fname is not None
+            and fname in ADDON_SYNCED_ADVANCED_FIELDS
+        ):
+            return "addon"
+        if os.environ.get(env_name) is not None:
+            return "env"
+        if overrides is None:
+            overrides = _read_feature_flag_override_file()
+        if fname is not None and fname in overrides:
+            return "file"
+        return "default"
+
+    async def _save_advanced_settings(request: Request) -> JSONResponse:
+        """Persist UI-edited advanced settings.
+
+        Two persistence sinks depending on field origin:
+
+        - ``ADDON_SYNCED_ADVANCED_FIELDS`` (``backup_hint``,
+          ``verify_ssl``) in addon mode → write goes through
+          Supervisor ``/addons/self/options`` so the addon
+          Configuration tab and this web UI share state.
+        - Everything else → atomic write to ``feature_flags.json``
+          (the shared override file used by feature flags), then
+          ``_reset_global_settings()`` so the next read picks up the
+          new value.
+
+        Validation chain per field:
+        - Unknown field → 400 ``VALIDATION_INVALID_PARAMETER``.
+        - ``editable=False`` registry entry → 409 (display-only).
+        - Env-pinned (``origin=='env'`` and NOT addon-synced) → 409
+          with env var name.
+        - Type mismatch → 400.
+        - Bounds violation → 400.
+        - Choices violation → 400.
+
+        Either sink responds with ``restart_required=True`` so the UI
+        shows the banner — most advanced fields gate one-time startup
+        paths (REST client construction, logging setup, MCP handshake
+        metadata, tool-module filtering, etc.).
+        """
+        from .config import (
+            _ADVANCED_SETTINGS_BOUNDS,
+            _ADVANCED_SETTINGS_CHOICES,
+            _FEATURE_FLAG_OVERRIDE_FILENAME,
+            ADVANCED_SETTINGS_FIELDS,
+        )
+        from .utils.data_paths import get_data_dir
+
+        try:
+            body = await request.json()
+        except (ValueError, TypeError):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_JSON,
+                    "Invalid JSON body",
+                ),
+                status_code=400,
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Request body must be a JSON object",
+                ),
+                status_code=400,
+            )
+
+        from .config import ADDON_SYNCED_ADVANCED_FIELDS
+
+        registry = {f: (e, t, s, ed) for f, e, t, s, ed in ADVANCED_SETTINGS_FIELDS}
+        new_overrides: dict[str, Any] = {}
+        addon_writes_present = False
+        addon_mode = is_running_in_addon()
+        for fname, raw in body.items():
+            if fname not in registry:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Unknown advanced field: {fname!r}",
+                    ),
+                    status_code=400,
+                )
+            env_name, ftype, _section, registry_editable = registry[fname]
+            if not registry_editable:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{fname!r} is display-only — modify via env var "
+                        "or addon configuration.",
+                    ),
+                    status_code=409,
+                )
+            # Addon-synced fields (e.g. backup_hint, verify_ssl) are
+            # editable in addon mode even though their env vars are
+            # set — start.py rewrites them from /data/options.json on
+            # every boot, so we route the user's write through
+            # Supervisor instead of the override file.
+            is_addon_synced = addon_mode and fname in ADDON_SYNCED_ADVANCED_FIELDS
+            if is_addon_synced:
+                addon_writes_present = True
+            elif os.environ.get(env_name) is not None:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{fname!r} is set via {env_name} env var — "
+                        "unset it to edit here.",
+                        context={"env_var": env_name},
+                    ),
+                    status_code=409,
+                )
+
+            coerced: Any
+            if ftype is bool:
+                if not isinstance(raw, bool):
+                    return _bad_advanced_type(fname, ftype, raw)
+                coerced = raw
+            elif ftype is int:
+                if isinstance(raw, bool) or not isinstance(raw, int):
+                    return _bad_advanced_type(fname, ftype, raw)
+                coerced = int(raw)
+            elif ftype is float:
+                if isinstance(raw, bool) or not isinstance(raw, int | float):
+                    return _bad_advanced_type(fname, ftype, raw)
+                coerced = float(raw)
+            elif ftype is str:
+                if not isinstance(raw, str):
+                    return _bad_advanced_type(fname, ftype, raw)
+                if "\x00" in raw:
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"{fname!r} contains a null byte; rejected.",
+                        ),
+                        status_code=400,
+                    )
+                coerced = raw
+            else:
+                return _bad_advanced_type(fname, ftype, raw)
+
+            bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
+            if bounds is not None and not (bounds[0] <= coerced <= bounds[1]):
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{fname!r} must be between {bounds[0]} and "
+                        f"{bounds[1]} (got {coerced}).",
+                    ),
+                    status_code=400,
+                )
+            choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
+            if choices is not None and coerced not in choices:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{fname!r} must be one of {list(choices)} (got {coerced!r}).",
+                    ),
+                    status_code=400,
+                )
+            new_overrides[fname] = coerced
+
+        if not new_overrides:
+            return JSONResponse(
+                {
+                    "success": True,
+                    "applied": {},
+                    "mode": "file",
+                    "restart_required": False,
+                }
+            )
+
+        # Addon-route: at least one field is an addon-synced advanced
+        # field (backup_hint / verify_ssl in addon mode). Batch every
+        # write in this call into a single Supervisor options POST
+        # — same merge-then-replace pattern as the feature-flag
+        # addon-route, including the "single persistence path"
+        # invariant: we don't mix override-file writes and Supervisor
+        # writes from the same call. If a future caller submits both
+        # addon-synced and non-addon fields in one batch (none today
+        # are non-addon AND non-locked in addon mode), reject loudly
+        # instead of routing them through different sinks.
+        if addon_writes_present:
+            if not addon_mode:
+                # Defensive: addon_writes_present should imply addon_mode
+                # because is_addon_synced is gated on it above.
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        "Inconsistent addon-route classification",
+                    ),
+                    status_code=500,
+                )
+            file_only = {
+                k: v
+                for k, v in new_overrides.items()
+                if k not in ADDON_SYNCED_ADVANCED_FIELDS
+            }
+            if file_only:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        (
+                            "Mixed addon-synced and override-file advanced "
+                            "writes in one batch; the UI should split these "
+                            f"into separate POSTs ({sorted(file_only)})."
+                        ),
+                    ),
+                    status_code=500,
+                )
+            if server is None:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        "Advanced settings POST requires a live MCP server",
+                    ),
+                    status_code=500,
+                )
+            ok, sup_err = await _supervisor_merge_and_post_options(
+                server.settings.verify_ssl, new_overrides
+            )
+            if not ok:
+                if sup_err is None:
+                    # ``ok=False`` with no error is a contract bug in
+                    # the helper, not a user-actionable failure. Bail
+                    # with INTERNAL_ERROR instead of letting an
+                    # AttributeError leak under ``python -O`` (where
+                    # the previous ``assert`` was stripped).
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.INTERNAL_ERROR,
+                            "Supervisor helper returned ok=False with no error",
+                        ),
+                        status_code=500,
+                    )
+                # Mirror the sibling ``_save_feature_flags`` /
+                # ``_save_backup_config`` handlers: log loudly before
+                # returning so addon-log forensics survive the user
+                # closing the tab.
+                logger.warning(
+                    "Supervisor advanced-settings update failed (%s): %s",
+                    sup_err.kind,
+                    sup_err.message,
+                )
+                code = (
+                    ErrorCode.CONNECTION_FAILED
+                    if sup_err.kind == "transport"
+                    else ErrorCode.CONFIG_VALIDATION_FAILED
+                )
+                return JSONResponse(
+                    create_error_response(code, sup_err.message),
+                    status_code=sup_err.status_code,
+                )
+            return JSONResponse(
+                {
+                    "success": True,
+                    "applied": new_overrides,
+                    "mode": "addon",
+                    "restart_required": True,
+                }
+            )
+
+        # Merge into the existing override file via atomic write (same
+        # path used by _save_feature_flags so a single file holds both
+        # advanced + feature-flag overrides). Lock-serialised against
+        # concurrent feature-flag saves on the same file.
+        path = get_data_dir() / _FEATURE_FLAG_OVERRIDE_FILENAME
+        async with _get_override_file_lock():
+            existing: dict[str, Any] = {}
+            try:
+                existing_raw = path.read_text()
+            except FileNotFoundError:
+                existing_raw = None
+            except OSError as exc:
+                logger.warning("Cannot read %s", path, exc_info=True)
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        f"Could not read existing override file "
+                        f"({type(exc).__name__}: {exc}); refusing to "
+                        "overwrite to avoid losing prior toggles.",
+                    ),
+                    status_code=500,
+                )
+            if existing_raw is not None:
+                try:
+                    parsed = json.loads(existing_raw)
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "Existing %s is corrupt: %s", path, exc, exc_info=True
+                    )
+                    return JSONResponse(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            f"Existing override file at {path} is not "
+                            f"valid JSON ({exc}); refusing to overwrite. "
+                            "Inspect or delete the file manually and retry.",
+                        ),
+                        status_code=409,
+                    )
+                if isinstance(parsed, dict):
+                    existing = parsed
+            existing.update(new_overrides)
+
+            try:
+                _atomic_write_json(path, existing)
+            except OSError as exc:
+                logger.warning("Could not write %s", path, exc_info=True)
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        f"Could not persist advanced settings: {exc}",
+                    ),
+                    status_code=500,
+                )
+
+        _reset_global_settings()
+        return JSONResponse(
+            {
+                "success": True,
+                "applied": new_overrides,
+                "mode": "file",
+                "restart_required": True,
+            }
+        )
+
+    def _bad_advanced_type(fname: str, ftype: type, raw: Any) -> JSONResponse:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"{fname!r} expects {ftype.__name__}, got {type(raw).__name__}.",
+            ),
+            status_code=400,
+        )
+
     async def _get_backup_config(_: Request) -> JSONResponse:
         """Return live auto-backup config + per-field origin + editable flag.
 
@@ -4198,6 +5540,19 @@ def build_settings_handlers(
                     1 <= value <= 10_000
                 ):
                     return {}, "auto_backup_retain_per_entity must be 1..10000"
+                if field_name == "auto_backup_calendar_lookahead_days" and not (
+                    1 <= value <= 365
+                ):
+                    return (
+                        {},
+                        "auto_backup_calendar_lookahead_days must be 1..365",
+                    )
+            elif ftype is str:
+                if not isinstance(raw, str):
+                    return {}, f"Invalid string for {field_name}: {raw!r}"
+                if "\x00" in raw:
+                    return {}, f"{field_name} must not contain null bytes"
+                value = raw
             else:
                 continue
             clean[field_name] = value
@@ -4350,6 +5705,8 @@ def build_settings_handlers(
         "settings_info": _settings_info,
         "get_feature_flags": _get_feature_flags,
         "save_feature_flags": _save_feature_flags,
+        "get_advanced_settings": _get_advanced_settings,
+        "save_advanced_settings": _save_advanced_settings,
         "list_backups": _list_backups,
         "view_backup": _view_backup,
         "diff_backup": _diff_backup,
@@ -4446,6 +5803,13 @@ def register_settings_routes(
         mcp.custom_route("/api/settings/features", methods=["POST"])(
             handlers["save_feature_flags"]
         )
+        # Advanced settings endpoints
+        mcp.custom_route("/api/settings/advanced", methods=["GET"])(
+            handlers["get_advanced_settings"]
+        )
+        mcp.custom_route("/api/settings/advanced", methods=["POST"])(
+            handlers["save_advanced_settings"]
+        )
         # Auto-backup endpoints (#1288)
         mcp.custom_route("/api/settings/backups", methods=["GET"])(
             handlers["list_backups"]
@@ -4519,6 +5883,13 @@ def register_settings_routes(
         )
         mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["POST"])(
             handlers["save_feature_flags"]
+        )
+        # Advanced settings endpoints
+        mcp.custom_route(f"{secret_prefix}/api/settings/advanced", methods=["GET"])(
+            handlers["get_advanced_settings"]
+        )
+        mcp.custom_route(f"{secret_prefix}/api/settings/advanced", methods=["POST"])(
+            handlers["save_advanced_settings"]
         )
         # Auto-backup endpoints (#1288)
         mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["GET"])(

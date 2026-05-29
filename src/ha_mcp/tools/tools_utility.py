@@ -1206,7 +1206,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - `condition: numeric_state` over `{{ states('x') | float > N }}`
         - `condition: state` over `{{ is_state(...) }}`
         - `condition: time` / `condition: sun` over `now().hour` / `is_state('sun.sun', ...)`
-        - Native `for:` field on state/numeric_state triggers and conditions over
+        - Native `for:` field on state/numeric_state triggers and state conditions over
           `{{ now() - X.last_changed > timedelta(...) }}` duration math
         - `choose` action over templated `service:` / `action:` strings
         See `ha_get_skill_guide` (best-practices skill) for the full anti-pattern list.

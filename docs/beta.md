@@ -1,40 +1,49 @@
 # Beta Features
 
-Some ha-mcp tools are gated behind feature flags and available only in the **dev channel** add-on (or via environment variables for non-add-on installs). Beta tools are still being evaluated and may change, be promoted to stable, or be removed based on field experience.
+Some ha-mcp tools are gated behind feature flags and disabled by default. They can be enabled via the web Settings UI or via environment variables (non-add-on installs). Beta tools are still being evaluated and may change, be promoted to stable, or be removed based on field experience.
 
 ## Current beta tools
 
 | Tool | Toggle / env var | Description |
 |---|---|---|
-| `ha_config_set_yaml` | `enable_yaml_config_editing` (dev add-on) / `ENABLE_YAML_CONFIG_EDITING=true` (env var) | Raw YAML editing of `configuration.yaml` and packages/*.yaml for YAML-only integrations. |
-| `ha_list_files` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | List files in allowed directories (www/, themes/, custom_templates/). Requires `ha_mcp_tools` custom component. |
-| `ha_read_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Read files from allowed paths. Requires `ha_mcp_tools` custom component. |
-| `ha_write_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Write files to allowed directories. Requires `ha_mcp_tools` custom component. |
-| `ha_delete_file` | `enable_filesystem_tools` (dev add-on) / `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (env var) | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
-| `ha_install_mcp_tools` | `enable_custom_component_integration` (dev add-on) / `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` (env var) | Installs the `ha_mcp_tools` custom component via HACS. |
-| `ha_manage_custom_tool` | `enable_code_mode` (dev add-on) / `ENABLE_CODE_MODE=true` (env var) | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev add-on). |
-| _(behaviour flag, no new tool)_ | `enable_lite_docstrings` (dev add-on) / `ENABLE_LITE_DOCSTRINGS=true` (env var) | Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_guide` (or its `skill://` resource). Reduces idle catalog token usage; relies on the LLM actually calling the skill tool/resource when it needs detail. See "Known limitations" below. |
+| `ha_config_set_yaml` | `enable_yaml_config_editing` (dev add-on Configuration tab); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_YAML_CONFIG_EDITING=true` env vars | Raw YAML editing of `configuration.yaml` and packages/*.yaml for YAML-only integrations. |
+| `ha_list_files` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | List files in allowed directories (www/, themes/, custom_templates/). Requires `ha_mcp_tools` custom component. |
+| `ha_read_file` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Read files from allowed paths. Requires `ha_mcp_tools` custom component. |
+| `ha_write_file` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Write files to allowed directories. Requires `ha_mcp_tools` custom component. |
+| `ha_delete_file` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
+| `ha_install_mcp_tools` | `enable_custom_component_integration` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` env vars | Installs the `ha_mcp_tools` custom component via HACS. |
+| `ha_manage_custom_tool` | `enable_code_mode` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_CODE_MODE=true` env vars | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev add-on). |
+| _(behaviour flag, no new tool)_ | `enable_lite_docstrings` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_LITE_DOCSTRINGS=true` env vars | Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_guide` (or its `skill://` resource). Reduces idle catalog token usage; relies on the LLM actually calling the skill tool/resource when it needs detail. See "Known limitations" below. |
 
 ## How to enable
 
-### Option 1: Dev channel add-on (Home Assistant users)
+There are three paths depending on how you run ha-mcp:
 
-1. Install the **Home Assistant MCP Server (Dev)** add-on. See [docs/dev-channel.md](dev-channel.md) for details.
-2. Open the add-on's **Configuration** tab.
-3. Enable "Show unused optional configuration options" to reveal beta toggles.
-4. Enable the desired toggle (e.g., `enable_yaml_config_editing`, `enable_filesystem_tools`).
+### Dev channel add-on (Home Assistant users)
+
+The dev channel add-on continues to expose the 5 beta sub-flags on its
+Configuration page. Toggle them there, restart the add-on, done — the
+master beta toggle is auto-enabled for dev add-on users at start-up.
+No web-UI step is needed.
+
+### Stable channel add-on (Home Assistant users)
+
+The stable add-on does NOT expose individual beta toggles. Use the web
+Settings UI instead:
+
+1. Open the add-on's web UI tab.
+2. Open the **Server Settings** tab.
+3. Flip **Enable beta features** on.
+4. Enable the desired beta toggle below it (e.g. **Enable YAML config
+   editing (beta)**).
 5. Restart the add-on.
 
-`enable_yaml_config_editing`, `enable_filesystem_tools`, `enable_custom_component_integration`, `enable_code_mode`, and `enable_lite_docstrings` are only available in the dev channel add-on. The stable add-on does not expose these beta toggles.
+### Non-add-on installs (Docker, uvx, pip)
 
-### Option 2: Environment variable (non-add-on installs)
-
-```bash
-export ENABLE_YAML_CONFIG_EDITING=true
-uvx ha-mcp@latest
-```
-
-The tool registers only when its variable is `true`. Any other value (unset, `false`, `0`) leaves it disabled.
+Either flip the master + sub-toggles in the web Settings UI as above, or
+set both env vars: `ENABLE_BETA_FEATURES=true` AND the specific sub-flag
+env var (e.g. `ENABLE_YAML_CONFIG_EDITING=true`). Sub-flag env vars are
+ignored unless the master is also true.
 
 ## Known limitations
 

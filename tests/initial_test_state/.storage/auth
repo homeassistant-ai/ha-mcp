@@ -25,6 +25,17 @@
         "name": "mcp",
         "system_generated": false,
         "local_only": false
+      },
+      {
+        "id": "a5973d5989084a51c9639e88d98629dc",
+        "group_ids": [
+          "system-users"
+        ],
+        "is_owner": false,
+        "is_active": true,
+        "name": "non_admin_test",
+        "system_generated": false,
+        "local_only": false
       }
     ],
     "groups": [
@@ -116,6 +127,23 @@
         "token": "8d2988fa06656005d4285394c668e515124a3d466a30e7f7d11eb34c8c8c0b43fd1537be25c20618378f7ffc7360c9920219acec94f52e26ff444d0b054a8169",
         "jwt_key": "b9782f5628c972857d98ebe812da82c0410c6b3749b6f1e8b3b65c3f37ffacec952fd4216b45791ebec07181829cd2ade95ff16f273096096a23e6ab7f15ddd4",
         "last_used_at": "2025-09-08T00:03:16.685833+00:00",
+        "last_used_ip": null,
+        "expire_at": null,
+        "credential_id": null,
+        "version": "2025.9.1"
+      },
+      {
+        "id": "3792979c7ba7e60005662e22c7838cf8",
+        "user_id": "a5973d5989084a51c9639e88d98629dc",
+        "client_id": null,
+        "client_name": "non_admin_test",
+        "client_icon": null,
+        "token_type": "long_lived_access_token",
+        "created_at": "2025-09-08T00:03:16.685569+00:00",
+        "access_token_expiration": 315360000.0,
+        "token": "e1f927669b4593ebe5be69fa7286dd8bde98002ba66ac79f2cad2c92bcacefde776228c59606b06af4144e1658315bef437991c1282a78a833a565da143ba227",
+        "jwt_key": "39dd4df791517a1f3319519ca425410ffddf6b02c89136fe43de4d5622497f626745e1498341b50235c6b6eddfdc5700406851a60c9e9dc3d2801514f78bdaa5",
+        "last_used_at": null,
         "last_used_ip": null,
         "expire_at": null,
         "credential_id": null,

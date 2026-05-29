@@ -13,9 +13,11 @@ The tools will gracefully fail with installation instructions if the component i
 Feature Flag: Set HAMCP_ENABLE_FILESYSTEM_TOOLS=true to enable these tools.
 """
 
+import asyncio
 import json
 import logging
-from typing import Annotated, Any
+import weakref
+from typing import Annotated, Any, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -37,6 +39,231 @@ FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
 
 # Domain for the custom component
 MCP_TOOLS_DOMAIN = "ha_mcp_tools"
+
+# Caller-token auth (mirrors custom_components/ha_mcp_tools).
+# The custom component's handlers reject every call that doesn't present
+# this field with the matching token. ha-mcp fetches the token once via
+# the get_caller_token bootstrap service, caches it, and re-fetches if a
+# subsequent call comes back unauthorized (covers token rotation).
+CALLER_TOKEN_FIELD = "_ha_mcp_token"
+CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
+
+# Minimum version of the ha_mcp_tools custom component that this ha-mcp
+# release expects. Bumps in lockstep with ``manifest.json`` whenever a
+# server-side behavior change requires it. Older components (no
+# ``version`` in the get_caller_token response, or a version below this)
+# get an actionable "update via HACS" error.
+MIN_COMPONENT_VERSION = "0.5.1"
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """Parse ``'0.5.1'`` → ``(0, 5, 1)`` for tuple-comparison.
+
+    Raises ``ValueError`` on any non-numeric segment. Coercing a bad
+    segment to ``0`` would not actually achieve the "fail closed"
+    intent: a malformed high-order segment like ``"1.x.0"`` would
+    still parse to ``(1, 0, 0)`` and pass a ``>= (0, 5, 1)`` gate.
+    The caller surfaces the ValueError as a distinct "malformed version"
+    error (reinstall / file-issue remediation), separate from the
+    "too old" update prompt.
+    """
+    return tuple(int(segment) for segment in version.split("."))
+
+
+# Weak-keyed by client object to support multi-client setups and self-evict
+# when a client is garbage-collected (avoids id() reuse if a freed client's
+# address gets recycled before the unauthorized-retry fires).
+_CALLER_TOKEN_CACHE: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+_CALLER_TOKEN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _get_token_lock(client: Any) -> asyncio.Lock:
+    """Per-client lock so concurrent first-callers fetch the token once."""
+    lock = _CALLER_TOKEN_LOCKS.get(client)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CALLER_TOKEN_LOCKS[client] = lock
+    return lock
+
+
+async def _is_bootstrap_service_registered(client: Any) -> bool:
+    """Returns True if ha_mcp_tools.get_caller_token is present in HA's
+    service registry. Old (<0.5.0) versions of the custom component
+    didn't ship this service; the bootstrap call would otherwise fail
+    with an opaque 400 from HA."""
+    services = await client.get_services()
+    for entry in services:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("domain") != MCP_TOOLS_DOMAIN:
+            continue
+        domain_services = entry.get("services") or {}
+        return CALLER_TOKEN_BOOTSTRAP_SERVICE in domain_services
+    return False
+
+
+def _raise_component_too_old(detail: str) -> NoReturn:
+    """Single actionable 'update via HACS' error path."""
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.COMPONENT_NOT_INSTALLED,
+            f"The installed ha_mcp_tools custom component is too old: {detail}. "
+            f"This ha-mcp release requires >= {MIN_COMPONENT_VERSION}. "
+            "Update via HACS and restart Home Assistant.",
+            suggestions=[
+                "HACS → Integrations → HA MCP Tools → Update",
+                "Restart Home Assistant after update completes",
+                "Then retry the operation",
+            ],
+        )
+    )
+
+
+async def _fetch_caller_token(client: Any) -> str:
+    """Call the bootstrap service and cache the returned token.
+
+    Two version gates:
+
+    1. ``_is_bootstrap_service_registered`` — pre-0.5.0 components don't
+       ship ``get_caller_token`` at all. Surface an actionable "update"
+       error instead of letting HA return an opaque 400 to the caller.
+    2. ``MIN_COMPONENT_VERSION`` — even when the bootstrap service is
+       present, the response now carries the component's manifest
+       version. ha-mcp releases that depend on newer custom-component
+       behavior (e.g. a new accepted yaml_path key, a new schema field)
+       bump ``MIN_COMPONENT_VERSION`` together with the manifest, and
+       this check rejects 0.5.0+ components that are still behind that
+       bar with the same actionable update prompt.
+
+    Components that pre-date the version-reporting field (returned no
+    ``version`` in the response) are treated as "too old" for the same
+    reason: the absence of the field IS the signal that the component
+    doesn't yet know how to report its capabilities to ha-mcp.
+    """
+    if not await _is_bootstrap_service_registered(client):
+        _raise_component_too_old(
+            "the get_caller_token bootstrap service is not registered (pre-0.5.0)"
+        )
+    result = await client.call_service(
+        MCP_TOOLS_DOMAIN,
+        CALLER_TOKEN_BOOTSTRAP_SERVICE,
+        {},
+        return_response=True,
+    )
+    unwrapped = unwrap_service_response(result) if isinstance(result, dict) else {}
+    token = unwrapped.get("token") if isinstance(unwrapped, dict) else None
+    if not isinstance(token, str) or not token:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "ha_mcp_tools.get_caller_token did not return a usable token.",
+                suggestions=[
+                    "Reload the ha_mcp_tools integration in Home Assistant",
+                    "Verify the HA token used by ha-mcp has admin rights",
+                    "Then retry the operation",
+                ],
+            )
+        )
+    raw_version: Any = unwrapped.get("version") if isinstance(unwrapped, dict) else None
+    if not isinstance(raw_version, str) or not raw_version:
+        _raise_component_too_old(
+            "the get_caller_token response did not include a version "
+            f"field (pre-{MIN_COMPONENT_VERSION})"
+        )
+    version: str = raw_version
+    try:
+        parsed = _version_tuple(version)
+    except ValueError:
+        # A malformed version (non-numeric segment like "1.x.0", or a
+        # future suffixed/date scheme _version_tuple can't parse) is a
+        # different failure mode from "too old": a HACS update won't help
+        # if the reported version itself is wrong. Point at reinstall /
+        # issue-filing instead of the version-bump remediation.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                "The installed ha_mcp_tools custom component reports a "
+                f"malformed version: {version!r}, so ha-mcp can't verify it "
+                f"meets the required >= {MIN_COMPONENT_VERSION}.",
+                suggestions=[
+                    "Reinstall ha_mcp_tools via HACS",
+                    "Restart Home Assistant after reinstalling",
+                    "If the version is still malformed, file an issue at "
+                    "https://github.com/homeassistant-ai/ha-mcp/issues",
+                ],
+            )
+        )
+    if parsed < _version_tuple(MIN_COMPONENT_VERSION):
+        _raise_component_too_old(f"reported version is {version}")
+    _CALLER_TOKEN_CACHE[client] = token
+    return token
+
+
+async def _ensure_caller_token(client: Any, *, force_refresh: bool = False) -> str:
+    """Return a cached or freshly-fetched caller token."""
+    if not force_refresh:
+        cached = _CALLER_TOKEN_CACHE.get(client)
+        if cached:
+            return cached
+    async with _get_token_lock(client):
+        cached = _CALLER_TOKEN_CACHE.get(client)
+        if cached and not force_refresh:
+            return cached
+        return await _fetch_caller_token(client)
+
+
+def _is_unauthorized_response(response: Any) -> bool:
+    """Detect the custom component's structured 'unauthorized' reply."""
+    if not isinstance(response, dict):
+        return False
+    inner = unwrap_service_response(response) if response else None
+    if not isinstance(inner, dict):
+        return False
+    return inner.get("error_code") == "unauthorized"
+
+
+async def call_mcp_tools_service(
+    client: Any,
+    service: str,
+    service_data: dict[str, Any],
+    *,
+    return_response: bool = True,
+) -> Any:
+    """Call an ha_mcp_tools.* service with the caller token injected.
+
+    On `unauthorized` response (token rotation or stale cache): refetch the
+    token from the bootstrap service and retry once. Subsequent unauthorized
+    responses are returned as-is — the wrapper tool surfaces the error.
+    """
+    token = await _ensure_caller_token(client)
+    payload = dict(service_data)
+    payload[CALLER_TOKEN_FIELD] = token
+    result = await client.call_service(
+        MCP_TOOLS_DOMAIN,
+        service,
+        payload,
+        return_response=return_response,
+    )
+    if _is_unauthorized_response(result):
+        logger.info("ha_mcp_tools rejected cached token; refetching and retrying once")
+        token = await _ensure_caller_token(client, force_refresh=True)
+        payload[CALLER_TOKEN_FIELD] = token
+        result = await client.call_service(
+            MCP_TOOLS_DOMAIN,
+            service,
+            payload,
+            return_response=return_response,
+        )
+    return result
+
+
+def _reset_caller_token_cache() -> None:
+    """Test hook: clear the module-level token cache."""
+    _CALLER_TOKEN_CACHE.clear()
+    _CALLER_TOKEN_LOCKS.clear()
+
 
 # Security constants - mirrors the custom component config
 READABLE_PATTERNS = [
@@ -62,7 +289,7 @@ def is_filesystem_tools_enabled() -> bool:
 
     Reads through :func:`config.get_global_settings` so the same
     env-var / override-file / default precedence path applies as
-    every other runtime-editable Settings field (issue #863 web UI).
+    every other runtime-editable Settings field.
     """
     from ..config import get_global_settings
 
@@ -173,17 +400,21 @@ class FilesystemTools:
             if pattern:
                 service_data["pattern"] = pattern
 
-            # Call the custom component service
-            result = await self._client.call_service(
-                MCP_TOOLS_DOMAIN,
+            # Call the custom component service (token injected by helper)
+            result = await call_mcp_tools_service(
+                self._client,
                 "list_files",
                 service_data,
-                return_response=True,
             )
 
-            # The service returns the response directly
+            # Mirror ha_config_set_yaml: raise on success=false so callers
+            # see a ToolError rather than a success-shaped response that
+            # carries an error payload.
             if isinstance(result, dict):
-                return unwrap_service_response(result)
+                result = unwrap_service_response(result)
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return result
 
             raise_tool_error(
                 create_error_response(
@@ -288,15 +519,17 @@ class FilesystemTools:
                 service_data["tail_lines"] = tail_lines_int
 
             # Call the custom component service
-            result = await self._client.call_service(
-                MCP_TOOLS_DOMAIN,
+            result = await call_mcp_tools_service(
+                self._client,
                 "read_file",
                 service_data,
-                return_response=True,
             )
 
             if isinstance(result, dict):
-                return unwrap_service_response(result)
+                result = unwrap_service_response(result)
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return result
 
             raise_tool_error(
                 create_error_response(
@@ -422,15 +655,17 @@ class FilesystemTools:
             }
 
             # Call the custom component service
-            result = await self._client.call_service(
-                MCP_TOOLS_DOMAIN,
+            result = await call_mcp_tools_service(
+                self._client,
                 "write_file",
                 service_data,
-                return_response=True,
             )
 
             if isinstance(result, dict):
-                return unwrap_service_response(result)
+                result = unwrap_service_response(result)
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return result
 
             raise_tool_error(
                 create_error_response(
@@ -534,15 +769,17 @@ class FilesystemTools:
             service_data: dict[str, Any] = {"path": path}
 
             # Call the custom component service
-            result = await self._client.call_service(
-                MCP_TOOLS_DOMAIN,
+            result = await call_mcp_tools_service(
+                self._client,
                 "delete_file",
                 service_data,
-                return_response=True,
             )
 
             if isinstance(result, dict):
-                return unwrap_service_response(result)
+                result = unwrap_service_response(result)
+                if not result.get("success", True):
+                    raise_tool_error(result)
+                return result
 
             raise_tool_error(
                 create_error_response(

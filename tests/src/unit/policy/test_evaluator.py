@@ -195,6 +195,25 @@ class TestCaseInsensitive:
         p = Predicate(path="args.x", op="eq", value="1")
         assert match_predicate(p, {"x": 1}) is False
 
+    def test_contains_list_membership_ignores_case(self):
+        # ``contains`` against a list/tuple/set must mirror ``in`` /
+        # ``not_in`` — a rule listing ``"light.kitchen"`` has to fire
+        # when the LLM passes ``["Light.Kitchen"]``. Pre-fix this
+        # branch was case-sensitive while every other op was CI.
+        p = Predicate(path="args.entity_id", op="contains", value="light.kitchen")
+        assert match_predicate(p, {"entity_id": ["Light.Kitchen"]}) is True
+        assert (
+            match_predicate(p, {"entity_id": ("LIGHT.KITCHEN", "other.thing")}) is True
+        )
+        assert match_predicate(p, {"entity_id": {"foo", "Light.Kitchen"}}) is True
+
+    def test_contains_list_membership_non_string_elements_preserve_equality(self):
+        # Mixed-type collections must keep natural equality for the
+        # non-string entries — _ci passes non-strings through unchanged.
+        p = Predicate(path="args.x", op="contains", value=42)
+        assert match_predicate(p, {"x": [1, 42, "three"]}) is True
+        assert match_predicate(p, {"x": ["1", "42"]}) is False  # int != "42"
+
 
 # --- wildcard path semantics (catch-all "any argument matches X") ---
 class TestWildcardPredicate:
