@@ -73,6 +73,14 @@ All workflow automation is implemented as skills in `.claude/skills/` and invoke
 - **Package**: `ha-mcp` on PyPI
 - **Python**: 3.13 only
 
+## Security
+
+See [SECURITY.md](SECURITY.md) for the threat model, scope, and reporting
+instructions. The threat model section documents the key design decisions that
+define what ha-mcp does and doesn't defend against (trusted MCP clients, local
+network boundary, OAuth Bearer token design, single-tenant standard mode, HA
+permission scope).
+
 ## External Documentation
 
 When implementing features or debugging, consult these resources:
