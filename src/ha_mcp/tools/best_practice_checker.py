@@ -85,8 +85,10 @@ _RE_DIRECT_STATE = re.compile(r"\bstates\.\w+\.\w+\.state\b")
 #       required — a bare ``X.last_changed < now()`` is *always* true and carries
 #       no duration, so it is intentionally NOT flagged: ``for:`` cannot express it)
 #   now() (<|<=|>|>=) X.last_changed + <delta>      (now() on the left)
+#   X.last_changed + <delta> (<|<=|>|>=) now()      (delta added to the attribute)
 #   now().timestamp() - X.last_changed.timestamp()  (epoch subtraction)
-#   as_timestamp(now()) - as_timestamp(X.last_changed)
+#   as_timestamp(now()) - as_timestamp(X.last_changed)        (function form)
+#   as_timestamp(now()) - X.last_changed | as_timestamp       (filter form)
 # Every alternation requires a dotted qualifier ending on a word boundary, so
 # bare Jinja variables literally named ``last_changed`` and longer look-alike
 # attributes (``last_changed_at``) are not falsely flagged; a leading ``word.``
@@ -100,8 +102,10 @@ _RE_DURATION_MATH = re.compile(
     r"\bnow\(\)\s*-\s*(?:\w+\.)+last_(?:changed|updated)\b"
     r"|\b(?:\w+\.)+last_(?:changed|updated)\b\s*[<>]=?\s*now\(\)\s*-"
     r"|\bnow\(\)\s*[<>]=?\s*(?:\w+\.)+last_(?:changed|updated)\b\s*\+"
+    r"|\b(?:\w+\.)+last_(?:changed|updated)\b\s*\+\s*[^<>{}]+?[<>]=?\s*now\(\)"
     r"|\bnow\(\)\.timestamp\(\)\s*-\s*(?:\w+\.)+last_(?:changed|updated)\.timestamp\(\)"
     r"|\bas_timestamp\(\s*now\(\)\s*\)\s*-\s*as_timestamp\([^)]*\.last_(?:changed|updated)\b"
+    r"|\bas_timestamp\(\s*now\(\)\s*\)\s*-\s*(?:\w+\.)+last_(?:changed|updated)\b\s*\|\s*as_timestamp\b"
 )
 # Motion entity pattern
 _RE_MOTION = re.compile(r"binary_sensor\.\w*motion", re.IGNORECASE)

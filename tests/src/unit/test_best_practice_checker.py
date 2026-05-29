@@ -2040,3 +2040,53 @@ class TestDurationMathDetector:
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_attribute_plus_delta_compared_to_now_flagged(self):
+        """``X.last_changed + <delta> (<|<=|>|>=) now()`` (delta on the attribute) is flagged.
+
+        Mirror of the now()-on-the-left form. A no-comparison ``X.last_changed +
+        <delta>`` (just computing a future time) is NOT a recency check and stays
+        unflagged — the comparator-then-now() tail is required.
+        """
+        for vt in (
+            "{{ states.binary_sensor.motion.last_changed + timedelta(minutes=5) < now() }}",
+            "{{ states.sensor.x.last_updated + timedelta(hours=1) <= now() }}",
+        ):
+            config = {
+                "condition": [{"condition": "template", "value_template": vt}],
+                "action": [],
+            }
+            warnings = check_automation_config(config)
+            assert _has_warning_containing(
+                warnings, "last_changed/last_updated", "for:"
+            ), f"{vt!r} should be flagged"
+
+    def test_attribute_plus_delta_no_comparison_not_flagged(self):
+        """Bare ``X.last_changed + <delta>`` (computing a time, no comparison) is NOT flagged."""
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states.sensor.x.last_changed + timedelta(minutes=5) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert not _has_warning_containing(
+            warnings, "last_changed/last_updated", "for:"
+        ), "computing a future time (no comparison to now()) is not a recency check"
+
+    def test_as_timestamp_filter_syntax_flagged(self):
+        """``as_timestamp(now()) - X.last_changed | as_timestamp`` (filter syntax) is flagged."""
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ as_timestamp(now()) - states.sensor.x.last_changed | as_timestamp > 300 }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
