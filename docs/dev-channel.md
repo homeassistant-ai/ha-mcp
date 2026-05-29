@@ -16,7 +16,13 @@ Want to test the latest changes before the biweekly stable release? The dev chan
 | **Dev** | Every push to master | `ha-mcp-dev` / `:dev` |
 | **Stable** | Biweekly (Wednesday 10:00 UTC) | `ha-mcp` / `:latest` |
 
-> **Docker tags:** Each stable release publishes the same image under both `:latest` (the default tag pulled when none is specified) and `:stable`. They point at identical bits — use `:stable` if you want "stable only" to be unambiguous in a compose file or config. The dev channel is `:dev` (rolling, every master push) plus `:dev-<sha>` (pinned to one dev build). `:latest` only ever tracks stable, never dev.
+**Docker tags at a glance** (image `ghcr.io/homeassistant-ai/ha-mcp`):
+
+- `:latest` / `:stable` — the most recent stable release; both point at identical bits. `:latest` is the default tag pulled when none is given; use `:stable` to make "stable only" explicit in a compose file or config.
+- `:dev` — the rolling dev channel, rebuilt on every push to master.
+- `:dev-<sha>` — an immutable tag pinned to one specific dev build (see the Docker section below).
+
+`:latest` only ever tracks stable, never dev.
 
 ## Installation Methods
 
@@ -99,6 +105,13 @@ Dev images are published to GitHub Container Registry with the `dev` tag.
 **Pull the dev image:**
 ```bash
 docker pull ghcr.io/homeassistant-ai/ha-mcp:dev
+```
+
+**Pin a specific dev build:**
+
+Every dev build is also published under an immutable `:dev-<sha>` tag (the short commit SHA), so you can pin to one exact build — handy when verifying a fix on a specific commit. Unlike `:dev`, a `:dev-<sha>` tag never moves:
+```bash
+docker pull ghcr.io/homeassistant-ai/ha-mcp:dev-a1b2c3d
 ```
 
 **Run in stdio mode (Claude Desktop):**
