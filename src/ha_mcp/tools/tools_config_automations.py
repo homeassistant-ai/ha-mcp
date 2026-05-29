@@ -401,7 +401,7 @@ class AutomationConfigTools:
     async def ha_config_set_automation(
         self,
         config: Annotated[
-            str | dict[str, Any] | None,
+            dict[str, Any] | None,
             Field(
                 description="Complete automation configuration with required fields: 'alias', 'trigger', 'action'. "
                 "Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'. "

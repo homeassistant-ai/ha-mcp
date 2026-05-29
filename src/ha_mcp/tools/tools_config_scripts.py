@@ -383,7 +383,7 @@ class ConfigScriptTools:
             ),
         ],
         config: Annotated[
-            str | dict[str, Any] | None,
+            dict[str, Any] | None,
             Field(
                 description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). "
                 "Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'. "
