@@ -1597,7 +1597,14 @@ class TestSkillPrefixNoneNewDetectors:
 
 
 class TestDurationMathDetector:
-    """Detects now() - X.last_changed patterns and suggests native for:."""
+    """Detects duration/recency math on ``last_changed``/``last_updated`` and suggests ``for:``.
+
+    Covers every shape ``_RE_DURATION_MATH`` matches — forward (``now() - X.last_changed``),
+    reversed-with-subtraction (``X.last_changed < now() - <delta>`` and the ``>`` variants),
+    ``now()`` on the left, and ``as_timestamp(...)`` arithmetic — plus the deliberate
+    non-matches: bare Jinja variables, ``state_attr(...)`` strings, and the always-true bare
+    ``X.last_changed < now()`` (no duration → cannot map to ``for:``).
+    """
 
     def test_condition_last_changed_math(self):
         config = {
@@ -1626,6 +1633,7 @@ class TestDurationMathDetector:
         assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
 
     def test_trigger_template_last_changed_math(self):
+        """Template trigger using ``trigger.last_changed`` (single dotted qualifier) is flagged."""
         config = {
             "trigger": [
                 {
@@ -1656,6 +1664,7 @@ class TestDurationMathDetector:
         assert not _has_warning_containing(warnings, "last_changed", "for:")
 
     def test_warning_contains_skill_ref(self):
+        """Condition-path warning links to ``#native-conditions`` (cf. ``#trigger-types`` for triggers)."""
         config = {
             "condition": [
                 {
@@ -1742,12 +1751,43 @@ class TestDurationMathDetector:
         )
 
     def test_condition_reversed_comparison_last_changed_math(self):
-        """Reversed form ``X.last_changed < now()`` in a condition is flagged.
+        """Reversed form ``X.last_changed < now() - <delta>`` in a condition is flagged.
 
-        The regex's second alternation exists to catch the comparison written
-        the other way round; without a positive test a later refactor could
-        drop it silently. Asserting exactly one warning also guards against the
-        two alternations double-flagging the same template.
+        The reversed alternation catches the comparison written the other way
+        round, but it requires the ``- <delta>`` subtraction: that is what makes
+        it a genuine recency check (``last_changed < now() - 5min`` ⇒ "changed
+        more than 5 minutes ago"). Asserting exactly one warning also guards
+        against the alternations double-flagging the same template. The bare
+        ``X.last_changed < now()`` form is covered separately in
+        ``test_bare_reversed_comparison_not_flagged`` — it is always true and
+        intentionally NOT flagged.
+        """
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states.binary_sensor.motion.last_changed < now() - timedelta(minutes=5) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        duration_warnings = [
+            w for w in warnings if "last_changed/last_updated" in w and "for:" in w
+        ]
+        assert len(duration_warnings) == 1, (
+            "Reversed-form duration math in a condition should fire exactly one warning"
+        )
+
+    def test_bare_reversed_comparison_not_flagged(self):
+        """Bare ``X.last_changed < now()`` (no subtraction) must NOT be flagged.
+
+        Without a ``- <delta>`` there is no duration threshold: an entity's
+        ``last_changed`` is by definition in the past, so the comparison is
+        always true and cannot be expressed with a native ``for:`` field.
+        Suggesting ``for:`` here would be incorrect advice, so the reversed
+        alternation deliberately requires the subtraction. (This corrects the
+        original #1264 behaviour, which flagged the bare form.)
         """
         config = {
             "condition": [
@@ -1759,11 +1799,16 @@ class TestDurationMathDetector:
             "action": [],
         }
         warnings = check_automation_config(config)
-        duration_warnings = [
-            w for w in warnings if "last_changed/last_updated" in w and "for:" in w
-        ]
-        assert len(duration_warnings) == 1, (
-            "Reversed-form duration math in a condition should fire exactly one warning"
+        assert not _has_warning_containing(
+            warnings, "last_changed/last_updated", "for:"
+        ), (
+            "Always-true bare `X.last_changed < now()` carries no duration and must "
+            "not get the `for:` suggestion"
+        )
+        # It is still a template in a logic position, so the generic fallback
+        # fires — confirming we drop only the (wrong) duration hint, not all output.
+        assert _has_warning_containing(warnings, "Template detected in condition"), (
+            "bare reversed form should still surface the generic template warning"
         )
 
     def test_trigger_reversed_comparison_last_updated_math(self):
@@ -1784,3 +1829,214 @@ class TestDurationMathDetector:
         assert len(duration_warnings) == 1, (
             "Reversed-form duration math in a trigger value_template should fire exactly one warning"
         )
+
+    def test_duration_math_suppresses_numeric_state_suggestion(self):
+        """Duration math with a numeric compare fires only the ``for:`` warning, not ``numeric_state``.
+
+        ``(now() - X.last_changed).total_seconds() | int > 300`` trips both the
+        numeric-comparison detector and the duration detector. The native fix is
+        ``for:`` (you cannot express "seconds since last_changed" as a
+        ``numeric_state``), so the conflicting ``numeric_state`` suggestion must
+        be suppressed — exactly one duration warning, and no float/int warning.
+        """
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ (now() - states.sensor.x.last_changed).total_seconds() | int > 300 }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        duration_warnings = [
+            w for w in warnings if "last_changed/last_updated" in w and "for:" in w
+        ]
+        assert len(duration_warnings) == 1, "Should fire exactly one duration warning"
+        assert not _has_warning_containing(warnings, "float/int comparison"), (
+            "numeric_state suggestion must be suppressed when duration math is present"
+        )
+
+    def test_trigger_duration_math_suppresses_numeric_state_suggestion(self):
+        """Same numeric_state suppression applies on the template-trigger path."""
+        config = {
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ (now() - states.sensor.x.last_changed).total_seconds() | int > 300 }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        duration_warnings = [
+            w for w in warnings if "last_changed/last_updated" in w and "for:" in w
+        ]
+        assert len(duration_warnings) == 1, "Should fire exactly one duration warning"
+        assert not _has_warning_containing(warnings, "float/int comparison"), (
+            "numeric_state suggestion must be suppressed when duration math is present"
+        )
+
+    def test_as_timestamp_recency_condition(self):
+        """``as_timestamp(now()) - as_timestamp(X.last_changed)`` recency math is flagged."""
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ as_timestamp(now()) - as_timestamp(states.sensor.x.last_changed) > 300 }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:"), (
+            "as_timestamp() recency form should be flagged"
+        )
+
+    def test_as_timestamp_recency_numeric_state_trigger(self):
+        """as_timestamp recency math inside a numeric_state value_template is flagged (no silent gap)."""
+        config = {
+            "trigger": [
+                {
+                    "platform": "numeric_state",
+                    "entity_id": "sensor.x",
+                    "value_template": "{{ as_timestamp(now()) - as_timestamp(states.sensor.x.last_changed) }}",
+                    "above": 300,
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:"), (
+            "as_timestamp() duration math in a numeric_state value_template should be flagged, "
+            "not silently passed"
+        )
+
+    def test_greater_than_reversed_recency(self):
+        """``X.last_changed > now() - <delta>`` (changed within window) recency math is flagged."""
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states.sensor.x.last_changed > now() - timedelta(minutes=5) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_now_on_left_recency(self):
+        """``now() > X.last_changed + <delta>`` recency math is flagged."""
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now() > states.sensor.x.last_changed + timedelta(minutes=5) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_state_attr_last_changed_not_flagged(self):
+        """``state_attr('x', 'last_changed')`` (quoted attr string) must NOT be flagged.
+
+        The dotted-qualifier requirement means a ``last_changed`` passed as a
+        string argument to ``state_attr`` is not mistaken for an entity-attribute
+        access. Locks in the most likely future false positive.
+        """
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now() - state_attr('sensor.x', 'last_changed') > timedelta(minutes=5) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert not _has_warning_containing(
+            warnings, "last_changed/last_updated", "for:"
+        ), "state_attr('x','last_changed') should not trigger the duration detector"
+
+    def test_comparator_variants_ge_le_flagged(self):
+        """``>=`` / ``<=`` recency comparisons are flagged like their strict ``>``/``<`` twins."""
+        for vt in (
+            "{{ states.sensor.x.last_changed <= now() - timedelta(minutes=5) }}",
+            "{{ states.sensor.x.last_changed >= now() - timedelta(minutes=5) }}",
+            "{{ now() >= states.sensor.x.last_changed + timedelta(minutes=5) }}",
+        ):
+            config = {
+                "condition": [{"condition": "template", "value_template": vt}],
+                "action": [],
+            }
+            warnings = check_automation_config(config)
+            assert _has_warning_containing(
+                warnings, "last_changed/last_updated", "for:"
+            ), f"{vt!r} should be flagged"
+
+    def test_timestamp_method_epoch_subtraction_flagged(self):
+        """``now().timestamp() - X.last_updated.timestamp()`` epoch recency math is flagged."""
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ now().timestamp() - states.sensor.x.last_updated.timestamp() > 300 }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_as_timestamp_last_updated_flagged(self):
+        """as_timestamp recency math covers ``last_updated`` too, not just ``last_changed``."""
+        config = {
+            "condition": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ as_timestamp(now()) - as_timestamp(states.sensor.x.last_updated) > 60 }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+    def test_suffixed_attribute_name_not_flagged(self):
+        """Look-alike attributes (``last_changed_at``) must NOT match any alternation.
+
+        The trailing word boundary on every alternation — including the
+        ``as_timestamp`` path, which previously lacked it — keeps custom
+        attributes whose names merely start with ``last_changed``/``last_updated``
+        from being mistaken for the real state property.
+        """
+        for vt in (
+            "{{ now() - states.sensor.x.last_changed_at > timedelta(minutes=5) }}",
+            "{{ as_timestamp(now()) - as_timestamp(states.sensor.x.last_changed_at) }}",
+            "{{ states.sensor.x.last_updated_ts < now() - timedelta(minutes=5) }}",
+        ):
+            config = {
+                "condition": [{"condition": "template", "value_template": vt}],
+                "action": [],
+            }
+            warnings = check_automation_config(config)
+            assert not _has_warning_containing(
+                warnings, "last_changed/last_updated", "for:"
+            ), f"{vt!r} (look-alike attribute) must not be flagged as duration math"
+
+    def test_trigger_path_now_on_left_recency_flagged(self):
+        """The ``now() > X.last_changed + <delta>`` form also flows through the trigger path."""
+        config = {
+            "trigger": [
+                {
+                    "platform": "template",
+                    "value_template": "{{ now() > states.sensor.x.last_changed + timedelta(minutes=5) }}",
+                }
+            ],
+            "action": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
