@@ -1338,7 +1338,7 @@ class TestFetchEntryOptions:
         assert await fetch_entry_options(client, "entry_y") == {}
         client.abort_options_flow.assert_awaited_once_with("f2")
 
-    async def test_aborts_flow_even_when_extraction_raises(self) -> None:
+    async def test_skips_abort_when_start_raises_before_flow_id(self) -> None:
         client = MagicMock()
         client.start_options_flow = AsyncMock(side_effect=RuntimeError("init blew up"))
         client.abort_options_flow = AsyncMock()
@@ -1346,3 +1346,19 @@ class TestFetchEntryOptions:
         assert await fetch_entry_options(client, "entry_z") == {}
         # start raised before a flow_id existed → abort skipped (no leak)
         client.abort_options_flow.assert_not_awaited()
+
+    async def test_aborts_flow_when_extraction_raises_after_start(self) -> None:
+        # The flow starts (flow_id exists) but parsing the form blows up — the
+        # finally block must still abort so the flow doesn't sit half-open.
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={"flow_id": "f3", "type": "form", "data_schema": []}
+        )
+        client.abort_options_flow = AsyncMock()
+
+        with patch(
+            "ha_mcp.tools.tools_integrations.options_from_form_flow",
+            side_effect=RuntimeError("parse blew up"),
+        ):
+            assert await fetch_entry_options(client, "entry_w") == {}
+        client.abort_options_flow.assert_awaited_once_with("f3")

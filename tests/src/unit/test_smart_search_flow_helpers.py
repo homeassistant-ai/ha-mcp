@@ -146,6 +146,9 @@ class TestFlowHelperDeepSearch:
             include_config=True,
         )
         assert results[0]["config"] == {"state": "{{ comfort_index() }}"}
+        # include_config=True forces the probe even though the title already
+        # exact-matches (the config body has to be fetched to attach it).
+        client.start_options_flow.assert_awaited_once_with("01HXTEMPLATEZ")
 
     async def test_skips_non_flow_helper_domains(self) -> None:
         # Mixed list: only the template entry should be considered.
@@ -212,3 +215,138 @@ class TestFlowHelperDeepSearch:
             include_config=False,
         )
         assert results == []
+
+    async def test_does_not_match_on_opaque_entry_id(self) -> None:
+        # Regression (issue #1457 review): the config-entry ULID must not be a
+        # search target. Here the entry_id contains "weather" but neither the
+        # title nor the template body does — the entry must NOT match "weather".
+        client = MagicMock()
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXWEATHERZZZ",
+                    "domain": "template",
+                    "title": "Bedroom Light",
+                    "supports_options": True,
+                }
+            ]
+        )
+        client.start_options_flow = AsyncMock(
+            return_value=_make_flow_form("{{ 1 + 1 }}")
+        )
+        client.abort_options_flow = AsyncMock()
+
+        tools = _make_tools(client)
+        results = await tools._search_flow_helpers(
+            "weather",
+            exact_match=True,
+            semaphore=asyncio.Semaphore(8),
+            include_config=False,
+        )
+        assert results == []
+
+    async def test_skips_entry_with_non_string_entry_id(self) -> None:
+        # A malformed config entry (missing/None entry_id) is skipped without a
+        # probe; the valid sibling is still returned.
+        client = MagicMock()
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": None,
+                    "domain": "template",
+                    "title": "Match Me",
+                    "supports_options": True,
+                },
+                {
+                    "entry_id": "01HXTEMPLATEOK",
+                    "domain": "template",
+                    "title": "Match Me",
+                    "supports_options": True,
+                },
+            ]
+        )
+        client.start_options_flow = AsyncMock(
+            return_value=_make_flow_form("{{ true }}")
+        )
+        client.abort_options_flow = AsyncMock()
+
+        tools = _make_tools(client)
+        results = await tools._search_flow_helpers(
+            "match",
+            exact_match=True,
+            semaphore=asyncio.Semaphore(8),
+            include_config=False,
+        )
+        assert [r["entry_id"] for r in results] == ["01HXTEMPLATEOK"]
+
+    async def test_probe_failure_on_one_entry_does_not_break_search(self) -> None:
+        # One entry's options probe blowing up must not drop the healthy
+        # sibling (fetch_entry_options swallows to {}; gather isolates faults).
+        client = MagicMock()
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXBAD",
+                    "domain": "template",
+                    "title": "Broken",
+                    "supports_options": True,
+                },
+                {
+                    "entry_id": "01HXGOOD",
+                    "domain": "template",
+                    "title": "Renamed Sensor",
+                    "supports_options": True,
+                },
+            ]
+        )
+
+        async def flaky_flow(entry_id: str) -> dict[str, Any]:
+            if entry_id == "01HXBAD":
+                raise RuntimeError("flow init exploded")
+            return _make_flow_form("{{ states('sensor.outside_temperature') }}")
+
+        client.start_options_flow = AsyncMock(side_effect=flaky_flow)
+        client.abort_options_flow = AsyncMock()
+
+        tools = _make_tools(client)
+        results = await tools._search_flow_helpers(
+            "outside_temperature",
+            exact_match=True,
+            semaphore=asyncio.Semaphore(8),
+            include_config=False,
+        )
+        assert [r["entry_id"] for r in results] == ["01HXGOOD"]
+
+    async def test_fuzzy_mode_probes_when_title_below_perfect_score(self) -> None:
+        # Regression guard for the probe-skip threshold. In fuzzy mode a title
+        # scoring below 100 (but above fuzzy_threshold) must STILL trigger the
+        # options probe — the config could score higher, and results sort by
+        # score. The earlier logic skipped the probe once the title cleared
+        # fuzzy_threshold, under-ranking such entries.
+        client = MagicMock()
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXFUZZY",
+                    "domain": "template",
+                    "title": "Weather Stuff",
+                    "supports_options": True,
+                }
+            ]
+        )
+        client.start_options_flow = AsyncMock(
+            return_value=_make_flow_form("{{ true }}")
+        )
+        client.abort_options_flow = AsyncMock()
+
+        tools = _make_tools(client)
+        # Force a mid-range title score: above fuzzy_threshold (60), below 100.
+        with patch.object(tools, "_score_deep_match", return_value=(70, 60, True)):
+            results = await tools._search_flow_helpers(
+                "weather",
+                exact_match=False,
+                semaphore=asyncio.Semaphore(8),
+                include_config=False,
+            )
+        client.start_options_flow.assert_awaited_once_with("01HXFUZZY")
+        assert [r["entry_id"] for r in results] == ["01HXFUZZY"]
