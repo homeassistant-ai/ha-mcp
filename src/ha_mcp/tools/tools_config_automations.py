@@ -482,8 +482,8 @@ class AutomationConfigTools:
           `{{ states(x) in [...] }}`
         - `condition: time` instead of `{{ now().hour ... }}` or `{{ now().weekday() ... }}`
         - `condition: sun` instead of `{{ is_state('sun.sun', ...) }}`
-        - Native `for:` field on `state`/`numeric_state` triggers and conditions over
-          `{{ now() - X.last_changed > timedelta(...) }}` duration math.
+        - Native `for:` field on `state`/`numeric_state` triggers and `state`
+          conditions over `{{ now() - X.last_changed > timedelta(...) }}` duration math.
         - `wait_for_trigger` instead of `wait_template`
         - `choose` action instead of template-based service names
         - For one-shot date firing, use a `time` trigger plus `automation.turn_off` on a

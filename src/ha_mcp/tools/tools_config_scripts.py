@@ -436,8 +436,8 @@ class ConfigScriptTools:
         schema. Templates in logic positions fail silently and obscure intent.
         - `choose` / `if/then/else` instead of template-based service names
         - `wait_for_trigger` instead of `wait_template`
-        - Native `for:` field on `state`/`numeric_state` conditions inside
-          `choose`/`if` (and on `wait_for_trigger` triggers) instead of
+        - Native `for:` field on `state` conditions inside `choose`/`if`, and on
+          `state`/`numeric_state` triggers in `wait_for_trigger`, instead of
           `{{ now() - X.last_changed > timedelta(...) }}` duration math.
         - `repeat` with `for_each` instead of template loops
         - Hardcode `target.entity_id` literals — never `{{ this.entity_id }}`.
