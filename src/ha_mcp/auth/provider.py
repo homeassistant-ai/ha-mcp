@@ -7,6 +7,7 @@ provide their Long-Lived Access Token (LLAT).
 """
 
 import binascii
+import contextlib
 import hashlib
 import hmac
 import json
@@ -69,7 +70,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
     The consent form collects the user's Long-Lived Access Token (LLAT),
     which is encoded into both access and refresh tokens as base64 JSON.
-    Tokens are stateless (HMAC-signed base64 JSON) so no token state is
+    Tokens are stateless (HMAC-signed base64 JSON) so no per-token state is
     stored server-side.
 
     DCR client registrations and the HMAC signing secret are persisted to
@@ -192,16 +193,28 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         if not self.clients:
             return
         path = self._clients_file()
-        tmp_path = path.with_suffix(".tmp")
+        # Serialize before touching the filesystem. A model that won't
+        # serialize is a programming error and should surface loudly, not be
+        # swallowed as if it were a transient disk fault in the write below.
+        data = {
+            cid: client.model_dump(mode="json") for cid, client in self.clients.items()
+        }
+        payload = json.dumps(data, indent=2).encode()
+        tmp_path = path.parent / f".{path.name}.tmp"
         try:
-            data = {
-                cid: client.model_dump(mode="json")
-                for cid, client in self.clients.items()
-            }
-            tmp_path.write_text(json.dumps(data, indent=2))
-            tmp_path.replace(path)
+            # Write to a temp file first, then atomically rename. Use os.open
+            # with mode 0o600 (owner read/write only) because a confidential
+            # client's client_secret can be stored in this file.
+            fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, payload)
+            finally:
+                os.close(fd)
+            os.replace(str(tmp_path), str(path))
             logger.debug("Persisted %d OAuth client(s) to %s", len(data), path)
-        except (OSError, TypeError, ValueError) as exc:
+        except OSError as exc:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
             logger.warning(
                 "Failed to persist OAuth client registry to %s (%s: %s). "
                 "Clients will need to re-register after the next restart. "
@@ -242,11 +255,11 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             )
 
         secret = secrets.token_bytes(32)
+        tmp_path = path.parent / f".{path.name}.tmp"
         try:
             # Write to a temp file first, then atomically rename — prevents a
             # partial write from corrupting the secret on an interrupted flush.
-            # Use os.open with mode 0o600 so the file is owner-readable only.
-            tmp_path = path.parent / f".{path.name}.tmp"
+            # os.open with mode 0o600 keeps the file owner read/write only.
             fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
                 os.write(fd, secret.hex().encode())
@@ -255,6 +268,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
             os.replace(str(tmp_path), str(path))
             logger.debug("Persisted new HMAC secret to %s", path)
         except OSError as exc:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
             logger.warning(
                 "Failed to persist HMAC secret to %s (%s: %s). "
                 "Refresh tokens will be invalidated on the next restart.",
@@ -291,8 +306,9 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         timestamp, and (for refresh tokens) client/scope metadata and
         expiry.
 
-        Tokens are invalidated on server restart (new HMAC secret).
-        Clients re-authenticate via the consent form.
+        The signing secret is persisted (see ``_load_hmac_secret``), so signed
+        tokens remain valid across server restarts. Clients re-authenticate via
+        the consent form only when a token expires or the secret is rotated.
         """
         payload: dict[str, Any] = {
             "ha_token": ha_token,

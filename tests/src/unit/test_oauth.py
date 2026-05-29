@@ -1,6 +1,7 @@
 """Unit tests for OAuth 2.1 authentication."""
 
 import json
+import stat
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -333,7 +334,9 @@ class TestHomeAssistantOAuthProvider:
 
         # Manually create an unsigned token (old format, no sig envelope)
         payload = {"ha_token": "forged_token", "iat": int(time.time())}
-        unsigned_token = urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        unsigned_token = (
+            urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        )
 
         result = await provider.load_access_token(unsigned_token)
         assert result is None
@@ -846,8 +849,12 @@ class TestStatelessTokenResilience:
         # Refresh token also survives restart — critical for ChatGPT reconnect
         assert token_response.refresh_token is not None
         client_info2 = await provider2.get_client("persist-client")
-        assert client_info2 is not None, "Client should survive restart (persisted DCR registry)"
-        refresh2 = await provider2.load_refresh_token(client_info2, token_response.refresh_token)
+        assert client_info2 is not None, (
+            "Client should survive restart (persisted DCR registry)"
+        )
+        refresh2 = await provider2.load_refresh_token(
+            client_info2, token_response.refresh_token
+        )
         assert refresh2 is not None, (
             "Refresh token should survive a provider restart when HMAC secret is persisted"
         )
@@ -880,7 +887,9 @@ class TestStatelessTokenResilience:
             code_challenge="challenge",
         )
         provider1.auth_codes["volatile-code"] = auth_code
-        token_response = await provider1.exchange_authorization_code(client_info, auth_code)
+        token_response = await provider1.exchange_authorization_code(
+            client_info, auth_code
+        )
 
         # Delete the persisted HMAC secret (simulates a corrupted or manually cleared file)
         (tmp_path / "oauth_hmac_secret").unlink()
@@ -1073,7 +1082,7 @@ class TestDecodeTokenEdgeCases:
 
         provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         # Encode a JSON array
-        array_token = urlsafe_b64encode(b'[1, 2, 3]').decode().rstrip("=")
+        array_token = urlsafe_b64encode(b"[1, 2, 3]").decode().rstrip("=")
         result = provider._decode_token(array_token)
         assert result is None
 
@@ -1261,7 +1270,9 @@ class TestOAuthProxyClient:
                 "fastmcp.server.dependencies.get_access_token",
                 return_value=token_no_claims,
             ),
-            pytest.raises(HomeAssistantAuthError, match="No Home Assistant credentials"),
+            pytest.raises(
+                HomeAssistantAuthError, match="No Home Assistant credentials"
+            ),
         ):
             _ = proxy.get_state
 
@@ -1530,7 +1541,9 @@ class TestDCRPersistence:
     # --- register_client + _save_clients ---
 
     @pytest.mark.asyncio
-    async def test_register_client_persists_to_disk(self, provider, tmp_data_dir, client_info):
+    async def test_register_client_persists_to_disk(
+        self, provider, tmp_data_dir, client_info
+    ):
         await provider.register_client(client_info)
 
         clients_file = tmp_data_dir / "oauth_clients.json"
@@ -1540,7 +1553,9 @@ class TestDCRPersistence:
         assert data["chatgpt-client-abc"]["client_name"] == "ChatGPT"
 
     @pytest.mark.asyncio
-    async def test_new_provider_loads_persisted_clients(self, tmp_data_dir, client_info):
+    async def test_new_provider_loads_persisted_clients(
+        self, tmp_data_dir, client_info
+    ):
         """Simulates a container restart: second provider loads clients from disk."""
         provider1 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         await provider1.register_client(client_info)
@@ -1551,21 +1566,35 @@ class TestDCRPersistence:
         assert stored is not None
         assert stored.client_name == "ChatGPT"
         # Pydantic may deserialize URIs as AnyUrl objects; compare via str().
-        assert [str(u) for u in stored.redirect_uris] == ["https://chatgpt.com/aip/callback"]
+        assert [str(u) for u in stored.redirect_uris] == [
+            "https://chatgpt.com/aip/callback"
+        ]
 
     @pytest.mark.asyncio
     async def test_save_clients_gracefully_handles_os_error(
         self, tmp_data_dir, provider, client_info
     ):
         """register_client completes normally even when the disk write fails."""
-        # Patch Path.write_text inside _save_clients to simulate a disk error.
-        with patch("pathlib.Path.write_text", side_effect=OSError("disk full")):
+        # Patch os.open inside _save_clients to simulate a disk error. The
+        # provider in the fixture is already constructed (HMAC secret written),
+        # so this only affects the client-registry write under test.
+        with patch("ha_mcp.auth.provider.os.open", side_effect=OSError("disk full")):
             # Should not raise — write failure is caught inside _save_clients.
             await provider.register_client(client_info)
 
         # Client is still held in memory despite the write failure.
         stored = await provider.get_client("chatgpt-client-abc")
         assert stored is not None
+
+    @pytest.mark.asyncio
+    async def test_clients_file_written_owner_only(
+        self, tmp_data_dir, provider, client_info
+    ):
+        """The client registry may hold client secrets — it must be 0o600."""
+        await provider.register_client(client_info)
+        clients_file = tmp_data_dir / "oauth_clients.json"
+        assert clients_file.exists()
+        assert stat.S_IMODE(clients_file.stat().st_mode) == 0o600
 
     # --- _load_hmac_secret ---
 
@@ -1597,3 +1626,25 @@ class TestDCRPersistence:
         provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         assert isinstance(provider._hmac_secret, bytes)
         assert len(provider._hmac_secret) == 32
+
+    def test_hmac_secret_regenerated_on_empty_file(self, tmp_data_dir):
+        """An empty secret file is treated as corrupt and regenerated."""
+        (tmp_data_dir / "oauth_hmac_secret").write_text("")
+        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        assert isinstance(provider._hmac_secret, bytes)
+        assert len(provider._hmac_secret) == 32
+
+    def test_hmac_secret_regenerated_on_wrong_length(self, tmp_data_dir):
+        """Valid hex of the wrong byte length is rejected and regenerated."""
+        # 16 bytes of valid hex — parses fine but is the wrong length.
+        (tmp_data_dir / "oauth_hmac_secret").write_text("00" * 16)
+        provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        assert isinstance(provider._hmac_secret, bytes)
+        assert len(provider._hmac_secret) == 32
+
+    def test_hmac_secret_file_written_owner_only(self, tmp_data_dir):
+        """The HMAC secret file must be 0o600 (owner read/write only)."""
+        HomeAssistantOAuthProvider(base_url="http://localhost:8086")
+        secret_file = tmp_data_dir / "oauth_hmac_secret"
+        assert secret_file.exists()
+        assert stat.S_IMODE(secret_file.stat().st_mode) == 0o600
