@@ -56,6 +56,7 @@ const withBase = (path: string) => {
         <div class="faq-item">
           <h3 class="text-lg font-medium text-white mb-2">Do I need the Home Assistant Add-on?</h3>
           <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA add-on is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). The add-on is only needed if you want to run ha-mcp inside your Home Assistant OS environment.</p>
+          <p class="text-slate-400 text-sm mt-2">If you <em>do</em> run the add-on, you don't also need <code class="bg-slate-800 px-1 rounded">uvx</code> — that would be a second, separate instance. HTTP-native clients (Codex, Cursor, Windsurf, Claude Code) connect straight to the add-on's URL, no proxy needed. One caveat: as of early 2026, Codex's HTTP MCP support has a <a href="https://github.com/openai/codex/issues/11284" class="text-blue-400 hover:underline">known initialization bug</a> where it loads no tools; if you hit that, run ha-mcp locally over stdio with <code class="bg-slate-800 px-1 rounded">uvx</code> instead.</p>
         </div>
 
         <div class="faq-item">

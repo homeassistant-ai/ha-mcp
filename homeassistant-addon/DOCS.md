@@ -46,6 +46,8 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ## Client Configuration
 
+> **You already have the add-on — connect your client to it.** The steps below point a client at this add-on's HTTP endpoint (ha-mcp running *inside* Home Assistant). You do **not** also need `uvx ha-mcp`: that starts a *separate* local copy of the server on your own machine and does **not** talk to this add-on, so running both side by side gives you two independent instances. `uvx` is the alternative for people *not* running the add-on (e.g. no Home Assistant OS) — see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for that path.
+
 ### <details><summary><b>📱 Claude Desktop</b></summary>
 
 Claude Desktop requires a proxy to connect to HTTP MCP servers. Install **mcp-proxy** first:
@@ -100,6 +102,24 @@ claude mcp add-json home-assistant '{
 Replace the URL with the one from your add-on logs.
 
 **Restart Claude Code** after adding the configuration.
+
+</details>
+
+### <details><summary><b>📘 Codex</b></summary>
+
+Codex connects to HTTP MCP servers directly — use the URL from your add-on logs:
+
+```bash
+codex mcp add home-assistant --url http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
+```
+
+**Heads-up:** as of early 2026, Codex's HTTP MCP support has a known initialization bug ([openai/codex#11284](https://github.com/openai/codex/issues/11284)) where the server connects but exposes **no tools**, even when the same endpoint works in other clients. If Codex shows no ha-mcp tools, run ha-mcp locally over stdio with `uvx` (see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/)) instead.
+
+</details>
+
+### <details><summary><b>🧩 Cursor / Windsurf / other HTTP-native clients</b></summary>
+
+These connect to HTTP MCP servers directly: add a new HTTP MCP server pointing at the **MCP Server URL** from the add-on logs — no proxy needed. See your client's own MCP configuration docs for the exact field name.
 
 </details>
 
