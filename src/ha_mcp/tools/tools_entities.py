@@ -613,12 +613,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         options: Annotated[
-            str | dict[str, dict[str, Any]] | None,
+            dict[str, dict[str, Any]] | None,
             Field(
                 description=(
                     "Per-domain entity registry options (e.g. sensor 'display_precision', "
                     "weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, "
-                    'e.g. {"sensor": {"display_precision": 2}}. JSON-string form also accepted. '
+                    'e.g. {"sensor": {"display_precision": 2}}. '
                     "Multiple domains are sent as separate registry updates. "
                     "For 'Show As' use the dedicated `device_class` parameter — that is "
                     "what the HA UI Show As dropdown writes. Voice-assistant exposure is "
@@ -658,7 +658,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         categories: Annotated[
-            str | dict[str, str | None] | None,
+            dict[str, str | None] | None,
             Field(
                 description=(
                     "Category assignment as a dict mapping scope to category_id. "
@@ -684,7 +684,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = "set",
         expose_to: Annotated[
-            str | dict[str, bool] | None,
+            dict[str, bool] | None,
             Field(
                 description=(
                     "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. "
