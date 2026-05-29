@@ -849,6 +849,21 @@ Before adding docs to tool descriptions, test what models already know using a n
 - `repository.yaml` (root) - For HA add-on store recognition
 - `homeassistant-addon/config.yaml` - Must match `pyproject.toml` version
 
+**Two add-on flavors:** `homeassistant-addon/` (stable, slug `ha_mcp`) and
+`homeassistant-addon-dev/` (dev channel, slug `ha_mcp_dev`) are *separate*
+add-ons with *separate* `config.yaml` files.
+
+**Functional config is NOT auto-synced between them.** The release pipeline
+(`semver-release.yml` → `update-addon-config`) only syncs the *version* and
+*changelog* into `homeassistant-addon/`. Functional keys — `ingress`, `ports`,
+`host_network`, `options`/`schema`, etc. — must be edited **by hand** in each
+flavor. When you add a non-beta capability to the dev add-on that should also
+ship on stable (e.g. `ingress` for the web Settings UI / "Open Web UI" button),
+mirror it into `homeassistant-addon/config.yaml` **in the same PR**. Assuming
+"the release pipeline handles it" is what kept `ingress` off the stable add-on.
+Beta-only keys are the deliberate exception — see the NOTE in
+`homeassistant-addon/config.yaml` and `docs/beta.md`.
+
 **Docs**: https://developers.home-assistant.io/docs/add-ons
 
 ## API Research

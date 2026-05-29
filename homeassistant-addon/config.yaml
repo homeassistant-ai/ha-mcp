@@ -11,6 +11,15 @@ arch:
 init: false
 startup: application
 boot: manual
+# Expose the web Settings UI via Supervisor ingress (the "Open Web UI" button).
+# start.py mounts the settings routes for the ingress proxy and binds 0.0.0.0;
+# this declaration is what makes Supervisor render the button and proxy to it.
+# Must be set here too — the release pipeline syncs only version/changelog, not
+# functional config, so ingress is NOT auto-mirrored from
+# homeassistant-addon-dev/config.yaml.
+ingress: true
+ingress_port: 9583
+ingress_stream: true
 # Enable access to Supervisor API for auto-discovery
 hassio_api: true
 # `manager` (not `default`) is required so the Supervisor token grants access
