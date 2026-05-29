@@ -268,6 +268,116 @@ async def test_deep_search_helper(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_deep_search_finds_ui_template_helper(mcp_client):
+    """Deep search must surface UI-created flow-based (template) helpers.
+
+    Regression for issue #1457: template/group/utility_meter/... helpers live
+    as config entries, not storage records, so the helper search used to miss
+    them entirely. They are now listed via the config-entries endpoint and the
+    options flow is probed so the template body is searchable. This exercises
+    the full chain end-to-end (deep_search → flow-helper probe →
+    fetch_entry_options → description.suggested_value extraction):
+
+    1. found by helper name,
+    2. found by a token inside the template body (the headline fix), and
+    3. include_config=True attaches the probed config.
+    """
+    logger.info("🔍 Testing deep search for UI template helpers")
+
+    # Distinctive token embedded in the template body (not in the name), so a
+    # match on it can only come from probing the options flow config.
+    body_marker = "deepsearchtemplatebody4471"
+    config = {
+        "next_step_id": "sensor",
+        "name": "Deep Search Template Helper",
+        "state": "{{ states('sensor." + body_marker + "') }}",
+    }
+
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "template", "name": config["name"], "config": config},
+    )
+    create_data = assert_mcp_success(create_result, "Create template helper")
+    entry_id = create_data.get("entry_id")
+    assert entry_id, "Create should return the config entry_id"
+    logger.info(f"✅ Created template helper: {entry_id}")
+
+    try:
+        # 1) Findable by name. Flow-helper results carry the parent config
+        #    entry id under `entry_id` (storage helpers use `entity_id`).
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={
+                "query": "Deep Search Template Helper",
+                "search_types": ["helper"],
+                "limit": 10,
+            },
+            predicate=lambda d: any(
+                h.get("entry_id") == entry_id for h in d.get("helpers", [])
+            ),
+            description="deep search finds template helper by name",
+        )
+        assert_deep_search_keys(data)
+        match = next(h for h in data["helpers"] if h.get("entry_id") == entry_id)
+        assert match.get("helper_type") == "template", (
+            f"helper_type should be 'template', got {match.get('helper_type')!r}"
+        )
+        assert match.get("match_in_name") is True, "should match on the name"
+        logger.info(f"✅ Found template helper by name (score {match.get('score')})")
+
+        # 2) Findable by a token inside the template body — only possible if the
+        #    options flow was probed and the template surfaced. This is the
+        #    core of issue #1457.
+        data2 = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={
+                "query": body_marker,
+                "search_types": ["helper"],
+                "limit": 10,
+            },
+            predicate=lambda d: any(
+                h.get("entry_id") == entry_id for h in d.get("helpers", [])
+            ),
+            description="deep search finds template helper by template body",
+        )
+        match2 = next(h for h in data2["helpers"] if h.get("entry_id") == entry_id)
+        assert match2.get("match_in_config") is True, (
+            "template body must be searchable via the options-flow probe"
+        )
+        logger.info("✅ Found template helper by template body content")
+
+        # 3) include_config=True attaches the probed options (template body).
+        result3 = await mcp_client.call_tool(
+            "ha_deep_search",
+            {
+                "query": body_marker,
+                "search_types": ["helper"],
+                "include_config": True,
+                "limit": 10,
+            },
+        )
+        data3 = assert_mcp_success(result3, "Deep search with include_config")
+        match3 = next(
+            h for h in data3.get("helpers", []) if h.get("entry_id") == entry_id
+        )
+        assert "config" in match3, "include_config=True should attach the helper config"
+        assert body_marker in str(match3["config"]), (
+            "attached config should contain the template body"
+        )
+        logger.info("✅ include_config attached the template body")
+
+    finally:
+        await safe_call_tool(
+            mcp_client,
+            "ha_remove_helpers_integrations",
+            {"target": entry_id, "confirm": True},
+        )
+        logger.info("🧹 Cleaned up template helper")
+
+
+@pytest.mark.asyncio
 async def test_deep_search_all_types(mcp_client):
     """Test deep search across all types simultaneously."""
     logger.info("🔍 Testing deep search across all types")
