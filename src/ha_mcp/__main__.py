@@ -761,58 +761,75 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
 # can't drift.
 DEFAULT_MCP_PATH = "/mcp"
 
-# Hostname literals (not IP addresses) the warning helper treats as
-# loopback. IP literals — including the whole ``127.0.0.0/8`` block, ``::1``,
-# bracketed forms, zone-suffixed forms, and IPv4-mapped IPv6 — are handled
-# by the ``ipaddress`` branch above the hostname check.
+# Hostname literals (not IP addresses) treated as loopback by
+# ``_is_loopback_host``. IP literals — the whole ``127.0.0.0/8`` block,
+# ``::1``, bracketed forms, zone-suffixed forms, and IPv4-mapped IPv6 — are
+# handled by the ``ipaddress`` parse before this set is consulted.
 _LOOPBACK_HOSTNAMES = frozenset({"localhost", "ip6-localhost", "ip6-loopback"})
 
 
+def _is_loopback_host(host: str) -> bool:
+    """Return True when ``host`` names the local machine only.
+
+    Accepts IPv6 hosts in bracketed (``[::1]``) or zone-suffixed
+    (``::1%eth0``) form, the full ``127.0.0.0/8`` range, IPv4-mapped IPv6
+    loopback (``::ffff:127.0.0.1``, which ``is_loopback`` resolves on its
+    own), and the names in ``_LOOPBACK_HOSTNAMES``. A value that is neither
+    an IP literal nor a known loopback name (a real hostname, or a malformed
+    string) is treated as non-loopback.
+    """
+    try:
+        candidate = host.strip("[]").split("%", 1)[0]
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        # Not an IP literal — fall back to the known loopback hostnames.
+        return host.lower() in _LOOPBACK_HOSTNAMES
+
+
+def _is_running_in_container() -> bool:
+    """Best-effort detection of containerized execution.
+
+    Inside a container the server binds ``0.0.0.0`` regardless of how the
+    operator restricted host-side exposure (``docker run -p 127.0.0.1:...``),
+    so the bind host alone can't tell a loopback-only deployment from a
+    LAN-reachable one — the default-path warning would be a false positive
+    for every container. Container deployments are hardened through the
+    published guidance instead (AGENTS.md -> Docker; the add-on
+    auto-generates a secret path).
+    """
+    # Docker writes /.dockerenv; Podman writes /run/.containerenv.
+    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+        return True
+    # The Home Assistant add-on runs under the Supervisor.
+    return bool(os.getenv("SUPERVISOR_TOKEN"))
+
+
 def _warn_if_default_path_exposed(host: str, port: int, path: str) -> None:
-    """Warn when the default MCP path is bound to a non-loopback host.
+    """Warn on a direct run that leaves the default path on a LAN bind.
 
-    Standard-mode HTTP/SSE authenticates by URL-path secrecy
-    (see SECURITY.md threat model). The default ``/mcp`` does not provide
-    the high-entropy secret that model assumes once the bind escapes
-    loopback. Operators silence this by following either of the two
-    documented hardening levers — bind ``MCP_HOST=127.0.0.1`` or set
-    ``MCP_SECRET_PATH`` to a high-entropy value.
+    Standard-mode HTTP/SSE authenticates by URL-path secrecy (see
+    SECURITY.md → Threat Model). The default ``/mcp`` is not the
+    high-entropy secret that model assumes once the bind leaves loopback.
 
-    Only called from ``_run_http_server`` (``ha-mcp-web`` / ``ha-mcp-sse``).
-    OAuth mode and the add-on entrypoint bypass this call site.
+    Fires only for a direct ``ha-mcp-web`` / ``ha-mcp-sse`` start (uvx, pip,
+    source) that uses the default path on a non-loopback host. Operators
+    silence it the same way they harden — bind ``MCP_HOST=127.0.0.1`` or set
+    a high-entropy ``MCP_SECRET_PATH``. Containers are skipped: an
+    in-container ``0.0.0.0`` bind says nothing about real exposure, which is
+    set by the ``docker -p`` mapping the process can't observe (see
+    ``_is_running_in_container``).
     """
     if path != DEFAULT_MCP_PATH:
         return
-    # IPv6 hosts may be supplied bracketed (``[::1]``) or with a zone
-    # suffix (``::1%eth0``); strip both before parsing so those forms are
-    # recognized as loopback rather than falling through to the hostname
-    # check. ``(ValueError, TypeError, AttributeError)`` defends against
-    # malformed strings AND a future refactor that hands the helper a
-    # non-string ``host`` — startup keeps the warning surface instead of
-    # crashing.
-    try:
-        candidate = host.strip("[]").split("%", 1)[0]
-        addr = ipaddress.ip_address(candidate)
-        if addr.is_loopback:
-            return
-        # IPv4-mapped IPv6 (``::ffff:127.0.0.1``): ``is_loopback`` returns
-        # False on the IPv6 representation; check the embedded IPv4.
-        if isinstance(addr, ipaddress.IPv6Address):
-            mapped = addr.ipv4_mapped
-            if mapped is not None and mapped.is_loopback:
-                return
-    except (ValueError, TypeError, AttributeError):
-        # Hostname rather than IP literal, or non-string defensively.
-        # Treat known loopback names as loopback; everything else
-        # (including unresolvable strings) as non-loopback so the
-        # warning surfaces.
-        if isinstance(host, str) and host.lower() in _LOOPBACK_HOSTNAMES:
-            return
+    if _is_running_in_container():
+        return
+    if _is_loopback_host(host):
+        return
     logger.warning(
         "ha-mcp listening on %s:%s%s with default MCP_SECRET_PATH. "
         "Standard-mode HTTP/SSE authenticates by URL-path secrecy and assumes "
         "a high-entropy MCP_SECRET_PATH for non-loopback binds "
-        "(see SECURITY.md \u2192 standard-mode threat model). "
+        "(see SECURITY.md → Threat Model). "
         "Either bind loopback (MCP_HOST=127.0.0.1) or set MCP_SECRET_PATH "
         "to a high-entropy value (e.g. /private_<token_urlsafe(16)>).",
         host,

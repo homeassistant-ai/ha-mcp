@@ -517,6 +517,32 @@ for same-host LLM clients (either at the Docker layer with
 `secrets.token_urlsafe(16)`). Internet-facing deployments need a different
 mode — see [SECURITY.md](SECURITY.md).
 
+### uvx / direct run (local network)
+
+`ha-mcp-web` and `ha-mcp-sse` started directly — `uvx`, `pipx`, or from source —
+default to `MCP_HOST=0.0.0.0` and the default path `MCP_SECRET_PATH=/mcp`, so the
+endpoint is reachable from other machines on the LAN at a predictable URL.
+Standard mode authenticates by URL-path secrecy (see
+[SECURITY.md → Threat Model](SECURITY.md#threat-model)); on a LAN-reachable bind
+the default `/mcp` is not the high-entropy secret that model assumes. Harden with
+either lever — the same two the server names in the startup warning it logs for
+this configuration:
+
+```bash
+# Same-host LLM client only — bind loopback; the default path is then fine
+MCP_HOST=127.0.0.1 uvx ha-mcp-web
+# Connect URL: http://127.0.0.1:8086/mcp
+
+# LAN-reachable — keep 0.0.0.0 but set a high-entropy secret path
+MCP_SECRET_PATH="/private_$(python3 -c 'import secrets; print(secrets.token_urlsafe(16))')" \
+  uvx ha-mcp-web
+# Connect URL: http://<lan-ip>:8086/private_<random>
+```
+
+The MCP client must use the full URL including the path. (Running the Home
+Assistant add-on instead generates a secret path for you, and is a *separate*
+deployment from a uvx instance — you don't need both.)
+
 ## Architecture
 
 ```

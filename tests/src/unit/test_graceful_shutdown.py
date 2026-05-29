@@ -585,13 +585,10 @@ class TestHTTPEntryPoints:
         assert exc_info.value.code == 1
 
     def test_run_http_server_invokes_path_warning(self, monkeypatch):
-        """_run_http_server (used by main_web / main_sse) must invoke
-        _warn_if_default_path_exposed so a future refactor that moves,
-        reorders, or accidentally drops the call still fails CI.
-
-        main_oauth bypasses _run_http_server, so the warning correctly
-        never fires for OAuth mode — that exclusion is covered by the
-        helper's own placement (only one call site, here)."""
+        """HTTP/SSE startup must invoke _warn_if_default_path_exposed, so a
+        future refactor that moves, reorders, or accidentally drops the
+        call still fails CI. OAuth startup does not run this path, so the
+        warning stays scoped to the standard-mode HTTP entrypoints."""
         import ha_mcp.__main__ as main_module
 
         called_with: list[tuple[str, int, str]] = []

@@ -1,9 +1,12 @@
-"""Tests for ``_warn_if_default_path_exposed`` startup warning.
+"""Tests for the ``_warn_if_default_path_exposed`` startup warning.
 
-Predicate: warn iff ``MCP_SECRET_PATH`` is the default ``/mcp`` AND the
-bind host is non-loopback. Operators silence the warning by following
-either of the two documented hardening levers (bind loopback OR set a
-custom high-entropy ``MCP_SECRET_PATH``).
+Predicate: warn iff the run is **not** containerized AND ``MCP_SECRET_PATH``
+is the default ``/mcp`` AND the bind host is non-loopback. The container
+exclusion is what keeps the warning from firing on every Docker / add-on
+deployment, where an in-container ``0.0.0.0`` bind says nothing about real
+exposure (that is set by the ``docker -p`` mapping). Operators on a direct
+run silence it by following either documented hardening lever (bind loopback
+OR set a custom high-entropy ``MCP_SECRET_PATH``).
 """
 
 from __future__ import annotations
@@ -12,9 +15,22 @@ import logging
 
 import pytest
 
+import ha_mcp.__main__ as main_module
 from ha_mcp.__main__ import _warn_if_default_path_exposed
 
 _WARNING_LOGGER = "ha_mcp.__main__"
+
+
+@pytest.fixture(autouse=True)
+def _not_in_container(monkeypatch) -> None:
+    """Pin the container check to False for the host/path predicate tests.
+
+    These tests run wherever pytest runs — including inside a container on
+    CI — so the container check must be neutralized to keep the host-based
+    cases deterministic. Container behavior is exercised explicitly in
+    ``test_no_warn_in_container_even_on_lan_bind``.
+    """
+    monkeypatch.setattr(main_module, "_is_running_in_container", lambda: False)
 
 
 @pytest.mark.parametrize(
@@ -75,6 +91,21 @@ def test_no_warn_on_custom_path_any_host(host: str, caplog) -> None:
     assert not [
         r for r in caplog.records if "default MCP_SECRET_PATH" in r.getMessage()
     ], f"unexpected warning for custom path on host {host!r}"
+
+
+def test_no_warn_in_container_even_on_lan_bind(monkeypatch, caplog) -> None:
+    """A container that binds 0.0.0.0 on the default path must stay silent.
+
+    This is the Docker false-positive guard: inside a container the bind is
+    always 0.0.0.0 regardless of the host-side ``docker -p`` mapping, so the
+    warning would be noise on every containerized deployment.
+    """
+    monkeypatch.setattr(main_module, "_is_running_in_container", lambda: True)
+    with caplog.at_level(logging.WARNING, logger=_WARNING_LOGGER):
+        _warn_if_default_path_exposed("0.0.0.0", 8086, "/mcp")
+    assert not [
+        r for r in caplog.records if "default MCP_SECRET_PATH" in r.getMessage()
+    ], "containerized run should not emit the default-path warning"
 
 
 def test_warning_text_names_both_hardening_levers(caplog) -> None:
