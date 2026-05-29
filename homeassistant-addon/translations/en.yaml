@@ -78,3 +78,22 @@ configuration:
       and memory state. Useful when reporting unexplained add-on
       stops or crash loops. Off by default to keep logs concise.
       Requires restart to take effect.
+  tool_search_max_results:
+    name: Tool search max results
+    description: >-
+      Maximum number of tools returned by ha_search_tools when tool search
+      is enabled. Lower values (2-3) save context tokens but may miss
+      relevant tools. Range: 2-10. Requires restart.
+  disabled_tools:
+    name: Disabled tools (comma-separated)
+    description: >-
+      Tools listed here are locked disabled — they cannot be re-enabled
+      from the web Settings UI (Tools tab) without unsetting this option
+      first. Comma-separated tool names (e.g. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Pinned tools (comma-separated)
+    description: >-
+      Tools listed here are locked pinned — they appear at the top of the
+      Tools tab and cannot be unpinned from the web Settings UI without
+      unsetting this option first. Useful in combination with Tool Search.
+      Comma-separated tool names.

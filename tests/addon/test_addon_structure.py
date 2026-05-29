@@ -111,6 +111,28 @@ class TestAddonStructure:
             "32-bit platforms not supported by uv base image"
         )
 
+    def test_stable_addon_exposes_nonbeta_tool_options(self):
+        """Stable add-on must expose the NON-beta operator options that dev
+        has — ``tool_search_max_results``, ``disabled_tools``, ``pinned_tools``
+        — in both ``options`` and ``schema``. These are not beta features, so
+        the web-UI master gate doesn't apply; without them in the stable
+        schema they were unreachable on stable (start.py wrote defaults, the
+        web UI showed them ``origin='addon'``-locked, and the override applier
+        skipped them). Regression guard for that dev/stable config drift."""
+        with open(f"{ADDON_DIR}/config.yaml") as f:
+            config = yaml.safe_load(f)
+
+        expected_schema = {
+            "tool_search_max_results": "int(2,10)?",
+            "disabled_tools": "str?",
+            "pinned_tools": "str?",
+        }
+        for key, schema_type in expected_schema.items():
+            assert key in config["options"], f"{key!r} must be in stable options"
+            assert config["schema"].get(key) == schema_type, (
+                f"{key!r} must be in stable schema as {schema_type!r}"
+            )
+
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Unix permissions not applicable on Windows"
     )
