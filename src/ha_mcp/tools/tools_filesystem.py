@@ -63,8 +63,9 @@ def _version_tuple(version: str) -> tuple[int, ...]:
     segment to ``0`` would not actually achieve the "fail closed"
     intent: a malformed high-order segment like ``"1.x.0"`` would
     still parse to ``(1, 0, 0)`` and pass a ``>= (0, 5, 1)`` gate.
-    Caller routes the ValueError through ``_raise_component_too_old``
-    so the actionable update prompt fires.
+    The caller surfaces the ValueError as a distinct "malformed version"
+    error (reinstall / file-issue remediation), separate from the
+    "too old" update prompt.
     """
     return tuple(int(segment) for segment in version.split("."))
 
@@ -175,7 +176,25 @@ async def _fetch_caller_token(client: Any) -> str:
     try:
         parsed = _version_tuple(version)
     except ValueError:
-        _raise_component_too_old(f"malformed version: {version!r}")
+        # A malformed version (non-numeric segment like "1.x.0", or a
+        # future suffixed/date scheme _version_tuple can't parse) is a
+        # different failure mode from "too old": a HACS update won't help
+        # if the reported version itself is wrong. Point at reinstall /
+        # issue-filing instead of the version-bump remediation.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.COMPONENT_NOT_INSTALLED,
+                "The installed ha_mcp_tools custom component reports a "
+                f"malformed version: {version!r}, so ha-mcp can't verify it "
+                f"meets the required >= {MIN_COMPONENT_VERSION}.",
+                suggestions=[
+                    "Reinstall ha_mcp_tools via HACS",
+                    "Restart Home Assistant after reinstalling",
+                    "If the version is still malformed, file an issue at "
+                    "https://github.com/homeassistant-ai/ha-mcp/issues",
+                ],
+            )
+        )
     if parsed < _version_tuple(MIN_COMPONENT_VERSION):
         _raise_component_too_old(f"reported version is {version}")
     _CALLER_TOKEN_CACHE[client] = token

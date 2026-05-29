@@ -551,10 +551,12 @@ class TestCallMcpToolsServiceInjectsToken:
 
     @pytest.mark.asyncio
     async def test_malformed_version_string_rejected(self):
-        """A non-numeric version segment (e.g. ``'1.x.0'``) is treated
-        as "too old" — fail-closed rather than letting the integer
-        prefix sneak past the gate (``(1, 0, 0)`` would otherwise
-        compare ``>= (0, 5, 1)`` and falsely accept).
+        """A non-numeric version segment (e.g. ``'1.x.0'``) is rejected
+        fail-closed rather than letting the integer prefix sneak past the
+        gate (``(1, 0, 0)`` would otherwise compare ``>= (0, 5, 1)`` and
+        falsely accept). It routes to a distinct "malformed version" error
+        (reinstall / file-issue), NOT the "too old / update via HACS"
+        remediation — updating can't fix a manifest whose version is wrong.
         """
         client = AsyncMock()
         client.get_services.return_value = [
@@ -575,8 +577,11 @@ class TestCallMcpToolsServiceInjectsToken:
         with pytest.raises(ToolError) as exc_info:
             await call_mcp_tools_service(client, "list_files", {"path": "www"})
         msg = str(exc_info.value)
-        assert "too old" in msg
-        assert "malformed" in msg
+        assert "malformed version" in msg
+        assert "1.x.0" in msg
+        assert "Reinstall" in msg
+        # Must NOT route to the "too old / update" remediation.
+        assert "too old" not in msg
 
 
 # =============================================================================
