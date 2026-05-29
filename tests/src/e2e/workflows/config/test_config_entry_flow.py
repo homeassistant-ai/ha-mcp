@@ -142,6 +142,9 @@ class TestConfigEntryFlow:
         """
         body_marker = "optimalpathtemplatebody8829"
         name = "e2e optimal path template"
+        # HA derives a template helper's entity_id from its name (slugified),
+        # e.g. "Weather Message" -> sensor.weather_message (issue #1457).
+        entity_id = "sensor.e2e_optimal_path_template"
         config = {
             "next_step_id": "sensor",
             "name": name,
@@ -151,28 +154,20 @@ class TestConfigEntryFlow:
             mcp_client, "template", config, "template sensor (optimal path)"
         )
         try:
-            # Locate the created template sensor entity.
-            search = await wait_for_tool_result(
-                mcp_client,
-                tool_name="ha_search_entities",
-                arguments={"query": name, "limit": 10},
-                predicate=lambda d: any(
-                    r.get("entity_id", "").startswith("sensor.")
-                    for r in d.get("results", [])
-                ),
-                description="created template sensor is searchable",
-            )
-            entity_id = next(
-                r["entity_id"]
-                for r in search["results"]
-                if r.get("entity_id", "").startswith("sensor.")
-            )
-
             # Change #2: ha_get_entity surfaces the parent config_entry_id, so
             # an agent can jump straight to ha_get_integration without scanning
-            # a domain list.
-            ge = await mcp_client.call_tool("ha_get_entity", {"entity_id": entity_id})
-            ge_data = assert_mcp_success(ge, "get entity")
+            # a domain list. Poll because the template entity registers shortly
+            # after its config entry; the predicate also asserts the field.
+            ge_data = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_entity",
+                arguments={"entity_id": entity_id},
+                predicate=lambda d: (
+                    (d.get("entity_entry") or {}).get("config_entry_id") == entry_id
+                ),
+                timeout=60,
+                description="ha_get_entity surfaces config_entry_id",
+            )
             assert ge_data["entity_entry"]["config_entry_id"] == entry_id, (
                 "ha_get_entity must surface the parent config_entry_id"
             )
