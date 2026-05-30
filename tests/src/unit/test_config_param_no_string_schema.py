@@ -113,6 +113,19 @@ _SERVICE_AND_ENTITY_TOOLS = [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# operations param on ha_bulk_control (list[dict], not dict)
+# ---------------------------------------------------------------------------
+
+_BULK_TOOLS = [
+    (
+        "ha_mcp.tools.tools_service",
+        "register_service_tools",
+        "ha_bulk_control",
+        "operations",
+    ),
+]
+
 _ALL_TOOLS = _CONFIG_TOOLS + _SERVICE_AND_ENTITY_TOOLS
 
 
@@ -148,4 +161,41 @@ def test_param_advertises_object(module, register_fn, tool_name, param_name):
     )
     assert has_object, (
         f"{tool_name}.{param_name}: schema does not include type:object. Schema: {schema}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("module", "register_fn", "tool_name", "param_name"),
+    _BULK_TOOLS,
+)
+def test_list_param_does_not_advertise_string(
+    module, register_fn, tool_name, param_name
+):
+    """List parameter schema must not include type:string."""
+    import importlib
+
+    mod = importlib.import_module(module)
+    fn = getattr(mod, register_fn)
+    schema = _get_param_schema(fn, tool_name, param_name)
+    assert not _contains_string_type(schema), (
+        f"{tool_name}.{param_name}: schema still advertises string type. Schema: {schema}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("module", "register_fn", "tool_name", "param_name"),
+    _BULK_TOOLS,
+)
+def test_list_param_advertises_array(module, register_fn, tool_name, param_name):
+    """List parameter schema must include type:array."""
+    import importlib
+
+    mod = importlib.import_module(module)
+    fn = getattr(mod, register_fn)
+    schema = _get_param_schema(fn, tool_name, param_name)
+    has_array = schema.get("type") == "array" or any(
+        v.get("type") == "array" for v in schema.get("anyOf", [])
+    )
+    assert has_array, (
+        f"{tool_name}.{param_name}: schema does not include type:array. Schema: {schema}"
     )

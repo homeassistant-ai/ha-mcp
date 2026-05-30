@@ -8,7 +8,6 @@ Note: ha_bulk_control expects 'operations' parameter as a list of dicts,
 each containing 'entity_id' and 'action' keys.
 """
 
-import json
 import logging
 
 import pytest
@@ -233,30 +232,6 @@ class TestBulkControl:
                 assert 50 <= brightness <= 100, (
                     f"Brightness should be around 77: {brightness}"
                 )
-
-    async def test_bulk_control_json_string_operations(
-        self, mcp_client, test_light_entity
-    ):
-        """Test bulk_control accepts operations as JSON string."""
-        logger.info("Testing ha_bulk_control with JSON string operations")
-
-        # First turn off the light
-        await mcp_client.call_tool(
-            "ha_call_service",
-            {"domain": "light", "service": "turn_off", "entity_id": test_light_entity},
-        )
-
-        # Operations as JSON string
-        operations_json = json.dumps([{"entity_id": test_light_entity, "action": "on"}])
-        result = await mcp_client.call_tool(
-            "ha_bulk_control",
-            {"operations": operations_json},
-        )
-
-        data = assert_mcp_success(result, "Bulk with JSON string operations")
-        logger.info(
-            f"JSON string operations accepted: successful={data.get('successful_commands')}"
-        )
 
     async def test_bulk_control_empty_operations(self, mcp_client):
         """Test bulk_control with empty operations list."""
