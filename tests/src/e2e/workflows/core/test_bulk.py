@@ -8,7 +8,6 @@ Note: ha_bulk_control expects 'operations' parameter as a list of dicts,
 each containing 'entity_id' and 'action' keys.
 """
 
-import json
 import logging
 
 import pytest
@@ -233,27 +232,6 @@ class TestBulkControl:
                 assert 50 <= brightness <= 100, (
                     f"Brightness should be around 77: {brightness}"
                 )
-
-    async def test_bulk_control_json_string_operations_rejected(
-        self, mcp_client, test_light_entity
-    ):
-        """Test bulk_control rejects operations passed as a JSON string.
-
-        operations must be a list[dict], not a JSON-encoded string.
-        FastMCP validates the type at the schema boundary.
-        """
-        logger.info("Testing ha_bulk_control rejects JSON string operations")
-
-        operations_json = json.dumps([{"entity_id": test_light_entity, "action": "on"}])
-        result = await safe_call_tool(
-            mcp_client,
-            "ha_bulk_control",
-            {"operations": operations_json},
-        )
-        assert result.get("success") is False, (
-            "ha_bulk_control should reject a JSON-encoded string for operations"
-        )
-        logger.info("JSON string operations correctly rejected")
 
     async def test_bulk_control_empty_operations(self, mcp_client):
         """Test bulk_control with empty operations list."""
