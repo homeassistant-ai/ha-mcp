@@ -46,11 +46,11 @@ async def test_call_event_with_dict_data(mcp_client):
 
 @pytest.mark.asyncio
 async def test_call_event_list_data_rejected(mcp_client):
-    """Event data must be a dict — a JSON array is rejected with ToolError."""
+    """Event data must be a dict — a native list is rejected with ToolError."""
     with pytest.raises(ToolError):
         await mcp_client.call_tool(
             "ha_call_event",
-            {"event_type": "test_mcp_event_bad_data", "data": "[1, 2, 3]"},
+            {"event_type": "test_mcp_event_bad_data", "data": [1, 2, 3]},
         )
 
 

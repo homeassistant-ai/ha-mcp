@@ -572,7 +572,7 @@ class ServiceTools:
     @log_tool_usage
     async def ha_bulk_control(
         self,
-        operations: str | list[dict[str, Any]],
+        operations: list[dict[str, Any]],
         parallel: bool = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
