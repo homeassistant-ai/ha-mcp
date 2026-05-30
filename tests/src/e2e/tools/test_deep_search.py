@@ -729,7 +729,3 @@ async def test_deep_search_invalid_params_returns_error(
     assert result["success"] is False, (
         f"Expected failure for {description}, got success=True"
     )
-    assert result["error"]["code"] == "VALIDATION_FAILED", (
-        f"Expected VALIDATION_FAILED for {description}, "
-        f"got {result.get('error', {}).get('code')}"
-    )

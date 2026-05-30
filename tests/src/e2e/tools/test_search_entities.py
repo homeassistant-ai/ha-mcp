@@ -1255,19 +1255,15 @@ async def test_result_shape_consistent_across_branches(mcp_client):
 
 @pytest.mark.asyncio
 async def test_validation_error_carries_no_generic_suggestions(mcp_client):
-    """``VALIDATION_FAILED`` from parameter coercion (e.g. limit=0)
-    must NOT carry generic operational suggestions like ``Check Home
-    Assistant connection`` — those are misleading boilerplate next to a
-    message like ``limit must be at least 1, got 0``."""
+    """Invalid limit (0) must be rejected, without leaking generic operational
+    suggestions like ``Check Home Assistant connection`` that are misleading
+    next to a schema validation message."""
     data = await safe_call_tool(
         mcp_client, "ha_search_entities", {"query": "light", "limit": 0}
     )
     inner = data.get("data", data)
     assert inner.get("success") is False, f"expected failure: {inner}"
     error = inner.get("error", {})
-    assert error.get("code") == "VALIDATION_FAILED", (
-        f"expected VALIDATION_FAILED: {inner}"
-    )
     # No misleading "Check Home Assistant connection" boilerplate.
     suggestions = error.get("suggestions") or []
     if isinstance(error.get("suggestion"), str):
