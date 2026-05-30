@@ -1171,6 +1171,270 @@ class TestAdvancedSectionRender:
         assert 'max="100"' in m.group(0)
 
 
+class TestFormControlAccessibility:
+    """Every generated form control must carry a ``name`` (or ``id``) so it
+    is not flagged by the "form field should have an id or name attribute"
+    accessibility rule. ``name`` is additive — no JS selects on it
+    (selection is via ``data-*`` attributes), so behaviour is unchanged.
+    """
+
+    def test_tool_toggles_carry_name_attribute(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_foo",
+                            "title": "Foo",
+                            "primary_tag": "Utilities",
+                            "tags": ["Utilities"],
+                            "description": "Test tool",
+                            "annotations": {},
+                        }
+                    ],
+                    "states": {"ha_foo": "enabled"},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        for field in ("enabled", "pinned", "gated"):
+            m = re.search(rf'<input[^>]*data-field="{field}"[^>]*>', result.dom)
+            assert m is not None, f"expected {field} toggle in DOM"
+            assert f'name="tool:ha_foo:{field}"' in m.group(0), (
+                f"expected name on {field} toggle; got {m.group(0)}"
+            )
+
+    def test_advanced_field_input_carries_name_attribute(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
+                            "type": "int",
+                            "section": "search",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1,
+                            "max": 100,
+                        }
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        m = re.search(
+            r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>', result.dom
+        )
+        assert m is not None, "expected advanced input for fuzzy_threshold"
+        assert 'name="adv:fuzzy_threshold"' in m.group(0), (
+            f"expected name on advanced input; got {m.group(0)}"
+        )
+
+    def test_no_rendered_input_lacks_name_or_id(
+        self, settings_script: str
+    ) -> None:
+        """Holistic guard: render every page-load form surface — tool toggles
+        + group master, feature flags, the yaml-packages sub-flags, the
+        code-mode numeric sub-rows and advanced fields — then assert every
+        rendered <input> carries a name or id, exactly the rule the
+        accessibility audit flags. (The backup-config and policy forms load
+        on tab activation, not at init — covered by their own tests below.)
+        """
+        def flag(env: str) -> dict:
+            return {
+                "value": True,
+                "origin": "default",
+                "editable": True,
+                "type": "bool",
+                "env_var": env,
+            }
+
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_foo",
+                            "title": "Foo",
+                            "primary_tag": "Utilities",
+                            "tags": ["Utilities"],
+                            "description": "Test tool",
+                            "annotations": {},
+                        }
+                    ],
+                    "states": {"ha_foo": "enabled"},
+                },
+            },
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": flag("ENABLE_BETA_FEATURES"),
+                        "enable_code_mode": flag("ENABLE_CODE_MODE"),
+                        "enable_yaml_config_editing": flag(
+                            "ENABLE_YAML_CONFIG_EDITING"
+                        ),
+                        "enable_yaml_packages_automation": flag(
+                            "ENABLE_YAML_PACKAGES_AUTOMATION"
+                        ),
+                        "enable_yaml_packages_script": flag(
+                            "ENABLE_YAML_PACKAGES_SCRIPT"
+                        ),
+                        "enable_yaml_packages_scene": flag(
+                            "ENABLE_YAML_PACKAGES_SCENE"
+                        ),
+                    },
+                    "beta_sub_flags": [
+                        "enable_code_mode",
+                        "enable_yaml_config_editing",
+                    ],
+                    "is_addon": False,
+                },
+            },
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
+                            "type": "int",
+                            "section": "search",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1,
+                            "max": 100,
+                        },
+                        {
+                            "field": "code_mode_max_duration",
+                            "env_var": "CODE_MODE_MAX_DURATION",
+                            "value": 30.0,
+                            "type": "float",
+                            "section": "beta_codemode",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1.0,
+                            "max": 300.0,
+                        },
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        import re
+
+        inputs = re.findall(r"<input\b[^>]*>", result.dom)
+        assert inputs, "expected at least one rendered <input>"
+        missing = [i for i in inputs if "name=" not in i and "id=" not in i]
+        assert not missing, (
+            f"{len(missing)} rendered <input> lack name/id (a11y): {missing}"
+        )
+        # Sanity: the expanded fixture really did exercise the extra
+        # surfaces (code-mode sub-row + a yaml-packages sub-flag), not
+        # silently render nothing.
+        assert 'name="adv:code_mode_max_duration"' in result.dom, (
+            "code-mode sub-row did not render — fixture/holistic-guard drift"
+        )
+        assert 'name="feature:enable_yaml_packages_automation"' in result.dom, (
+            "yaml-packages sub-row did not render — fixture/holistic-guard drift"
+        )
+
+    def test_backup_config_inputs_carry_name_attribute(
+        self, settings_script: str
+    ) -> None:
+        """The backup-config form loads on backups-tab activation (not at
+        page init), so drive ``loadBackupConfig()`` directly and assert its
+        bool / text / number inputs each carry a ``name``.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/backup-config": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "auto_backup_enabled",
+                            "env_var": "AUTO_BACKUP_ENABLED",
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                        },
+                        {
+                            "field": "auto_backup_dir",
+                            "env_var": "AUTO_BACKUP_DIR",
+                            "value": "/backups",
+                            "origin": "default",
+                            "editable": True,
+                        },
+                        {
+                            "field": "auto_backup_throttle_minutes",
+                            "env_var": "AUTO_BACKUP_THROTTLE_MINUTES",
+                            "value": 5,
+                            "origin": "default",
+                            "editable": True,
+                        },
+                    ],
+                    "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke=(
+                "await loadBackupConfig(); "
+                "await new Promise(r => setTimeout(r, 100));"
+            ),
+        )
+        _assert_clean_init(result)
+        for field in (
+            "auto_backup_enabled",
+            "auto_backup_dir",
+            "auto_backup_throttle_minutes",
+        ):
+            assert f'name="backup:{field}"' in result.dom, (
+                f"expected name on backup input {field}; "
+                f"dom tail: {result.dom[-2000:]}"
+            )
+
+
 class TestAddonModeLockedBannerCopy:
     """Locked-banner copy must avoid 'unset env var' wording in addon mode.
 
