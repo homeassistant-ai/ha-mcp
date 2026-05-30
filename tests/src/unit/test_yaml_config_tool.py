@@ -245,3 +245,185 @@ async def test_remove_action_skips_collision_check(monkeypatch):
     )
     client.send_websocket_message.assert_not_called()
     assert _dispatch_call_count(client) == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-key gates for PACKAGES_ONLY_YAML_KEYS (automation/script/scene)
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_payloads(client) -> list[dict]:
+    """Return the service_data dicts the wrapper actually posted to
+    ha_mcp_tools.<dangerous-service>, skipping the bootstrap fetch."""
+    return [
+        c.args[2]
+        for c in client.call_service.await_args_list
+        if c.args[1] != "get_caller_token"
+    ]
+
+
+@pytest.mark.parametrize(
+    "key,flag",
+    [
+        ("automation", "ENABLE_YAML_PACKAGES_AUTOMATION"),
+        ("script", "ENABLE_YAML_PACKAGES_SCRIPT"),
+        ("scene", "ENABLE_YAML_PACKAGES_SCENE"),
+    ],
+)
+async def test_disabled_key_rejects_client_side(monkeypatch, key, flag):
+    """With the per-key flag OFF, the wrapper must reject before the
+    call ever reaches the custom component. The other PACKAGES_ONLY
+    keys with their flag ON keep working in the same test process."""
+    from fastmcp.exceptions import ToolError
+
+    from ha_mcp import config as ha_mcp_config
+
+    # Leave the other two flags ON so we can confirm the reject is
+    # per-key, not a blanket "all packages disabled" mode.
+    for other_flag in (
+        "ENABLE_YAML_PACKAGES_AUTOMATION",
+        "ENABLE_YAML_PACKAGES_SCRIPT",
+        "ENABLE_YAML_PACKAGES_SCENE",
+    ):
+        monkeypatch.setenv(other_flag, "true")
+    monkeypatch.delenv(flag, raising=False)
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+    fn, client = await _make_tool()
+    with pytest.raises(ToolError) as excinfo:
+        await fn(
+            file=f"packages/{key}.yaml",
+            yaml_path=key,
+            action="add",
+            content=f"- alias: example_{key}\n  trigger: []\n  action: []\n",
+        )
+    # Error message must name the disabled key so a reader can act.
+    assert key in str(excinfo.value)
+    # call_service must NOT have been called for the dispatch
+    # (bootstrap fetch is OK; that fires before any reject).
+    assert _dispatch_call_count(client) == 0
+
+
+async def test_enabled_key_passes_disabled_set_in_payload(monkeypatch):
+    """When all 3 flags are ON, the wrapper still passes a (empty)
+    ``disabled_packages_keys`` list so the component receives the
+    field consistently. When some are OFF, the disabled ones appear
+    in the list — that's the defense-in-depth payload."""
+    from ha_mcp import config as ha_mcp_config
+
+    # automation ON, script ON, scene OFF.
+    monkeypatch.setenv("ENABLE_YAML_PACKAGES_AUTOMATION", "true")
+    monkeypatch.setenv("ENABLE_YAML_PACKAGES_SCRIPT", "true")
+    monkeypatch.delenv("ENABLE_YAML_PACKAGES_SCENE", raising=False)
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+    fn, client = await _make_tool()
+    await fn(
+        file="packages/auto.yaml",
+        yaml_path="automation",
+        action="add",
+        content="- alias: example\n  trigger: []\n  action: []\n",
+    )
+    payloads = _dispatch_payloads(client)
+    assert len(payloads) == 1
+    assert payloads[0].get("disabled_packages_keys") == ["scene"]
+
+
+async def test_non_packages_key_unaffected_by_flag(monkeypatch):
+    """Keys that aren't PACKAGES_ONLY (e.g. ``template``) must not be
+    gated by these flags. They route through the same wrapper but
+    aren't in _YAML_PACKAGES_FLAG_BY_KEY."""
+    from ha_mcp import config as ha_mcp_config
+
+    # Turn ALL 3 packages flags OFF.
+    for f in (
+        "ENABLE_YAML_PACKAGES_AUTOMATION",
+        "ENABLE_YAML_PACKAGES_SCRIPT",
+        "ENABLE_YAML_PACKAGES_SCENE",
+    ):
+        monkeypatch.delenv(f, raising=False)
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+    fn, client = await _make_tool()
+    await fn(
+        yaml_path="template",
+        action="add",
+        content="- sensor: []\n",
+    )
+    assert _dispatch_call_count(client) == 1
+    # The disabled set is still computed and forwarded (defense in depth),
+    # in deterministic sorted order, even though ``template`` isn't gated.
+    assert _dispatch_payloads(client)[0].get("disabled_packages_keys") == [
+        "automation",
+        "scene",
+        "script",
+    ]
+
+
+async def test_disabled_key_in_configuration_yaml_falls_through(monkeypatch):
+    """A disabled PACKAGES_ONLY key targeting configuration.yaml must NOT be
+    rejected client-side — the wrapper gate is scoped to packages/*.yaml. The
+    call is forwarded (the component rejects it for being a packages-only key),
+    and the disabled set is still attached for the component's own gate."""
+    from ha_mcp import config as ha_mcp_config
+
+    monkeypatch.delenv("ENABLE_YAML_PACKAGES_AUTOMATION", raising=False)
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+    fn, client = await _make_tool()
+    await fn(
+        file="configuration.yaml",
+        yaml_path="automation",
+        action="add",
+        content="- alias: x\n  trigger: []\n  action: []\n",
+    )
+    # Gate did NOT fire client-side (it would have raised + skipped dispatch).
+    assert _dispatch_call_count(client) == 1
+    assert "automation" in _dispatch_payloads(client)[0].get(
+        "disabled_packages_keys", []
+    )
+
+
+async def test_relative_packages_path_is_normalized_and_gated(monkeypatch):
+    """``./packages/x.yaml`` normalises to ``packages/x.yaml`` (matching the
+    component's os.path.normpath + fnmatch classification), so the disabled-key
+    gate fires client-side for it too — not only the bare ``packages/`` spelling."""
+    from fastmcp.exceptions import ToolError
+
+    from ha_mcp import config as ha_mcp_config
+
+    monkeypatch.delenv("ENABLE_YAML_PACKAGES_AUTOMATION", raising=False)
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+    fn, client = await _make_tool()
+    with pytest.raises(ToolError) as excinfo:
+        await fn(
+            file="./packages/auto.yaml",
+            yaml_path="automation",
+            action="add",
+            content="- alias: x\n  trigger: []\n  action: []\n",
+        )
+    assert "automation" in str(excinfo.value)
+    assert _dispatch_call_count(client) == 0
+
+
+async def test_disabled_key_remove_action_rejected_before_dispatch(monkeypatch):
+    """The gate fires for ``remove`` too (which carries no content), before any
+    dispatch — so it can't be bypassed by choosing an action that skips the
+    content-required check."""
+    from fastmcp.exceptions import ToolError
+
+    from ha_mcp import config as ha_mcp_config
+
+    monkeypatch.delenv("ENABLE_YAML_PACKAGES_SCENE", raising=False)
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+    fn, client = await _make_tool()
+    with pytest.raises(ToolError) as excinfo:
+        await fn(
+            file="packages/scenes.yaml",
+            yaml_path="scene",
+            action="remove",
+        )
+    assert "scene" in str(excinfo.value)
+    assert _dispatch_call_count(client) == 0

@@ -3,6 +3,7 @@
 import asyncio
 import sys
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 from unittest.mock import MagicMock as MM
 
@@ -766,3 +767,182 @@ class TestHandleEditYamlConfigPathTraversal:
         assert result["success"] is False
         assert "packages/*.yaml" in result["error"]
         assert "ha_config_set_automation" in result["error"]
+
+
+class TestHandleEditYamlConfigPackagesGate:
+    """Server-side per-key gate: the component independently refuses a
+    PACKAGES_ONLY key when the caller passes it in ``disabled_packages_keys``,
+    even if the wrapper's client-side gate were bypassed (defense in depth).
+    Mirrors the wrapper-side coverage in test_yaml_config_tool.py."""
+
+    @pytest.fixture
+    def hass(self, tmp_path):
+        h = MM()
+        h.config = MM()
+        h.config.config_dir = str(tmp_path)
+        h.data = {DOMAIN: {"caller_token": _TEST_CALLER_TOKEN}}
+
+        async def _run(fn, *args):
+            return fn(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=_run)
+        h.services = MM()
+        h.services.async_call = AsyncMock(return_value={"errors": None})
+        return h
+
+    @pytest.fixture
+    def call_factory(self):
+        def _make(data):
+            call = MM()
+            call.data = {**data, CALLER_TOKEN_FIELD: _TEST_CALLER_TOKEN}
+            return call
+
+        return _make
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    # Per-key valid content (automation/scene are lists, script is a map).
+    _CONTENT: ClassVar[dict[str, str]] = {
+        "automation": "- id: x\n  alias: x\n  trigger: []\n  action: []\n",
+        "script": "my_script:\n  sequence: []\n",
+        "scene": "- id: x\n  name: x\n  entities: {}\n",
+    }
+
+    @pytest.mark.parametrize("key", ["automation", "script", "scene"])
+    def test_disabled_key_rejected_server_side(self, hass, call_factory, key):
+        """A disabled key targeting packages/*.yaml is refused by the
+        component itself — independently of the wrapper — with a message
+        pointing back at the caller's runtime configuration."""
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": f"packages/{key}.yaml",
+                        "action": "add",
+                        "yaml_path": key,
+                        "content": self._CONTENT[key],
+                        "backup": False,
+                        "disabled_packages_keys": [key],
+                    }
+                )
+            )
+        )
+        assert result["success"] is False, result
+        assert key in result["error"]
+        assert "disabled by the caller's runtime configuration" in result["error"]
+
+    def test_other_packages_key_not_blocked(self, hass, call_factory):
+        """The gate is per-key: disabling ``automation`` must not block a
+        ``script`` write to the same packages surface."""
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "packages/things.yaml",
+                        "action": "add",
+                        "yaml_path": "script",
+                        "content": self._CONTENT["script"],
+                        "backup": False,
+                        "disabled_packages_keys": ["automation"],
+                    }
+                )
+            )
+        )
+        assert result["success"] is True, result
+
+    def test_configuration_yaml_disabled_key_falls_through(
+        self, tmp_path, hass, call_factory
+    ):
+        """A disabled PACKAGES_ONLY key written to configuration.yaml must
+        fall through to the storage-mode advisory (``_parse_and_validate_yaml_path``),
+        NOT the per-key gate message — the gate is scoped to packages targets."""
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text("")
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "configuration.yaml",
+                        "action": "add",
+                        "yaml_path": "automation",
+                        "content": self._CONTENT["automation"],
+                        "backup": False,
+                        "disabled_packages_keys": ["automation"],
+                    }
+                )
+            )
+        )
+        assert result["success"] is False, result
+        # The storage-mode advisory, not the per-key gate message.
+        assert "disabled by the caller's runtime configuration" not in result["error"]
+        assert "ha_config_set_automation" in result["error"]
+
+    def test_unknown_disabled_key_is_noop(self, hass, call_factory):
+        """An unrecognized key in ``disabled_packages_keys`` is filtered out
+        (typo guard), so it cannot accidentally block a real, enabled key."""
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "packages/automations.yaml",
+                        "action": "add",
+                        "yaml_path": "automation",
+                        "content": self._CONTENT["automation"],
+                        "backup": False,
+                        "disabled_packages_keys": ["automatoin"],  # typo
+                    }
+                )
+            )
+        )
+        assert result["success"] is True, result
+
+    def test_default_empty_disabled_allows(self, hass, call_factory):
+        """Omitting ``disabled_packages_keys`` entirely (older wrapper, or the
+        schema default) imposes no per-key restriction on a packages write."""
+        from custom_components.ha_mcp_tools import _build_edit_yaml_config_handler
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "packages/automations.yaml",
+                        "action": "add",
+                        "yaml_path": "automation",
+                        "content": self._CONTENT["automation"],
+                        "backup": False,
+                    }
+                )
+            )
+        )
+        assert result["success"] is True, result
+
+    def test_flag_map_matches_packages_only_keys(self):
+        """The wrapper's ``_YAML_PACKAGES_FLAG_BY_KEY`` must stay in lockstep
+        with the component's ``PACKAGES_ONLY_YAML_KEYS`` (no import-time
+        coupling exists), and every mapped flag must be a real ``Settings``
+        field. Otherwise a packages-only key silently becomes ungated, or
+        ``_disabled_packages_keys`` raises at runtime."""
+        from custom_components.ha_mcp_tools.const import PACKAGES_ONLY_YAML_KEYS
+        from ha_mcp.config import Settings
+        from ha_mcp.tools.tools_yaml_config import _YAML_PACKAGES_FLAG_BY_KEY
+
+        assert set(_YAML_PACKAGES_FLAG_BY_KEY) == set(PACKAGES_ONLY_YAML_KEYS)
+        for flag in _YAML_PACKAGES_FLAG_BY_KEY.values():
+            assert flag in Settings.model_fields, (
+                f"{flag} is mapped in _YAML_PACKAGES_FLAG_BY_KEY but is not a "
+                "Settings field"
+            )

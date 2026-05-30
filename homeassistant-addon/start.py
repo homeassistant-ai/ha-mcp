@@ -187,6 +187,13 @@ def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool
 
 _DEV_ADDON_BETA_KEYS = (
     "enable_yaml_config_editing",
+    # Per-key sub-gates of enable_yaml_config_editing. Kept in lockstep
+    # with config.BETA_FEATURE_FIELDS (enforced by
+    # test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry) so the
+    # auto-enable bridge covers exactly the runtime beta set.
+    "enable_yaml_packages_automation",
+    "enable_yaml_packages_script",
+    "enable_yaml_packages_scene",
     "enable_filesystem_tools",
     "enable_custom_component_integration",
     "enable_code_mode",
@@ -274,6 +281,17 @@ def main() -> int:
     enable_tool_security_policies = False  # default
     enable_yaml_config_editing = False  # default
     yaml_config_in_config = False  # presence flag
+    # Per-key sub-gates of enable_yaml_config_editing (dev-addon schema
+    # only). Each follows the same presence-tracked pattern as the
+    # parent so stable installs (key absent) fall through to the
+    # standalone file/default origin chain instead of being pinned to
+    # origin='addon'.
+    enable_yaml_packages_automation = False  # default
+    yaml_packages_automation_in_config = False  # presence flag
+    enable_yaml_packages_script = False  # default
+    yaml_packages_script_in_config = False  # presence flag
+    enable_yaml_packages_scene = False  # default
+    yaml_packages_scene_in_config = False  # presence flag
     enable_filesystem_tools = False  # default
     filesystem_tools_in_config = False  # presence flag
     enable_custom_component_integration = False  # default
@@ -332,6 +350,27 @@ def main() -> int:
             raw_yaml_config = config.get("enable_yaml_config_editing", False)
             enable_yaml_config_editing = (
                 raw_yaml_config if isinstance(raw_yaml_config, bool) else False
+            )
+            yaml_packages_automation_in_config = (
+                "enable_yaml_packages_automation" in config
+            )
+            raw_yaml_pkg_automation = config.get(
+                "enable_yaml_packages_automation", False
+            )
+            enable_yaml_packages_automation = (
+                raw_yaml_pkg_automation
+                if isinstance(raw_yaml_pkg_automation, bool)
+                else False
+            )
+            yaml_packages_script_in_config = "enable_yaml_packages_script" in config
+            raw_yaml_pkg_script = config.get("enable_yaml_packages_script", False)
+            enable_yaml_packages_script = (
+                raw_yaml_pkg_script if isinstance(raw_yaml_pkg_script, bool) else False
+            )
+            yaml_packages_scene_in_config = "enable_yaml_packages_scene" in config
+            raw_yaml_pkg_scene = config.get("enable_yaml_packages_scene", False)
+            enable_yaml_packages_scene = (
+                raw_yaml_pkg_scene if isinstance(raw_yaml_pkg_scene, bool) else False
             )
             filesystem_tools_in_config = "enable_filesystem_tools" in config
             raw_filesystem_tools = config.get("enable_filesystem_tools", False)
@@ -461,6 +500,18 @@ def main() -> int:
     if yaml_config_in_config:
         os.environ["ENABLE_YAML_CONFIG_EDITING"] = str(
             enable_yaml_config_editing
+        ).lower()
+    if yaml_packages_automation_in_config:
+        os.environ["ENABLE_YAML_PACKAGES_AUTOMATION"] = str(
+            enable_yaml_packages_automation
+        ).lower()
+    if yaml_packages_script_in_config:
+        os.environ["ENABLE_YAML_PACKAGES_SCRIPT"] = str(
+            enable_yaml_packages_script
+        ).lower()
+    if yaml_packages_scene_in_config:
+        os.environ["ENABLE_YAML_PACKAGES_SCENE"] = str(
+            enable_yaml_packages_scene
         ).lower()
     if filesystem_tools_in_config:
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(

@@ -53,7 +53,7 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 # server-side behavior change requires it. Older components (no
 # ``version`` in the get_caller_token response, or a version below this)
 # get an actionable "update via HACS" error.
-MIN_COMPONENT_VERSION = "0.5.1"
+MIN_COMPONENT_VERSION = "0.5.2"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:

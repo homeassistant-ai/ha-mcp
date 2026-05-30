@@ -2172,3 +2172,187 @@ class TestCodeModeNesting:
         assert cm_rows, "expected codemode-sub row"
         for row in cm_rows:
             assert "dimmed" not in row, f"unexpected dimmed when both gates on: {row}"
+
+
+class TestYamlPackagesSubFlagNesting:
+    """JSDOM coverage for the 3 yaml-packages sub-rows nested under
+    enable_yaml_config_editing. Same dim-on-parent-off pattern as the
+    code-mode sub-numerics but with bool sub-toggles instead of int
+    bounds."""
+
+    def _payload(self, master_on: bool, parent_on: bool) -> dict[str, dict]:
+        flag = lambda name, value, env: {  # noqa: E731
+            "value": value,
+            "origin": "default",
+            "editable": True,
+            "type": "bool",
+            "env_var": env,
+        }
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": flag(
+                            "enable_beta_features", master_on, "ENABLE_BETA_FEATURES"
+                        ),
+                        "enable_yaml_config_editing": flag(
+                            "enable_yaml_config_editing",
+                            parent_on,
+                            "ENABLE_YAML_CONFIG_EDITING",
+                        ),
+                        "enable_yaml_packages_automation": flag(
+                            "enable_yaml_packages_automation",
+                            False,
+                            "ENABLE_YAML_PACKAGES_AUTOMATION",
+                        ),
+                        "enable_yaml_packages_script": flag(
+                            "enable_yaml_packages_script",
+                            False,
+                            "ENABLE_YAML_PACKAGES_SCRIPT",
+                        ),
+                        "enable_yaml_packages_scene": flag(
+                            "enable_yaml_packages_scene",
+                            False,
+                            "ENABLE_YAML_PACKAGES_SCENE",
+                        ),
+                    },
+                    # The backend now sends the per-key flags in
+                    # beta_sub_flags (they're in BETA_FEATURE_FIELDS); the
+                    # main render pass still skips them via
+                    # YAML_PACKAGES_SUB_FLAGS, so they render nested rather
+                    # than as top-level beta-sub rows.
+                    "beta_sub_flags": [
+                        "enable_yaml_config_editing",
+                        "enable_yaml_packages_automation",
+                        "enable_yaml_packages_script",
+                        "enable_yaml_packages_scene",
+                    ],
+                },
+            },
+        }
+
+    def test_three_sub_rows_render(self, settings_script: str) -> None:
+        """All 3 yaml-packages sub-rows must render even when the
+        parent is off — the user needs to see what they CAN enable
+        once they flip the parent on."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(master_on=True, parent_on=False),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        rows = re.findall(
+            r'<div[^>]*class="[^"]*yaml-packages-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert len(rows) == 3, (
+            f"expected 3 yaml-packages-sub rows, got {len(rows)}; tail: "
+            f"{result.dom[-2000:]}"
+        )
+
+    def test_dimmed_when_parent_off(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(master_on=True, parent_on=False),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        rows = re.findall(
+            r'<div[^>]*class="[^"]*yaml-packages-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert rows
+        for row in rows:
+            assert "dimmed" in row, (
+                f"expected dimmed on yaml-packages-sub row when parent off: {row}"
+            )
+
+    def test_dimmed_when_master_off(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(master_on=False, parent_on=True),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        rows = re.findall(
+            r'<div[^>]*class="[^"]*yaml-packages-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert rows
+        for row in rows:
+            assert "dimmed" in row, (
+                f"expected dimmed when master off (parent transitively off): {row}"
+            )
+
+    def test_enabled_when_both_gates_on(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(master_on=True, parent_on=True),
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        rows = re.findall(
+            r'<div[^>]*class="[^"]*yaml-packages-sub[^"]*"[^>]*>',
+            result.dom,
+        )
+        assert rows
+        for row in rows:
+            assert "dimmed" not in row, f"unexpected dimmed when both gates on: {row}"
+
+    def test_subrow_input_disabled_when_parent_off(self, settings_script: str) -> None:
+        """The ``dimmed`` class is cosmetic — assert the actual <input>
+        ``.disabled`` PROPERTY is true when the parent is off, so a dimmed
+        sub-row genuinely can't be toggled. (JSDOM serialises attributes, not
+        live properties, so probe the property directly.)"""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(master_on=True, parent_on=False),
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const row = document.querySelector('.yaml-packages-sub');
+              const input = row.querySelector('input[type="checkbox"]');
+              const probe = document.createElement('div');
+              probe.id = 'pkgProbe';
+              probe.dataset.disabled = String(input.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'id="pkgProbe"[^>]*data-disabled="([^"]*)"', result.dom)
+        assert m is not None, f"probe div missing; tail: {result.dom[-1500:]}"
+        assert m.group(1) == "true", (
+            "sub-row <input> must be .disabled when the parent is off"
+        )
+
+    def test_subrow_input_enabled_when_both_gates_on(
+        self, settings_script: str
+    ) -> None:
+        """With master + parent both on, the sub-row <input> is actually
+        interactive (``.disabled === false``)."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._payload(master_on=True, parent_on=True),
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const row = document.querySelector('.yaml-packages-sub');
+              const input = row.querySelector('input[type="checkbox"]');
+              const probe = document.createElement('div');
+              probe.id = 'pkgProbe';
+              probe.dataset.disabled = String(input.disabled);
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'id="pkgProbe"[^>]*data-disabled="([^"]*)"', result.dom)
+        assert m is not None, f"probe div missing; tail: {result.dom[-1500:]}"
+        assert m.group(1) == "false", (
+            "sub-row <input> must be interactive when both gates are on"
+        )

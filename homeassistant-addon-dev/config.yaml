@@ -35,6 +35,13 @@ options:
   # would risk damage on a fresh install. The master above being on
   # just means "you can enable these from here," not "they are on."
   enable_yaml_config_editing: false
+  # Per-key sub-gates of enable_yaml_config_editing — independently allow
+  # the automation / script / scene keys inside packages/*.yaml. Default
+  # OFF (opt-in per key); only meaningful when the parent
+  # enable_yaml_config_editing is on.
+  enable_yaml_packages_automation: false
+  enable_yaml_packages_script: false
+  enable_yaml_packages_scene: false
   enable_filesystem_tools: false
   enable_custom_component_integration: false
   enable_code_mode: false
@@ -54,6 +61,9 @@ schema:
   enable_tool_security_policies: bool?
   enable_beta_features: bool?
   enable_yaml_config_editing: bool?
+  enable_yaml_packages_automation: bool?
+  enable_yaml_packages_script: bool?
+  enable_yaml_packages_scene: bool?
   enable_code_mode: bool?
   enable_lite_docstrings: bool?
   enable_mandatory_bps: bool?
