@@ -45,11 +45,14 @@ def _is_under(path: Path, root: Path) -> bool:
 def pytest_configure(config: pytest.Config) -> None:
     """Reject an invocation whose path args span both unit and e2e trees."""
     params = config.invocation_params
+    if params is None:
+        return
     base = Path(params.dir)
     touches_unit = touches_e2e = False
-    for arg in params.args:
-        if arg.startswith("-"):
-            continue
+    # ``config.args`` contains only the already-parsed positional path args,
+    # not option values (e.g. -k unit). Using invocation_params.args would
+    # misclassify option arguments as paths.
+    for arg in config.args:
         # Strip ``::node::ids`` and resolve relative to the invocation dir.
         target = (base / arg.split("::", 1)[0]).resolve()
         if _is_under(target, _UNIT):
