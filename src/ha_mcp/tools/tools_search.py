@@ -20,8 +20,6 @@ from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_e
 from .util_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
-    coerce_bool_param,
-    coerce_int_param,
     filter_active_repairs,
     parse_string_list_param,
     project_fields,
@@ -214,17 +212,25 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description="Limit to entities in a specific area (area ID or name).",
             ),
         ] = None,
-        limit: int = 10,
+        limit: Annotated[
+            int,
+            Field(
+                default=10,
+                ge=1,
+                description="Maximum number of results to return (default: 10, minimum: 1)",
+            ),
+        ] = 10,
         offset: Annotated[
-            int | str,
+            int,
             Field(
                 default=0,
+                ge=0,
                 description="Number of results to skip for pagination (default: 0)",
             ),
         ] = 0,
-        group_by_domain: bool | str = False,
+        group_by_domain: bool = False,
         exact_match: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=True,
                 description=(
@@ -235,7 +241,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
         include_hidden: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=True,
                 description=(
@@ -250,7 +256,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
         per_domain_limit: Annotated[
-            int | str | None,
+            int | None,
             Field(
                 default=None,
                 description=(
@@ -363,36 +369,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
         try:
-            # Param coercion stays inside try/except so a malformed
-            # value (e.g. include_hidden="maybe") surfaces as a
-            # structured ToolError via exception_to_structured_error
-            # rather than escaping as INTERNAL_ERROR.
-            group_by_domain_bool = (
-                coerce_bool_param(group_by_domain, "group_by_domain", default=False)
-                or False
-            )
-            exact_match_bool = coerce_bool_param(
-                exact_match, "exact_match", default=True
-            )
-            # Default True: hidden entities are kept (with score penalty)
-            # unless the caller explicitly opts out by passing False.
-            coerced_hidden = coerce_bool_param(
-                include_hidden, "include_hidden", default=True
-            )
-            # coerce_bool_param returns the default when value is None;
-            # with default=True the result is a real bool, but the type
-            # system still admits None — coalesce defensively for static
-            # typing.
-            include_hidden_bool = coerced_hidden if coerced_hidden is not None else True
-            offset = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
-            limit = coerce_int_param(limit, "limit", default=10, min_value=1)
-            per_domain_limit_int = (
-                coerce_int_param(
-                    per_domain_limit, "per_domain_limit", default=None, min_value=1
-                )
-                if per_domain_limit is not None
-                else None
-            )
+            group_by_domain_bool = group_by_domain
+            exact_match_bool = exact_match
+            include_hidden_bool = include_hidden
+            per_domain_limit_int = per_domain_limit
 
             # Normalize state_filter — strip surrounding whitespace so
             # "on " and " on" match HA's canonical lowercase state values.
@@ -1023,10 +1003,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         except ToolError:
             raise
         except ValueError as e:
-            # coerce_bool_param / coerce_int_param raise ValueError on
-            # bad input. These are param-validation failures, not
-            # operational ones — surface them as VALIDATION_FAILED with
-            # the helper's own message and NO generic operational
+            # ValueError from param validation — surface as VALIDATION_FAILED
+            # with the original message and NO generic operational
             # suggestions (those would just be misleading boilerplate
             # next to an unrelated message like "limit must be at least
             # 1, got 0").
@@ -1088,9 +1066,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         limit: Annotated[
-            int | str | None,
+            int | None,
             Field(
                 default=None,
+                ge=1,
                 description=(
                     "Max total entities across all domains (default: unlimited for minimal, "
                     "200 for standard/full). Counts and states always complete. "
@@ -1099,9 +1078,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         offset: Annotated[
-            int | str,
+            int,
             Field(
                 default=0,
+                ge=0,
                 description="Number of entities to skip for pagination (default: 0)",
             ),
         ] = 0,
@@ -1113,28 +1093,28 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         include_state: Annotated[
-            bool | str | None,
+            bool | None,
             Field(
                 default=None,
                 description="Include state field for entities (None = auto based on level). Full defaults to True.",
             ),
         ] = None,
         include_entity_id: Annotated[
-            bool | str | None,
+            bool | None,
             Field(
                 default=None,
                 description="Include entity_id field for entities (None = auto based on level). Full defaults to True.",
             ),
         ] = None,
         include_notifications: Annotated[
-            bool | str | None,
+            bool | None,
             Field(
                 default=True,
                 description="Include active persistent notifications (default: True). Set False to skip.",
             ),
         ] = True,
         include_dismissed_repairs: Annotated[
-            bool | str | None,
+            bool | None,
             Field(
                 default=False,
                 description=(
@@ -1200,30 +1180,19 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
 
-        # Coerce boolean parameters that may come as strings from XML-style calls
-        include_state_bool = coerce_bool_param(
-            include_state, "include_state", default=None
+        include_state_bool = include_state
+        include_entity_id_bool = include_entity_id
+        include_notifications_bool = (
+            include_notifications if include_notifications is not None else True
         )
-        include_entity_id_bool = coerce_bool_param(
-            include_entity_id, "include_entity_id", default=None
-        )
-        include_notifications_bool = coerce_bool_param(
-            include_notifications, "include_notifications", default=True
-        )
-        include_dismissed_repairs_bool = bool(
-            coerce_bool_param(
-                include_dismissed_repairs,
-                "include_dismissed_repairs",
-                default=False,
-            )
-        )
+        include_dismissed_repairs_bool = bool(include_dismissed_repairs)
 
         # Parse domains filter
         parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
 
         # Parse pagination parameters
-        limit_int = coerce_int_param(limit, "limit", default=None, min_value=1)
-        offset_int = coerce_int_param(offset, "offset", default=0, min_value=0) or 0
+        limit_int = limit
+        offset_int = offset
 
         result = await smart_tools.get_system_overview(
             detail_level,
@@ -1424,21 +1393,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         limit: Annotated[
-            int | str,
+            int,
             Field(
                 default=5,
+                ge=1,
                 description="Maximum total results to return (default: 5)",
             ),
         ] = 5,
         offset: Annotated[
-            int | str,
+            int,
             Field(
                 default=0,
+                ge=0,
                 description="Number of results to skip for pagination (default: 0)",
             ),
         ] = 0,
         include_config: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=False,
                 description=(
@@ -1448,7 +1419,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = False,
         exact_match: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=True,
                 description=(
@@ -1495,13 +1466,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         # Parse search_types to handle JSON string input from MCP clients
         parsed_search_types = parse_string_list_param(search_types, "search_types")
-        include_config_bool = coerce_bool_param(
-            include_config, "include_config", default=False
-        )
-        exact_match_bool = coerce_bool_param(exact_match, "exact_match", default=True)
+        include_config_bool = include_config
+        exact_match_bool = exact_match
         try:
-            limit = coerce_int_param(limit, "limit", default=5, min_value=1)
-            offset = coerce_int_param(offset, "offset", default=0, min_value=0)
             result = await smart_tools.deep_search(
                 query,
                 parsed_search_types,

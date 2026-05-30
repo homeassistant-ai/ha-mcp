@@ -39,7 +39,6 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
-    coerce_bool_param,
     fetch_entity_category,
     merge_validation_meta,
     parse_json_param,
@@ -472,7 +471,7 @@ class ConfigSceneTools:
             ),
         ] = None,
         wait: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "Wait for scene to be queryable before returning. Default: True. "
@@ -723,9 +722,8 @@ class ConfigSceneTools:
                 # post-upsert finalisation the full-config branch runs. Without
                 # these, ``wait`` and ``category`` are silently dropped on
                 # python_transform calls.
-                wait_bool = coerce_bool_param(wait, "wait", default=True)
                 entity_id = await self._resolve_scene_entity_id(resolved_id)
-                if wait_bool:
+                if wait:
                     try:
                         registered = await wait_for_entity_registered(
                             self._client, entity_id
@@ -841,8 +839,7 @@ class ConfigSceneTools:
             entity_id = await self._resolve_scene_entity_id(resolved_id)
 
             # Wait for scene to be queryable
-            wait_bool = coerce_bool_param(wait, "wait", default=True)
-            if wait_bool:
+            if wait:
                 try:
                     registered = await wait_for_entity_registered(
                         self._client, entity_id
@@ -914,7 +911,7 @@ class ConfigSceneTools:
             str, Field(description="Scene identifier to delete (e.g., 'old_scene')")
         ],
         wait: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="Wait for scene to be fully removed before returning. Default: True.",
                 default=True,
@@ -970,8 +967,7 @@ class ConfigSceneTools:
 
             result = await self._client.delete_scene_config(resolved_id)
 
-            wait_bool = coerce_bool_param(wait, "wait", default=True)
-            if wait_bool:
+            if wait:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id)
                     if not removed:
