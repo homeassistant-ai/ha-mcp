@@ -234,29 +234,26 @@ class TestBulkControl:
                     f"Brightness should be around 77: {brightness}"
                 )
 
-    async def test_bulk_control_json_string_operations(
+    async def test_bulk_control_json_string_operations_rejected(
         self, mcp_client, test_light_entity
     ):
-        """Test bulk_control accepts operations as JSON string."""
-        logger.info("Testing ha_bulk_control with JSON string operations")
+        """Test bulk_control rejects operations passed as a JSON string.
 
-        # First turn off the light
-        await mcp_client.call_tool(
-            "ha_call_service",
-            {"domain": "light", "service": "turn_off", "entity_id": test_light_entity},
-        )
+        operations must be a list[dict], not a JSON-encoded string.
+        FastMCP validates the type at the schema boundary.
+        """
+        logger.info("Testing ha_bulk_control rejects JSON string operations")
 
-        # Operations as JSON string
         operations_json = json.dumps([{"entity_id": test_light_entity, "action": "on"}])
-        result = await mcp_client.call_tool(
+        result = await safe_call_tool(
+            mcp_client,
             "ha_bulk_control",
             {"operations": operations_json},
         )
-
-        data = assert_mcp_success(result, "Bulk with JSON string operations")
-        logger.info(
-            f"JSON string operations accepted: successful={data.get('successful_commands')}"
+        assert result.get("success") is False, (
+            "ha_bulk_control should reject a JSON-encoded string for operations"
         )
+        logger.info("JSON string operations correctly rejected")
 
     async def test_bulk_control_empty_operations(self, mcp_client):
         """Test bulk_control with empty operations list."""

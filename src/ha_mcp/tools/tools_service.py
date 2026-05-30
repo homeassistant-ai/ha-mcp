@@ -579,7 +579,8 @@ class ServiceTools:
         """Control multiple devices with bulk operation support and WebSocket tracking."""
         parallel_bool = parallel
 
-        # Parse JSON operations if provided as string
+        # FastMCP validates operations as list[dict] before this runs.
+        # parse_json_param is kept as a defensive passthrough for the list case.
         try:
             parsed_operations = parse_json_param(operations, "operations")
         except ValueError as e:
@@ -591,8 +592,7 @@ class ServiceTools:
                 )
             )
 
-        # Ensure operations is a list of dicts
-        if parsed_operations is None or not isinstance(parsed_operations, list):
+        if not isinstance(parsed_operations, list):
             raise_tool_error(
                 create_validation_error(
                     "Operations parameter must be a list",
