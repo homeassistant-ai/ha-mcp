@@ -22,7 +22,6 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import coerce_bool_param
 
 logger = logging.getLogger(__name__)
 
@@ -664,14 +663,14 @@ class UpdateTools:
             ),
         ] = None,
         include_skipped: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="When listing all updates, include updates that have been skipped (default: False)",
                 default=False,
             ),
         ] = False,
         include_release_notes: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="When getting a Core update entity, fetch multi-version release notes "
                 "and breaking changes for all versions between installed and latest (default: False). "
@@ -716,19 +715,11 @@ class UpdateTools:
         """
         try:
             if entity_id is None:
-                include_skipped_bool = (
-                    coerce_bool_param(include_skipped, "include_skipped", default=False)
-                    or False
-                )
-                return await self._list_updates(include_skipped_bool)
+                return await self._list_updates(bool(include_skipped))
             else:
-                include_rn_bool = (
-                    coerce_bool_param(
-                        include_release_notes, "include_release_notes", default=False
-                    )
-                    or False
+                return await self._get_update_details(
+                    entity_id, bool(include_release_notes)
                 )
-                return await self._get_update_details(entity_id, include_rn_bool)
 
         except ToolError:
             raise

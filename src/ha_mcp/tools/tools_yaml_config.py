@@ -31,7 +31,7 @@ from .tools_filesystem import (
     _assert_mcp_tools_available,
     call_mcp_tools_service,
 )
-from .util_helpers import coerce_bool_param, unwrap_service_response
+from .util_helpers import unwrap_service_response
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ class YamlConfigTools:
             ),
         ] = "configuration.yaml",
         backup: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=True,
                 description=(
@@ -219,9 +219,6 @@ class YamlConfigTools:
                     )
                 )
 
-            # Coerce boolean parameter
-            backup_bool = coerce_bool_param(backup, "backup", default=True)
-
             # Storage-mode dashboard collision check (only for lovelace.dashboards.*).
             # Skip on `remove` so users can clean up YAML entries that conflict
             # with a storage-mode dashboard (e.g., during a migration).
@@ -236,7 +233,7 @@ class YamlConfigTools:
                 "file": file,
                 "action": action,
                 "yaml_path": yaml_path,
-                "backup": backup_bool,
+                "backup": backup,
             }
             if content is not None:
                 service_data["content"] = content

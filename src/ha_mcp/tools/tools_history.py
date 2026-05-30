@@ -32,7 +32,6 @@ from .helpers import (
 from .util_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
-    coerce_int_param,
     parse_string_list_param,
     project_fields,
 )
@@ -181,17 +180,20 @@ class HistoryTools:
             ),
         ] = True,
         limit: Annotated[
-            int | str | None,
+            int | None,
             Field(
                 description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).',
                 default=None,
+                ge=1,
+                le=1000,
             ),
         ] = None,
         offset: Annotated[
-            int | str | None,
+            int | None,
             Field(
                 description="Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.",
                 default=None,
+                ge=0,
             ),
         ] = None,
         # Statistics-specific (ignored when source="history")
@@ -296,28 +298,8 @@ class HistoryTools:
             # Offset > 0 is only supported for single-entity requests.
             # build_pagination_metadata applies per entity — limit=100 across
             # 5 entities returns up to 500 rows with no top-level has_more signal.
-            # Coerce and validate offset before the multi-entity guard so that
-            # invalid strings (e.g. "garbage") produce VALIDATION_INVALID_PARAMETER
-            # instead of a bare ValueError swallowed by the outer except.
-            try:
-                _effective_offset_check = coerce_int_param(
-                    offset,
-                    param_name="offset",
-                    default=0,
-                    min_value=0,
-                )
-            except ValueError as e:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        str(e),
-                        context={"parameter": "offset"},
-                        suggestions=[
-                            "Provide offset as a non-negative integer (e.g., 0)"
-                        ],
-                    )
-                )
-            if _effective_offset_check > 0 and len(entity_id_list) > 1:
+            _effective_offset = offset if offset is not None else 0
+            if _effective_offset > 0 and len(entity_id_list) > 1:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -521,8 +503,8 @@ async def _fetch_history(
     end_dt: datetime,
     minimal_response: bool,
     significant_changes_only: bool,
-    limit: int | str | None,
-    offset: int | str | None,
+    limit: int | None,
+    offset: int | None,
     default_limit: int,
     max_limit: int,
     order: str = "desc",
@@ -535,40 +517,8 @@ async def _fetch_history(
     Returns the unwrapped history dict; the caller is responsible for projection
     and wrapping with ``add_timezone_metadata``.
     """
-    try:
-        effective_limit = coerce_int_param(
-            limit,
-            param_name="limit",
-            default=default_limit,
-            min_value=1,
-            max_value=max_limit,
-        )
-    except ValueError as e:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                str(e),
-                context={"parameter": "limit"},
-                suggestions=["Provide limit as an integer (e.g., 100)"],
-            )
-        )
-
-    try:
-        effective_offset = coerce_int_param(
-            offset,
-            param_name="offset",
-            default=0,
-            min_value=0,
-        )
-    except ValueError as e:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                str(e),
-                context={"parameter": "offset"},
-                suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
-            )
-        )
+    effective_limit = min(limit, max_limit) if limit is not None else default_limit
+    effective_offset = offset if offset is not None else 0
 
     command_params = {
         "start_time": start_dt.isoformat(),
@@ -670,48 +620,16 @@ async def _fetch_statistics(
     end_dt: datetime,
     period: str,
     statistic_types: str | list[str] | None,
-    limit: int | str | None,
-    offset: int | str | None,
+    limit: int | None,
+    offset: int | None,
 ) -> dict[str, Any]:
     """Execute the recorder/statistics_during_period WebSocket call.
 
     Returns the unwrapped statistics dict; the caller is responsible for projection
     and wrapping with ``add_timezone_metadata``.
     """
-    try:
-        effective_limit = coerce_int_param(
-            limit,
-            param_name="limit",
-            default=_DEFAULT_HISTORY_LIMIT,
-            min_value=1,
-            max_value=_MAX_HISTORY_LIMIT,
-        )
-    except ValueError as e:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                str(e),
-                context={"parameter": "limit"},
-                suggestions=["Provide limit as an integer (e.g., 100)"],
-            )
-        )
-
-    try:
-        effective_offset = coerce_int_param(
-            offset,
-            param_name="offset",
-            default=0,
-            min_value=0,
-        )
-    except ValueError as e:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                str(e),
-                context={"parameter": "offset"},
-                suggestions=["Provide offset as a non-negative integer (e.g., 0)"],
-            )
-        )
+    effective_limit = limit if limit is not None else _DEFAULT_HISTORY_LIMIT
+    effective_offset = offset if offset is not None else 0
 
     # Validate period
     valid_periods = ["5minute", "hour", "day", "week", "month", "year"]

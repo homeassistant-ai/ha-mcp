@@ -197,23 +197,6 @@ class TestHaGetOverviewRepairs:
         assert result["dismissed_repair_count"] == 3
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "value,expected_count",
-        [("true", 2), ("True", 2), ("1", 2), ("false", 1), ("0", 1)],
-    )
-    async def test_include_dismissed_accepts_string_inputs(
-        self, mock_mcp, mock_smart_tools, value, expected_count
-    ):
-        """LLM clients send booleans as strings — coercion must apply."""
-        issues = [_active_issue("active"), _ignored_issue("dismissed")]
-        client = self._make_client(issues)
-        tool = self._build_tool(mock_mcp, client, mock_smart_tools)
-
-        result = await tool(detail_level="minimal", include_dismissed_repairs=value)
-
-        assert result["repair_count"] == expected_count
-
-    @pytest.mark.asyncio
     async def test_repairs_ws_failure_does_not_break_overview(
         self, mock_mcp, mock_smart_tools
     ):

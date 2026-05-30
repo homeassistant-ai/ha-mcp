@@ -22,7 +22,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .tools_voice_assistant import KNOWN_ASSISTANTS
-from .util_helpers import coerce_bool_param, parse_json_param, parse_string_list_param
+from .util_helpers import parse_json_param, parse_string_list_param
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +83,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         area_id: str | None,
         name: str | None,
         icon: str | None,
-        enabled: bool | str | None,
-        hidden: bool | str | None,
+        enabled: bool | None,
+        hidden: bool | None,
         parsed_aliases: list[str] | None,
         parsed_categories: dict[str, str | None] | None,
         parsed_labels: list[str] | None,
@@ -151,30 +151,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
         if enabled is not None:
-            try:
-                enabled_bool = coerce_bool_param(enabled, "enabled")
-            except ValueError as e:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        str(e),
-                    )
-                )
-            message["disabled_by"] = None if enabled_bool else "user"
-            updates_made.append("enabled" if enabled_bool else "disabled")
+            message["disabled_by"] = None if enabled else "user"
+            updates_made.append("enabled" if enabled else "disabled")
 
         if hidden is not None:
-            try:
-                hidden_bool = coerce_bool_param(hidden, "hidden")
-            except ValueError as e:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        str(e),
-                    )
-                )
-            message["hidden_by"] = "user" if hidden_bool else None
-            updates_made.append("hidden" if hidden_bool else "visible")
+            message["hidden_by"] = "user" if hidden else None
+            updates_made.append("hidden" if hidden else "visible")
 
         if parsed_aliases is not None:
             message["aliases"] = parsed_aliases
@@ -630,7 +612,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         enabled: Annotated[
-            bool | str | None,
+            bool | None,
             Field(
                 description=(
                     "True to enable the entity, False to disable it. Single entity only. "
@@ -644,7 +626,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         hidden: Annotated[
-            bool | str | None,
+            bool | None,
             Field(
                 description="True to hide the entity from UI, False to show it. Single entity only.",
                 default=None,
@@ -872,12 +854,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # script.turn_off) which simply prevent them from running while
             # keeping them visible and manageable.
             if enabled is not None:
-                try:
-                    _enabled_check = coerce_bool_param(enabled, "enabled")
-                except ValueError:
-                    _enabled_check = None  # will be caught by _update_single_entity
-
-                if _enabled_check is False:
+                if enabled is False:
                     blocked = [
                         eid
                         for eid in entity_ids
@@ -1030,25 +1007,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
                     )
 
-                # Coerce values to bool
-                for asst, val in parsed_expose_to.items():
-                    try:
-                        coerced = coerce_bool_param(val, f"expose_to[{asst}]")
-                    except ValueError as e:
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                str(e),
-                            )
-                        )
-                    if coerced is None:
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                f"expose_to[{asst}] must be a boolean value",
-                            )
-                        )
-                    parsed_expose_to[asst] = coerced
+                # Values are already bool (enforced by the dict[str, bool] annotation)
 
             # Single entity case - use existing logic
             if not is_bulk:

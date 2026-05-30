@@ -30,7 +30,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
-from .util_helpers import coerce_bool_param, coerce_int_param, unwrap_service_response
+from .util_helpers import unwrap_service_response
 
 logger = logging.getLogger(__name__)
 
@@ -453,9 +453,11 @@ class FilesystemTools:
             ),
         ],
         tail_lines: Annotated[
-            int | str | None,
+            int | None,
             Field(
                 default=None,
+                ge=1,
+                le=10000,
                 description=(
                     "For log files, return only the last N lines. "
                     "Recommended for home-assistant.log to avoid large responses. "
@@ -501,22 +503,13 @@ class FilesystemTools:
         ```
         """
         try:
-            # Coerce tail_lines parameter
-            tail_lines_int = coerce_int_param(
-                tail_lines,
-                "tail_lines",
-                default=None,
-                min_value=1,
-                max_value=10000,
-            )
-
             # Check if custom component is available
             await _assert_mcp_tools_available(self._client)
 
             # Build service data
             service_data: dict[str, Any] = {"path": path}
-            if tail_lines_int is not None:
-                service_data["tail_lines"] = tail_lines_int
+            if tail_lines is not None:
+                service_data["tail_lines"] = tail_lines
 
             # Call the custom component service
             result = await call_mcp_tools_service(
@@ -575,7 +568,7 @@ class FilesystemTools:
             ),
         ],
         overwrite: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=False,
                 description=(
@@ -585,7 +578,7 @@ class FilesystemTools:
             ),
         ] = False,
         create_dirs: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=True,
                 description=(
@@ -637,12 +630,6 @@ class FilesystemTools:
         ```
         """
         try:
-            # Coerce boolean parameters
-            overwrite_bool = coerce_bool_param(overwrite, "overwrite", default=False)
-            create_dirs_bool = coerce_bool_param(
-                create_dirs, "create_dirs", default=True
-            )
-
             # Check if custom component is available
             await _assert_mcp_tools_available(self._client)
 
@@ -650,8 +637,8 @@ class FilesystemTools:
             service_data: dict[str, Any] = {
                 "path": path,
                 "content": content,
-                "overwrite": overwrite_bool,
-                "create_dirs": create_dirs_bool,
+                "overwrite": overwrite,
+                "create_dirs": create_dirs,
             }
 
             # Call the custom component service
@@ -705,7 +692,7 @@ class FilesystemTools:
             ),
         ],
         confirm: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=False,
                 description=(
@@ -747,10 +734,7 @@ class FilesystemTools:
         ```
         """
         try:
-            # Coerce boolean parameter
-            confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
-
-            if not confirm_bool:
+            if not confirm:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,

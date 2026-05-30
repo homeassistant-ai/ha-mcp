@@ -70,35 +70,6 @@ class TestIntegrationManagement:
             "Integration should not be disabled after re-enable"
         )
 
-    async def test_set_integration_enabled_string_bool(self, mcp_client):
-        """Test that enabled parameter accepts string booleans."""
-        # Find suitable integration
-        list_result = await mcp_client.call_tool("ha_get_integration", {})
-        data = assert_mcp_success(list_result, "List integrations")
-
-        test_entry = None
-        for entry in data.get("entries", []):
-            if entry.get("supports_unload") and entry.get("state") == "loaded":
-                test_entry = entry
-                break
-
-        if not test_entry:
-            pytest.skip("No suitable integration found for testing")
-
-        entry_id = test_entry["entry_id"]
-
-        # Test with string "false"
-        disable_result = await mcp_client.call_tool(
-            "ha_set_integration_enabled", {"entry_id": entry_id, "enabled": "false"}
-        )
-        assert_mcp_success(disable_result, "Disable with string false")
-
-        # Test with string "true"
-        enable_result = await mcp_client.call_tool(
-            "ha_set_integration_enabled", {"entry_id": entry_id, "enabled": "true"}
-        )
-        assert_mcp_success(enable_result, "Enable with string true")
-
     async def test_delete_config_entry_requires_confirm(self, mcp_client):
         """Test deletion safety check."""
         data = await safe_call_tool(
@@ -107,21 +78,6 @@ class TestIntegrationManagement:
             {"target": "fake_id", "confirm": False},
         )
         assert not data.get("success"), "Delete without confirm should fail"
-        error = data.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "not confirmed" in error_msg.lower()
-
-    async def test_delete_config_entry_string_confirm(self, mcp_client):
-        """Test that confirm parameter accepts string booleans."""
-        # Test with string "false" - should fail
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_remove_helpers_integrations",
-            {"target": "fake_id", "confirm": "false"},
-        )
-        assert not data.get("success"), "Delete with string false should fail"
         error = data.get("error", {})
         error_msg = (
             error.get("message", str(error)) if isinstance(error, dict) else str(error)

@@ -44,7 +44,6 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
-    coerce_bool_param,
     coerce_to_list,
     fetch_entity_category,
     merge_validation_meta,
@@ -447,7 +446,7 @@ class AutomationConfigTools:
             ),
         ] = None,
         wait: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="Wait for automation to be queryable before returning. Default: True. Set to False for bulk operations.",
                 default=True,
@@ -829,7 +828,7 @@ class AutomationConfigTools:
         config_dict: dict[str, Any],
         identifier: str | None,
         effective_category: str | None,
-        wait: bool | str,
+        wait: bool,
         bp_warnings: list[str],
         validation_meta: dict[str, Any],
     ) -> dict[str, Any]:
@@ -846,11 +845,10 @@ class AutomationConfigTools:
             )
             result.pop("entity_not_verified", None)
 
-        wait_bool = coerce_bool_param(wait, "wait", default=True)
         entity_id = result.get("entity_id")
         if not entity_id and identifier and identifier.startswith("automation."):
             entity_id = identifier
-        if wait_bool and entity_id:
+        if wait and entity_id:
             action_word = "created" if identifier is None else "updated"
             try:
                 registered = await wait_for_entity_registered(self._client, entity_id)
@@ -1167,7 +1165,7 @@ class AutomationConfigTools:
             ),
         ],
         wait: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="Wait for automation to be fully removed before returning. Default: True.",
                 default=True,
@@ -1208,8 +1206,7 @@ class AutomationConfigTools:
             result = await self._client.delete_automation_config(identifier)
 
             # Wait for entity to be removed
-            wait_bool = coerce_bool_param(wait, "wait", default=True)
-            if wait_bool and entity_id_for_wait:
+            if wait and entity_id_for_wait:
                 try:
                     removed = await wait_for_entity_removed(
                         self._client, entity_id_for_wait
