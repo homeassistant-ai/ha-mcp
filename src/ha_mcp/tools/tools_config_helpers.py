@@ -1103,7 +1103,8 @@ async def _ws_registry_lookup(
     """
     try:
         result = await client.send_websocket_message(message)
-    except Exception:
+    except Exception as e:
+        logger.debug("_ws_registry_lookup: failed for %r: %s", message.get("type"), e)
         return False, []
     if isinstance(result, list):
         return True, result
@@ -1123,6 +1124,15 @@ def _registry_id_values(items: list[dict[str, Any]], field: str) -> list[str]:
         for it in items
         if isinstance(it, dict) and isinstance((v := it.get(field)), str)
     ]
+
+
+def _ws_error_msg(response: dict[str, Any]) -> str:
+    """Extract a human-readable error message from a failed WS response dict."""
+    error_detail = response.get("error", {})
+    if isinstance(error_detail, dict):
+        msg: str = error_detail.get("message", "Unknown error")
+        return msg
+    return str(error_detail) if error_detail else "Unknown error"
 
 
 def _raise_if_unknown_labels(
@@ -1419,15 +1429,9 @@ async def _get_entities_for_config_entry(
     # error that should surface in warnings rather than silently returning [].
     if isinstance(result, dict) and result.get("success") is False:
         if warnings is not None:
-            error_detail = result.get("error", "Unknown error")
-            error_msg = (
-                error_detail.get("message", str(error_detail))
-                if isinstance(error_detail, dict)
-                else str(error_detail)
-            )
             warnings.append(
                 f"entity_registry/list failed for config_entry_id={entry_id}: "
-                f"{error_msg}"
+                f"{_ws_error_msg(result)}"
             )
         return []
 
@@ -1486,13 +1490,9 @@ def _process_reg_update_result(
             if labels is not None:
                 applied["labels"] = labels
         else:
-            error_detail = reg_result.get("error", {})
-            error_msg = (
-                error_detail.get("message", "Unknown error")
-                if isinstance(error_detail, dict)
-                else str(error_detail)
+            warnings.append(
+                f"{entity_id}: entity registry update failed: {_ws_error_msg(reg_result)}"
             )
-            warnings.append(f"{entity_id}: entity registry update failed: {error_msg}")
 
 
 def _process_cat_apply_result(
@@ -2240,14 +2240,8 @@ async def _apply_create_entity_registry(
         if labels is not None:
             helper_data["labels"] = labels
     else:
-        error_detail = update_result.get("error", {})
-        error_msg = (
-            error_detail.get("message", "Unknown error")
-            if isinstance(error_detail, dict)
-            else str(error_detail)
-        )
         warnings.append(
-            f"Helper created but entity registry update failed: {error_msg}"
+            f"Helper created but entity registry update failed: {_ws_error_msg(update_result)}"
         )
 
 
@@ -2871,14 +2865,8 @@ async def _apply_update_icon_area_labels(
         if labels is not None:
             updated_data["labels"] = labels
     else:
-        error_detail = reg_result.get("error", {})
-        error_msg = (
-            error_detail.get("message", "Unknown error")
-            if isinstance(error_detail, dict)
-            else str(error_detail)
-        )
         warnings.append(
-            f"Config updated but entity registry update failed: {error_msg}"
+            f"Config updated but entity registry update failed: {_ws_error_msg(reg_result)}"
         )
 
 
@@ -2933,8 +2921,9 @@ async def _execute_fallback_registry_update(
     if labels is not None:
         fallback_msg["labels"] = labels
     result = await client.send_websocket_message(fallback_msg)
+    updated_data: dict[str, Any] = {}
     if result.get("success"):
-        updated_data: dict[str, Any] = result.get("result", {}).get("entity_entry", {})
+        updated_data = result.get("result", {}).get("entity_entry", {})
     else:
         raise_tool_error(
             create_error_response(
@@ -3079,8 +3068,13 @@ async def _handle_set_config_subentry(
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "action='create' conflicts with subentry_id. Omit subentry_id to create a new subentry.",
-                    context={"helper_type": "config_subentry", "action": action},
+                    "action='create' was passed with subentry_id. "
+                    "Omit subentry_id to create a new subentry.",
+                    context={
+                        "helper_type": "config_subentry",
+                        "action": action,
+                        "subentry_id": subentry_id,
+                    },
                 )
             )
         if action == "update" and subentry_id is None:
