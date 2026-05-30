@@ -1304,6 +1304,17 @@ class TestFormControlAccessibility:
                         "enable_yaml_packages_scene": flag(
                             "ENABLE_YAML_PACKAGES_SCENE"
                         ),
+                        # int-typed feature flag -> exercises the number-input
+                        # branch of the feature-flag generator.
+                        "tool_search_max_results": {
+                            "value": 50,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "int",
+                            "env_var": "TOOL_SEARCH_MAX_RESULTS",
+                            "min": 1,
+                            "max": 200,
+                        },
                     },
                     "beta_sub_flags": [
                         "enable_code_mode",
@@ -1381,6 +1392,9 @@ class TestFormControlAccessibility:
         )
         assert 'name="tool-group:' in result.dom, (
             "tool group-master toggle did not render — fixture/guard drift"
+        )
+        assert 'name="feature:tool_search_max_results"' in result.dom, (
+            "int feature-flag input did not render — fixture/guard drift"
         )
 
     def test_backup_config_inputs_carry_name_attribute(
