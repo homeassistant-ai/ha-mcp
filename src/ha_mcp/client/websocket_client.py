@@ -1076,10 +1076,10 @@ class WebSocketManager:
 
             connected = await client.connect()
             if not connected:
-                reason = getattr(client, "last_connect_error", None)
-                # Only append an actual string reason — a missing attribute or
-                # a non-str (e.g. a MagicMock in tests) must not pollute the
-                # message with a repr.
+                reason = client.last_connect_error
+                # Append only an actual string reason; the isinstance guard
+                # keeps a non-str (e.g. a MagicMock in tests) from polluting
+                # the message with a repr.
                 detail = f": {reason}" if isinstance(reason, str) else ""
                 raise Exception(
                     "Failed to connect to Home Assistant WebSocket" + detail

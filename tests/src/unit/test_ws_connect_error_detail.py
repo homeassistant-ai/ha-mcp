@@ -132,6 +132,32 @@ class TestConnectCapturesReason:
         assert "SSLCertVerificationError" in client.last_connect_error
         assert "self-signed" in client.last_connect_error
 
+    @pytest.mark.asyncio
+    async def test_token_is_not_leaked_into_reason(self):
+        """The captured reason must never contain the access token.
+
+        The reason is built only from the exception text; the token travels
+        in the Authorization header / auth payload and is never echoed into a
+        connect exception. This pins that invariant against a future change
+        that captures more (repr(e), e.args, the URL, or request headers).
+        """
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        token = "super-secret-token-DO-NOT-LEAK"
+        client = HomeAssistantWebSocketClient(url="http://supervisor/core", token=token)
+
+        async def fake_connect(*_args, **_kwargs):
+            raise OSError("[Errno 111] Connection refused")
+
+        with patch(
+            "ha_mcp.client.websocket_client.websockets.connect",
+            side_effect=fake_connect,
+        ):
+            assert await client.connect() is False
+
+        assert client.last_connect_error is not None
+        assert token not in client.last_connect_error
+
 
 class TestManagerSurfacesReason:
     """``WebSocketManager.get_client`` appends the reason to its raised error."""
@@ -169,21 +195,21 @@ class TestManagerSurfacesReason:
 
     @pytest.mark.asyncio
     async def test_get_client_omits_suffix_when_reason_absent(self):
-        """A client with no captured reason yields the bare message.
+        """A client whose connect() captured no reason yields the bare message.
 
-        Also guards the MagicMock footgun: ``getattr(client,
-        "last_connect_error", None)`` on a bare mock returns a truthy mock,
-        and the ``isinstance`` guard must keep its repr out of the message.
+        No trailing colon, no repr — the ``isinstance`` guard turns a ``None``
+        reason into an empty suffix.
         """
         from ha_mcp.client.websocket_client import (
             HomeAssistantWebSocketClient,
             WebSocketManager,
         )
 
-        mock_client = MagicMock()  # last_connect_error left as an auto-mock
+        mock_client = MagicMock()
         mock_client.is_connected = False
         mock_client.connect = AsyncMock(return_value=False)
         mock_client.disconnect = AsyncMock()
+        mock_client.last_connect_error = None
 
         manager = WebSocketManager()
         manager._clients.clear()
