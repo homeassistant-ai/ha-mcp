@@ -6,7 +6,15 @@ When testcontainers fails with an image error, diagnose Docker first (`docker im
 
 ## Running stories
 
+Stories live in `tests/uat/stories/catalog/` (s01–s14 yaml files). Run from the repo root.
+
 ```bash
+# Single story (path must be relative to repo root)
+UV_CACHE_DIR=/tmp/claude-1000/uv-cache TMPDIR=/tmp/claude-1000 \
+  uv run python tests/uat/stories/run_story.py \
+  tests/uat/stories/catalog/s01_automation_sunset_lights.yaml \
+  --agents openai --base-url http://172.19.0.1:1234/v1 --model <model-id>
+
 # All stories, local model (LM Studio)
 UV_CACHE_DIR=/tmp/claude-1000/uv-cache TMPDIR=/tmp/claude-1000 \
   uv run python tests/uat/stories/run_story.py --all --agents openai \
