@@ -29,9 +29,36 @@ from .helpers import (
     raise_tool_error,
     validate_identifier_not_empty,
 )
-from .util_helpers import parse_json_param
+from .util_helpers import (
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+    parse_json_param,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# dashboard-guide.md + dashboard-cards.md cover layout patterns and the
+# card-type taxonomy — both relevant on every dashboard write.
+_DASHBOARD_SKILL_FILES: tuple[str, ...] = (
+    "references/dashboard-guide.md",
+    "references/dashboard-cards.md",
+)
+
+
+def _attach_dashboard_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
+    """In-place attach skill_content to a dashboard response when applicable.
+
+    Delegates to the shared :func:`attach_skill_content` so the
+    missing-vendor-warning path is consistent across every write tool.
+    """
+    attach_skill_content(
+        response,
+        MandatoryBPS=MandatoryBPS,
+        canonical_files=_DASHBOARD_SKILL_FILES,
+        referenced_files=None,
+    )
 
 
 async def _get_dashboard_config_internal(
@@ -901,9 +928,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "For existing dashboards, only updated when explicitly provided."
             ),
         ] = None,
+        MandatoryBPS: Annotated[
+            bool,
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
         """
-        Create or update a Home Assistant dashboard.
+        Create or update a Home Assistant dashboard. MUST call ha_get_skill_guide first.
 
         Creates a new dashboard or updates an existing one with the provided configuration.
         Supports two modes: full config replacement OR Python transformation.
@@ -928,7 +959,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         - Pattern-based update: 'for card in config["views"][0]["cards"]: if "light" in card.get("entity", ""): card["icon"] = "mdi:lightbulb"'
         - Multi-operation: 'config["views"][0]["cards"][0]["icon"] = "mdi:a"; config["views"][0]["cards"][1]["icon"] = "mdi:b"'
 
-        MODERN DASHBOARD BEST PRACTICES (2024+):
+        MODERN DASHBOARD BEST PRACTICES:
         - Use "sections" view type (default) with grid-based layouts
         - Use "tile" cards as primary card type (replaces legacy entity/light/climate cards)
         - Use "grid" cards for multi-column layouts within sections
@@ -943,10 +974,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         If unsure about entity IDs, ALWAYS use one of these tools first.
 
-        DASHBOARD DOCUMENTATION (via MCP skills):
-        - skill://home-assistant-best-practices/references/dashboard-guide.md — comprehensive guide
-        - skill://home-assistant-best-practices/references/dashboard-cards.md — card types list
-        - ha_get_skill_guide — guidance on card types and configuration
+        DASHBOARD DOCUMENTATION:
+        - dashboard-guide.md and dashboard-cards.md ship in this response
+          under ``skill_content`` by default — layout patterns,
+          card-type taxonomy, and worked examples.
+        - ha_get_skill_guide — deeper card-type and configuration guidance.
 
         EXAMPLES:
 
@@ -1008,6 +1040,20 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
         Note: When updating an existing dashboard, title/icon/require_admin/show_in_sidebar
         are also updated if explicitly provided alongside (or instead of) a config change.
+
+        STORAGE-MODE vs YAML-MODE DASHBOARDS:
+        This tool only manages storage-mode dashboards (created via UI/API and stored in
+        Home Assistant's storage backend). It does NOT touch YAML-defined dashboards.
+        Two distinct YAML cases exist and this tool covers neither:
+        - "YAML-mode" dashboards: written in their own .yaml file referenced from
+          configuration.yaml under ``lovelace: dashboards:``. The dashboard itself lives
+          in a separate YAML file but its registration is in configuration.yaml.
+        - Dashboards inlined directly in ``configuration.yaml`` under the ``lovelace:``
+          key (legacy single-dashboard mode).
+        For either YAML case, edit the dashboard's .yaml file directly.
+        ``ha_config_set_yaml`` can update the ``lovelace:`` registration
+        entry in configuration.yaml but does NOT touch the dashboard
+        body in the referenced .yaml file.
         """
         try:
             # ``url_path`` is required (always non-None). Reject empty/
@@ -1233,6 +1279,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 }
                 if pre_resolved_from is not None:
                     transform_result["resolved_from"] = pre_resolved_from
+                _attach_dashboard_skill(transform_result, MandatoryBPS)
                 return transform_result
 
             # Check if dashboard exists. When the pre-resolver fired
@@ -1471,12 +1518,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 # an existing dashboard was updated instead.
                 result_dict["resolved_from"] = pre_resolved_from
 
+            _attach_dashboard_skill(result_dict, MandatoryBPS)
             return result_dict
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
         except Exception as e:
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"action": "set", "url_path": url_path},
                 suggestions=[
@@ -1485,7 +1533,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "Check that you have admin permissions",
                     "Verify config format is valid Lovelace JSON",
                 ],
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings=None)
+            raise_tool_error(error)
 
     @mcp.tool(
         tags={"Dashboards"},

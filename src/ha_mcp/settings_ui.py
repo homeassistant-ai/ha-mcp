@@ -2165,6 +2165,10 @@ const FEATURE_META = {
     label: "Enable Tool Security Policies",
     help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
   },
+  enable_mandatory_bps: {
+    label: "Attach best-practice skills on writes",
+    help: "Master switch for the write-tool skill content delivery feature (issue #1182). When enabled (default), the six config write tools (automations, scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant best-practice reference files under skill_content on every successful write, plus auto-embed any reference sections cited by best-practice warnings. Each tool also exposes a per-call MandatoryBPS parameter the agent can set to false on subsequent calls once it has the content. When this master switch is off, NO skill_content goes out regardless of the per-call parameter or BP warnings. Leave on if your LLM benefits from inline guidance; turn off to minimise tokens when using an LLM that has the best-practice files indexed via skills or another retrieval path. Requires restart to take effect.",
+  },
   // Master beta toggle — gates the 5 sub-flags below at runtime
   // (see config.py:_apply_feature_flag_overrides master gate). UI
   // dims sub-rows when this is off and re-renders live on flip.

@@ -27,6 +27,9 @@ from ..utils.python_sandbox import (
 )
 from .auto_backup import with_auto_backup
 from .best_practice_checker import (
+    BestPracticeCheckResult,
+)
+from .best_practice_checker import (
     check_script_config as _check_best_practices,
 )
 from .helpers import (
@@ -39,6 +42,9 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     fetch_entity_category,
     merge_validation_meta,
     parse_json_param,
@@ -47,6 +53,15 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Scripts share the automation skill mapping — both use
+# action / condition / trigger templates and benefit from the same
+# native-vs-template guidance.
+_SCRIPT_SKILL_FILES: tuple[str, ...] = (
+    "references/automation-patterns.md",
+    "references/template-guidelines.md",
+)
 
 
 def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
@@ -426,9 +441,13 @@ class ConfigScriptTools:
                 default=True,
             ),
         ] = True,
+        MandatoryBPS: Annotated[
+            bool,
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
         """
-        Create or update a Home Assistant script.
+        Create or update a Home Assistant script. MUST call ha_get_skill_guide first.
 
         PREFER NATIVE ACTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native actions are validated at config load, fail loudly, and do not bypass HA's
@@ -444,7 +463,10 @@ class ConfigScriptTools:
         `event_data`, and `variables`. The reactive best-practice checker on this tool
         will surface anything in a logic position that should be native; consult the
         `best_practice_warnings` field on the response and fix before re-submitting.
-        For comprehensive guidance, call `ha_get_skill_guide`.
+        The relevant skill section is auto-embedded under `skill_content` on warnings,
+        and the full `automation-patterns.md` + `template-guidelines.md` references
+        ship under `skill_content` proactively by default. For comprehensive
+        guidance beyond that, call `ha_get_skill_guide`.
 
         Supports two modes: full config replacement OR Python transformation.
 
@@ -557,7 +579,7 @@ class ConfigScriptTools:
         Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
         features like conditions, variables, parallel execution, and service call options.
         """
-        bp_warnings: list[str] = []
+        bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
             # Strip BEFORE validate so a bare ``"script."`` (empty after
             # strip) is rejected as ``VALIDATION_INVALID_PARAMETER`` rather
@@ -681,7 +703,13 @@ class ConfigScriptTools:
                     **{k: v for k, v in result.items() if k != "success"},
                 }
                 if bp_warnings:
-                    response["best_practice_warnings"] = bp_warnings
+                    response["best_practice_warnings"] = list(bp_warnings)
+                attach_skill_content(
+                    response,
+                    MandatoryBPS=MandatoryBPS,
+                    canonical_files=_SCRIPT_SKILL_FILES,
+                    referenced_files=bp_warnings.referenced_files,
+                )
                 return response
 
             if config is None:
@@ -748,17 +776,27 @@ class ConfigScriptTools:
                 )
 
             if bp_warnings:
-                result["best_practice_warnings"] = bp_warnings
+                result["best_practice_warnings"] = list(bp_warnings)
 
             merge_validation_meta(result, validation_meta)
 
-            return {
+            response = {
                 "success": True,
                 **result,
             }
+            # attach AFTER the outer dict is built so hint lands at
+            # position 0 of the FINAL response (see BAT history in
+            # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
+            attach_skill_content(
+                response,
+                MandatoryBPS=MandatoryBPS,
+                canonical_files=_SCRIPT_SKILL_FILES,
+                referenced_files=bp_warnings.referenced_files,
+            )
+            return response
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings) from None
         except Exception as e:
             suggestions = [
                 "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
@@ -778,11 +816,14 @@ class ConfigScriptTools:
             # script_id form is what callers pass and what the registry stores.
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_script_not_found(script_id)
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"script_id": script_id},
                 suggestions=suggestions,
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings)
+            raise_tool_error(error)
 
     @tool(
         name="ha_config_remove_script",

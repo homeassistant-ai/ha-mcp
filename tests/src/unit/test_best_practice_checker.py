@@ -1592,6 +1592,172 @@ class TestSkillPrefixNoneNewDetectors:
 
 
 # ---------------------------------------------------------------------------
+# BestPracticeCheckResult shape + 2-route warning text (issue #1182)
+# ---------------------------------------------------------------------------
+
+
+class TestBestPracticeCheckResultShape:
+    """The return value behaves as a list[str] AND exposes referenced_files."""
+
+    def test_result_is_list_subclass(self):
+        """BestPracticeCheckResult IS a list[str] — existing callers don't break."""
+        from ha_mcp.tools.best_practice_checker import BestPracticeCheckResult
+
+        result = check_automation_config({})
+        assert isinstance(result, BestPracticeCheckResult)
+        assert isinstance(result, list)
+
+    def test_clean_config_returns_empty_list_and_empty_set(self):
+        result = check_automation_config(
+            {
+                "trigger": [],
+                "condition": [],
+                "action": [],
+            }
+        )
+        assert result == []  # list semantics
+        assert result.referenced_files == set()
+
+    def test_referenced_files_preserves_anchor(self):
+        """When a warning fires, the referenced skill file (with #anchor) is tracked.
+
+        The anchor is what makes the auto-embed path ship only the
+        relevant markdown section instead of the whole 20 KB file.
+        """
+        result = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.x') | float > 25 }}",
+                    }
+                ],
+                "action": [],
+            }
+        )
+        assert (
+            "references/automation-patterns.md#native-conditions"
+            in result.referenced_files
+        )
+
+    def test_referenced_files_dedup_same_anchor_across_emissions(self):
+        """Repeated warnings hitting the same anchor collapse to one set entry."""
+        result = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.a') | float > 10 }}",
+                    },
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.b') | float > 20 }}",
+                    },
+                ],
+                "action": [],
+            }
+        )
+        assert result.referenced_files == {
+            "references/automation-patterns.md#native-conditions"
+        }
+
+    def test_referenced_files_tracked_even_when_skill_prefix_none(self):
+        """referenced_files is populated even when skill_prefix=None.
+
+        Skills feature being off doesn't change which files would be
+        relevant — the caller decides whether to attempt resolution.
+        """
+        result = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.x') | float > 25 }}",
+                    }
+                ],
+                "action": [],
+            },
+            skill_prefix=None,
+        )
+        assert result.referenced_files == {
+            "references/automation-patterns.md#native-conditions"
+        }
+
+
+class TestTwoRouteWarningSuffix:
+    """Each warning names the LLM-discoverable access routes for the
+    referenced skill file (issue #1182). The skill:// URI works in clients
+    that auto-fetch resources; ha_get_skill_guide works everywhere else.
+    The MandatoryBPS parameter is intentionally NOT mentioned in the
+    warning suffix — the param ships visible-but-undescribed, and naming
+    it here would prime models to flip it. The opt-out hint shipped
+    alongside delivered skill_content is the only place the param is
+    described."""
+
+    @staticmethod
+    def _first_warning(prefix=None):
+        from ha_mcp.tools.best_practice_checker import (
+            _DEFAULT_SKILL_PREFIX,
+            check_automation_config,
+        )
+
+        skill_prefix = prefix if prefix is not None else _DEFAULT_SKILL_PREFIX
+        result = check_automation_config(
+            {
+                "condition": [
+                    {
+                        "condition": "template",
+                        "value_template": "{{ states('sensor.x') | float > 25 }}",
+                    }
+                ],
+                "action": [],
+            },
+            skill_prefix=skill_prefix,
+        )
+        assert result, "expected at least one warning"
+        return result[0]
+
+    def test_default_warning_names_skill_uri_route(self):
+        msg = self._first_warning()
+        assert (
+            "skill://home-assistant-best-practices/references/automation-patterns.md"
+            in msg
+        )
+
+    def test_default_warning_names_ha_get_skill_guide_route(self):
+        msg = self._first_warning()
+        assert "ha_get_skill_guide(skill='home-assistant-best-practices'" in msg
+        assert "file='references/automation-patterns.md'" in msg
+
+    def test_warning_does_not_mention_MandatoryBPS_param(self):
+        """MandatoryBPS must not appear in warnings. The param is visible
+        in the catalog but undescribed; naming it in warnings would
+        re-prime the reflex-disable that BAT showed kills the feature
+        for smart models."""
+        msg = self._first_warning()
+        assert "MandatoryBPS" not in msg
+
+    def test_custom_prefix_replaces_skill_uri_keeps_tool_route(self):
+        msg = self._first_warning(prefix="https://example.com/refs")
+        assert "https://example.com/refs/automation-patterns.md" in msg
+        assert "skill://" not in msg
+        # Tool route always present when skills are on
+        assert "ha_get_skill_guide" in msg
+        # MandatoryBPS not advertised in the warning suffix —
+        # only in the opt-out hint shipped with delivered content.
+        assert "MandatoryBPS" not in msg
+
+    def test_anchor_preserved_in_uri_stripped_in_tool_route(self):
+        """The skill:// URI keeps the #anchor (links scroll to section);
+        the ha_get_skill_guide call uses bare file path (tool reads the whole file)."""
+        msg = self._first_warning()
+        # URI: anchor preserved
+        assert "automation-patterns.md#native-conditions" in msg
+        # Tool route: bare file path, no anchor
+        assert "file='references/automation-patterns.md'" in msg
+
+
+# ---------------------------------------------------------------------------
 # Duration math / for: field detector
 # ---------------------------------------------------------------------------
 

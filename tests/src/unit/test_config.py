@@ -15,6 +15,56 @@ def test_tool_security_policies_disabled_by_default():
     assert Settings().enable_tool_security_policies is False
 
 
+def test_enable_mandatory_bps_default_on():
+    """ENABLE_MANDATORY_BPS defaults to True — feature is on unless the
+    operator explicitly disables (issue #1182 master switch)."""
+    from ha_mcp.config import Settings
+
+    assert Settings().enable_mandatory_bps is True
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [
+        ("true", True),
+        ("True", True),
+        ("TRUE", True),
+        ("1", True),
+        ("yes", True),
+        ("on", True),
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_enable_mandatory_bps_env_var_coercion_accepted(env_value, expected):
+    """Pydantic accepts the documented boolean strings (case-insensitive)."""
+    from ha_mcp.config import Settings
+
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        ENABLE_MANDATORY_BPS=env_value,
+    )
+    assert settings.enable_mandatory_bps is expected
+
+
+@pytest.mark.parametrize("env_value", ["garbage", "disable", "off please", ""])
+def test_enable_mandatory_bps_env_var_coercion_rejected(env_value):
+    """Pydantic rejects non-boolean strings with ValidationError, surfacing
+    a clear startup-time error instead of silently coercing."""
+    import pydantic
+
+    from ha_mcp.config import Settings
+
+    with pytest.raises(pydantic.ValidationError):
+        Settings(
+            _env_file=None,  # type: ignore[call-arg]
+            ENABLE_MANDATORY_BPS=env_value,
+        )
+
+
 @pytest.mark.slow
 class TestConfigErrorHandling:
     """Test configuration error handling and user-friendly messages."""

@@ -31,7 +31,17 @@ from .tools_filesystem import (
     _assert_mcp_tools_available,
     call_mcp_tools_service,
 )
-from .util_helpers import unwrap_service_response
+from .util_helpers import (
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
+    unwrap_service_response,
+)
+
+# YAML packages frequently include template sensors, command_line entities,
+# and mqtt templates — exactly where template misuse causes the most
+# subtle bugs. template-guidelines.md is the relevant default.
+_YAML_SKILL_FILES: tuple[str, ...] = ("references/template-guidelines.md",)
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +168,12 @@ class YamlConfigTools:
                 ),
             ),
         ] = True,
+        MandatoryBPS: Annotated[
+            bool,
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
-        """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
+        """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT). MUST call ha_get_skill_guide first.
 
         **WARNING:** Destructive, disabled by default. Dedicated tools exist for
         almost every use case and should be preferred:
@@ -169,7 +183,7 @@ class YamlConfigTools:
         - Automations (storage-mode) -> ha_config_set_automation
         - Scripts (storage-mode) -> ha_config_set_script
         - Scenes (storage-mode) -> ha_config_set_scene
-        - All 27 helper types (input_*, counter, timer, schedule, zone, person,
+        - All 28 helper types (input_*, counter, timer, schedule, zone, person,
           tag, group, min_max, threshold, derivative, statistics, utility_meter,
           trend, filter, switch_as_x, etc.) -> ha_config_set_helper
 
@@ -189,7 +203,11 @@ class YamlConfigTools:
         support reload. Preserves YAML comments and HA tags (``!include``,
         ``!secret``) on round-trip; ``replace`` swaps the subtree as-is.
 
-        For detailed routing guidance, use ha_get_skill_guide.
+        ``template-guidelines.md`` ships in this response under ``skill_content``
+        by default — YAML packages frequently include
+        template sensors / command_line entities / mqtt templates, exactly where
+        template misuse causes the subtlest bugs. For deeper routing guidance
+        beyond what ships here, use ha_get_skill_guide.
         """
         try:
             # Validate action
@@ -249,6 +267,12 @@ class YamlConfigTools:
                 result = unwrap_service_response(result)
                 if not result.get("success", True):
                     raise_tool_error(result)
+                attach_skill_content(
+                    result,
+                    MandatoryBPS=MandatoryBPS,
+                    canonical_files=_YAML_SKILL_FILES,
+                    referenced_files=None,
+                )
                 return result
 
             raise_tool_error(
@@ -259,10 +283,10 @@ class YamlConfigTools:
                 )
             )
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
         except Exception as e:
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={
                     "tool": "ha_config_set_yaml",
@@ -270,7 +294,10 @@ class YamlConfigTools:
                     "action": action,
                     "yaml_path": yaml_path,
                 },
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings=None)
+            raise_tool_error(error)
 
 
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

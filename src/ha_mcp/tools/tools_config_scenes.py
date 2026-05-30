@@ -39,12 +39,23 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     fetch_entity_category,
     merge_validation_meta,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
 )
+
+# No scene-specific reference file exists in home-assistant-best-practices;
+# SKILL.md is the top-level generic best-practice doc covering entity-naming,
+# safe-refactoring, and helper-vs-template trade-offs the agent benefits
+# from when authoring scenes. Scenes have NO actions/conditions/triggers
+# (only an ``entities`` state-snapshot dict) so the automation/script
+# reference files don't apply.
+_SCENE_SKILL_FILES: tuple[str, ...] = ("SKILL.md",)
 
 logger = logging.getLogger(__name__)
 
@@ -480,9 +491,13 @@ class ConfigSceneTools:
                 default=True,
             ),
         ] = True,
+        MandatoryBPS: Annotated[
+            bool,
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
         """
-        Create or update a Home Assistant scene.
+        Create or update a Home Assistant scene. MUST call ha_get_skill_guide first.
 
         Supports two modes: full config replacement (``config``) or
         Python transformation of an existing scene (``python_transform``).
@@ -517,7 +532,11 @@ class ConfigSceneTools:
             "icon": "mdi:movie",
         })
 
-        For detailed scene configuration help, use ha_get_skill_guide.
+        The top-level ``SKILL.md`` for home-assistant-best-practices ships in
+        this response under ``skill_content`` by default — generic
+        best-practice index covering entity-naming and
+        safe-refactoring patterns that intersect with scene authoring. For
+        detailed scene configuration help beyond that, use ha_get_skill_guide.
         """
         try:
             # Issue #1168 R6 blocker 16: empty ``scene_id`` pre-flight before
@@ -764,6 +783,12 @@ class ConfigSceneTools:
                     "python_expression": python_transform,
                     "message": f"Scene {resolved_id} updated via Python transform",
                 }
+                attach_skill_content(
+                    response,
+                    MandatoryBPS=MandatoryBPS,
+                    canonical_files=_SCENE_SKILL_FILES,
+                    referenced_files=None,
+                )
                 return response
 
             if config is None:
@@ -874,16 +899,26 @@ class ConfigSceneTools:
             # ``result["scene_id"]`` is also the storage key (from
             # rest_client); explicit assignment after the spread guards
             # against any future result-shape drift.
-            return {
+            response = {
                 "success": True,
                 **result,
                 "scene_id": resolved_id,
             }
+            # attach AFTER the outer dict is built so hint lands at
+            # position 0 of the FINAL response (see
+            # util_helpers._SKILL_CONTENT_OPTOUT_HINT).
+            attach_skill_content(
+                response,
+                MandatoryBPS=MandatoryBPS,
+                canonical_files=_SCENE_SKILL_FILES,
+                referenced_files=None,
+            )
+            return response
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
         except Exception as e:
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"scene_id": scene_id},
                 suggestions=[
@@ -892,7 +927,10 @@ class ConfigSceneTools:
                     "Use ha_search_entities(domain_filter='scene') to find scenes",
                     "Use ha_get_skill_guide for help",
                 ],
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings=None)
+            raise_tool_error(error)
 
     @tool(
         name="ha_config_remove_scene",

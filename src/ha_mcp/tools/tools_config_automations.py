@@ -32,6 +32,9 @@ from ..utils.python_sandbox import (
 )
 from .auto_backup import automation_backup_target, with_auto_backup
 from .best_practice_checker import (
+    BestPracticeCheckResult,
+)
+from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
 from .helpers import (
@@ -44,6 +47,9 @@ from .helpers import (
 from .reference_validator import validate_config_references
 from .util_helpers import (
     apply_entity_category,
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     coerce_to_list,
     fetch_entity_category,
     merge_validation_meta,
@@ -53,6 +59,17 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Skill files attached to ha_config_set_automation responses when
+# MandatoryBPS=True (default), plus auto-attached on best-practice
+# warning hits regardless of MandatoryBPS. Paths are relative to the
+# home-assistant-best-practices skill directory.
+_AUTOMATION_SKILL_FILES: tuple[str, ...] = (
+    "references/automation-patterns.md",
+    "references/template-guidelines.md",
+)
+
 
 # Distinctive prefix of the soft-failure warning emitted by
 # ``ha_config_set_automation`` when ``_poll_for_automation_entity``
@@ -452,26 +469,13 @@ class AutomationConfigTools:
                 default=True,
             ),
         ] = True,
+        MandatoryBPS: Annotated[
+            bool,
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
         """
-        Create or update a Home Assistant automation.
-
-        The returned `automation_id` is the resolved entity_id (canonical
-        form, e.g. `automation.morning_routine`) when entity registration
-        succeeds, falling back to the input `identifier` (update path) or
-        the generated `unique_id` from the upsert response (fresh create
-        when no identifier was passed).
-
-        Before reaching for ``ha_config_set_automation``, consider whether a
-        dedicated tool fits the use case better:
-
-        - State snapshot of one or more entities (capture-then-replay,
-          no trigger needed) -> ha_config_set_scene
-        - State-derived value that recomputes when its inputs change
-          (template sensor / binary sensor / number / select)
-          -> ha_config_set_helper(helper_type='template')
-        - Stateful counter / timer / schedule / boolean / etc.
-          -> ha_config_set_helper(helper_type='counter' | 'timer' | ...)
+        Create or update a Home Assistant automation. MUST call ha_get_skill_guide first.
 
         PREFER NATIVE SOLUTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
         Native triggers/conditions/actions are validated at config load, fail loudly, and
@@ -492,7 +496,27 @@ class AutomationConfigTools:
         `event_data`, and `variables`. The reactive best-practice checker on this tool
         will surface anything in a logic position that should be native; consult the
         `best_practice_warnings` field on the response and fix before re-submitting.
-        For comprehensive guidance, call `ha_get_skill_guide`.
+        The relevant skill section is auto-embedded under `skill_content` on warnings,
+        and the full `automation-patterns.md` + `template-guidelines.md` references
+        ship under `skill_content` proactively by default. For comprehensive
+        guidance beyond that, call `ha_get_skill_guide`.
+
+        The returned `automation_id` is the resolved entity_id (canonical
+        form, e.g. `automation.morning_routine`) when entity registration
+        succeeds, falling back to the input `identifier` (update path) or
+        the generated `unique_id` from the upsert response (fresh create
+        when no identifier was passed).
+
+        Before reaching for ``ha_config_set_automation``, consider whether a
+        dedicated tool fits the use case better:
+
+        - State snapshot of one or more entities (capture-then-replay,
+          no trigger needed) -> ha_config_set_scene
+        - State-derived value that recomputes when its inputs change
+          (template sensor / binary sensor / number / select)
+          -> ha_config_set_helper(helper_type='template')
+        - Stateful counter / timer / schedule / boolean / etc.
+          -> ha_config_set_helper(helper_type='counter' | 'timer' | ...)
 
         Supports two modes: full config replacement OR Python transformation.
 
@@ -620,10 +644,12 @@ class AutomationConfigTools:
         TROUBLESHOOTING:
         - Use ha_get_state() to verify entity_ids exist
         - Use ha_search_entities() to find correct entity_ids
-        - Use ha_eval_template() to test Jinja2 templates before using in automations
+        - IF you must use Jinja2 and have no native alternative, test it first with
+          ha_eval_template() before embedding it in the automation config — catches
+          syntax errors and unresolved entity_ids before they fail silently at runtime
         - Use ha_search_entities(domain_filter='automation') to find existing automations
         """
-        bp_warnings: list[str] = []
+        bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
             # ``identifier`` is optional (omit → create new with generated
             # unique_id; pass → update existing). When provided, reject
@@ -659,7 +685,11 @@ class AutomationConfigTools:
 
             if python_transform is not None:
                 response, bp_warnings = await self._run_python_transform(
-                    identifier, config_hash, python_transform, category
+                    identifier,
+                    config_hash,
+                    python_transform,
+                    category,
+                    MandatoryBPS,
                 )
                 return response
 
@@ -703,10 +733,11 @@ class AutomationConfigTools:
                 wait,
                 bp_warnings,
                 validation_meta,
+                MandatoryBPS,
             )
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings) from None
         except Exception as e:
             # 404 during update only — create (identifier=None) never hits this branch.
             if (
@@ -727,11 +758,14 @@ class AutomationConfigTools:
                     "Config had best-practice issues that may be related: "
                     + "; ".join(bp_warnings)
                 )
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"identifier": identifier},
                 suggestions=suggestions,
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings)
+            raise_tool_error(error)
 
     async def _run_python_transform(
         self,
@@ -739,7 +773,8 @@ class AutomationConfigTools:
         config_hash: str | None,
         python_transform: str,
         category: str | None,
-    ) -> tuple[dict[str, Any], list[str]]:
+        MandatoryBPS: bool,
+    ) -> tuple[dict[str, Any], BestPracticeCheckResult]:
         """Execute python_transform mode and return (response, bp_warnings)."""
         if not identifier:
             raise_tool_error(
@@ -820,7 +855,13 @@ class AutomationConfigTools:
             **_strip_redundant_identifier_echo(result, extra_excludes=("success",)),
         }
         if bp_warnings:
-            response["best_practice_warnings"] = bp_warnings
+            response["best_practice_warnings"] = list(bp_warnings)
+        attach_skill_content(
+            response,
+            MandatoryBPS=MandatoryBPS,
+            canonical_files=_AUTOMATION_SKILL_FILES,
+            referenced_files=bp_warnings.referenced_files,
+        )
         return response, bp_warnings
 
     async def _run_config_update(
@@ -829,8 +870,9 @@ class AutomationConfigTools:
         identifier: str | None,
         effective_category: str | None,
         wait: bool,
-        bp_warnings: list[str],
+        bp_warnings: BestPracticeCheckResult,
         validation_meta: dict[str, Any],
+        MandatoryBPS: bool,
     ) -> dict[str, Any]:
         """Execute config-replacement mode and return the tool response."""
         result = await self._client.upsert_automation_config(config_dict, identifier)
@@ -873,12 +915,12 @@ class AutomationConfigTools:
             )
 
         if bp_warnings:
-            result["best_practice_warnings"] = bp_warnings
+            result["best_practice_warnings"] = list(bp_warnings)
 
         merge_validation_meta(result, validation_meta)
 
         automation_id = entity_id or identifier or result.get("unique_id")
-        return {
+        response = {
             "success": True,
             # automation_id omitted when all three fallbacks are falsy —
             # the create path is unguarded by validate_identifier_not_empty,
@@ -887,6 +929,18 @@ class AutomationConfigTools:
             **({"automation_id": automation_id} if automation_id else {}),
             **_strip_redundant_identifier_echo(result),
         }
+        # attach AFTER the outer dict is built so attach_skill_content's
+        # reorder puts skill_content_hint at position 0 of the FINAL
+        # response — building the outer dict via spread otherwise pushes
+        # the hint to position 2-3 behind success/automation_id, which
+        # is the exact position BAT showed small models can't find.
+        attach_skill_content(
+            response,
+            MandatoryBPS=MandatoryBPS,
+            canonical_files=_AUTOMATION_SKILL_FILES,
+            referenced_files=bp_warnings.referenced_files,
+        )
+        return response
 
     async def _list_automation_entity_ids(self) -> list[str]:
         """Best-effort list of automation entity_ids (up to 10) from the entity registry.

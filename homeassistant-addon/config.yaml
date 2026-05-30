@@ -45,6 +45,7 @@ options:
   enable_tool_search: false
   tool_search_max_results: 5
   enable_tool_security_policies: false
+  enable_mandatory_bps: true
   disabled_tools: ""
   pinned_tools: ""
   enable_auto_backup: true
@@ -57,6 +58,7 @@ schema:
   enable_tool_search: bool?
   tool_search_max_results: int(2,10)?
   enable_tool_security_policies: bool?
+  enable_mandatory_bps: bool?
   disabled_tools: str?
   pinned_tools: str?
   enable_auto_backup: bool?

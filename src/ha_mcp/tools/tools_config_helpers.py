@@ -33,10 +33,35 @@ from .tools_config_entry_flow import (
 )
 from .util_helpers import (
     apply_entity_category,
+    attach_skill_content,
+    augment_error_dict_with_skill_content,
+    augment_tool_error_with_skill_content,
     parse_json_param,
     parse_string_list_param,
     wait_for_entity_registered,
 )
+
+# helper-selection.md guides which helper type fits the agent's use case
+# (input_*, counter, timer, template, group, utility_meter, etc.).
+_HELPER_SKILL_FILES: tuple[str, ...] = ("references/helper-selection.md",)
+
+
+def _attach_helper_skill(response: dict[str, Any], MandatoryBPS: bool) -> None:
+    """In-place attach skill_content to a helper response when applicable.
+
+    Helper tool has no best-practice checker integration, so
+    ``referenced_files`` is always None — embedding is driven purely by
+    the ``MandatoryBPS`` flag. Delegates to the shared
+    :func:`attach_skill_content` so the missing-vendor-warning path is
+    consistent across every write tool.
+    """
+    attach_skill_content(
+        response,
+        MandatoryBPS=MandatoryBPS,
+        canonical_files=_HELPER_SKILL_FILES,
+        referenced_files=None,
+    )
+
 
 # Simple helper types — managed via {type}/create and {type}/update WebSocket APIs
 # (not Config Entry Flow). Kept in parallel with FLOW_HELPER_TYPES for routing.
@@ -1927,6 +1952,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
 
+        Flow-based types (template / group / utility_meter / derivative / etc.)
+        cannot be listed via this tool — use ``ha_search_entities`` or
+        ``ha_deep_search`` for those.
+
         For detailed helper documentation, use ha_get_skill_guide.
         """
         try:
@@ -2329,10 +2358,14 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
             ),
         ] = None,
+        MandatoryBPS: Annotated[
+            bool,
+            Field(default=True),
+        ] = True,
     ) -> dict[str, Any]:
         """
         Create or update Home Assistant helper entities and config subentries
-        (28 types, unified interface).
+        (28 types, unified interface). MUST call ha_get_skill_guide first.
 
         SIMPLE/FLOW helper create requires `name`; SIMPLE/FLOW helper update
         requires `helper_id`. Config subentry create requires `entry_id` and
@@ -2390,10 +2423,11 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entry_id="01HXYZ...", subentry_type="conversation",
                 config={"name": "Local agent", "model": "gemma3:27b"})
 
-        For helper-design guidance (when to pick which helper type, YAML
-        examples, per-type field tables), use ha_get_skill_guide — the
-        skill's `helper-selection.md` reference covers helper types
-        with worked examples and a decision matrix.
+        ``helper-selection.md`` ships in this response under
+        ``skill_content`` by default — decision
+        matrix for picking the right helper type plus worked examples
+        and per-type field tables. For deeper helper-design guidance
+        beyond what ships here, call ha_get_skill_guide.
         """
         try:
             if helper_type == "config_subentry":
@@ -2476,7 +2510,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             context={"helper_type": helper_type, "action": action},
                         )
                     )
-                return await set_config_subentry(
+                subentry_response = await set_config_subentry(
                     client,
                     entry_id,
                     subentry_type,
@@ -2484,6 +2518,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     subentry_id=subentry_id,
                     show_advanced_options=show_advanced_options,
                 )
+                _attach_helper_skill(subentry_response, MandatoryBPS)
+                return subentry_response
 
             # Determine if this is a create or update — set early so the
             # outer exception handler's context dict can reference it even
@@ -2657,7 +2693,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             # Route flow-based helpers to Config Entry Flow API.
             # Simple helpers continue through the WebSocket {type}/create+update path below.
             if helper_type in FLOW_HELPER_TYPES:
-                return await _handle_flow_helper(
+                flow_response = await _handle_flow_helper(
                     client=client,
                     helper_type=helper_type,
                     name=name,
@@ -2669,6 +2705,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     wait=wait,
                     action=action,
                 )
+                _attach_helper_skill(flow_response, MandatoryBPS)
+                return flow_response
 
             # Parse JSON list parameters if provided as strings
             try:
@@ -3039,7 +3077,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         elif cat_result.get("warnings"):
                             warnings.extend(cat_result["warnings"])
 
-                    return _helper_response(
+                    create_response = _helper_response(
                         "create",
                         helper_type,
                         data=helper_data,
@@ -3047,6 +3085,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message=f"Successfully created {helper_type}: {name}",
                         warnings=warnings,
                     )
+                    _attach_helper_skill(create_response, MandatoryBPS)
+                    return create_response
                 else:
                     raise_tool_error(
                         create_error_response(
@@ -3140,7 +3180,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # today, but ``_helper_response`` already omits the key when the
                     # list is empty — future warnings flow through the same contract
                     # without further plumbing.
-                    return _helper_response(
+                    update_response = _helper_response(
                         "update",
                         helper_type,
                         data=updated_data,
@@ -3148,6 +3188,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         message=f"Successfully updated {helper_type}: {entity_id}",
                         warnings=warnings,
                     )
+                    _attach_helper_skill(update_response, MandatoryBPS)
+                    return update_response
 
                 elif helper_type in config_store_types:
                     # Person and zone: look up unique_id from entity registry
@@ -3728,7 +3770,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     except Exception as e:
                         warnings.append(f"Update applied but verification failed: {e}")
 
-                return _helper_response(
+                config_update_response = _helper_response(
                     "update",
                     helper_type,
                     data=updated_data,
@@ -3736,6 +3778,8 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     message=f"Successfully updated {helper_type}: {entity_id}",
                     warnings=warnings,
                 )
+                _attach_helper_skill(config_update_response, MandatoryBPS)
+                return config_update_response
 
             # This should never be reached since action is either "create" or "update"
             raise_tool_error(
@@ -3745,10 +3789,10 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 )
             )
 
-        except ToolError:
-            raise
+        except ToolError as te:
+            raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
         except Exception as e:
-            exception_to_structured_error(
+            error = exception_to_structured_error(
                 e,
                 context={"action": action, "helper_type": helper_type},
                 suggestions=[
@@ -3756,4 +3800,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Verify helper_id exists for update operations",
                     "Ensure required parameters are provided for the helper type",
                 ],
+                raise_error=False,
             )
+            augment_error_dict_with_skill_content(error, bp_warnings=None)
+            raise_tool_error(error)

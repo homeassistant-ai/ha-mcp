@@ -200,10 +200,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         Skills are vendored via a git submodule at resources/skills-vendor/.
         The actual skill directories live under the skills/ subdirectory
-        within that repo.
+        within that repo. Delegates to
+        :func:`ha_mcp.utils.skill_loader.get_skills_dir` so the write-tool
+        ``MandatoryBPS`` parameter resolves the same path.
         """
-        skills_dir = Path(__file__).parent / "resources" / "skills-vendor" / "skills"
-        return skills_dir if skills_dir.exists() else None
+        from .utils.skill_loader import get_skills_dir
+
+        return get_skills_dir()
 
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.
@@ -1434,13 +1437,28 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 )
             )
 
-        return {
-            "success": True,
-            "skill": skill,
-            "file": file,
-            "uri": f"skill://{skill}/{file}",
-            "content": content,
-        }
+        # Hint goes at the top of the response so the LLM sees it before
+        # parsing the (potentially large) content body. Scoped to the
+        # best-practice skill because that's the one the write-tool
+        # MandatoryBPS param gates; other skills (if any) are unrelated.
+        from .tools.util_helpers import (
+            _HA_BEST_PRACTICES_SKILL_NAME,
+            _SKILL_GUIDE_MANDATORYBPS_HINT,
+        )
+
+        response: dict[str, Any] = {}
+        if skill == _HA_BEST_PRACTICES_SKILL_NAME:
+            response["skill_content_hint"] = _SKILL_GUIDE_MANDATORYBPS_HINT
+        response.update(
+            {
+                "success": True,
+                "skill": skill,
+                "file": file,
+                "uri": f"skill://{skill}/{file}",
+                "content": content,
+            }
+        )
+        return response
 
     # Helper methods required by EnhancedToolsMixin
 
