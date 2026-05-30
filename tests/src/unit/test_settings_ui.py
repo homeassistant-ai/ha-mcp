@@ -16,6 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ha_mcp.settings_ui import (
+    _SETTINGS_HTML,
     FEATURE_GATED_TOOLS,
     MANDATORY_TOOLS,
     TRANSFORM_GENERATED_TOOLS,
@@ -392,50 +393,6 @@ class TestRouteRegistration:
         assert "/private_x/settings" in paths
         assert "/private_x/api/settings/tools" in paths
 
-    def test_registers_favicon_in_addon_mode(self, monkeypatch):
-        # The settings page ships no <link rel="icon">, so browsers request
-        # /favicon.ico at the origin root and log a 404 on every load. A
-        # root favicon route (addon mode mounts root for ingress) silences it.
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
-        mcp = MagicMock()
-        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
-        register_settings_routes(mcp, MagicMock(), secret_path="/private_x")
-        paths = self._collect_paths(mcp)
-        assert "/favicon.ico" in paths
-
-    @pytest.mark.asyncio
-    async def test_favicon_handler_returns_no_content(self, monkeypatch):
-        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
-        captured: dict[str, Any] = {}
-
-        def custom_route_factory(path, methods):
-            def decorator(fn):
-                if path == "/favicon.ico":
-                    captured["favicon"] = fn
-                return fn
-
-            return decorator
-
-        mcp = MagicMock()
-        mcp.custom_route = MagicMock(side_effect=custom_route_factory)
-        register_settings_routes(mcp, MagicMock(), secret_path="/x")
-        favicon = captured["favicon"]
-        resp = await favicon(MagicMock())
-        assert resp.status_code == 204
-
-    def test_favicon_not_registered_in_standalone_mode(self, monkeypatch):
-        # Favicon is addon-only: standalone/Docker mounts solely under the
-        # secret prefix, where the browser never requests a root
-        # /favicon.ico. Mounting it at root there would be an
-        # unauthenticated endpoint, so guard against the route leaking out
-        # of the `if is_addon:` block.
-        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
-        mcp = MagicMock()
-        mcp.custom_route = MagicMock(return_value=lambda fn: fn)
-        register_settings_routes(mcp, MagicMock(), secret_path="/mcp")
-        paths = self._collect_paths(mcp)
-        assert "/favicon.ico" not in paths
-
     def test_secret_path_only_when_not_addon(self, monkeypatch):
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         mcp = MagicMock()
@@ -455,6 +412,20 @@ class TestRouteRegistration:
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(mcp, MagicMock(), secret_path="")
         assert mcp.custom_route.call_count == 0
+
+
+class TestFaviconSuppression:
+    """The page suppresses the browser's automatic /favicon.ico request via
+    an empty-data-URI <link rel="icon">, so no 404 is logged in any
+    deployment mode (add-on, standalone, Docker, sidecar) — no backend
+    route required.
+    """
+
+    def test_settings_html_head_suppresses_favicon_request(self) -> None:
+        # `data:,` is an empty data URI: modern browsers read it as "no
+        # icon" and skip the default /favicon.ico request entirely, so the
+        # 404 console error never fires regardless of which routes mount.
+        assert '<link rel="icon" href="data:,">' in _SETTINGS_HTML
 
 
 class TestSaveToolsValidation:

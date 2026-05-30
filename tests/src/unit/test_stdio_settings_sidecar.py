@@ -75,10 +75,6 @@ class TestBuildSettingsHandlers:
         assert set(handlers.keys()) == {
             "root_page",
             "settings_page",
-            # Addon-root-only assets (like root_page, the sidecar does not
-            # mount these — register_settings_routes serves them at the
-            # ingress root).
-            "favicon",
             "get_tools",
             "save_tools",
             "restart_addon",

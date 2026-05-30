@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, NotRequired, TypedDi
 
 import httpx
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse
 
 from ._version import get_version, is_running_in_addon
 from .backup_manager import get_backup_manager
@@ -602,6 +602,10 @@ _SETTINGS_HTML = (
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HA-MCP Tool Settings</title>
+<!-- Empty data URI: tells the browser "no favicon" so it never requests
+     /favicon.ico (which would 404 and log a console error, since the
+     settings server serves no such asset in any deployment mode). -->
+<link rel="icon" href="data:,">
 <style>
   :root {
     --bg: #1c1c1e; --surface: #2c2c2e; --surface-hover: #3a3a3c;
@@ -4222,13 +4226,6 @@ def build_settings_handlers(
     async def _settings_page(_: Request) -> HTMLResponse:
         return HTMLResponse(_SETTINGS_HTML)
 
-    async def _favicon(_: Request) -> Response:
-        # The page ships no <link rel="icon">, so browsers request
-        # /favicon.ico at the origin root. Without this route that 404s
-        # and logs a red console error on every load. 204 No Content is
-        # the smallest correct answer ("no icon"), no body to serve.
-        return Response(status_code=204)
-
     async def _get_tools(_: Request) -> JSONResponse:
         if server is not None:
             tools = await _get_tool_metadata(server)
@@ -5874,7 +5871,6 @@ def build_settings_handlers(
 
     handlers: dict[str, Any] = {
         "root_page": _root_page,
-        "favicon": _favicon,
         "settings_page": _settings_page,
         "get_tools": _get_tools,
         "save_tools": _save_tools,
@@ -5964,7 +5960,6 @@ def register_settings_routes(
         # the auth for direct access. Document this in DOCS.md.
         mcp.custom_route("/", methods=["GET"])(handlers["root_page"])
         mcp.custom_route("/settings", methods=["GET"])(handlers["settings_page"])
-        mcp.custom_route("/favicon.ico", methods=["GET"])(handlers["favicon"])
         mcp.custom_route("/api/settings/tools", methods=["GET"])(handlers["get_tools"])
         mcp.custom_route("/api/settings/tools", methods=["POST"])(
             handlers["save_tools"]
