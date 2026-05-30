@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, NotRequired, TypedDi
 
 import httpx
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from ._version import get_version, is_running_in_addon
 from .backup_manager import get_backup_manager
@@ -2548,8 +2548,15 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
 
     const info = document.createElement('div');
     info.className = 'feature-info';
+    // Route through the shared addon-aware helper (same as the feature-
+    // flag and advanced-field locked rows). In addon mode an env-pinned
+    // field like CODE_MODE_SAVED_TOOLS_PATH is set by start.py via
+    // setdefault and, being absent from the addon config.yaml schema,
+    // cannot be unset by the user — so the standalone "unset it to edit
+    // here" copy is unactionable; envLockedNoteHtml swaps it for the
+    // addon-runtime wording. Standalone mode is unchanged.
     const lockedNote = f.origin === 'env'
-      ? `<div class="feature-locked-note">Set via env var <code>${escapeHtml(f.env_var)}</code> — unset it to edit here.</div>`
+      ? `<div class="feature-locked-note">${envLockedNoteHtml(f.env_var, f.field)}</div>`
       : '';
     info.innerHTML =
       `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
@@ -4215,6 +4222,13 @@ def build_settings_handlers(
     async def _settings_page(_: Request) -> HTMLResponse:
         return HTMLResponse(_SETTINGS_HTML)
 
+    async def _favicon(_: Request) -> Response:
+        # The page ships no <link rel="icon">, so browsers request
+        # /favicon.ico at the origin root. Without this route that 404s
+        # and logs a red console error on every load. 204 No Content is
+        # the smallest correct answer ("no icon"), no body to serve.
+        return Response(status_code=204)
+
     async def _get_tools(_: Request) -> JSONResponse:
         if server is not None:
             tools = await _get_tool_metadata(server)
@@ -5860,6 +5874,7 @@ def build_settings_handlers(
 
     handlers: dict[str, Any] = {
         "root_page": _root_page,
+        "favicon": _favicon,
         "settings_page": _settings_page,
         "get_tools": _get_tools,
         "save_tools": _save_tools,
@@ -5949,6 +5964,7 @@ def register_settings_routes(
         # the auth for direct access. Document this in DOCS.md.
         mcp.custom_route("/", methods=["GET"])(handlers["root_page"])
         mcp.custom_route("/settings", methods=["GET"])(handlers["settings_page"])
+        mcp.custom_route("/favicon.ico", methods=["GET"])(handlers["favicon"])
         mcp.custom_route("/api/settings/tools", methods=["GET"])(handlers["get_tools"])
         mcp.custom_route("/api/settings/tools", methods=["POST"])(
             handlers["save_tools"]
