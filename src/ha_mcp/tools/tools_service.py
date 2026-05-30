@@ -24,7 +24,6 @@ from .helpers import (
     register_tool_methods,
 )
 from .util_helpers import (
-    coerce_bool_param,
     compact_service_result,
     parse_json_param,
     parse_string_list_param,
@@ -290,10 +289,10 @@ class ServiceTools:
         service: str,
         entity_id: str | None = None,
         data: dict[str, Any] | None = None,
-        return_response: bool | str = False,
-        wait: bool | str = True,
+        return_response: bool = False,
+        wait: bool = True,
         verbose: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "Return HA's raw service response unchanged (default: False). "
@@ -390,15 +389,9 @@ class ServiceTools:
         try:
             service_data = self._parse_service_data(data, entity_id)
 
-            # Coerce return_response boolean parameter
-            return_response_bool = coerce_bool_param(
-                return_response, "return_response", default=False
-            )
-            wait_bool = coerce_bool_param(wait, "wait", default=True)
-            try:
-                verbose_bool = coerce_bool_param(verbose, "verbose", default=False)
-            except ValueError as e:
-                raise_tool_error(create_validation_error(str(e), parameter="verbose"))
+            return_response_bool = return_response
+            wait_bool = wait
+            verbose_bool = verbose
             try:
                 parsed_result_fields = parse_string_list_param(
                     result_fields, "result_fields", allow_csv=True
@@ -580,13 +573,11 @@ class ServiceTools:
     async def ha_bulk_control(
         self,
         operations: str | list[dict[str, Any]],
-        parallel: bool | str = True,
+        parallel: bool = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Control multiple devices with bulk operation support and WebSocket tracking."""
-        # Coerce boolean parameter that may come as string from XML-style calls
-        parallel_bool = coerce_bool_param(parallel, "parallel", default=True)
-        assert parallel_bool is not None  # default=True guarantees non-None
+        parallel_bool = parallel
 
         # Parse JSON operations if provided as string
         try:

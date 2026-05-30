@@ -34,8 +34,6 @@ from .tools_config_helpers import (
 )
 from .util_helpers import (
     build_pagination_metadata,
-    coerce_bool_param,
-    coerce_int_param,
     fetch_integration_diagnostics,
     get_logger_levels,
     parse_diagnostics_fields,
@@ -301,7 +299,7 @@ class IntegrationTools:
             ),
         ] = None,
         include_options: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="Include the options object for each entry. "
                 "Automatically enabled when domain filter is set. "
@@ -316,7 +314,7 @@ class IntegrationTools:
             ),
         ] = False,
         include_schema: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="When entry_id is set, also return the options flow schema "
                 "(available fields and their types). Use before ha_config_set_helper "
@@ -325,7 +323,7 @@ class IntegrationTools:
             ),
         ] = False,
         include_subentries: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "When entry_id is set, include config subentries for the "
@@ -337,7 +335,7 @@ class IntegrationTools:
             ),
         ] = False,
         include_subentry_schema: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "When entry_id is set, return introspection-only config "
@@ -369,7 +367,7 @@ class IntegrationTools:
             ),
         ] = None,
         show_advanced_options: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "When include_subentry_schema=True, ask Home Assistant to "
@@ -379,7 +377,7 @@ class IntegrationTools:
             ),
         ] = False,
         exact_match: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "Use exact substring matching for query filter (default: True). "
@@ -389,21 +387,24 @@ class IntegrationTools:
             ),
         ] = True,
         limit: Annotated[
-            int | str,
+            int,
             Field(
                 default=50,
+                ge=1,
+                le=200,
                 description="Max entries to return per page in list mode (default: 50)",
             ),
         ] = 50,
         offset: Annotated[
-            int | str,
+            int,
             Field(
                 default=0,
+                ge=0,
                 description="Number of entries to skip for pagination (default: 0)",
             ),
         ] = 0,
         include_diagnostics: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "When entry_id is set, also fetch the integration's diagnostics "
@@ -449,7 +450,7 @@ class IntegrationTools:
             ),
         ] = None,
         diagnostics_truncate_at_bytes: Annotated[
-            int | str | None,
+            int | None,
             Field(
                 description=(
                     "Optional byte cap on the serialized diagnostics payload "
@@ -460,6 +461,7 @@ class IntegrationTools:
                     "20000 bytes. Only applies when include_diagnostics=True."
                 ),
                 default=None,
+                ge=1,
             ),
         ] = None,
         diagnostics_data_path: Annotated[
@@ -481,7 +483,7 @@ class IntegrationTools:
             ),
         ] = None,
         diagnostics_data_offset: Annotated[
-            int | str | None,
+            int | None,
             Field(
                 description=(
                     "Pagination start index (default 0) for list-valued "
@@ -491,10 +493,11 @@ class IntegrationTools:
                     "when include_diagnostics=True."
                 ),
                 default=0,
+                ge=0,
             ),
         ] = 0,
         diagnostics_data_limit: Annotated[
-            int | str | None,
+            int | None,
             Field(
                 description=(
                     "Pagination window size for list-valued "
@@ -508,6 +511,7 @@ class IntegrationTools:
                     "Only applies when include_diagnostics=True."
                 ),
                 default=None,
+                ge=1,
             ),
         ] = None,
     ) -> dict[str, Any]:
@@ -548,58 +552,25 @@ class IntegrationTools:
         Supervisor's lowercase ``"default"`` literal — do not cross-compare.
         """
         try:
-            include_opts = coerce_bool_param(
-                include_options, "include_options", default=False
-            )
-            include_schema_bool = coerce_bool_param(
-                include_schema, "include_schema", default=False
-            )
-            include_diagnostics_bool = coerce_bool_param(
-                include_diagnostics, "include_diagnostics", default=False
-            )
-            include_subentries_bool = coerce_bool_param(
-                include_subentries, "include_subentries", default=False
-            )
-            include_subentry_schema_bool = coerce_bool_param(
-                include_subentry_schema,
-                "include_subentry_schema",
-                default=False,
-            )
-            show_advanced_options_bool = coerce_bool_param(
-                show_advanced_options,
-                "show_advanced_options",
-                default=False,
-            )
-            exact_match_bool = coerce_bool_param(
-                exact_match, "exact_match", default=True
-            )
-            limit_int = coerce_int_param(
-                limit, "limit", default=50, min_value=1, max_value=200
-            )
-            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
+            include_opts = include_options
+            include_schema_bool = include_schema
+            include_diagnostics_bool = include_diagnostics
+            include_subentries_bool = include_subentries
+            include_subentry_schema_bool = include_subentry_schema
+            show_advanced_options_bool = show_advanced_options
+            exact_match_bool = exact_match
+            limit_int = limit
+            offset_int = offset
             fields_list = parse_diagnostics_fields(diagnostics_fields)
-            truncate_bytes = coerce_int_param(
-                diagnostics_truncate_at_bytes,
-                "diagnostics_truncate_at_bytes",
-                default=None,
-                min_value=1,
+            truncate_bytes = diagnostics_truncate_at_bytes
+            data_offset_int = (
+                diagnostics_data_offset if diagnostics_data_offset is not None else 0
             )
-            data_offset_int = coerce_int_param(
-                diagnostics_data_offset,
-                "diagnostics_data_offset",
-                default=0,
-                min_value=0,
-            )
-            data_limit_int = coerce_int_param(
-                diagnostics_data_limit,
-                "diagnostics_data_limit",
-                default=None,
-                min_value=1,
-            )
+            data_limit_int = diagnostics_data_limit
             # Type-guard ``diagnostics_data_path`` here so a bad caller (dict /
             # list) surfaces as ``VALIDATION_INVALID_PARAMETER`` instead of
             # leaking as ``INTERNAL_ERROR`` from the resolver's ``.strip()``
-            # downstream. Mirrors the coerce_int_param guards above.
+            # downstream.
             if diagnostics_data_path is not None and not isinstance(
                 diagnostics_data_path, str
             ):
@@ -1079,9 +1050,7 @@ class IntegrationTools:
     async def ha_set_integration_enabled(
         self,
         entry_id: Annotated[str, Field(description="Config entry ID")],
-        enabled: Annotated[
-            bool | str, Field(description="True to enable, False to disable")
-        ],
+        enabled: Annotated[bool, Field(description="True to enable, False to disable")],
     ) -> dict[str, Any]:
         """Enable/disable integration (config entry).
 
@@ -1097,12 +1066,11 @@ class IntegrationTools:
                     "Use ha_get_integration() to find valid config entry IDs",
                 ],
             )
-            enabled_bool = coerce_bool_param(enabled, "enabled")
 
             message = {
                 "type": "config_entries/disable",
                 "entry_id": entry_id,
-                "disabled_by": None if enabled_bool else "user",
+                "disabled_by": None if enabled else "user",
             }
 
             result = await self._client.send_websocket_message(message)
@@ -1114,7 +1082,7 @@ class IntegrationTools:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to {'enable' if enabled_bool else 'disable'} integration: {error_msg}",
+                        f"Failed to {'enable' if enabled else 'disable'} integration: {error_msg}",
                         context={"entry_id": entry_id},
                     )
                 )
@@ -1127,13 +1095,13 @@ class IntegrationTools:
             else:
                 note = (
                     "Integration has been loaded."
-                    if enabled_bool
+                    if enabled
                     else "Integration has been unloaded."
                 )
 
             return {
                 "success": True,
-                "message": f"Integration {'enabled' if enabled_bool else 'disabled'} successfully",
+                "message": f"Integration {'enabled' if enabled else 'disabled'} successfully",
                 "entry_id": entry_id,
                 "require_restart": require_restart,
                 "note": note,
@@ -1209,26 +1177,20 @@ class IntegrationTools:
             ),
         ] = None,
         confirm: Annotated[
-            bool | str,
+            bool,
             Field(
-                description=(
-                    "Must be True to confirm removal. Accepts bool or "
-                    "string ('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', "
-                    "case-insensitive) for transport ergonomics."
-                ),
+                description="Must be True to confirm removal.",
                 default=False,
             ),
         ] = False,
         wait: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "Wait for entity removal. Default: True. "
                     "Ignored when helper_type=None or "
                     "helper_type='config_subentry' (no entity poll, "
-                    "require_restart returned). Accepts bool or string "
-                    "('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', "
-                    "case-insensitive)."
+                    "require_restart returned)."
                 ),
                 default=True,
             ),
@@ -1317,8 +1279,7 @@ class IntegrationTools:
         removal. Cannot be undone.
         """
         # === Confirm gate (uniform for all four paths) ===
-        confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
-        if not confirm_bool:
+        if not confirm:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -1354,7 +1315,7 @@ class IntegrationTools:
             context={"helper_type": helper_type},
         )
 
-        wait_bool = coerce_bool_param(wait, "wait", default=True)
+        wait_bool = wait
         warnings: list[str] = []
 
         # === Routing dispatch ===

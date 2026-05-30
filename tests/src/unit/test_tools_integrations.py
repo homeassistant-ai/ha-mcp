@@ -1121,8 +1121,8 @@ class TestGetIntegrationDiagnostics:
                 entry_id="entry_abc",
                 include_diagnostics=True,
                 diagnostics_data_path="data.devices",
-                diagnostics_data_offset="5",
-                diagnostics_data_limit="10",
+                diagnostics_data_offset=5,
+                diagnostics_data_limit=10,
             )
         mock_fetch.assert_awaited_once_with(
             client,

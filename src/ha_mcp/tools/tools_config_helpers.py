@@ -36,7 +36,6 @@ from .util_helpers import (
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
-    coerce_bool_param,
     parse_json_param,
     parse_string_list_param,
     wait_for_entity_registered,
@@ -1578,7 +1577,7 @@ async def _handle_flow_helper(
     area_id: str | None,
     labels: str | list[str] | None,
     category: str | None,
-    wait: bool | str,
+    wait: bool,
     action: str | None = None,
 ) -> dict[str, Any]:
     """Create or update a flow-based helper and apply registry updates to all entities.
@@ -1762,10 +1761,9 @@ async def _handle_flow_helper(
     # instances quickly; steady 500ms matches typical entity_registry/list latency
     # on larger remote setups without missing entities near the deadline.
     warnings: list[str] = list(pre_warnings)
-    wait_bool = coerce_bool_param(wait, "wait", default=True)
     entities: list[dict[str, Any]] = []
     if entry_id:
-        if action == "create" and wait_bool:
+        if action == "create" and wait:
             deadline = 5.0
             intervals = [0.2, 0.3]  # first two retries faster
             steady_interval = 0.5
@@ -2099,7 +2097,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         show_advanced_options: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "When helper_type='config_subentry', ask Home Assistant "
@@ -2341,7 +2339,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         wait: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.",
                 default=True,
@@ -2518,11 +2516,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     subentry_type,
                     config_dict,
                     subentry_id=subentry_id,
-                    show_advanced_options=coerce_bool_param(
-                        show_advanced_options,
-                        "show_advanced_options",
-                        default=False,
-                    ),
+                    show_advanced_options=show_advanced_options,
                 )
                 _attach_helper_skill(subentry_response, MandatoryBPS)
                 return subentry_response
@@ -3013,8 +3007,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     # branch under the update action below already skips the
                     # wait for this reason; mirror it here so create doesn't
                     # burn 10s per tag on every CI run.
-                    wait_bool = coerce_bool_param(wait, "wait", default=True)
-                    if wait_bool and entity_id and helper_type != "tag":
+                    if wait and entity_id and helper_type != "tag":
                         try:
                             registered = await wait_for_entity_registered(
                                 client, entity_id
@@ -3767,8 +3760,7 @@ def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             warnings.extend(cat_result["warnings"])
 
                 # Wait for entity to reflect the update
-                wait_bool = coerce_bool_param(wait, "wait", default=True)
-                if wait_bool:
+                if wait:
                     try:
                         registered = await wait_for_entity_registered(client, entity_id)
                         if not registered:

@@ -45,7 +45,6 @@ from .util_helpers import (
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
-    coerce_bool_param,
     fetch_entity_category,
     merge_validation_meta,
     parse_json_param,
@@ -436,7 +435,7 @@ class ConfigScriptTools:
             ),
         ] = None,
         wait: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="Wait for script to be queryable before returning. Default: True. Set to False for bulk operations.",
                 default=True,
@@ -749,9 +748,8 @@ class ConfigScriptTools:
             result = await self._client.upsert_script_config(config_dict, script_id)
 
             # Wait for script to be queryable
-            wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = f"script.{script_id}"
-            if wait_bool:
+            if wait:
                 try:
                     registered = await wait_for_entity_registered(
                         self._client, entity_id
@@ -847,7 +845,7 @@ class ConfigScriptTools:
             ),
         ],
         wait: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="Wait for script to be fully removed before returning. Default: True.",
                 default=True,
@@ -891,9 +889,8 @@ class ConfigScriptTools:
             result = await self._client.delete_script_config(script_id)
 
             # Wait for script to be removed
-            wait_bool = coerce_bool_param(wait, "wait", default=True)
             entity_id = f"script.{script_id}"
-            if wait_bool:
+            if wait:
                 try:
                     removed = await wait_for_entity_removed(self._client, entity_id)
                     if not removed:

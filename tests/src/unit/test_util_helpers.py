@@ -15,7 +15,6 @@ from ha_mcp.tools.util_helpers import (
     add_timezone_metadata,
     apply_entity_category,
     build_pagination_metadata,
-    coerce_int_param,
     fetch_integration_diagnostics,
     filter_active_repairs,
     get_logger_levels,
@@ -216,46 +215,6 @@ class TestBuildPaginationMetadata:
         """Negative limit raises ValueError."""
         with pytest.raises(ValueError, match="limit must be positive"):
             build_pagination_metadata(total_count=10, offset=0, limit=-1, count=0)
-
-
-class TestCoerceIntParam:
-    """Test coerce_int_param function."""
-
-    def test_none_returns_default(self):
-        assert coerce_int_param(None, default=42) == 42
-
-    def test_none_returns_none_when_no_default(self):
-        assert coerce_int_param(None) is None
-
-    def test_int_passthrough(self):
-        assert coerce_int_param(10, default=0) == 10
-
-    def test_string_coercion(self):
-        assert coerce_int_param("100", default=0) == 100
-
-    def test_float_string_coercion(self):
-        assert coerce_int_param("100.0", default=0) == 100
-
-    def test_empty_string_returns_default(self):
-        assert coerce_int_param("", default=5) == 5
-
-    def test_invalid_string_raises(self):
-        with pytest.raises(ValueError, match="must be a valid integer"):
-            coerce_int_param("abc", "limit")
-
-    def test_below_min_raises(self):
-        with pytest.raises(ValueError, match="must be at least"):
-            coerce_int_param(-1, "offset", default=0, min_value=0)
-
-    def test_above_max_clamped(self):
-        """Values above max_value are clamped (soft cap for oversized requests)."""
-        assert coerce_int_param(500, "limit", default=50, max_value=200) == 200
-
-    def test_exact_min_value_allowed(self):
-        assert coerce_int_param(0, "offset", default=0, min_value=0) == 0
-
-    def test_exact_max_value_allowed(self):
-        assert coerce_int_param(200, "limit", default=50, max_value=200) == 200
 
 
 class TestNormalizeLogLevel:
@@ -1054,27 +1013,6 @@ class TestFetchIntegrationDiagnostics:
         assert result["data"] is None
         assert "sub-tree not present" in result["data_path_error"]
         assert "resolved to null" in result["data_path_error"]
-
-    @pytest.mark.asyncio
-    async def test_diagnostics_data_limit_zero_rejected_at_tool_layer(self):
-        """``data_limit=0`` is rejected by ``coerce_int_param(min_value=1)``
-        at the wire-up — caller sees a structured validation error rather
-        than an empty page that silently swallows pagination intent."""
-        from fastmcp.exceptions import ToolError as _ToolError
-
-        from ha_mcp.tools.tools_integrations import IntegrationTools
-
-        client = MagicMock()
-        tools = IntegrationTools(client)
-        with pytest.raises(_ToolError) as excinfo:
-            await tools.ha_get_integration(
-                entry_id="entry_abc",
-                include_diagnostics=True,
-                diagnostics_data_limit=0,
-            )
-        msg = str(excinfo.value)
-        assert "diagnostics_data_limit" in msg
-        assert "min" in msg.lower() or "must be" in msg.lower()
 
     # --- KP13 round-4 gap tests --------------------------------------------
 
