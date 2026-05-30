@@ -522,13 +522,10 @@ class TestSearchEntitiesLimitValidation:
     """
 
     async def test_negative_limit_rejected(self, mcp_client) -> None:
-        """ha_search_entities with limit=-1 returns VALIDATION_FAILED.
+        """ha_search_entities with limit=-1 returns an error (success=False).
 
-        Before fix: results[0:-1] silently drops the last entity, success=True.
-        After fix: coerce_int_param(min_value=1) raises ValueError → VALIDATION_FAILED.
-        Code path: tools_search.py — coerce_int_param(limit, "limit", default=10, min_value=1)
-        → ValueError("limit must be at least 1, got -1")
-        → outer except Exception → exception_to_structured_error → VALIDATION_FAILED.
+        Before fix: results[0:-1] silently dropped the last entity, success=True.
+        After fix: Field(ge=1) schema validation rejects limit=-1.
         """
         result = await safe_call_tool(
             mcp_client,
@@ -541,16 +538,12 @@ class TestSearchEntitiesLimitValidation:
         assert inner["success"] is False, (
             f"Expected success=False for limit=-1, got: {inner}"
         )
-        assert inner["error"]["code"] == "VALIDATION_FAILED", (
-            f"Expected VALIDATION_FAILED, got: {inner}"
-        )
 
     async def test_zero_limit_rejected(self, mcp_client) -> None:
-        """ha_search_entities with limit=0 returns VALIDATION_FAILED.
+        """ha_search_entities with limit=0 returns an error (success=False).
 
         Before fix: results[0:0] returns empty list, success=True, count=0.
-        After fix: coerce_int_param(min_value=1) raises ValueError → VALIDATION_FAILED.
-        Code path: identical to limit=-1 — same coerce_int_param branch.
+        After fix: Field(ge=1) schema validation rejects limit=0.
         """
         result = await safe_call_tool(
             mcp_client,
@@ -562,9 +555,6 @@ class TestSearchEntitiesLimitValidation:
 
         assert inner["success"] is False, (
             f"Expected success=False for limit=0, got: {inner}"
-        )
-        assert inner["error"]["code"] == "VALIDATION_FAILED", (
-            f"Expected VALIDATION_FAILED, got: {inner}"
         )
 
 
