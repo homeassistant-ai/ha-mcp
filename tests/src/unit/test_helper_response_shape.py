@@ -33,15 +33,16 @@ def register_tools(mock_client):
 
     registered: dict[str, Any] = {}
 
-    def capture_tool(**kwargs):
-        def decorator(fn):
-            registered[fn.__name__] = fn
-            return fn
-
-        return decorator
+    def capture_add_tool(method: Any) -> None:
+        name = (
+            method.__fastmcp__.name
+            if hasattr(method, "__fastmcp__")
+            else method.__name__
+        )
+        registered[name] = method
 
     mock_mcp = MagicMock()
-    mock_mcp.tool = capture_tool
+    mock_mcp.add_tool = capture_add_tool
     register_config_helper_tools(mock_mcp, mock_client)
     return registered
 
@@ -726,12 +727,8 @@ class TestLifecycleWriteWarningsShape:
         monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
 
         client = MagicMock()
-        client.upsert_scene_config = AsyncMock(
-            return_value={"scene_id": "test_scene"}
-        )
-        client.delete_scene_config = AsyncMock(
-            return_value={"scene_id": "test_scene"}
-        )
+        client.upsert_scene_config = AsyncMock(return_value={"scene_id": "test_scene"})
+        client.delete_scene_config = AsyncMock(return_value={"scene_id": "test_scene"})
         client.resolve_scene_id = AsyncMock(
             side_effect=lambda sid: sid.removeprefix("scene.")
         )
@@ -797,9 +794,7 @@ class TestLifecycleWriteWarningsShape:
                 object_id="test_group",
             )
         _assert_warnings_list_shape(result)
-        assert any(
-            "removal verification failed" in w for w in result["warnings"]
-        )
+        assert any("removal verification failed" in w for w in result["warnings"])
 
     async def test_groups_remove_auth_error_yields_top_level_warnings_list(
         self, groups_tools
@@ -813,13 +808,9 @@ class TestLifecycleWriteWarningsShape:
                 object_id="test_group",
             )
         _assert_warnings_list_shape(result)
-        assert any(
-            "removal verification failed" in w for w in result["warnings"]
-        )
+        assert any("removal verification failed" in w for w in result["warnings"])
 
-    async def test_groups_update_path_uses_updated_action_word(
-        self, groups_tools
-    ):
+    async def test_groups_update_path_uses_updated_action_word(self, groups_tools):
         # Rename-only call (name set, entities/add/remove all None) — the
         # is_create branch in tools_groups.py:306 evaluates to False, so
         # action_word must be "updated". Pins the create/update branching
@@ -883,9 +874,7 @@ class TestLifecycleWriteWarningsShape:
                 script_id="test_script",
             )
         _assert_warnings_list_shape(result)
-        assert any(
-            "removal verification failed" in w for w in result["warnings"]
-        )
+        assert any("removal verification failed" in w for w in result["warnings"])
 
     async def test_scripts_remove_auth_error_yields_top_level_warnings_list(
         self, scripts_tools
@@ -899,9 +888,7 @@ class TestLifecycleWriteWarningsShape:
                 script_id="test_script",
             )
         _assert_warnings_list_shape(result)
-        assert any(
-            "removal verification failed" in w for w in result["warnings"]
-        )
+        assert any("removal verification failed" in w for w in result["warnings"])
 
     # ------------------------------------------------------------------
     # Automations: set + remove × 2 exception types
@@ -955,9 +942,7 @@ class TestLifecycleWriteWarningsShape:
                 identifier="automation.test_auto",
             )
         _assert_warnings_list_shape(result)
-        assert any(
-            "removal verification failed" in w for w in result["warnings"]
-        )
+        assert any("removal verification failed" in w for w in result["warnings"])
 
     async def test_automations_remove_auth_error_yields_top_level_warnings_list(
         self, automations_tools
@@ -971,9 +956,7 @@ class TestLifecycleWriteWarningsShape:
                 identifier="automation.test_auto",
             )
         _assert_warnings_list_shape(result)
-        assert any(
-            "removal verification failed" in w for w in result["warnings"]
-        )
+        assert any("removal verification failed" in w for w in result["warnings"])
 
     async def test_automations_update_path_uses_updated_action_word(
         self, automations_tools
@@ -1050,9 +1033,7 @@ class TestLifecycleWriteWarningsShape:
                 scene_id="test_scene",
             )
         _assert_warnings_list_shape(result)
-        assert any(
-            "removal verification failed" in w for w in result["warnings"]
-        )
+        assert any("removal verification failed" in w for w in result["warnings"])
 
     async def test_scenes_remove_auth_error_yields_top_level_warnings_list(
         self, scenes_tools
@@ -1066,9 +1047,7 @@ class TestLifecycleWriteWarningsShape:
                 scene_id="test_scene",
             )
         _assert_warnings_list_shape(result)
-        assert any(
-            "removal verification failed" in w for w in result["warnings"]
-        )
+        assert any("removal verification failed" in w for w in result["warnings"])
 
 
 class TestSweepWarningsShape:
@@ -1129,10 +1108,21 @@ class TestSweepWarningsShape:
         ws = AsyncMock()
         ws.send_command.side_effect = [
             {"success": True, "result": {"backups": [{"backup_id": "abc"}]}},
-            {"success": True, "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]}},
-            {"success": True, "result": {"config": {"create_backup": {"password": "pw"}}}},
+            {
+                "success": True,
+                "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]},
+            },
+            {
+                "success": True,
+                "result": {"config": {"create_backup": {"password": "pw"}}},
+            },
             {"success": True, "result": {"backup_job_id": "job"}},
-            {"success": True, "result": {"backups": [{"name": "Pre_Restore_Safety", "backup_id": "sxyz"}]}},
+            {
+                "success": True,
+                "result": {
+                    "backups": [{"name": "Pre_Restore_Safety", "backup_id": "sxyz"}]
+                },
+            },
             {"success": True},
         ]
         client = MagicMock()
@@ -1145,7 +1135,6 @@ class TestSweepWarningsShape:
         ):
             result = await restore_backup(client, "abc")
         _assert_warnings_list_shape(result)
-
 
     @pytest.mark.asyncio
     async def test_service_call_event_timeout_warnings_shape(self):
@@ -1218,6 +1207,7 @@ class TestSweepWarningsShape:
             def wrapper(func):
                 registered[func.__name__] = func
                 return func
+
             return wrapper
 
         mock_mcp.tool = tool_decorator
@@ -1252,7 +1242,9 @@ class TestSweepWarningsShape:
         _assert_warnings_list_shape_no_success(result)
 
     @pytest.mark.asyncio
-    async def test_energy_manage_energy_prefs_dry_run_validate_failure_warnings_shape(self):
+    async def test_energy_manage_energy_prefs_dry_run_validate_failure_warnings_shape(
+        self,
+    ):
         """Shape-pins the validate_warning emit in
         ``_dry_run`` when HA's ``energy/validate`` fails. Response carries
         ``success: True`` at top level (set from ``len(shape_errors) == 0``)
@@ -1278,4 +1270,3 @@ class TestSweepWarningsShape:
         )
 
         _assert_warnings_list_shape(result)
-

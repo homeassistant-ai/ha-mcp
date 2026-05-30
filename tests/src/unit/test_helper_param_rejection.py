@@ -39,8 +39,11 @@ def mock_client():
     """Mock client that records every WS message sent."""
     client = MagicMock()
 
-    def make_ws_responses(helper_type: str, unique_id: str = "abc123",
-                         existing_config: dict[str, Any] | None = None):
+    def make_ws_responses(
+        helper_type: str,
+        unique_id: str = "abc123",
+        existing_config: dict[str, Any] | None = None,
+    ):
         existing = existing_config or {
             "id": unique_id,
             "name": "Existing Helper",
@@ -92,15 +95,16 @@ def register_tools(mock_client):
 
     registered: dict[str, Any] = {}
 
-    def capture_tool(**kwargs):
-        def decorator(fn):
-            registered[fn.__name__] = fn
-            return fn
-
-        return decorator
+    def capture_add_tool(method: Any) -> None:
+        name = (
+            method.__fastmcp__.name
+            if hasattr(method, "__fastmcp__")
+            else method.__name__
+        )
+        registered[name] = method
 
     mock_mcp = MagicMock()
-    mock_mcp.tool = capture_tool
+    mock_mcp.add_tool = capture_add_tool
     register_config_helper_tools(mock_mcp, mock_client)
     return registered
 
@@ -129,11 +133,14 @@ class TestInputBooleanRejectsInapplicableParams:
 
     async def test_rejects_min_value(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_boolean")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Lamp",
@@ -143,11 +150,14 @@ class TestInputBooleanRejectsInapplicableParams:
 
     async def test_rejects_options(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_boolean")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Lamp",
@@ -159,11 +169,14 @@ class TestInputBooleanRejectsInapplicableParams:
 class TestInputNumberRejectsInapplicableParams:
     async def test_rejects_options(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_number")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_number",
                 name="Volume",
@@ -175,11 +188,14 @@ class TestInputNumberRejectsInapplicableParams:
 
     async def test_rejects_has_date(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_number")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_number",
                 name="Volume",
@@ -193,11 +209,14 @@ class TestInputNumberRejectsInapplicableParams:
 class TestInputSelectRejectsInapplicableParams:
     async def test_rejects_min_value(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_select")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
                 name="Mode",
@@ -208,11 +227,14 @@ class TestInputSelectRejectsInapplicableParams:
 
     async def test_rejects_duration(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_select")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_select",
                 name="Mode",
@@ -225,11 +247,14 @@ class TestInputSelectRejectsInapplicableParams:
 class TestInputTextRejectsInapplicableParams:
     async def test_rejects_options(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_text")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_text",
                 name="Note",
@@ -239,11 +264,14 @@ class TestInputTextRejectsInapplicableParams:
 
     async def test_rejects_unit_of_measurement(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_text")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_text",
                 name="Note",
@@ -255,11 +283,14 @@ class TestInputTextRejectsInapplicableParams:
 class TestInputDatetimeRejectsInapplicableParams:
     async def test_rejects_options(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_datetime")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_datetime",
                 name="Wakeup",
@@ -270,11 +301,14 @@ class TestInputDatetimeRejectsInapplicableParams:
 
     async def test_rejects_min_value(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_datetime")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_datetime",
                 name="Wakeup",
@@ -287,11 +321,14 @@ class TestInputDatetimeRejectsInapplicableParams:
 class TestCounterRejectsInapplicableParams:
     async def test_rejects_options(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "counter")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="counter",
                 name="Count",
@@ -301,11 +338,14 @@ class TestCounterRejectsInapplicableParams:
 
     async def test_rejects_duration(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "counter")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="counter",
                 name="Count",
@@ -317,11 +357,14 @@ class TestCounterRejectsInapplicableParams:
 class TestTimerRejectsInapplicableParams:
     async def test_rejects_min_value(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "timer")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="timer",
                 name="Coffee",
@@ -332,11 +375,14 @@ class TestTimerRejectsInapplicableParams:
 
     async def test_rejects_options(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "timer")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="timer",
                 name="Coffee",
@@ -349,11 +395,14 @@ class TestTimerRejectsInapplicableParams:
 class TestScheduleRejectsInapplicableParams:
     async def test_rejects_min_value(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "schedule")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="schedule",
                 name="Workdays",
@@ -364,11 +413,14 @@ class TestScheduleRejectsInapplicableParams:
 
     async def test_rejects_initial(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "schedule")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="schedule",
                 name="Workdays",
@@ -381,11 +433,14 @@ class TestScheduleRejectsInapplicableParams:
 class TestZoneRejectsInapplicableParams:
     async def test_rejects_options(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "zone")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="zone",
                 name="Home",
@@ -397,11 +452,14 @@ class TestZoneRejectsInapplicableParams:
 
     async def test_rejects_initial(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "zone")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="zone",
                 name="Home",
@@ -415,11 +473,14 @@ class TestZoneRejectsInapplicableParams:
 class TestPersonRejectsInapplicableParams:
     async def test_rejects_latitude(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "person")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="person",
                 name="Alice",
@@ -429,11 +490,14 @@ class TestPersonRejectsInapplicableParams:
 
     async def test_rejects_options(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "person")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="person",
                 name="Alice",
@@ -445,11 +509,14 @@ class TestPersonRejectsInapplicableParams:
 class TestTagRejectsInapplicableParams:
     async def test_rejects_latitude(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "tag")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="tag",
                 name="DoorTag",
@@ -459,11 +526,14 @@ class TestTagRejectsInapplicableParams:
 
     async def test_rejects_initial(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "tag")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="tag",
                 name="DoorTag",
@@ -482,11 +552,14 @@ class TestIconRejectionForPersonAndTag:
 
     async def test_person_rejects_icon(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "person")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="person",
                 name="Alice",
@@ -496,11 +569,14 @@ class TestIconRejectionForPersonAndTag:
 
     async def test_tag_rejects_icon(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "tag")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="tag",
                 name="DoorTag",
@@ -519,11 +595,14 @@ class TestInputButtonRejectsAllTypedParams:
 
     async def test_rejects_initial(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_button")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_button",
                 name="Doorbell",
@@ -533,11 +612,14 @@ class TestInputButtonRejectsAllTypedParams:
 
     async def test_rejects_min_value(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_button")
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_button",
                 name="Doorbell",

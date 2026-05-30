@@ -36,15 +36,16 @@ def register_tools(mock_client):
 
     registered: dict[str, Any] = {}
 
-    def capture_tool(**kwargs):
-        def decorator(fn):
-            registered[fn.__name__] = fn
-            return fn
-
-        return decorator
+    def capture_add_tool(method: Any) -> None:
+        name = (
+            method.__fastmcp__.name
+            if hasattr(method, "__fastmcp__")
+            else method.__name__
+        )
+        registered[name] = method
 
     mock_mcp = MagicMock()
-    mock_mcp.tool = capture_tool
+    mock_mcp.add_tool = capture_add_tool
     register_config_helper_tools(mock_mcp, mock_client)
     return registered
 
@@ -134,11 +135,14 @@ class TestPhantomAreaIdRejected:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_ws_handler(area_ids=["kitchen", "living_room"])
         )
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test",
@@ -158,11 +162,14 @@ class TestPhantomLabelRejected:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_ws_handler(label_ids=["important", "automation"])
         )
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test",
@@ -181,11 +188,14 @@ class TestPhantomCategoryRejected:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_ws_handler(category_ids=["mood_lighting", "security"])
         )
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test",
@@ -275,11 +285,14 @@ class TestPhantomRejectedAgainstEmptyRegistry:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_ws_handler(area_ids=[])
         )
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test",
@@ -294,11 +307,14 @@ class TestPhantomRejectedAgainstEmptyRegistry:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_ws_handler(label_ids=[])
         )
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test",
@@ -313,11 +329,14 @@ class TestPhantomRejectedAgainstEmptyRegistry:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=_make_ws_handler(category_ids=[])
         )
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-            return_value=True,
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="input_boolean",
                 name="Test",

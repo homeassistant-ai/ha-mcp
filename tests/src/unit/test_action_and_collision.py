@@ -37,15 +37,16 @@ def register_tools(mock_client):
 
     registered: dict[str, Any] = {}
 
-    def capture_tool(**kwargs):
-        def decorator(fn):
-            registered[fn.__name__] = fn
-            return fn
-
-        return decorator
+    def capture_add_tool(method: Any) -> None:
+        name = (
+            method.__fastmcp__.name
+            if hasattr(method, "__fastmcp__")
+            else method.__name__
+        )
+        registered[name] = method
 
     mock_mcp = MagicMock()
-    mock_mcp.tool = capture_tool
+    mock_mcp.add_tool = capture_add_tool
     register_config_helper_tools(mock_mcp, mock_client)
     return registered
 
@@ -341,12 +342,18 @@ class TestBug12NameCollisionFlowHelper:
 
         # The flow create path itself is mocked away — we only care that the
         # collision check fires before HA is called.
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.create_flow_helper",
-            new_callable=AsyncMock,
-            return_value={"entry_id": "shouldnotbecreated", "title": "Room Temp",
-                          "message": "ok"},
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            patch(
+                "ha_mcp.tools.tools_config_helpers.create_flow_helper",
+                new_callable=AsyncMock,
+                return_value={
+                    "entry_id": "shouldnotbecreated",
+                    "title": "Room Temp",
+                    "message": "ok",
+                },
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await register_tools["ha_config_set_helper"](
                 helper_type="template",
                 name="Room Temp",

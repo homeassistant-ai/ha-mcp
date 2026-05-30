@@ -94,15 +94,16 @@ def register_tools(mock_client):
 
     registered: dict[str, Any] = {}
 
-    def capture_tool(**kwargs):
-        def decorator(fn):
-            registered[fn.__name__] = fn
-            return fn
-
-        return decorator
+    def capture_add_tool(method: Any) -> None:
+        name = (
+            method.__fastmcp__.name
+            if hasattr(method, "__fastmcp__")
+            else method.__name__
+        )
+        registered[name] = method
 
     mock_mcp = MagicMock()
-    mock_mcp.tool = capture_tool
+    mock_mcp.add_tool = capture_add_tool
     register_config_helper_tools(mock_mcp, mock_client)
     return registered
 
@@ -441,9 +442,10 @@ class TestInputSelectDuplicateOptions:
                 options=["A", "B", "A"],
             )
         _assert_invalid_param(excinfo)
-        assert "unique" in str(excinfo.value).lower() or "duplicate" in str(
-            excinfo.value
-        ).lower()
+        assert (
+            "unique" in str(excinfo.value).lower()
+            or "duplicate" in str(excinfo.value).lower()
+        )
 
     async def test_unique_options_pass(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "input_select")
@@ -480,9 +482,10 @@ class TestScheduleValidation:
                 ],
             )
         _assert_invalid_param(excinfo)
-        assert "monday" in str(excinfo.value).lower() or "overlap" in str(
-            excinfo.value
-        ).lower()
+        assert (
+            "monday" in str(excinfo.value).lower()
+            or "overlap" in str(excinfo.value).lower()
+        )
 
     async def test_rejects_missing_to_key(self, register_tools, mock_client):
         _wire_default_ws(mock_client, "schedule")
@@ -784,9 +787,7 @@ class TestInputDatetimeHasDateOrTime:
             )
         _assert_invalid_param(excinfo)
 
-    async def test_update_happy_path_keeps_both_true(
-        self, register_tools, mock_client
-    ):
+    async def test_update_happy_path_keeps_both_true(self, register_tools, mock_client):
         """Valid merge passes — guards against false-positive rejection on a
         no-op-ish update."""
         _wire_default_ws(
