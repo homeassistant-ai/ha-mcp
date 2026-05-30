@@ -182,12 +182,17 @@ async def get_connected_ws_client(
     ws_client = HomeAssistantWebSocketClient(base_url, token, verify_ssl=verify_ssl)
     connected = await ws_client.connect()
     if not connected:
+        reason = ws_client.last_connect_error
+        details = (
+            reason
+            if isinstance(reason, str)
+            else "WebSocket connection could not be established"
+        )
         return None, create_connection_error(
             "Failed to connect to Home Assistant WebSocket",
-            details="WebSocket connection could not be established",
+            details=details,
         )
     return ws_client, None
-
 
 
 def _classify_api_status(
@@ -202,13 +207,17 @@ def _classify_api_status(
             if entity_id:
                 result = create_entity_not_found_error(entity_id, details=error_msg)
             else:
-                result = create_error_response(ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context)
+                result = create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context
+                )
         case 401 | 403:
             result = create_auth_error(error_msg, context=context)
         case 400:
             result = create_validation_error(error_msg, context=context)
         case _:
-            result = create_error_response(ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context)
+            result = create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context
+            )
     return result
 
 
@@ -244,7 +253,9 @@ def _classify_exception(
         case TimeoutError():
             operation = context.get("operation", "request") if context else "request"
             timeout_seconds = context.get("timeout_seconds", 30) if context else 30
-            result = create_timeout_error(operation, timeout_seconds, details=error_msg, context=context)
+            result = create_timeout_error(
+                operation, timeout_seconds, details=error_msg, context=context
+            )
         case ValueError():
             result = create_validation_error(error_msg, context=context)
 
@@ -276,7 +287,9 @@ def _classify_by_message(
                 "unknown type",
             )
         )
-        or re.search(r"expected (?:a |str|int|bool|dict|list|float|type|one of)", error_str)
+        or re.search(
+            r"expected (?:a |str|int|bool|dict|list|float|type|one of)", error_str
+        )
     ):
         # Supervisor schema validation: vol.Invalid message arriving as a
         # HomeAssistantCommandError via HA Core's hassio WS bridge. The
@@ -298,20 +311,27 @@ def _classify_by_message(
         if entity_id:
             result = create_entity_not_found_error(entity_id, details=error_msg)
         else:
-            result = create_error_response(ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context)
+            result = create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context
+            )
     elif "timeout" in error_str:
-        result = create_timeout_error("operation", 30, details=error_msg, context=context)
+        result = create_timeout_error(
+            "operation", 30, details=error_msg, context=context
+        )
     elif "connection" in error_str or "connect" in error_str:
         result = create_connection_error(error_msg, context=context)
-    elif any(
-        phrase in error_str
-        for phrase in (
-            "unauthorized",
-            "authentication",
-            "invalid token",
-            "access denied",
+    elif (
+        any(
+            phrase in error_str
+            for phrase in (
+                "unauthorized",
+                "authentication",
+                "invalid token",
+                "access denied",
+            )
         )
-    ) or "401" in error_str:
+        or "401" in error_str
+    ):
         result = create_auth_error(error_msg, context=context)
     elif error_str.startswith("command failed:"):
         # HomeAssistantCommandError fallback: WS ``success=False`` with a
@@ -319,10 +339,15 @@ def _classify_by_message(
         # known failure mode (the WS command itself failed), not an
         # unexpected internal error — route to SERVICE_CALL_FAILED,
         # mirroring the 4xx fallback in _classify_api_status.
-        result = create_error_response(ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context)
+        result = create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context
+        )
     else:
         result = create_error_response(
-            ErrorCode.INTERNAL_ERROR, "An unexpected error occurred", details=error_msg, context=context
+            ErrorCode.INTERNAL_ERROR,
+            "An unexpected error occurred",
+            details=error_msg,
+            context=context,
         )
     return result
 
@@ -418,7 +443,11 @@ def exception_to_structured_error(
     ):
         logger.exception("Unclassified exception: %s", error_msg)
 
-    if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
+    if (
+        suggestions
+        and "error" in error_response
+        and isinstance(error_response["error"], dict)
+    ):
         # Set both `suggestion` (singular, first item) and `suggestions`
         # (plural, full list). create_error_response (errors.py) sets the
         # singular key; existing tests for exception_to_structured_error
@@ -535,6 +564,4 @@ def register_tool_methods(mcp: Any, instance: Any) -> None:
             mcp.add_tool(method)
             count += 1
     if count == 0:
-        logger.warning(
-            f"No @tool-decorated methods found on {type(instance).__name__}"
-        )
+        logger.warning(f"No @tool-decorated methods found on {type(instance).__name__}")

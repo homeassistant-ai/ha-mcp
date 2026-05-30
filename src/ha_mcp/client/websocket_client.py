@@ -235,6 +235,10 @@ class HomeAssistantWebSocketClient:
         self._send_lock: asyncio.Lock | None = None
         self._lock_loop: asyncio.AbstractEventLoop | None = None
         self._state = WebSocketConnectionState()
+        # Reason the most recent connect() attempt failed (exception text),
+        # or None. Surfaced by callers so the agent sees *why* a WebSocket
+        # connection failed instead of an opaque "Failed to connect" string.
+        self._last_connect_error: str | None = None
 
         # Parse URL to get WebSocket endpoint
         parsed = urlparse(self.base_url)
@@ -259,6 +263,7 @@ class HomeAssistantWebSocketClient:
         try:
             logger.info(f"Connecting to Home Assistant WebSocket: {self.ws_url}")
             self._state.reset_connection()
+            self._last_connect_error = None
 
             # Only configure an SSLContext for wss://; ws:// (Supervisor
             # proxy) doesn't use TLS and gets ssl=None.
@@ -326,6 +331,7 @@ class HomeAssistantWebSocketClient:
             return True
 
         except Exception as e:
+            self._last_connect_error = f"{type(e).__name__}: {e}"
             if _is_ssl_error(e) and self.verify_ssl:
                 logger.error(
                     "WebSocket TLS verification failed for %s: %s. "
@@ -925,6 +931,17 @@ class HomeAssistantWebSocketClient:
         """Check if WebSocket is connected and authenticated."""
         return self._state.is_ready
 
+    @property
+    def last_connect_error(self) -> str | None:
+        """Reason the most recent ``connect()`` attempt failed, or ``None``.
+
+        Captured from the underlying exception (e.g. an auth timeout, a
+        handshake HTTP/TLS error, or "Did not receive auth_required") so
+        callers can surface *why* the connection failed instead of an
+        opaque "Failed to connect to Home Assistant WebSocket".
+        """
+        return self._last_connect_error
+
 
 MAX_POOL_SIZE = 50
 
@@ -1059,7 +1076,14 @@ class WebSocketManager:
 
             connected = await client.connect()
             if not connected:
-                raise Exception("Failed to connect to Home Assistant WebSocket")
+                reason = getattr(client, "last_connect_error", None)
+                # Only append an actual string reason — a missing attribute or
+                # a non-str (e.g. a MagicMock in tests) must not pollute the
+                # message with a repr.
+                detail = f": {reason}" if isinstance(reason, str) else ""
+                raise Exception(
+                    "Failed to connect to Home Assistant WebSocket" + detail
+                )
 
             self._clients[key] = client
             self._last_used[key] = time.monotonic()
