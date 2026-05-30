@@ -144,7 +144,7 @@ class TestAddonStructure:
         against future one-sided drift (the exact bug class this fix
         addresses: dev gains/changes an option, stable is forgotten)."""
         keys = ("tool_search_max_results", "disabled_tools", "pinned_tools")
-        with open("homeassistant-addon/config.yaml") as f:
+        with open(f"{ADDON_DIR}/config.yaml") as f:
             stable = yaml.safe_load(f)
         with open("homeassistant-addon-dev/config.yaml") as f:
             dev = yaml.safe_load(f)

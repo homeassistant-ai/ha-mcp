@@ -168,7 +168,7 @@ configuration:
       here. Comma-separated tool names (e.g. ha_call_event,ha_eval_template).
   pinned_tools:
     name: Pinned tools (comma-separated)
-    description: |
+    description: >-
       Tools listed here are locked pinned — they appear at the top of the
       Tools tab and cannot be unpinned from the web Settings UI without
       unsetting this option first. Useful in combination with Tool Search.
