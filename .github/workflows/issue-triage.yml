@@ -747,13 +747,14 @@ jobs:
               return { status: resp.status, data };
             };
 
-            // Retry primary model on 5xx with exponential backoff; fall back to mini on 429.
+            // gpt-4o-mini: 16K input token free-tier limit (vs 8K for gpt-4.1).
+            // Retry on 5xx with exponential backoff; fall back to gpt-4o on 429.
             let result;
             for (let attempt = 1; attempt <= 3; attempt++) {
-              result = await call('openai/gpt-4.1');
+              result = await call('openai/gpt-4o-mini');
               if (result.status === 429) {
-                core.warning('gpt-4.1 rate limited, falling back to gpt-4.1-mini');
-                result = await call('openai/gpt-4.1-mini');
+                core.warning('gpt-4o-mini rate limited, falling back to gpt-4o');
+                result = await call('openai/gpt-4o');
                 break;
               }
               if (result.status < 500) break;
