@@ -2552,16 +2552,36 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
 
     const info = document.createElement('div');
     info.className = 'feature-info';
-    // Route through the shared addon-aware helper (same as the feature-
-    // flag and advanced-field locked rows). In addon mode an env-pinned
-    // field like CODE_MODE_SAVED_TOOLS_PATH is set by start.py via
-    // setdefault and, being absent from the addon config.yaml schema,
-    // cannot be unset by the user — so the standalone "unset it to edit
-    // here" copy is unactionable; envLockedNoteHtml swaps it for the
-    // addon-runtime wording. Standalone mode is unchanged.
-    const lockedNote = f.origin === 'env'
-      ? `<div class="feature-locked-note">${envLockedNoteHtml(f.env_var, f.field)}</div>`
-      : '';
+    // code_mode_saved_tools_path needs honest, field-specific copy:
+    //  - add-on mode: hardcoded by start.py (setdefault to /data); not
+    //    Supervisor-managed and absent from the addon schema, so it
+    //    genuinely can't be changed — don't imply a lever exists.
+    //  - standalone with the env var set: the "unset it" hint IS
+    //    actionable (the operator controls the env var), so keep it.
+    //  - standalone with no path: a blank path disables persistence —
+    //    warn that saved tools live in memory only.
+    // Other env-locked code-mode sub-fields keep the shared helper.
+    let lockedNote = '';
+    if (f.field === 'code_mode_saved_tools_path') {
+      if (IS_ADDON_MODE) {
+        lockedNote =
+          '<div class="feature-locked-note">Hardcoded to ' +
+          '<code>/data/saved_tools.json</code> in add-on mode and cannot ' +
+          'be changed (fixed here so saved tools survive add-on updates).' +
+          '</div>';
+      } else if (f.origin === 'env') {
+        lockedNote =
+          `<div class="feature-locked-note">${envLockedNoteHtml(f.env_var, f.field)}</div>`;
+      } else if (!f.value) {
+        lockedNote =
+          '<div class="feature-locked-note">If blank, custom tools are kept ' +
+          'in memory only and lost on restart. Set a path on persistent ' +
+          'storage to keep them.</div>';
+      }
+    } else if (f.origin === 'env') {
+      lockedNote =
+        `<div class="feature-locked-note">${envLockedNoteHtml(f.env_var, f.field)}</div>`;
+    }
     info.innerHTML =
       `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
@@ -5384,16 +5404,34 @@ def build_settings_handlers(
             if is_addon_synced:
                 addon_writes_present = True
             elif os.environ.get(env_name) is not None:
+                # Add-on mode has no env-var surface for non-schema keys
+                # (e.g. CODE_MODE_SAVED_TOOLS_PATH, set by start.py), so
+                # "unset it to edit here" is unactionable there — give
+                # add-on-aware copy instead of implying a lever exists.
+                if addon_mode:
+                    message = (
+                        f"{fname!r} is fixed by the add-on runtime and "
+                        "cannot be changed from the web UI."
+                    )
+                    suggestions = [
+                        "This value is baked into the add-on and is not "
+                        "exposed as an editable setting.",
+                    ]
+                else:
+                    message = (
+                        f"{fname!r} is set via {env_name} env var — "
+                        "unset it to edit here."
+                    )
+                    suggestions = [
+                        f"Unset the {env_name} environment variable (or "
+                        "remove it from your Docker config), then restart "
+                        "to edit this setting from the UI.",
+                    ]
                 return JSONResponse(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"{fname!r} is set via {env_name} env var — "
-                        "unset it to edit here.",
-                        suggestions=[
-                            f"Unset the {env_name} environment variable (or "
-                            "remove it from your addon/Docker config), then "
-                            "restart to edit this setting from the UI.",
-                        ],
+                        message,
+                        suggestions=suggestions,
                         context={"env_var": env_name},
                     ),
                     status_code=409,

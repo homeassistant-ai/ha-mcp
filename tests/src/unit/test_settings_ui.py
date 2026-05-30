@@ -415,16 +415,11 @@ class TestRouteRegistration:
 
 
 class TestFaviconSuppression:
-    """The page suppresses the browser's automatic /favicon.ico request via
-    an empty-data-URI <link rel="icon">, so no 404 is logged in any
-    deployment mode (add-on, standalone, Docker, sidecar) — no backend
-    route required.
+    """The page carries an empty-data-URI `<link rel="icon">` so the browser
+    never requests /favicon.ico (rationale at the `<link>` in settings_ui.py).
     """
 
     def test_settings_html_head_suppresses_favicon_request(self) -> None:
-        # `data:,` is an empty data URI: modern browsers read it as "no
-        # icon" and skip the default /favicon.ico request entirely, so the
-        # 404 console error never fires regardless of which routes mount.
         assert '<link rel="icon" href="data:,">' in _SETTINGS_HTML
 
 

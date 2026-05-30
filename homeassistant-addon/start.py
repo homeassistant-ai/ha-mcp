@@ -590,8 +590,10 @@ def main() -> int:
     # this file out before reinstalling if they want to migrate).
     # Setting this unconditionally is safe: on the stable add-on the
     # tool isn't registered anyway, so the file is never read or
-    # written. Operators can override by setting CODE_MODE_SAVED_TOOLS_PATH
-    # in the add-on's environment if they want a different location.
+    # written. This path is hardcoded in add-on mode: it is not in the
+    # add-on config.yaml schema, so add-on operators have no surface to
+    # change it — and /data is the only location that survives add-on
+    # updates anyway.
     os.environ.setdefault("CODE_MODE_SAVED_TOOLS_PATH", "/data/saved_tools.json")
     os.environ["TOOL_SEARCH_MAX_RESULTS"] = str(tool_search_max_results)
     os.environ["DISABLED_TOOLS"] = disabled_tools_raw
