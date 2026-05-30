@@ -190,6 +190,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # the skill guide tool are registered so it can wrap everything)
         self._apply_tool_search()
 
+        # Convert Pydantic type-validation errors to structured ToolErrors so
+        # models get actionable guidance instead of raw Pydantic messages.
+        from .tools.validation_middleware import ValidationErrorMiddleware
+
+        self.mcp.add_middleware(ValidationErrorMiddleware())
+
         # Wire tool security policies middleware (#966) — opt-in via
         # ENABLE_TOOL_SECURITY_POLICIES. Must come last so the middleware
         # wraps the final tool surface (including the search proxies).
