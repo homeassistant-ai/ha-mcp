@@ -111,6 +111,51 @@ class TestAddonStructure:
             "32-bit platforms not supported by uv base image"
         )
 
+    def test_stable_addon_exposes_nonbeta_tool_options(self):
+        """Stable add-on must expose the NON-beta operator options that dev
+        has — ``tool_search_max_results``, ``disabled_tools``, ``pinned_tools``
+        — in both ``options`` and ``schema``. These are not beta features, so
+        the web-UI master gate doesn't apply; without them in the stable
+        schema they were unreachable on stable (start.py wrote defaults, the
+        web UI showed them ``origin='addon'``-locked, and the override applier
+        skipped them). Regression guard for that dev/stable config drift."""
+        with open(f"{ADDON_DIR}/config.yaml") as f:
+            config = yaml.safe_load(f)
+
+        # key: (schema type, default value). Defaults are load-bearing — a
+        # non-empty disabled_tools default would silently lock tools off.
+        expected = {
+            "tool_search_max_results": ("int(2,10)?", 5),
+            "disabled_tools": ("str?", ""),
+            "pinned_tools": ("str?", ""),
+        }
+        for key, (schema_type, default) in expected.items():
+            assert key in config["options"], f"{key!r} must be in stable options"
+            assert config["options"].get(key) == default, (
+                f"{key!r} default must be {default!r}"
+            )
+            assert config["schema"].get(key) == schema_type, (
+                f"{key!r} must be in stable schema as {schema_type!r}"
+            )
+
+    def test_stable_and_dev_agree_on_nonbeta_tool_options(self):
+        """The three non-beta tool options must stay in sync between the
+        stable and dev add-ons — same defaults AND same schema types. Guards
+        against future one-sided drift (the exact bug class this fix
+        addresses: dev gains/changes an option, stable is forgotten)."""
+        keys = ("tool_search_max_results", "disabled_tools", "pinned_tools")
+        with open(f"{ADDON_DIR}/config.yaml") as f:
+            stable = yaml.safe_load(f)
+        with open("homeassistant-addon-dev/config.yaml") as f:
+            dev = yaml.safe_load(f)
+        for key in keys:
+            assert stable["options"].get(key) == dev["options"].get(key), (
+                f"{key!r} option default differs between stable and dev add-ons"
+            )
+            assert stable["schema"].get(key) == dev["schema"].get(key), (
+                f"{key!r} schema type differs between stable and dev add-ons"
+            )
+
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Unix permissions not applicable on Windows"
     )

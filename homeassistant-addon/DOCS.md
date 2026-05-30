@@ -292,6 +292,14 @@ Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discov
 
 Requires add-on restart to take effect.
 
+### tool_search_max_results
+
+**Default:** `5` (range 2-10)
+
+Maximum number of tools returned by `ha_search_tools` when `enable_tool_search` is on. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
+
+Requires add-on restart to take effect.
+
 ### enable_tool_security_policies
 
 **Default:** `false`
@@ -330,12 +338,22 @@ Features:
 - **Pin tools** — keep tools always visible when `enable_tool_search` is on
 - **Per-group master toggle** — enable/disable all tools in a group (HACS, System, etc.) with one click
 - **Search** — filter tools by name or title
-- **Mandatory tools** — `ha_search_entities`, `ha_get_overview`, `ha_get_state`, `ha_report_issue` are always enabled and cannot be disabled
+- **Mandatory tools** — `ha_search_entities`, `ha_get_overview`, `ha_get_state`, `ha_report_issue`, `ha_get_skill_guide`, and `ha_manage_backup` are always enabled and cannot be disabled (listing one in `disabled_tools` is a silent no-op — it keeps running)
 - **Tool Security Policies tab** — when `enable_tool_security_policies` is on, approve held tool calls and manage per-tool rules here
 - **Advanced settings** — an advanced panel with a beta master toggle (plus per-feature sub-toggles) for opting into beta tools such as raw YAML editing, filesystem tools, and code mode. See [Beta Features](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md)
 - **In-UI restart** — a "Restart Add-on" button appears after saving to apply changes with one click
 
 **Important:** Tool configuration changes require an add-on restart to take effect. The UI will prompt you to restart after saving.
+
+### Non-add-on installations
+
+In Docker (`ha-mcp-web`) and standalone HTTP installations, the settings UI is mounted under your MCP secret path. Open `http://<host>:<port>/<secret_path>/settings` (the same URL prefix that protects your MCP endpoint). This keeps the auth posture consistent — anyone who can reach your MCP endpoint can also use the settings UI; anyone who can't, can't.
+
+### Text-field fallback
+
+If you prefer not to use the web UI (or want to set these before first start), the `disabled_tools` and `pinned_tools` options accept comma-separated tool names as seed values. On first start, the add-on creates `/data/tool_config.json` from these values; after that, the web UI is the source of truth. Mandatory tools (listed above) cannot be disabled this way.
+
+---
 
 ## Security
 
