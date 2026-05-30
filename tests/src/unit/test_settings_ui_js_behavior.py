@@ -1178,9 +1178,7 @@ class TestFormControlAccessibility:
     (selection is via ``data-*`` attributes), so behaviour is unchanged.
     """
 
-    def test_tool_toggles_carry_name_attribute(
-        self, settings_script: str
-    ) -> None:
+    def test_tool_toggles_carry_name_attribute(self, settings_script: str) -> None:
         fetches = {
             **DEFAULT_FETCHES,
             "/api/settings/tools": {
@@ -1207,8 +1205,6 @@ class TestFormControlAccessibility:
             invoke="await new Promise(r => setTimeout(r, 200));",
         )
         _assert_clean_init(result)
-        import re
-
         for field in ("enabled", "pinned", "gated"):
             m = re.search(rf'<input[^>]*data-field="{field}"[^>]*>', result.dom)
             assert m is not None, f"expected {field} toggle in DOM"
@@ -1247,26 +1243,22 @@ class TestFormControlAccessibility:
             invoke="await new Promise(r => setTimeout(r, 200));",
         )
         _assert_clean_init(result)
-        import re
-
-        m = re.search(
-            r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>', result.dom
-        )
+        m = re.search(r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>', result.dom)
         assert m is not None, "expected advanced input for fuzzy_threshold"
         assert 'name="adv:fuzzy_threshold"' in m.group(0), (
             f"expected name on advanced input; got {m.group(0)}"
         )
 
-    def test_no_rendered_input_lacks_name_or_id(
-        self, settings_script: str
-    ) -> None:
+    def test_no_rendered_input_lacks_name_or_id(self, settings_script: str) -> None:
         """Holistic guard: render every page-load form surface — tool toggles
         + group master, feature flags, the yaml-packages sub-flags, the
-        code-mode numeric sub-rows and advanced fields — then assert every
-        rendered <input> carries a name or id, exactly the rule the
-        accessibility audit flags. (The backup-config and policy forms load
-        on tab activation, not at init — covered by their own tests below.)
+        code-mode numeric sub-rows, advanced fields and a choices dropdown —
+        then assert every rendered <input> AND <select> carries a name or id,
+        exactly the rule the accessibility audit flags. (The backup-config
+        and policy forms load on tab activation, not at init — covered by
+        their own tests below; the policy predicate <select>s render there.)
         """
+
         def flag(env: str) -> dict:
             return {
                 "value": True,
@@ -1346,6 +1338,18 @@ class TestFormControlAccessibility:
                             "min": 1.0,
                             "max": 300.0,
                         },
+                        {
+                            # choices -> renders a <select>, so the guard
+                            # also exercises the dropdown generator.
+                            "field": "log_level",
+                            "env_var": "LOG_LEVEL",
+                            "value": "INFO",
+                            "type": "str",
+                            "section": "diagnostics",
+                            "origin": "default",
+                            "editable": True,
+                            "choices": ["DEBUG", "INFO", "WARNING", "ERROR"],
+                        },
                     ]
                 },
             },
@@ -1357,13 +1361,11 @@ class TestFormControlAccessibility:
             invoke="await new Promise(r => setTimeout(r, 300));",
         )
         _assert_clean_init(result)
-        import re
-
-        inputs = re.findall(r"<input\b[^>]*>", result.dom)
-        assert inputs, "expected at least one rendered <input>"
-        missing = [i for i in inputs if "name=" not in i and "id=" not in i]
+        controls = re.findall(r"<(?:input|select)\b[^>]*>", result.dom)
+        assert controls, "expected at least one rendered form control"
+        missing = [c for c in controls if "name=" not in c and "id=" not in c]
         assert not missing, (
-            f"{len(missing)} rendered <input> lack name/id (a11y): {missing}"
+            f"{len(missing)} rendered form control(s) lack name/id (a11y): {missing}"
         )
         # Sanity: the expanded fixture really did exercise the extra
         # surfaces (code-mode sub-row + a yaml-packages sub-flag), not
@@ -1373,6 +1375,9 @@ class TestFormControlAccessibility:
         )
         assert 'name="feature:enable_yaml_packages_automation"' in result.dom, (
             "yaml-packages sub-row did not render — fixture/holistic-guard drift"
+        )
+        assert '<select name="adv:log_level"' in result.dom, (
+            "advanced choices <select> did not render — fixture/guard drift"
         )
 
     def test_backup_config_inputs_carry_name_attribute(
@@ -1419,8 +1424,7 @@ class TestFormControlAccessibility:
             initial_html=MIN_DOM,
             fetch_map=fetches,
             invoke=(
-                "await loadBackupConfig(); "
-                "await new Promise(r => setTimeout(r, 100));"
+                "await loadBackupConfig(); await new Promise(r => setTimeout(r, 100));"
             ),
         )
         _assert_clean_init(result)
@@ -1430,8 +1434,7 @@ class TestFormControlAccessibility:
             "auto_backup_throttle_minutes",
         ):
             assert f'name="backup:{field}"' in result.dom, (
-                f"expected name on backup input {field}; "
-                f"dom tail: {result.dom[-2000:]}"
+                f"expected name on backup input {field}; dom tail: {result.dom[-2000:]}"
             )
 
 

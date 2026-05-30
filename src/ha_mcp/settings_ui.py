@@ -2790,7 +2790,7 @@ function renderPolicyCard(toolName, rule) {
       '<div class="policy-predicate-form" style="display:none;">' +
         '<div class="policy-form-row">' +
           '<label class="policy-form-label">Argument:</label>' +
-          '<select class="policy-predicate-path-select">' +
+          '<select name="policy:predicate-path" class="policy-predicate-path-select">' +
             '<option value="">(loading...)</option>' +
           '</select>' +
           '<input type="text" name="policy:predicate-path-custom" class="policy-predicate-path-custom" ' +
@@ -2798,7 +2798,7 @@ function renderPolicyCard(toolName, rule) {
         '</div>' +
         '<div class="policy-form-row">' +
           '<label class="policy-form-label">Match when:</label>' +
-          '<select class="policy-predicate-op">' +
+          '<select name="policy:predicate-op" class="policy-predicate-op">' +
             '<option value="exists">is present (any value)</option>' +
             '<option value="eq">equals</option>' +
             '<option value="neq">does NOT equal</option>' +
@@ -3057,7 +3057,7 @@ function renderPolicyCard(toolName, rule) {
     const existingArr = Array.isArray(existingValue)
       ? existingValue
       : (existingValue !== undefined && existingValue !== null ? [existingValue] : []);
-    let html = '<select class="policy-predicate-value-control"' +
+    let html = '<select name="policy:predicate-value" class="policy-predicate-value-control"' +
       (isMulti ? ' multiple size="6" style="min-width:220px"' : '') +
       '>';
     if (!isMulti) {
@@ -3616,7 +3616,7 @@ function renderAdvancedSection(containerId, fields) {
     const meta = ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' };
     let controlHtml;
     if (f.choices) {
-      controlHtml = `<select data-adv-field="${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>` +
+      controlHtml = `<select name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>` +
         f.choices.map(c =>
           `<option value="${escapeHtml(c)}" ${String(f.value) === c ? 'selected' : ''}>${escapeHtml(c)}</option>`
         ).join('') +
