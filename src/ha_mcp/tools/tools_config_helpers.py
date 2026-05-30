@@ -9,6 +9,7 @@ input_number, input_text, input_datetime, counter, timer, schedule).
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Annotated, Any, Literal, TypedDict
 
 from fastmcp.exceptions import ToolError
@@ -2183,7 +2184,7 @@ def _create_fields_tag(
     return fields
 
 
-_SIMPLE_CREATE_FIELD_BUILDERS: dict[str, Any] = {
+_SIMPLE_CREATE_FIELD_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     "input_select": _create_fields_input_select,
     "input_number": _create_fields_input_number,
     "input_text": _create_fields_input_text,
@@ -2493,7 +2494,7 @@ def _update_fields_timer(
     return fields
 
 
-_SIMPLE_UPDATE_FIELD_BUILDERS: dict[str, Any] = {
+_SIMPLE_UPDATE_FIELD_BUILDERS: dict[str, Callable[..., dict[str, Any]]] = {
     "input_select": _update_fields_input_select,
     "input_number": _update_fields_input_number,
     "input_text": _update_fields_input_text,
