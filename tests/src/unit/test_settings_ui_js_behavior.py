@@ -1379,6 +1379,9 @@ class TestFormControlAccessibility:
         assert '<select name="adv:log_level"' in result.dom, (
             "advanced choices <select> did not render — fixture/guard drift"
         )
+        assert 'name="tool-group:' in result.dom, (
+            "tool group-master toggle did not render — fixture/guard drift"
+        )
 
     def test_backup_config_inputs_carry_name_attribute(
         self, settings_script: str
@@ -1435,6 +1438,68 @@ class TestFormControlAccessibility:
         ):
             assert f'name="backup:{field}"' in result.dom, (
                 f"expected name on backup input {field}; dom tail: {result.dom[-2000:]}"
+            )
+
+    def test_policy_predicate_controls_carry_name_attribute(
+        self, settings_script: str
+    ) -> None:
+        """The policy-rule editor renders on tab activation, not page init.
+        Drive ``policyLoadConfig()`` with one rule so ``renderPolicyCard``
+        emits the predicate form, and assert its always-rendered controls
+        carry a ``name``. (The predicate *value* control renders only on an
+        op-change — an async, fetch-backed path — so its name is covered by
+        review/code, not this render guard; it is set at both generator
+        sites.)
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {"enable_tool_security_policies": {"value": True}},
+                },
+            },
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "rules": [
+                        {
+                            "tool_name": "ha_config_set_helper",
+                            "when": [
+                                {
+                                    "path": "args.helper_type",
+                                    "op": "eq",
+                                    "value": "input_boolean",
+                                }
+                            ],
+                            "remember_minutes": 0,
+                        }
+                    ],
+                },
+            },
+            "/api/policy/pending": {
+                "status": 503,
+                "json": {"error": "irrelevant for this test"},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await window.policyLoadConfig();",
+        )
+        _assert_clean_init(result)
+        for nm in (
+            "policy:predicate-path",
+            "policy:predicate-op",
+            "policy:predicate-path-custom",
+            "policy:remember-minutes",
+        ):
+            assert f'name="{nm}"' in result.dom, (
+                f"expected policy control name={nm!r} in the rendered card; "
+                f"dom tail: {result.dom[-2500:]}"
             )
 
 
