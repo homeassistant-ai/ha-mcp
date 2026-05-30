@@ -1290,5 +1290,16 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "in-memory cache. Check operator logs for the "
                     "underlying I/O error."
                 )
+            elif not settings.code_mode_saved_tools_path:
+                # Blank path = persistence disabled: the in-memory save
+                # succeeded but is lost on restart. Surface a warning so
+                # the agent doesn't assume the entry is durable — mirrors
+                # the write-failure branch above.
+                response["data"]["save_warning"] = (
+                    f"save_as={save_as!r} is kept in memory only — "
+                    "code_mode_saved_tools_path is unset, so custom tools "
+                    "are not persisted and are lost on restart. Set a path "
+                    "on persistent storage to keep them."
+                )
 
         return response

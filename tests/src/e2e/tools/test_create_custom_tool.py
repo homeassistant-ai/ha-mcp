@@ -1989,13 +1989,49 @@ class TestCodeModeSavePersistenceFailure:
                 "save_as": "test_save_warning_restored",
             },
         )
-        assert data.get("success") is True, (
-            f"Post-restore save must succeed: {data}"
-        )
+        assert data.get("success") is True, f"Post-restore save must succeed: {data}"
         payload = data.get("data", {})
         assert payload.get("saved_as") == "test_save_warning_restored", (
             f"saved_as must reflect the persisted name after restore: {data}"
         )
         assert "save_warning" not in payload, (
             f"save_warning must not appear on a clean save: {data}"
+        )
+
+
+class TestCodeModeBlankPathWarning:
+    """A blank ``code_mode_saved_tools_path`` disables persistence — a
+    ``save_as`` succeeds in memory but isn't durable, so the response must
+    carry a ``save_warning``. The in-process ``mcp_client_with_code_mode``
+    server leaves the path unset (the standalone/Docker "forgot to
+    configure persistence" case), so any save through it exercises this.
+    Companion to the write-failure shape pinned above.
+    """
+
+    async def test_blank_path_save_warns_in_memory_only(
+        self, mcp_client_with_code_mode
+    ):
+        _skip_if_unavailable(
+            await _check_tool_available(mcp_client_with_code_mode),
+            "test_blank_path_save_warns_in_memory_only",
+        )
+        data = await safe_call_tool(
+            mcp_client_with_code_mode,
+            TOOL_NAME,
+            {
+                "code": "result = {'value': 1}\nresult",
+                "justification": "E2E test: blank-path persistence warning",
+                "save_as": "test_blank_path_warning",
+            },
+        )
+        assert data.get("success") is True, data
+        payload = data.get("data", {})
+        # The in-memory save succeeds, so saved_as stays set (unlike the
+        # write-failure rollback, which resets it to None).
+        assert payload.get("saved_as") == "test_blank_path_warning", data
+        # ...but the response must warn that the entry isn't persisted.
+        warning = payload.get("save_warning")
+        assert isinstance(warning, str) and "memory only" in warning, (
+            f"expected an in-memory-only persistence warning when the "
+            f"saved-tools path is unset: {data}"
         )

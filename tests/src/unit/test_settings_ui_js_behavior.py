@@ -1310,6 +1310,214 @@ class TestAddonModeLockedBannerCopy:
             f"standalone-mode copy regressed; dom tail: {result.dom[-2000:]}"
         )
 
+    def test_codemode_subrow_locked_banner_in_addon_mode_avoids_unset_copy(
+        self, settings_script: str
+    ) -> None:
+        """Env-pinned code-mode sub-row in addon mode must use addon-runtime
+        copy, not the standalone "unset env var" instruction.
+
+        ``CODE_MODE_SAVED_TOOLS_PATH`` is set by the add-on's ``start.py``
+        via ``os.environ.setdefault`` and is absent from the add-on
+        ``config.yaml`` schema, so the Saved-tools-path row renders
+        env-pinned and read-only and the add-on user cannot unset it —
+        the standalone "unset it to edit here" copy is unactionable.
+        ``renderCodeModeSubRows`` was
+        overlooked when the addon-aware locked-note copy was added to
+        the other render paths (see the master/advanced banner tests
+        above); this pins the same rule for the code-mode sub-rows.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        },
+                        "enable_code_mode": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_CODE_MODE",
+                        },
+                    },
+                    "beta_sub_flags": ["enable_code_mode"],
+                    "is_addon": True,
+                },
+            },
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "code_mode_saved_tools_path",
+                            "env_var": "CODE_MODE_SAVED_TOOLS_PATH",
+                            "value": "/data/saved_tools.json",
+                            "type": "str",
+                            "section": "beta_codemode",
+                            "origin": "env",
+                            "editable": False,
+                        }
+                    ],
+                    "is_addon": True,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert 'data-adv-field="code_mode_saved_tools_path"' in result.dom, (
+            f"expected the saved-tools code-mode sub-row to render; "
+            f"dom tail: {result.dom[-2000:]}"
+        )
+        assert "unset it to edit here" not in result.dom, (
+            "addon-mode code-mode sub-row still shows standalone "
+            "'unset env var' copy the add-on user cannot act on"
+        )
+        # Field-specific, honest copy — NOT the generic "managed by
+        # Supervisor" helper text (Supervisor never sees this start.py
+        # setdefault value).
+        assert "Hardcoded to" in result.dom and "cannot be changed" in result.dom, (
+            f"expected field-specific 'hardcoded in add-on mode' copy; "
+            f"dom tail: {result.dom[-2000:]}"
+        )
+        assert "managed by Home Assistant Supervisor" not in result.dom, (
+            "add-on copy must not imply Supervisor manages this hardcoded field"
+        )
+
+    def test_codemode_subrow_standalone_mode_still_uses_unset_copy(
+        self, settings_script: str
+    ) -> None:
+        """Regression guard: outside addon mode the code-mode sub-row keeps
+        the standalone "unset env var" copy.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        },
+                        "enable_code_mode": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_CODE_MODE",
+                        },
+                    },
+                    "beta_sub_flags": ["enable_code_mode"],
+                    "is_addon": False,
+                },
+            },
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "code_mode_saved_tools_path",
+                            "env_var": "CODE_MODE_SAVED_TOOLS_PATH",
+                            "value": "/srv/saved_tools.json",
+                            "type": "str",
+                            "section": "beta_codemode",
+                            "origin": "env",
+                            "editable": False,
+                        }
+                    ],
+                    "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "unset it to edit here" in result.dom, (
+            f"standalone code-mode sub-row copy regressed; "
+            f"dom tail: {result.dom[-2000:]}"
+        )
+
+    def test_codemode_saved_tools_path_blank_warns_persistence_off(
+        self, settings_script: str
+    ) -> None:
+        """Standalone with no path set: the saved-tools row must warn that
+        custom tools are kept in memory only and lost on restart — a blank
+        ``code_mode_saved_tools_path`` disables persistence.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_BETA_FEATURES",
+                        },
+                        "enable_code_mode": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                            "env_var": "ENABLE_CODE_MODE",
+                        },
+                    },
+                    "beta_sub_flags": ["enable_code_mode"],
+                    "is_addon": False,
+                },
+            },
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "code_mode_saved_tools_path",
+                            "env_var": "CODE_MODE_SAVED_TOOLS_PATH",
+                            "value": "",
+                            "type": "str",
+                            "section": "beta_codemode",
+                            "origin": "default",
+                            "editable": True,
+                        }
+                    ],
+                    "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        assert "memory only" in result.dom and "lost on restart" in result.dom, (
+            f"expected blank-path persistence warning on saved-tools row; "
+            f"dom tail: {result.dom[-2000:]}"
+        )
+
 
 class TestBetaBlockRendersAtBottom:
     """Beta master + sub-flags render into the dedicated `betaBody` div,

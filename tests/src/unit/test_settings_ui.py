@@ -16,6 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ha_mcp.settings_ui import (
+    _SETTINGS_HTML,
     FEATURE_GATED_TOOLS,
     MANDATORY_TOOLS,
     TRANSFORM_GENERATED_TOOLS,
@@ -411,6 +412,15 @@ class TestRouteRegistration:
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(mcp, MagicMock(), secret_path="")
         assert mcp.custom_route.call_count == 0
+
+
+class TestFaviconSuppression:
+    """The page carries an empty-data-URI `<link rel="icon">` so the browser
+    never requests /favicon.ico (rationale at the `<link>` in settings_ui.py).
+    """
+
+    def test_settings_html_head_suppresses_favicon_request(self) -> None:
+        assert '<link rel="icon" href="data:,">' in _SETTINGS_HTML
 
 
 class TestSaveToolsValidation:
