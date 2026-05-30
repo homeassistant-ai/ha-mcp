@@ -2610,7 +2610,7 @@
     "inputSchema": {
       "properties": {
         "operations": {
-          "type": "str | list[dict[str, Any]]"
+          "type": "list[dict[str, Any]]"
         },
         "parallel": {
           "type": "bool",
