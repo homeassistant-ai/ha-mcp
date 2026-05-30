@@ -186,13 +186,16 @@ configuration:
       may miss relevant tools. Range: 2-10. Requires restart.
   disabled_tools:
     name: Disabled tools (comma-separated)
-    description: |
-      Tools listed here are locked disabled — they cannot be re-enabled
-      from the web Settings UI (Tools tab) without unsetting this option
-      first. Comma-separated tool names (e.g. ``ha_call_event,ha_eval_template``).
+    description: >-
+      Tools listed here are forced off and locked in the web Settings UI
+      (Tools tab) — they cannot be re-enabled there without unsetting this
+      option first. A small set of mandatory tools (ha_search_entities,
+      ha_get_overview, ha_get_state, ha_report_issue, ha_get_skill_guide,
+      ha_manage_backup) cannot be disabled and keep running even if listed
+      here. Comma-separated tool names (e.g. ha_call_event,ha_eval_template).
   pinned_tools:
     name: Pinned tools (comma-separated)
-    description: |
+    description: >-
       Tools listed here are locked pinned — they appear at the top of the
       Tools tab and cannot be unpinned from the web Settings UI without
       unsetting this option first. Useful in combination with Tool Search.

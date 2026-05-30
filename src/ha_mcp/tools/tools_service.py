@@ -289,7 +289,7 @@ class ServiceTools:
         domain: str,
         service: str,
         entity_id: str | None = None,
-        data: str | dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
         return_response: bool | str = False,
         wait: bool | str = True,
         verbose: Annotated[
@@ -629,7 +629,7 @@ class ServiceTools:
     async def ha_call_event(
         self,
         event_type: str,
-        data: str | dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute a custom event on the Home Assistant event bus.
 

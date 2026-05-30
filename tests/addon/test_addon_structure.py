@@ -62,6 +62,23 @@ class TestAddonStructure:
         assert "ports" in config, "ports section required for HTTP transport"
         assert "9583/tcp" in config["ports"], "port 9583/tcp must be exposed"
 
+        # Verify ingress is enabled so the stable add-on exposes the web
+        # Settings UI ("Open Web UI" button). This must stay declared here —
+        # the release pipeline syncs version/changelog only, not functional
+        # config, so ingress is not auto-mirrored from the dev add-on. Locks
+        # the regression where stable shipped without the button.
+        assert config.get("ingress") is True, (
+            "ingress must be enabled so the 'Open Web UI' button / web Settings "
+            "UI is reachable on the stable add-on"
+        )
+        assert config.get("ingress_port") == 9583, (
+            "ingress_port must be 9583 (the fixed internal MCP/web port)"
+        )
+        assert config.get("ingress_stream") is True, (
+            "ingress_stream must be enabled so streamed responses flush through "
+            "the ingress proxy (streamable-HTTP MCP transport)"
+        )
+
         # Verify secret_path configuration (optional advanced override)
         assert "secret_path" not in config["options"], (
             "secret_path should be optional and omitted so Supervisor treats it as advanced"
@@ -93,6 +110,51 @@ class TestAddonStructure:
         assert not any(arch in config["arch"] for arch in unsupported_archs), (
             "32-bit platforms not supported by uv base image"
         )
+
+    def test_stable_addon_exposes_nonbeta_tool_options(self):
+        """Stable add-on must expose the NON-beta operator options that dev
+        has — ``tool_search_max_results``, ``disabled_tools``, ``pinned_tools``
+        — in both ``options`` and ``schema``. These are not beta features, so
+        the web-UI master gate doesn't apply; without them in the stable
+        schema they were unreachable on stable (start.py wrote defaults, the
+        web UI showed them ``origin='addon'``-locked, and the override applier
+        skipped them). Regression guard for that dev/stable config drift."""
+        with open(f"{ADDON_DIR}/config.yaml") as f:
+            config = yaml.safe_load(f)
+
+        # key: (schema type, default value). Defaults are load-bearing — a
+        # non-empty disabled_tools default would silently lock tools off.
+        expected = {
+            "tool_search_max_results": ("int(2,10)?", 5),
+            "disabled_tools": ("str?", ""),
+            "pinned_tools": ("str?", ""),
+        }
+        for key, (schema_type, default) in expected.items():
+            assert key in config["options"], f"{key!r} must be in stable options"
+            assert config["options"].get(key) == default, (
+                f"{key!r} default must be {default!r}"
+            )
+            assert config["schema"].get(key) == schema_type, (
+                f"{key!r} must be in stable schema as {schema_type!r}"
+            )
+
+    def test_stable_and_dev_agree_on_nonbeta_tool_options(self):
+        """The three non-beta tool options must stay in sync between the
+        stable and dev add-ons — same defaults AND same schema types. Guards
+        against future one-sided drift (the exact bug class this fix
+        addresses: dev gains/changes an option, stable is forgotten)."""
+        keys = ("tool_search_max_results", "disabled_tools", "pinned_tools")
+        with open(f"{ADDON_DIR}/config.yaml") as f:
+            stable = yaml.safe_load(f)
+        with open("homeassistant-addon-dev/config.yaml") as f:
+            dev = yaml.safe_load(f)
+        for key in keys:
+            assert stable["options"].get(key) == dev["options"].get(key), (
+                f"{key!r} option default differs between stable and dev add-ons"
+            )
+            assert stable["schema"].get(key) == dev["schema"].get(key), (
+                f"{key!r} schema type differs between stable and dev add-ons"
+            )
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Unix permissions not applicable on Windows"

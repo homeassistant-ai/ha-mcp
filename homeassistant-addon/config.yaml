@@ -11,6 +11,17 @@ arch:
 init: false
 startup: application
 boot: manual
+# Expose the web Settings UI via Supervisor ingress (the "Open Web UI" button).
+# start.py mounts the settings routes for the ingress proxy and binds 0.0.0.0;
+# this declaration is what makes Supervisor render the button and proxy to it.
+# ingress_stream keeps the proxy streaming responses (required for the
+# streamable-HTTP MCP transport / settings UI flush behaviour).
+# Must be set here too — the release pipeline syncs only version/changelog, not
+# functional config, so ingress is NOT auto-mirrored from
+# homeassistant-addon-dev/config.yaml.
+ingress: true
+ingress_port: 9583
+ingress_stream: true
 # Enable access to Supervisor API for auto-discovery
 hassio_api: true
 # `manager` (not `default`) is required so the Supervisor token grants access
@@ -32,7 +43,10 @@ image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 options:
   backup_hint: "normal"
   enable_tool_search: false
+  tool_search_max_results: 5
   enable_tool_security_policies: false
+  disabled_tools: ""
+  pinned_tools: ""
   enable_auto_backup: true
   auto_backup_throttle_minutes: 0
   auto_backup_retain_per_entity: 100
@@ -41,7 +55,10 @@ schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
   enable_tool_search: bool?
+  tool_search_max_results: int(2,10)?
   enable_tool_security_policies: bool?
+  disabled_tools: str?
+  pinned_tools: str?
   enable_auto_backup: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?

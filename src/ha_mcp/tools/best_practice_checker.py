@@ -78,11 +78,34 @@ _RE_STATE_IN = re.compile(r"states\s*\([^)]+\)\s+in\s+[\[(]")
 # Unsafe direct state access: states.sensor.x.state
 _RE_DIRECT_STATE = re.compile(r"\bstates\.\w+\.\w+\.state\b")
 # Duration/recency checks via last_changed or last_updated arithmetic.
-# Both alternations require at least one dotted qualifier (e.g. ``states.sensor.x.``)
-# so bare Jinja variables named ``last_changed`` are not falsely flagged.
+# Catches the shapes that compute "how long since X changed", all of which map
+# to the native ``for:`` field:
+#   now() - X.last_changed                          (forward subtraction)
+#   X.last_changed (<|<=|>|>=) now() - <delta>      (reversed; the subtraction is
+#       required — a bare ``X.last_changed < now()`` is *always* true and carries
+#       no duration, so it is intentionally NOT flagged: ``for:`` cannot express it)
+#   now() (<|<=|>|>=) X.last_changed + <delta>      (now() on the left)
+#   X.last_changed + <delta> (<|<=|>|>=) now()      (delta added to the attribute)
+#   now().timestamp() - X.last_changed.timestamp()  (epoch subtraction)
+#   as_timestamp(now()) - as_timestamp(X.last_changed)        (function form)
+#   as_timestamp(now()) - X.last_changed | as_timestamp       (filter form)
+# Every alternation requires a dotted qualifier ending on a word boundary, so
+# bare Jinja variables literally named ``last_changed`` and longer look-alike
+# attributes (``last_changed_at``) are not falsely flagged; a leading ``word.``
+# (``trigger.``, ``states.sensor.x.``) is the minimum.
+# Intentionally NOT matched (heuristic limits, low value): the reversed
+# as_timestamp operand order, the reversed ``.timestamp()`` order, and
+# ``state_attr(e, 'last_changed')`` / ``states('e').last_changed`` — the latter
+# two are not valid ways to read a state's ``last_changed`` in HA anyway. These
+# fall through to the generic template fallback in condition/trigger positions.
 _RE_DURATION_MATH = re.compile(
     r"\bnow\(\)\s*-\s*(?:\w+\.)+last_(?:changed|updated)\b"
-    r"|\b(?:\w+\.)+last_(?:changed|updated)\s*<\s*now\(\)"
+    r"|\b(?:\w+\.)+last_(?:changed|updated)\b\s*[<>]=?\s*now\(\)\s*-"
+    r"|\bnow\(\)\s*[<>]=?\s*(?:\w+\.)+last_(?:changed|updated)\b\s*\+"
+    r"|\b(?:\w+\.)+last_(?:changed|updated)\b\s*\+\s*[^<>{}]+?[<>]=?\s*now\(\)"
+    r"|\bnow\(\)\.timestamp\(\)\s*-\s*(?:\w+\.)+last_(?:changed|updated)\.timestamp\(\)"
+    r"|\bas_timestamp\(\s*now\(\)\s*\)\s*-\s*as_timestamp\([^)]*\.last_(?:changed|updated)\b"
+    r"|\bas_timestamp\(\s*now\(\)\s*\)\s*-\s*(?:\w+\.)+last_(?:changed|updated)\b\s*\|\s*as_timestamp\b"
 )
 # Motion entity pattern
 _RE_MOTION = re.compile(r"binary_sensor\.\w*motion", re.IGNORECASE)
@@ -220,7 +243,15 @@ def _check_template_string(
     initial_count = len(warnings)
     label = position.capitalize()
 
-    if _RE_NUMERIC_CMP.search(template):
+    # Duration/recency math (e.g. `(now() - X.last_changed).total_seconds() > 300`)
+    # also contains a numeric comparison, so it matches `_RE_NUMERIC_CMP` too. But its
+    # correct native replacement is the `for:` field, NOT `numeric_state`. Suppress the
+    # numeric_state suggestion when duration math is present so the user isn't handed
+    # two conflicting native alternatives for one template (the duration warning below
+    # fires instead).
+    duration_match = _RE_DURATION_MATH.search(template)
+
+    if _RE_NUMERIC_CMP.search(template) and not duration_match:
         warnings.append(
             f"{label} uses template with float/int comparison — use native "
             f"`numeric_state` {position} instead "
@@ -280,7 +311,7 @@ def _check_template_string(
             "function instead (returns 'unknown' if missing rather than raising)."
             + _ref(skill_prefix, "template-guidelines.md#common-patterns")
         )
-    if _RE_DURATION_MATH.search(template):
+    if duration_match:
         warnings.append(
             f"{label} uses template for duration/recency check "
             "(`now() - X.last_changed/last_updated`) — use the native `for:` field "
@@ -502,7 +533,11 @@ def _check_triggers(
             vt = trigger.get("value_template", "")
             if isinstance(vt, str):
                 initial = len(warnings)
-                if _RE_NUMERIC_CMP.search(vt):
+                # See `_check_template_string`: duration math also trips the numeric
+                # comparison detector, but maps to `for:`, not `numeric_state`. Suppress
+                # the numeric_state suggestion when duration math is present.
+                duration_match = _RE_DURATION_MATH.search(vt)
+                if _RE_NUMERIC_CMP.search(vt) and not duration_match:
                     warnings.append(
                         "Trigger uses template with float/int comparison — "
                         "use native `numeric_state` trigger instead "
@@ -522,7 +557,7 @@ def _check_triggers(
                             "automation-patterns.md#trigger-types",
                         )
                     )
-                if _RE_DURATION_MATH.search(vt):
+                if duration_match:
                     warnings.append(
                         "Trigger uses template for duration/recency check "
                         "(`now() - X.last_changed/last_updated`) — use the native "

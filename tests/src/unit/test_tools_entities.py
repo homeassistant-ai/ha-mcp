@@ -312,50 +312,6 @@ class TestHaSetEntityExposeTo:
         )
 
     @pytest.mark.asyncio
-    async def test_expose_to_json_string(self, mock_mcp, mock_client):
-        """expose_to as JSON string should be parsed."""
-        entity_entry = {
-            "entity_id": "light.test",
-            "name": None,
-            "original_name": "Test",
-            "icon": None,
-            "area_id": None,
-            "disabled_by": None,
-            "hidden_by": None,
-            "aliases": [],
-            "labels": [],
-        }
-
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {"success": True},  # expose call
-                {"success": True, "result": entity_entry},  # get entity call
-            ]
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        result = await tool(
-            entity_id="light.test",
-            expose_to=json.dumps({"conversation": True}),
-        )
-
-        assert result["success"] is True
-        assert result["exposure"] == {"conversation": True}
-
-    @pytest.mark.asyncio
-    async def test_expose_to_invalid_json_string(self, set_entity_tool):
-        """Invalid JSON string for expose_to should raise ToolError."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(
-                entity_id="light.test",
-                expose_to="not valid json{",
-            )
-
-        error_data = json.loads(str(exc_info.value))
-        assert error_data["success"] is False
-
-    @pytest.mark.asyncio
     async def test_expose_to_none_not_triggered(self, mock_mcp, mock_client):
         """When expose_to is None, no exposure API call should be made."""
         mock_client.send_websocket_message = AsyncMock(
@@ -788,8 +744,7 @@ class TestHaSetEntityCombined:
         device_rename = result["device_rename"]
         assert device_rename.get("lookup_failed") is None
         assert any(
-            "no associated device" in w
-            for w in device_rename.get("warnings", [])
+            "no associated device" in w for w in device_rename.get("warnings", [])
         )
 
 
@@ -1615,24 +1570,6 @@ class TestHaSetEntityShowAs:
         assert body["options_succeeded"] == {"sensor": {"display_precision": 1}}
 
     @pytest.mark.asyncio
-    async def test_options_json_string_is_parsed(self, mock_mcp, mock_client):
-        """options as a JSON string should be parsed transparently."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value=self._registry_response()
-        )
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        await tool(
-            entity_id="sensor.temp",
-            options='{"sensor": {"display_precision": 0}}',
-        )
-
-        ws_msg = mock_client.send_websocket_message.call_args[0][0]
-        assert ws_msg["options_domain"] == "sensor"
-        assert ws_msg["options"] == {"display_precision": 0}
-
-    @pytest.mark.asyncio
     async def test_options_invalid_shape_raises_validation_error(
         self, mock_mcp, mock_client
     ):
@@ -1861,3 +1798,80 @@ class TestHaGetEntityRegistryOptions:
         assert entry["device_class"] == "window"
         assert entry["original_device_class"] is None
         assert entry["options"] == {"sensor": {"display_precision": 2}}
+
+    @pytest.mark.asyncio
+    async def test_get_entity_surfaces_config_entry_id(self, mock_mcp, mock_client):
+        # Issue #1457: agents trying to read a UI-created template helper
+        # need the parent config entry id to call ha_get_integration. Before
+        # this change the field was dropped from the response, forcing them
+        # to fall back to a domain-list scan.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "entity_id": "sensor.weather_message",
+                    "name": None,
+                    "original_name": "Weather Message",
+                    "icon": None,
+                    "area_id": None,
+                    "disabled_by": None,
+                    "hidden_by": None,
+                    "aliases": [],
+                    "labels": [],
+                    "categories": {},
+                    "device_class": None,
+                    "original_device_class": None,
+                    "options": {},
+                    "platform": "template",
+                    "device_id": None,
+                    "config_entry_id": "01KB6B1Z1SA8B6AVAEMQ4FM8SD",
+                    "unique_id": "01KB6B1Z1SA8B6AVAEMQ4FM8SD",
+                },
+            }
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_get_entity"]
+
+        result = await tool(entity_id="sensor.weather_message")
+
+        entry = result["entity_entry"]
+        assert entry["config_entry_id"] == "01KB6B1Z1SA8B6AVAEMQ4FM8SD"
+        assert entry["platform"] == "template"
+
+    @pytest.mark.asyncio
+    async def test_config_entry_id_is_none_for_yaml_only_entity(
+        self, mock_mcp, mock_client
+    ):
+        # YAML-defined entities (e.g. legacy template platform) have no
+        # config entry — the field is surfaced as None rather than omitted
+        # so consumers can rely on a stable schema.
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "entity_id": "sensor.legacy",
+                    "name": None,
+                    "original_name": "Legacy",
+                    "icon": None,
+                    "area_id": None,
+                    "disabled_by": None,
+                    "hidden_by": None,
+                    "aliases": [],
+                    "labels": [],
+                    "categories": {},
+                    "device_class": None,
+                    "original_device_class": None,
+                    "options": {},
+                    "platform": "sensor",
+                    "device_id": None,
+                    # No config_entry_id key in HA's response.
+                    "unique_id": None,
+                },
+            }
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_get_entity"]
+
+        result = await tool(entity_id="sensor.legacy")
+
+        assert result["entity_entry"]["config_entry_id"] is None

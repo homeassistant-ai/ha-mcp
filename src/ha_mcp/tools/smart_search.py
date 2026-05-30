@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import time
 from typing import Any
 
@@ -23,6 +24,8 @@ from ..utils.fuzzy_search import (
 )
 from .helpers import exception_to_structured_error, safe_info, safe_progress
 from .tools_config_dashboards import fetch_dashboards_list
+from .tools_config_entry_flow import FLOW_HELPER_TYPES
+from .tools_integrations import fetch_entry_options
 
 logger = logging.getLogger(__name__)
 
@@ -1755,6 +1758,22 @@ class SmartSearchTools:
                     elif isinstance(result, Exception):
                         logger.debug(f"Helper list fetch failed: {result}")
 
+                # Flow-based helpers (template, group, utility_meter,
+                # derivative, ...) are config entries, not storage records,
+                # and have no `<type>/list` WebSocket endpoint. Pull them via
+                # the standard /config/config_entries/entry REST surface and
+                # probe each entry's options flow so the helper's current
+                # config (template body, group members, source entity, ...)
+                # is searchable alongside the input_* helpers above.
+                results["helpers"].extend(
+                    await self._search_flow_helpers(
+                        query_lower,
+                        exact_match,
+                        semaphore,
+                        include_config=include_config,
+                    )
+                )
+
                 phase_done += 1
                 await safe_progress(
                     ctx,
@@ -1968,6 +1987,138 @@ class SmartSearchTools:
                     "helpers": [],
                 },
             )
+
+    async def _search_flow_helpers(
+        self,
+        query_lower: str,
+        exact_match: bool,
+        semaphore: asyncio.Semaphore,
+        *,
+        include_config: bool,
+    ) -> list[dict[str, Any]]:
+        """Search UI-created flow-based helpers (template, group, …).
+
+        Flow-helpers live as config entries (not storage records) and have
+        no ``<type>/list`` endpoint. Lists them via the standard config
+        entries REST endpoint, then probes each entry's options flow so the
+        helper's current config — template body, group members, source
+        entity, etc. — is searchable.
+
+        Cost: 1 REST call + one options-flow probe per flow-helper config
+        entry, parallelised under ``semaphore``. The probe is skipped when
+        the title alone already scores the maximum (a deeper config match can
+        only raise the total, never lower it); any title that leaves headroom
+        is still probed for accurate scoring and ``match_in_config``.
+        """
+        try:
+            response = await self.client._request("GET", "/config/config_entries/entry")
+        except Exception as exc:
+            logger.debug(f"flow-helper search: list_entries failed: {exc}")
+            return []
+
+        if not isinstance(response, list):
+            return []
+
+        flow_entries = [
+            e
+            for e in response
+            if isinstance(e, dict)
+            and e.get("domain") in FLOW_HELPER_TYPES
+            and e.get("supports_options")
+        ]
+        if not flow_entries:
+            return []
+
+        async def score_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+            entry_id = entry.get("entry_id")
+            if not isinstance(entry_id, str):
+                return None
+            domain = entry.get("domain", "")
+            title = entry.get("title") or entry_id
+
+            # Score the name against a title-derived slug, never the opaque
+            # config-entry ULID: a random ULID substring would otherwise
+            # produce false-positive name matches (e.g. a 3-char query that
+            # happens to occur inside the base32 id). The slug mirrors the
+            # storage-helper path, which scores a name-derived id rather than
+            # an opaque key. entry_id is still returned to the caller; it just
+            # isn't a search target.
+            title_slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+            title_pseudo_eid = f"{domain}.{title_slug}" if title_slug else domain
+            name_score = self.fuzzy_searcher._calculate_entity_score(
+                title_pseudo_eid, title, domain, query_lower
+            )
+
+            options: dict[str, Any] = {}
+            # Only a perfect title match (score 100) makes the deeper options
+            # probe redundant — the probe can only raise the total, never lower
+            # it, so anything below 100 is worth probing (in both exact and
+            # fuzzy modes) for accurate scoring and ``match_in_config``.
+            need_probe = include_config or (
+                self._score_deep_match(
+                    title_pseudo_eid,
+                    title,
+                    name_score,
+                    0,
+                    query_lower,
+                    exact_match,
+                )[0]
+                < 100
+            )
+            if need_probe:
+                async with semaphore:
+                    options = await fetch_entry_options(
+                        self.client, entry_id, quiet=True
+                    )
+
+            # Search the title, domain, and probed options — but not the opaque
+            # entry_id (it would match random ULID substrings; it is returned
+            # in the result for the caller regardless).
+            haystack: dict[str, Any] = {
+                "title": title,
+                "domain": domain,
+                "options": options,
+            }
+            config_score = self._search_in_dict(haystack, query_lower, exact_match)
+            total_score, threshold, match_in_name = self._score_deep_match(
+                title_pseudo_eid,
+                title,
+                name_score,
+                config_score,
+                query_lower,
+                exact_match,
+            )
+            if total_score < threshold:
+                return None
+
+            result: dict[str, Any] = {
+                "entry_id": entry_id,
+                "helper_type": domain,
+                "name": title,
+                "score": total_score,
+                "match_in_name": match_in_name,
+                "match_in_config": config_score >= threshold,
+            }
+            if include_config:
+                result["config"] = options
+            return result
+
+        scored = await asyncio.gather(
+            *(score_entry(e) for e in flow_entries),
+            return_exceptions=True,
+        )
+        out: list[dict[str, Any]] = []
+        for item in scored:
+            if isinstance(item, dict):
+                out.append(item)
+            elif isinstance(item, Exception):
+                # The probe swallows its own transient/API errors, so anything
+                # reaching here is a scoring/extraction bug (e.g. a shape
+                # assumption breaking on a future HA version). Log at warning so
+                # it's discoverable — one bad entry must not sink the whole
+                # multi-source deep_search, so we drop it and keep going.
+                logger.warning(f"flow-helper scoring failed: {item!r}")
+        return out
 
     def _score_deep_match(
         self,
