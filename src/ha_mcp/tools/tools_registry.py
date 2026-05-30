@@ -22,7 +22,6 @@ from .helpers import (
 )
 from .util_helpers import (
     build_pagination_metadata,
-    coerce_int_param,
     parse_string_list_param,
 )
 
@@ -175,16 +174,19 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         limit: Annotated[
-            int | str,
+            int,
             Field(
                 default=50,
+                ge=1,
+                le=200,
                 description="Max devices to return per page in list mode (default: 50)",
             ),
         ] = 50,
         offset: Annotated[
-            int | str,
+            int,
             Field(
                 default=0,
+                ge=0,
                 description="Number of devices to skip for pagination (default: 0)",
             ),
         ] = 0,
@@ -220,10 +222,8 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Z-Wave:** integration="zwave_js". Returns node_id, node_status.
         """
         try:
-            limit_int = coerce_int_param(
-                limit, "limit", default=50, min_value=1, max_value=200
-            )
-            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
+            limit_int = limit
+            offset_int = offset
             effective_detail = detail_level
 
             # Get device registry

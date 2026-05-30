@@ -122,7 +122,11 @@ class TestFetchRepairs:
         ws = _ws_client_with_issues(
             [
                 {"issue_id": "active", "ignored": False},
-                {"issue_id": "dismissed", "ignored": True, "dismissed_version": "2026.4.0"},
+                {
+                    "issue_id": "dismissed",
+                    "ignored": True,
+                    "dismissed_version": "2026.4.0",
+                },
             ]
         )
 
@@ -151,9 +155,7 @@ class TestFetchRepairs:
     @pytest.mark.asyncio
     async def test_no_dismissed_omits_counter(self):
         """When nothing is filtered, the `dismissed_count` key stays out."""
-        ws = _ws_client_with_issues(
-            [{"issue_id": "active", "ignored": False}]
-        )
+        ws = _ws_client_with_issues([{"issue_id": "active", "ignored": False}])
 
         result = await SystemTools._fetch_repairs(ws)
 
@@ -232,12 +234,11 @@ class TestGetSystemHealthGather:
         mock_zha = AsyncMock(return_value={"devices": [{"name": "A"}]})
         mock_zwave = AsyncMock(return_value={"nodes": []})
 
-        with _patch_health_info_baseline() as (_, ws_client), patch.object(
-            SystemTools, "_fetch_repairs", new=mock_repairs
-        ), patch.object(
-            SystemTools, "_fetch_zha_network", new=mock_zha
-        ), patch.object(
-            SystemTools, "_fetch_zwave_network", new=mock_zwave
+        with (
+            _patch_health_info_baseline() as (_, ws_client),
+            patch.object(SystemTools, "_fetch_repairs", new=mock_repairs),
+            patch.object(SystemTools, "_fetch_zha_network", new=mock_zha),
+            patch.object(SystemTools, "_fetch_zwave_network", new=mock_zwave),
         ):
             result = await tools.ha_get_system_health(
                 include="repairs,zha_network,zwave_network"
@@ -264,12 +265,11 @@ class TestGetSystemHealthGather:
         mock_zha = AsyncMock()
         mock_zwave = AsyncMock()
 
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools, "_fetch_repairs", new=mock_repairs
-        ), patch.object(
-            SystemTools, "_fetch_zha_network", new=mock_zha
-        ), patch.object(
-            SystemTools, "_fetch_zwave_network", new=mock_zwave
+        with (
+            _patch_health_info_baseline(),
+            patch.object(SystemTools, "_fetch_repairs", new=mock_repairs),
+            patch.object(SystemTools, "_fetch_zha_network", new=mock_zha),
+            patch.object(SystemTools, "_fetch_zwave_network", new=mock_zwave),
         ):
             result = await tools.ha_get_system_health(include="repairs")
 
@@ -285,9 +285,7 @@ class TestGetSystemHealthGather:
         "raising_section",
         ["repairs", "zha_network", "zwave_network"],
     )
-    async def test_one_section_raising_does_not_block_siblings(
-        self, raising_section
-    ):
+    async def test_one_section_raising_does_not_block_siblings(self, raising_section):
         """A raising helper attributes its failure to its section; others still populate.
 
         The helpers themselves are written never to raise (each wraps its WS
@@ -324,12 +322,13 @@ class TestGetSystemHealthGather:
             for section in section_to_helper
         }
 
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools, "_fetch_repairs", new=mocks["repairs"]
-        ), patch.object(
-            SystemTools, "_fetch_zha_network", new=mocks["zha_network"]
-        ), patch.object(
-            SystemTools, "_fetch_zwave_network", new=mocks["zwave_network"]
+        with (
+            _patch_health_info_baseline(),
+            patch.object(SystemTools, "_fetch_repairs", new=mocks["repairs"]),
+            patch.object(SystemTools, "_fetch_zha_network", new=mocks["zha_network"]),
+            patch.object(
+                SystemTools, "_fetch_zwave_network", new=mocks["zwave_network"]
+            ),
         ):
             result = await tools.ha_get_system_health(
                 include="repairs,zha_network,zwave_network"
@@ -375,16 +374,18 @@ class TestGetSystemHealthGather:
             signal.set()
             return {"devices": [{"name": "B"}]}
 
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools, "_fetch_repairs", new=AsyncMock(side_effect=waiting_helper)
-        ), patch.object(
-            SystemTools,
-            "_fetch_zha_network",
-            new=AsyncMock(side_effect=signalling_helper),
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools, "_fetch_repairs", new=AsyncMock(side_effect=waiting_helper)
+            ),
+            patch.object(
+                SystemTools,
+                "_fetch_zha_network",
+                new=AsyncMock(side_effect=signalling_helper),
+            ),
         ):
-            result = await tools.ha_get_system_health(
-                include="repairs,zha_network"
-            )
+            result = await tools.ha_get_system_health(include="repairs,zha_network")
 
         assert result["repairs"] == {"issues": [], "count": 0}
         assert result["zha_network"] == {"devices": [{"name": "B"}]}
@@ -403,11 +404,12 @@ class TestGetSystemHealthGather:
         mock_repairs = AsyncMock(side_effect=asyncio.CancelledError())
         mock_zha = AsyncMock(return_value={"devices": [{"name": "B"}]})
 
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools, "_fetch_repairs", new=mock_repairs
-        ), patch.object(
-            SystemTools, "_fetch_zha_network", new=mock_zha
-        ), pytest.raises(asyncio.CancelledError):
+        with (
+            _patch_health_info_baseline(),
+            patch.object(SystemTools, "_fetch_repairs", new=mock_repairs),
+            patch.object(SystemTools, "_fetch_zha_network", new=mock_zha),
+            pytest.raises(asyncio.CancelledError),
+        ):
             await tools.ha_get_system_health(include="repairs,zha_network")
 
     @pytest.mark.asyncio
@@ -421,11 +423,12 @@ class TestGetSystemHealthGather:
         mock_repairs = AsyncMock(side_effect=tool_err)
         mock_zha = AsyncMock(return_value={"devices": [{"name": "B"}]})
 
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools, "_fetch_repairs", new=mock_repairs
-        ), patch.object(
-            SystemTools, "_fetch_zha_network", new=mock_zha
-        ), pytest.raises(ToolError) as excinfo:
+        with (
+            _patch_health_info_baseline(),
+            patch.object(SystemTools, "_fetch_repairs", new=mock_repairs),
+            patch.object(SystemTools, "_fetch_zha_network", new=mock_zha),
+            pytest.raises(ToolError) as excinfo,
+        ):
             await tools.ha_get_system_health(include="repairs,zha_network")
         assert excinfo.value is tool_err
 
@@ -436,8 +439,9 @@ class TestGetSystemHealthGather:
         tools = SystemTools(client)
         mock_zha = AsyncMock(return_value={"devices": []})
 
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools, "_fetch_zha_network", new=mock_zha
+        with (
+            _patch_health_info_baseline(),
+            patch.object(SystemTools, "_fetch_zha_network", new=mock_zha),
         ):
             await tools.ha_get_system_health(include="zha_network_full")
 
@@ -454,12 +458,11 @@ class TestGetSystemHealthGather:
         mock_zha = AsyncMock()
         mock_zwave = AsyncMock()
 
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools, "_fetch_repairs", new=mock_repairs
-        ), patch.object(
-            SystemTools, "_fetch_zha_network", new=mock_zha
-        ), patch.object(
-            SystemTools, "_fetch_zwave_network", new=mock_zwave
+        with (
+            _patch_health_info_baseline(),
+            patch.object(SystemTools, "_fetch_repairs", new=mock_repairs),
+            patch.object(SystemTools, "_fetch_zha_network", new=mock_zha),
+            patch.object(SystemTools, "_fetch_zwave_network", new=mock_zwave),
         ):
             result = await tools.ha_get_system_health()
 
@@ -494,10 +497,13 @@ class TestGetSystemHealthDiagnostics:
             "config_entry_id": "entry_abc",
             "data": {"home_assistant": {"version": "2026.5.0"}},
         }
-        with _patch_health_info_baseline(), patch(
-            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-            new=AsyncMock(return_value=diag_payload),
-        ) as mock_fetch:
+        with (
+            _patch_health_info_baseline(),
+            patch(
+                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+                new=AsyncMock(return_value=diag_payload),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_system_health(
                 include="diagnostics", config_entry_id="entry_abc"
             )
@@ -517,10 +523,13 @@ class TestGetSystemHealthDiagnostics:
     async def test_diagnostics_with_device_id_forwarded_to_helper(self):
         client = MagicMock()
         tools = SystemTools(client)
-        with _patch_health_info_baseline(), patch(
-            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-            new=AsyncMock(return_value={"data": {}}),
-        ) as mock_fetch:
+        with (
+            _patch_health_info_baseline(),
+            patch(
+                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+                new=AsyncMock(return_value={"data": {}}),
+            ) as mock_fetch,
+        ):
             await tools.ha_get_system_health(
                 include="diagnostics",
                 config_entry_id="entry_abc",
@@ -543,12 +552,14 @@ class TestGetSystemHealthDiagnostics:
         client = MagicMock()
         tools = SystemTools(client)
         mock_repairs = AsyncMock(return_value={"issues": [], "count": 0})
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools, "_fetch_repairs", new=mock_repairs
-        ), patch(
-            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-            new=AsyncMock(return_value={"data": {"x": 1}}),
-        ) as mock_diag:
+        with (
+            _patch_health_info_baseline(),
+            patch.object(SystemTools, "_fetch_repairs", new=mock_repairs),
+            patch(
+                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+                new=AsyncMock(return_value={"data": {"x": 1}}),
+            ) as mock_diag,
+        ):
             result = await tools.ha_get_system_health(
                 include="repairs,diagnostics", config_entry_id="entry_abc"
             )
@@ -565,15 +576,18 @@ class TestGetSystemHealthDiagnostics:
         """Tool surfaces ``diagnostics_fields`` + ``diagnostics_truncate_at_bytes``."""
         client = MagicMock()
         tools = SystemTools(client)
-        with _patch_health_info_baseline(), patch(
-            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-            new=AsyncMock(return_value={"data": {}}),
-        ) as mock_fetch:
+        with (
+            _patch_health_info_baseline(),
+            patch(
+                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+                new=AsyncMock(return_value={"data": {}}),
+            ) as mock_fetch,
+        ):
             await tools.ha_get_system_health(
                 include="diagnostics",
                 config_entry_id="entry_abc",
                 diagnostics_fields="home_assistant, issues",
-                diagnostics_truncate_at_bytes="20000",
+                diagnostics_truncate_at_bytes=20000,
             )
         mock_fetch.assert_awaited_once_with(
             client,
@@ -592,16 +606,19 @@ class TestGetSystemHealthDiagnostics:
         the helper."""
         client = MagicMock()
         tools = SystemTools(client)
-        with _patch_health_info_baseline(), patch(
-            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-            new=AsyncMock(return_value={"data": {}}),
-        ) as mock_fetch:
+        with (
+            _patch_health_info_baseline(),
+            patch(
+                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+                new=AsyncMock(return_value={"data": {}}),
+            ) as mock_fetch,
+        ):
             await tools.ha_get_system_health(
                 include="diagnostics",
                 config_entry_id="entry_abc",
                 diagnostics_data_path="data.devices",
-                diagnostics_data_offset="10",
-                diagnostics_data_limit="5",
+                diagnostics_data_offset=10,
+                diagnostics_data_limit=5,
             )
         mock_fetch.assert_awaited_once_with(
             client,
@@ -623,15 +640,18 @@ class TestGetSystemHealthDiagnostics:
         rather than a coerced placeholder."""
         client = MagicMock()
         tools = SystemTools(client)
-        with _patch_health_info_baseline(), patch(
-            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-            new=AsyncMock(
-                return_value={
-                    "config_entry_id": None,
-                    "error": "config_entry_id is required for diagnostics fetch.",
-                }
-            ),
-        ) as mock_fetch:
+        with (
+            _patch_health_info_baseline(),
+            patch(
+                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+                new=AsyncMock(
+                    return_value={
+                        "config_entry_id": None,
+                        "error": "config_entry_id is required for diagnostics fetch.",
+                    }
+                ),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_system_health(include="diagnostics")
         # Positional config_entry_id is None, not "".
         assert mock_fetch.await_args.args[1] is None
@@ -642,14 +662,18 @@ class TestGetSystemHealthDiagnostics:
         """include='repairs' (no diagnostics) must not invoke the diagnostics helper."""
         client = MagicMock()
         tools = SystemTools(client)
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools,
-            "_fetch_repairs",
-            new=AsyncMock(return_value={"issues": [], "count": 0}),
-        ), patch(
-            "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
-            new=AsyncMock(),
-        ) as mock_fetch:
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools,
+                "_fetch_repairs",
+                new=AsyncMock(return_value={"issues": [], "count": 0}),
+            ),
+            patch(
+                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+                new=AsyncMock(),
+            ) as mock_fetch,
+        ):
             result = await tools.ha_get_system_health(
                 include="repairs", config_entry_id="entry_abc"
             )
@@ -663,10 +687,13 @@ class TestGetSystemHealthDiagnostics:
         + device_id` warning)."""
         client = MagicMock()
         tools = SystemTools(client)
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools,
-            "_fetch_repairs",
-            new=AsyncMock(return_value={"issues": [], "count": 0}),
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools,
+                "_fetch_repairs",
+                new=AsyncMock(return_value={"issues": [], "count": 0}),
+            ),
         ):
             result = await tools.ha_get_system_health(
                 include="repairs",
@@ -675,8 +702,7 @@ class TestGetSystemHealthDiagnostics:
             )
         assert "warnings" in result
         assert any(
-            "config_entry_id" in w or "device_id" in w
-            for w in result["warnings"]
+            "config_entry_id" in w or "device_id" in w for w in result["warnings"]
         )
 
     @pytest.mark.asyncio
@@ -686,19 +712,20 @@ class TestGetSystemHealthDiagnostics:
         guards the ``data_offset_int > 0`` term in the predicate."""
         client = MagicMock()
         tools = SystemTools(client)
-        with _patch_health_info_baseline(), patch.object(
-            SystemTools,
-            "_fetch_repairs",
-            new=AsyncMock(return_value={"issues": [], "count": 0}),
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools,
+                "_fetch_repairs",
+                new=AsyncMock(return_value={"issues": [], "count": 0}),
+            ),
         ):
             result = await tools.ha_get_system_health(
                 include="repairs",
                 diagnostics_data_offset=5,
             )
         assert "warnings" in result
-        assert any(
-            "diagnostics_data_offset" in w for w in result["warnings"]
-        )
+        assert any("diagnostics_data_offset" in w for w in result["warnings"])
 
     @pytest.mark.asyncio
     async def test_data_path_non_string_rejected_with_validation_error(self):
@@ -717,23 +744,3 @@ class TestGetSystemHealthDiagnostics:
         err_payload = json.loads(str(excinfo.value))
         assert err_payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "diagnostics_data_path" in err_payload["error"]["message"]
-
-    @pytest.mark.asyncio
-    async def test_data_limit_zero_rejected_with_validation_error(self):
-        """``diagnostics_data_limit=0`` violates the ``min_value=1`` guard on
-        the coerce_int_param call — surfaces as a structured validation
-        error rather than slipping through as a no-op pagination window.
-        Coercion was moved outside the includes branch deliberately (see
-        ``tools_system.py`` comment); a regression putting it back would
-        skip validation for no-include callers."""
-        client = MagicMock()
-        tools = SystemTools(client)
-        with _patch_health_info_baseline(), pytest.raises(ToolError) as excinfo:
-            await tools.ha_get_system_health(
-                include="diagnostics",
-                config_entry_id="entry_abc",
-                diagnostics_data_limit=0,
-            )
-        msg = str(excinfo.value)
-        assert "diagnostics_data_limit" in msg
-        assert "min" in msg.lower() or "must be" in msg.lower()

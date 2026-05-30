@@ -522,13 +522,10 @@ class TestSearchEntitiesLimitValidation:
     """
 
     async def test_negative_limit_rejected(self, mcp_client) -> None:
-        """ha_search_entities with limit=-1 returns VALIDATION_FAILED.
+        """ha_search_entities with limit=-1 returns an error (success=False).
 
-        Before fix: results[0:-1] silently drops the last entity, success=True.
-        After fix: coerce_int_param(min_value=1) raises ValueError → VALIDATION_FAILED.
-        Code path: tools_search.py — coerce_int_param(limit, "limit", default=10, min_value=1)
-        → ValueError("limit must be at least 1, got -1")
-        → outer except Exception → exception_to_structured_error → VALIDATION_FAILED.
+        Before fix: results[0:-1] silently dropped the last entity, success=True.
+        After fix: Field(ge=1) schema validation rejects limit=-1.
         """
         result = await safe_call_tool(
             mcp_client,
@@ -541,16 +538,12 @@ class TestSearchEntitiesLimitValidation:
         assert inner["success"] is False, (
             f"Expected success=False for limit=-1, got: {inner}"
         )
-        assert inner["error"]["code"] == "VALIDATION_FAILED", (
-            f"Expected VALIDATION_FAILED, got: {inner}"
-        )
 
     async def test_zero_limit_rejected(self, mcp_client) -> None:
-        """ha_search_entities with limit=0 returns VALIDATION_FAILED.
+        """ha_search_entities with limit=0 returns an error (success=False).
 
         Before fix: results[0:0] returns empty list, success=True, count=0.
-        After fix: coerce_int_param(min_value=1) raises ValueError → VALIDATION_FAILED.
-        Code path: identical to limit=-1 — same coerce_int_param branch.
+        After fix: Field(ge=1) schema validation rejects limit=0.
         """
         result = await safe_call_tool(
             mcp_client,
@@ -562,9 +555,6 @@ class TestSearchEntitiesLimitValidation:
 
         assert inner["success"] is False, (
             f"Expected success=False for limit=0, got: {inner}"
-        )
-        assert inner["error"]["code"] == "VALIDATION_FAILED", (
-            f"Expected VALIDATION_FAILED, got: {inner}"
         )
 
 
@@ -1255,19 +1245,15 @@ async def test_result_shape_consistent_across_branches(mcp_client):
 
 @pytest.mark.asyncio
 async def test_validation_error_carries_no_generic_suggestions(mcp_client):
-    """``VALIDATION_FAILED`` from parameter coercion (e.g. limit=0)
-    must NOT carry generic operational suggestions like ``Check Home
-    Assistant connection`` — those are misleading boilerplate next to a
-    message like ``limit must be at least 1, got 0``."""
+    """Invalid limit (0) must be rejected, without leaking generic operational
+    suggestions like ``Check Home Assistant connection`` that are misleading
+    next to a schema validation message."""
     data = await safe_call_tool(
         mcp_client, "ha_search_entities", {"query": "light", "limit": 0}
     )
     inner = data.get("data", data)
     assert inner.get("success") is False, f"expected failure: {inner}"
     error = inner.get("error", {})
-    assert error.get("code") == "VALIDATION_FAILED", (
-        f"expected VALIDATION_FAILED: {inner}"
-    )
     # No misleading "Check Home Assistant connection" boilerplate.
     suggestions = error.get("suggestions") or []
     if isinstance(error.get("suggestion"), str):

@@ -180,21 +180,13 @@ class TestHistoryPagination:
         assert PAGINATION_FIELDS.issubset(entity.keys())
 
     @pytest.mark.asyncio
-    async def test_negative_offset_raises_tool_error(self, history_tool):
-        """Negative offset raises ToolError with VALIDATION_INVALID_PARAMETER."""
+    async def test_offset_greater_than_zero_multi_entity_raises_tool_error(
+        self, history_tool
+    ):
+        """Offset > 0 with multiple entities raises ToolError with VALIDATION_INVALID_PARAMETER."""
         states = _make_history_states(5)
         with self._patch_ws(states), pytest.raises(ToolError) as exc_info:
-            await history_tool(entity_ids="sensor.test", offset="-1")
-
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-
-    @pytest.mark.asyncio
-    async def test_invalid_limit_raises_tool_error(self, history_tool):
-        """Non-numeric limit raises ToolError with VALIDATION_INVALID_PARAMETER."""
-        states = _make_history_states(5)
-        with self._patch_ws(states), pytest.raises(ToolError) as exc_info:
-            await history_tool(entity_ids="sensor.test", limit="not_a_number")
+            await history_tool(entity_ids=["sensor.test", "sensor.other"], offset=1)
 
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
@@ -312,36 +304,6 @@ class TestStatisticsPagination:
 
         entity = result["entities"][0]
         assert PAGINATION_FIELDS.issubset(entity.keys())
-
-    @pytest.mark.asyncio
-    async def test_negative_offset_raises_tool_error(self, history_tool):
-        """Negative offset raises ToolError for statistics source."""
-        rows = _make_stat_rows(5)
-        with self._patch_ws(rows), pytest.raises(ToolError) as exc_info:
-            await history_tool(
-                entity_ids="sensor.energy",
-                source="statistics",
-                start_time="30d",
-                offset="-5",
-            )
-
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
-
-    @pytest.mark.asyncio
-    async def test_invalid_limit_raises_tool_error(self, history_tool):
-        """Non-numeric limit raises ToolError for statistics source."""
-        rows = _make_stat_rows(5)
-        with self._patch_ws(rows), pytest.raises(ToolError) as exc_info:
-            await history_tool(
-                entity_ids="sensor.energy",
-                source="statistics",
-                start_time="30d",
-                limit="bad",
-            )
-
-        error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
 
     @pytest.mark.asyncio
     async def test_statistics_query_params_default(self, history_tool):
@@ -528,25 +490,6 @@ class TestMultiEntityOffsetGuard:
             assert entity["offset"] == 0
             assert entity["count"] == 3
 
-    @pytest.mark.asyncio
-    async def test_multi_entity_invalid_string_offset(self, history_tool):
-        """Invalid string offset with multiple entity_ids raises VALIDATION_INVALID_PARAMETER.
-
-        Verifies that coerce_int_param is used in the multi-entity guard so that
-        offset="garbage" produces a clean VALIDATION_INVALID_PARAMETER error
-        instead of a bare ValueError swallowed by the outer except handler.
-        """
-        with self._patch_ws(), pytest.raises(ToolError) as exc_info:
-            await history_tool(
-                entity_ids=["sensor.a", "sensor.b"],
-                offset="garbage",
-                limit=10,
-            )
-
-        response = json.loads(str(exc_info.value))
-        assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert response["parameter"] == "offset"
-
 
 # ---------------------------------------------------------------------------
 # Tests: default limit (history source) + MAX boundary
@@ -592,11 +535,7 @@ class TestHistoryLimitBoundary:
 
     @pytest.mark.asyncio
     async def test_limit_exceeds_max_is_clamped(self, history_tool):
-        """limit > _MAX_HISTORY_LIMIT (1000) is silently clamped to 1000.
-
-        coerce_int_param(max_value=1000) clamps rather than raises for
-        above-maximum values — soft cap for oversized requests (per util_helpers.py).
-        """
+        """limit > _MAX_HISTORY_LIMIT (1000) is silently clamped to 1000."""
         states = _make_history_states(5)
         with (
             self._patch_ws(states),

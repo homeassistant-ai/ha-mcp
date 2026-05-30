@@ -21,7 +21,6 @@ from .helpers import (
 )
 from .util_helpers import (
     build_pagination_metadata,
-    coerce_int_param,
     parse_string_list_param,
     project_fields,
     result_fields_warning,
@@ -51,16 +50,19 @@ class ServiceDiscoveryTools:
         domain: str | None = None,
         query: str | None = None,
         limit: Annotated[
-            int | str,
+            int,
             Field(
                 default=50,
+                ge=1,
+                le=200,
                 description="Max services to return per page (default: 50)",
             ),
         ] = 50,
         offset: Annotated[
-            int | str,
+            int,
             Field(
                 default=0,
+                ge=0,
                 description="Number of services to skip for pagination (default: 0)",
             ),
         ] = 0,
@@ -152,10 +154,8 @@ class ServiceDiscoveryTools:
                     create_validation_error(str(exc), parameter="service_fields")
                 )
         try:
-            limit_int = coerce_int_param(
-                limit, "limit", default=50, min_value=1, max_value=200
-            )
-            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
+            limit_int = limit
+            offset_int = offset
 
             # Get services from REST API (includes parameter definitions)
             rest_services = await self._client.get_services()

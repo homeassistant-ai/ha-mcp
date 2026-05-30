@@ -26,7 +26,7 @@ from .helpers import (
     safe_progress,
     validate_identifier_not_empty,
 )
-from .util_helpers import add_timezone_metadata, coerce_bool_param, coerce_int_param
+from .util_helpers import add_timezone_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -122,23 +122,26 @@ class HacsTools:
             ),
         ] = None,
         installed_only: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=False,
                 description="Only return installed repositories (default: False)",
             ),
         ] = False,
         max_results: Annotated[
-            int | str,
+            int,
             Field(
                 default=10,
+                ge=1,
+                le=100,
                 description="Maximum number of results to return (default: 10, max: 100)",
             ),
         ] = 10,
         offset: Annotated[
-            int | str,
+            int,
             Field(
                 default=0,
+                ge=0,
                 description="Number of results to skip for pagination (default: 0)",
             ),
         ] = 0,
@@ -169,28 +172,10 @@ class HacsTools:
             offset: Number of results to skip for pagination (default: 0)
         """
         try:
-            # Coerce parameters
-            installed_only_bool = coerce_bool_param(
-                installed_only, "installed_only", default=False
-            )
-            max_results_int = coerce_int_param(
-                max_results,
-                "max_results",
-                default=10,
-                min_value=1,
-                max_value=100,
-            )
-            offset_int = coerce_int_param(
-                offset,
-                "offset",
-                default=0,
-                min_value=0,
-            )
-
             await safe_info(
                 ctx,
                 f"ha_hacs_search starting: query={query!r} "
-                f"category={category} installed_only={installed_only_bool}",
+                f"category={category} installed_only={installed_only}",
             )
             await safe_progress(
                 ctx,
@@ -242,9 +227,7 @@ class HacsTools:
                 total=3,
                 message=f"filtering {len(all_repositories)} repositories",
             )
-            matches = _filter_and_score_repos(
-                all_repositories, query, installed_only_bool
-            )
+            matches = _filter_and_score_repos(all_repositories, query, installed_only)
             await safe_progress(
                 ctx,
                 progress=3,
@@ -252,8 +235,8 @@ class HacsTools:
                 message=f"matched {len(matches)} repositories",
             )
 
-            limited_matches = matches[offset_int : offset_int + max_results_int]
-            has_more = (offset_int + len(limited_matches)) < len(matches)
+            limited_matches = matches[offset : offset + max_results]
+            has_more = (offset + len(limited_matches)) < len(matches)
 
             return await add_timezone_metadata(
                 self._client,
@@ -261,13 +244,13 @@ class HacsTools:
                     "success": True,
                     "query": query if query.strip() else None,
                     "category_filter": category,
-                    "installed_only": installed_only_bool,
+                    "installed_only": installed_only,
                     "total_matches": len(matches),
-                    "offset": offset_int,
-                    "limit": max_results_int,
+                    "offset": offset,
+                    "limit": max_results,
                     "count": len(limited_matches),
                     "has_more": has_more,
-                    "next_offset": offset_int + max_results_int if has_more else None,
+                    "next_offset": offset + max_results if has_more else None,
                     "results": limited_matches,
                 },
             )

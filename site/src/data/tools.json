@@ -359,7 +359,7 @@
           "type": "Annotated[str, Field(description=\"Automation entity_id (e.g., 'automation.old_automation') or unique_id to delete\")]"
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for automation to be fully removed before returning. Default: True.', default=True)]",
+          "type": "Annotated[bool, Field(description='Wait for automation to be fully removed before returning. Default: True.', default=True)]",
           "default": true
         }
       },
@@ -403,7 +403,7 @@
           "default": null
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for automation to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
+          "type": "Annotated[bool, Field(description='Wait for automation to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
         }
       }
@@ -825,11 +825,11 @@
           "default": null
         },
         "limit": {
-          "type": "Annotated[int | str, Field(default=50, description='Max devices to return per page in list mode (default: 50)')]",
+          "type": "Annotated[int, Field(default=50, ge=1, le=200, description='Max devices to return per page in list mode (default: 50)')]",
           "default": 50
         },
         "offset": {
-          "type": "Annotated[int | str, Field(default=0, description='Number of devices to skip for pagination (default: 0)')]",
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of devices to skip for pagination (default: 0)')]",
           "default": 0
         },
         "detail_level": {
@@ -1066,11 +1066,11 @@
           "default": null
         },
         "enabled": {
-          "type": "Annotated[bool | str | None, Field(description='True to enable the entity, False to disable it. Single entity only. WARNING: Setting enabled=False is a registry-level disable — it completely removes the entity from the state machine and hides it from the UI. A reload or restart is required to restore it after re-enabling. NOT allowed for automation or script entities — use automation.turn_off / script.turn_off via ha_call_service() instead.', default=None)]",
+          "type": "Annotated[bool | None, Field(description='True to enable the entity, False to disable it. Single entity only. WARNING: Setting enabled=False is a registry-level disable — it completely removes the entity from the state machine and hides it from the UI. A reload or restart is required to restore it after re-enabling. NOT allowed for automation or script entities — use automation.turn_off / script.turn_off via ha_call_service() instead.', default=None)]",
           "default": null
         },
         "hidden": {
-          "type": "Annotated[bool | str | None, Field(description='True to hide the entity from UI, False to show it. Single entity only.', default=None)]",
+          "type": "Annotated[bool | None, Field(description='True to hide the entity from UI, False to show it. Single entity only.', default=None)]",
           "default": null
         },
         "aliases": {
@@ -1125,7 +1125,7 @@
           "type": "Annotated[str, Field(description=\"Relative path from config directory. Must be in www/, themes/, custom_templates/, or dashboards/. Example: 'www/old-file.css'\")]"
         },
         "confirm": {
-          "type": "Annotated[bool | str, Field(default=False, description='Must be True to confirm deletion. This is a safety measure to prevent accidental deletions.')]",
+          "type": "Annotated[bool, Field(default=False, description='Must be True to confirm deletion. This is a safety measure to prevent accidental deletions.')]",
           "default": false
         }
       },
@@ -1179,7 +1179,7 @@
           "type": "Annotated[str, Field(description=\"Relative path from config directory. Examples: 'configuration.yaml', 'www/custom.css', 'home-assistant.log'\")]"
         },
         "tail_lines": {
-          "type": "Annotated[int | str | None, Field(default=None, description='For log files, return only the last N lines. Recommended for home-assistant.log to avoid large responses. Default: None (return full file, or last 1000 lines for logs)')]",
+          "type": "Annotated[int | None, Field(default=None, ge=1, le=10000, description='For log files, return only the last N lines. Recommended for home-assistant.log to avoid large responses. Default: None (return full file, or last 1000 lines for logs)')]",
           "default": null
         }
       },
@@ -1209,11 +1209,11 @@
           "type": "Annotated[str, Field(description='The content to write to the file.')]"
         },
         "overwrite": {
-          "type": "Annotated[bool | str, Field(default=False, description='Whether to overwrite if file exists. Default is False to prevent accidental overwrites.')]",
+          "type": "Annotated[bool, Field(default=False, description='Whether to overwrite if file exists. Default is False to prevent accidental overwrites.')]",
           "default": false
         },
         "create_dirs": {
-          "type": "Annotated[bool | str, Field(default=True, description=\"Whether to create parent directories if they don't exist. Default is True.\")]",
+          "type": "Annotated[bool, Field(default=True, description=\"Whether to create parent directories if they don't exist. Default is True.\")]",
           "default": true
         }
       },
@@ -1255,7 +1255,7 @@
           "type": "Annotated[str, Field(description=\"Group identifier without 'group.' prefix (e.g., 'living_room_lights')\")]"
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for group to be fully removed before returning. Default: True.', default=True)]",
+          "type": "Annotated[bool, Field(description='Wait for group to be fully removed before returning. Default: True.', default=True)]",
           "default": true
         }
       },
@@ -1306,7 +1306,7 @@
           "default": null
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for group to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
+          "type": "Annotated[bool, Field(description='Wait for group to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
         }
       },
@@ -1412,15 +1412,15 @@
           "default": null
         },
         "installed_only": {
-          "type": "Annotated[bool | str, Field(default=False, description='Only return installed repositories (default: False)')]",
+          "type": "Annotated[bool, Field(default=False, description='Only return installed repositories (default: False)')]",
           "default": false
         },
         "max_results": {
-          "type": "Annotated[int | str, Field(default=10, description='Maximum number of results to return (default: 10, max: 100)')]",
+          "type": "Annotated[int, Field(default=10, ge=1, le=100, description='Maximum number of results to return (default: 10, max: 100)')]",
           "default": 10
         },
         "offset": {
-          "type": "Annotated[int | str, Field(default=0, description='Number of results to skip for pagination (default: 0)')]",
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of results to skip for pagination (default: 0)')]",
           "default": 0
         }
       }
@@ -1487,7 +1487,7 @@
           "default": null
         },
         "show_advanced_options": {
-          "type": "Annotated[bool | str, Field(description=\"When helper_type='config_subentry', ask Home Assistant to expose advanced flow options.\", default=False)]",
+          "type": "Annotated[bool, Field(description=\"When helper_type='config_subentry', ask Home Assistant to expose advanced flow options.\", default=False)]",
           "default": false
         },
         "icon": {
@@ -1619,7 +1619,7 @@
           "default": null
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
+          "type": "Annotated[bool, Field(description='Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
         },
         "action": {
@@ -1657,11 +1657,11 @@
           "default": null
         },
         "confirm": {
-          "type": "Annotated[bool | str, Field(description=\"Must be True to confirm removal. Accepts bool or string ('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', case-insensitive) for transport ergonomics.\", default=False)]",
+          "type": "Annotated[bool, Field(description='Must be True to confirm removal.', default=False)]",
           "default": false
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description=\"Wait for entity removal. Default: True. Ignored when helper_type=None or helper_type='config_subentry' (no entity poll, require_restart returned). Accepts bool or string ('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', case-insensitive).\", default=True)]",
+          "type": "Annotated[bool, Field(description=\"Wait for entity removal. Default: True. Ignored when helper_type=None or helper_type='config_subentry' (no entity poll, require_restart returned).\", default=True)]",
           "default": true
         }
       },
@@ -1760,11 +1760,11 @@
           "default": true
         },
         "limit": {
-          "type": "Annotated[int | str | None, Field(description='Max entries per entity. Default: 100, Max: 1000. For source=\"history\": state changes. For source=\"statistics\": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).', default=None)]",
+          "type": "Annotated[int | None, Field(description='Max entries per entity. Default: 100, Max: 1000. For source=\"history\": state changes. For source=\"statistics\": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).', default=None, ge=1, le=1000)]",
           "default": null
         },
         "offset": {
-          "type": "Annotated[int | str | None, Field(description='Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.', default=None)]",
+          "type": "Annotated[int | None, Field(description='Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.', default=None, ge=0)]",
           "default": null
         },
         "period": {
@@ -1808,7 +1808,7 @@
           "default": "logbook"
         },
         "limit": {
-          "type": "int | str | None",
+          "type": "int | None",
           "default": null
         },
         "search": {
@@ -1816,7 +1816,7 @@
           "default": null
         },
         "hours_back": {
-          "type": "int | str",
+          "type": "Annotated[int, Field(ge=1)]",
           "default": 1
         },
         "entity_id": {
@@ -1828,11 +1828,11 @@
           "default": null
         },
         "offset": {
-          "type": "int | str",
+          "type": "Annotated[int, Field(ge=0)]",
           "default": 0
         },
         "compact": {
-          "type": "bool | str",
+          "type": "bool",
           "default": true
         },
         "level": {
@@ -1873,19 +1873,19 @@
           "default": null
         },
         "include_options": {
-          "type": "Annotated[bool | str, Field(description='Include the options object for each entry. Automatically enabled when domain filter is set. For UI-created flow-based helpers (template, group, utility_meter, derivative, ...), the current config — template body, group members, source entity, etc. — is surfaced here by probing the options flow. Prefer this over include_schema when you only need to read the current values; use include_schema when you also need the field types or selector metadata.', default=False)]",
+          "type": "Annotated[bool, Field(description='Include the options object for each entry. Automatically enabled when domain filter is set. For UI-created flow-based helpers (template, group, utility_meter, derivative, ...), the current config — template body, group members, source entity, etc. — is surfaced here by probing the options flow. Prefer this over include_schema when you only need to read the current values; use include_schema when you also need the field types or selector metadata.', default=False)]",
           "default": false
         },
         "include_schema": {
-          "type": "Annotated[bool | str, Field(description='When entry_id is set, also return the options flow schema (available fields and their types). Use before ha_config_set_helper to understand what can be updated. Only applies when supports_options=true.', default=False)]",
+          "type": "Annotated[bool, Field(description='When entry_id is set, also return the options flow schema (available fields and their types). Use before ha_config_set_helper to understand what can be updated. Only applies when supports_options=true.', default=False)]",
           "default": false
         },
         "include_subentries": {
-          "type": "Annotated[bool | str, Field(description='When entry_id is set, include config subentries for the integration entry. Useful for integrations that expose conversation agents, devices, or other extension points as subentries.', default=False)]",
+          "type": "Annotated[bool, Field(description='When entry_id is set, include config subentries for the integration entry. Useful for integrations that expose conversation agents, devices, or other extension points as subentries.', default=False)]",
           "default": false
         },
         "include_subentry_schema": {
-          "type": "Annotated[bool | str, Field(description='When entry_id is set, return introspection-only config subentry schema information; no subentry is created. Pair with subentry_type, and optionally subentry_id for reconfigure schema.', default=False)]",
+          "type": "Annotated[bool, Field(description='When entry_id is set, return introspection-only config subentry schema information; no subentry is created. Pair with subentry_type, and optionally subentry_id for reconfigure schema.', default=False)]",
           "default": false
         },
         "subentry_type": {
@@ -1897,23 +1897,23 @@
           "default": null
         },
         "show_advanced_options": {
-          "type": "Annotated[bool | str, Field(description='When include_subentry_schema=True, ask Home Assistant to expose advanced flow options.', default=False)]",
+          "type": "Annotated[bool, Field(description='When include_subentry_schema=True, ask Home Assistant to expose advanced flow options.', default=False)]",
           "default": false
         },
         "exact_match": {
-          "type": "Annotated[bool | str, Field(description='Use exact substring matching for query filter (default: True). Set to False for fuzzy matching when the query may contain typos.', default=True)]",
+          "type": "Annotated[bool, Field(description='Use exact substring matching for query filter (default: True). Set to False for fuzzy matching when the query may contain typos.', default=True)]",
           "default": true
         },
         "limit": {
-          "type": "Annotated[int | str, Field(default=50, description='Max entries to return per page in list mode (default: 50)')]",
+          "type": "Annotated[int, Field(default=50, ge=1, le=200, description='Max entries to return per page in list mode (default: 50)')]",
           "default": 50
         },
         "offset": {
-          "type": "Annotated[int | str, Field(default=0, description='Number of entries to skip for pagination (default: 0)')]",
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of entries to skip for pagination (default: 0)')]",
           "default": 0
         },
         "include_diagnostics": {
-          "type": "Annotated[bool | str, Field(description=\"When entry_id is set, also fetch the integration's diagnostics dump — integration-defined JSON (commonly includes redacted config, device list, state snapshots; exact top-level keys vary by integration). The canonical artifact users grab via Settings → Devices & Services → [integration] → ⋯ → Download diagnostics. Use when triaging integration bugs or filing ha_report_issue for a specific integration. Payloads can be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with diagnostics_fields or diagnostics_truncate_at_bytes to fit the LLM context budget.\", default=False)]",
+          "type": "Annotated[bool, Field(description=\"When entry_id is set, also fetch the integration's diagnostics dump — integration-defined JSON (commonly includes redacted config, device list, state snapshots; exact top-level keys vary by integration). The canonical artifact users grab via Settings → Devices & Services → [integration] → ⋯ → Download diagnostics. Use when triaging integration bugs or filing ha_report_issue for a specific integration. Payloads can be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with diagnostics_fields or diagnostics_truncate_at_bytes to fit the LLM context budget.\", default=False)]",
           "default": false
         },
         "device_id": {
@@ -1925,7 +1925,7 @@
           "default": null
         },
         "diagnostics_truncate_at_bytes": {
-          "type": "Annotated[int | str | None, Field(description='Optional byte cap on the serialized diagnostics payload (after diagnostics_fields and diagnostics_data_path have been applied). On hit, drops data and emits truncated=true, bytes_total, byte_cap, plus available_fields (when the capped value is a dict). Recommended starting point: 20000 bytes. Only applies when include_diagnostics=True.', default=None)]",
+          "type": "Annotated[int | None, Field(description='Optional byte cap on the serialized diagnostics payload (after diagnostics_fields and diagnostics_data_path have been applied). On hit, drops data and emits truncated=true, bytes_total, byte_cap, plus available_fields (when the capped value is a dict). Recommended starting point: 20000 bytes. Only applies when include_diagnostics=True.', default=None, ge=1)]",
           "default": null
         },
         "diagnostics_data_path": {
@@ -1933,11 +1933,11 @@
           "default": null
         },
         "diagnostics_data_offset": {
-          "type": "Annotated[int | str | None, Field(description='Pagination start index (default 0) for list-valued diagnostics_data_path results. Ignored when diagnostics_data_path is unset, diagnostics_data_limit is unset, or the resolved value is not a list. Only applies when include_diagnostics=True.', default=0)]",
+          "type": "Annotated[int | None, Field(description='Pagination start index (default 0) for list-valued diagnostics_data_path results. Ignored when diagnostics_data_path is unset, diagnostics_data_limit is unset, or the resolved value is not a list. Only applies when include_diagnostics=True.', default=0, ge=0)]",
           "default": 0
         },
         "diagnostics_data_limit": {
-          "type": "Annotated[int | str | None, Field(description='Pagination window size for list-valued diagnostics_data_path results. When set with a list-resolved path, swaps data for a pagination envelope {path, items, offset, limit, total, has_more}. Default None returns the full resolved value. Workflow: probe with a list-valued diagnostics_data_path and diagnostics_data_limit=10 to walk a large list one page at a time (the exact path varies by integration version). Only applies when include_diagnostics=True.', default=None)]",
+          "type": "Annotated[int | None, Field(description='Pagination window size for list-valued diagnostics_data_path results. When set with a list-resolved path, swaps data for a pagination envelope {path, items, offset, limit, total, has_more}. Default None returns the full resolved value. Workflow: probe with a list-valued diagnostics_data_path and diagnostics_data_limit=10 to walk a large list one page at a time (the exact path varies by integration version). Only applies when include_diagnostics=True.', default=None, ge=1)]",
           "default": null
         }
       }
@@ -1962,7 +1962,7 @@
           "default": null
         },
         "include_dismissed_repairs": {
-          "type": "bool | str | None",
+          "type": "bool | None",
           "default": false
         },
         "config_entry_id": {
@@ -1978,7 +1978,7 @@
           "default": null
         },
         "diagnostics_truncate_at_bytes": {
-          "type": "int | str | None",
+          "type": "Annotated[int, Field(ge=1)] | None",
           "default": null
         },
         "diagnostics_data_path": {
@@ -1986,11 +1986,11 @@
           "default": null
         },
         "diagnostics_data_offset": {
-          "type": "int | str | None",
+          "type": "Annotated[int, Field(ge=0)] | None",
           "default": 0
         },
         "diagnostics_data_limit": {
-          "type": "int | str | None",
+          "type": "Annotated[int, Field(ge=1)] | None",
           "default": null
         }
       }
@@ -2017,7 +2017,7 @@
           "type": "Annotated[str, Field(description='Config entry ID')]"
         },
         "enabled": {
-          "type": "Annotated[bool | str, Field(description='True to enable, False to disable')]"
+          "type": "Annotated[bool, Field(description='True to enable, False to disable')]"
         }
       },
       "required": [
@@ -2236,7 +2236,7 @@
           "type": "Annotated[str, Field(description=\"Scene identifier to delete (e.g., 'old_scene')\")]"
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for scene to be fully removed before returning. Default: True.', default=True)]",
+          "type": "Annotated[bool, Field(description='Wait for scene to be fully removed before returning. Default: True.', default=True)]",
           "default": true
         }
       },
@@ -2279,7 +2279,7 @@
           "default": null
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for scene to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
+          "type": "Annotated[bool, Field(description='Wait for scene to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
         }
       },
@@ -2328,7 +2328,7 @@
           "type": "Annotated[str, Field(description=\"Script identifier to delete — bare storage key ('old_script') or entity_id form ('script.old_script'); a leading 'script.' prefix is stripped before lookup.\")]"
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for script to be fully removed before returning. Default: True.', default=True)]",
+          "type": "Annotated[bool, Field(description='Wait for script to be fully removed before returning. Default: True.', default=True)]",
           "default": true
         }
       },
@@ -2371,7 +2371,7 @@
           "default": null
         },
         "wait": {
-          "type": "Annotated[bool | str, Field(description='Wait for script to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
+          "type": "Annotated[bool, Field(description='Wait for script to be queryable before returning. Default: True. Set to False for bulk operations.', default=True)]",
           "default": true
         }
       },
@@ -2401,19 +2401,19 @@
           "default": null
         },
         "limit": {
-          "type": "Annotated[int | str, Field(default=5, description='Maximum total results to return (default: 5)')]",
+          "type": "Annotated[int, Field(default=5, ge=1, description='Maximum total results to return (default: 5)')]",
           "default": 5
         },
         "offset": {
-          "type": "Annotated[int | str, Field(default=0, description='Number of results to skip for pagination (default: 0)')]",
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of results to skip for pagination (default: 0)')]",
           "default": 0
         },
         "include_config": {
-          "type": "Annotated[bool | str, Field(default=False, description='Include full config in results. Default: False (returns summary only). Use ha_config_get_automation/ha_config_get_script for individual configs.')]",
+          "type": "Annotated[bool, Field(default=False, description='Include full config in results. Default: False (returns summary only). Use ha_config_get_automation/ha_config_get_script for individual configs.')]",
           "default": false
         },
         "exact_match": {
-          "type": "Annotated[bool | str, Field(default=True, description='Use exact substring matching (default: True). Set to False for fuzzy matching when the query may contain typos or when searching with approximate terms.')]",
+          "type": "Annotated[bool, Field(default=True, description='Use exact substring matching (default: True). Set to False for fuzzy matching when the query may contain typos or when searching with approximate terms.')]",
           "default": true
         }
       },
@@ -2445,11 +2445,11 @@
           "default": null
         },
         "limit": {
-          "type": "Annotated[int | str | None, Field(default=None, description='Max total entities across all domains (default: unlimited for minimal, 200 for standard/full). Counts and states always complete. Use with offset for pagination.')]",
+          "type": "Annotated[int | None, Field(default=None, ge=1, description='Max total entities across all domains (default: unlimited for minimal, 200 for standard/full). Counts and states always complete. Use with offset for pagination.')]",
           "default": null
         },
         "offset": {
-          "type": "Annotated[int | str, Field(default=0, description='Number of entities to skip for pagination (default: 0)')]",
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of entities to skip for pagination (default: 0)')]",
           "default": 0
         },
         "max_entities_per_domain": {
@@ -2457,19 +2457,19 @@
           "default": null
         },
         "include_state": {
-          "type": "Annotated[bool | str | None, Field(default=None, description='Include state field for entities (None = auto based on level). Full defaults to True.')]",
+          "type": "Annotated[bool | None, Field(default=None, description='Include state field for entities (None = auto based on level). Full defaults to True.')]",
           "default": null
         },
         "include_entity_id": {
-          "type": "Annotated[bool | str | None, Field(default=None, description='Include entity_id field for entities (None = auto based on level). Full defaults to True.')]",
+          "type": "Annotated[bool | None, Field(default=None, description='Include entity_id field for entities (None = auto based on level). Full defaults to True.')]",
           "default": null
         },
         "include_notifications": {
-          "type": "Annotated[bool | str | None, Field(default=True, description='Include active persistent notifications (default: True). Set False to skip.')]",
+          "type": "Annotated[bool | None, Field(default=True, description='Include active persistent notifications (default: True). Set False to skip.')]",
           "default": true
         },
         "include_dismissed_repairs": {
-          "type": "Annotated[bool | str | None, Field(default=False, description='Include user-dismissed/ignored repairs (default: False). Matches the HA Repairs UI which hides dismissed items by default.')]",
+          "type": "Annotated[bool | None, Field(default=False, description='Include user-dismissed/ignored repairs (default: False). Matches the HA Repairs UI which hides dismissed items by default.')]",
           "default": false
         },
         "fields": {
@@ -2537,27 +2537,27 @@
           "default": null
         },
         "limit": {
-          "type": "int",
+          "type": "Annotated[int, Field(default=10, ge=1, description='Maximum number of results to return (default: 10, minimum: 1)')]",
           "default": 10
         },
         "offset": {
-          "type": "Annotated[int | str, Field(default=0, description='Number of results to skip for pagination (default: 0)')]",
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of results to skip for pagination (default: 0)')]",
           "default": 0
         },
         "group_by_domain": {
-          "type": "bool | str",
+          "type": "bool",
           "default": false
         },
         "exact_match": {
-          "type": "Annotated[bool | str, Field(default=True, description='Use exact substring matching (default: True). Set to False for fuzzy matching when the query may contain typos or approximate terms.')]",
+          "type": "Annotated[bool, Field(default=True, description='Use exact substring matching (default: True). Set to False for fuzzy matching when the query may contain typos or approximate terms.')]",
           "default": true
         },
         "include_hidden": {
-          "type": "Annotated[bool | str, Field(default=True, description='Include entities marked hidden_by in the entity registry (default: True). Hidden entities still appear in results but receive a score penalty so they sort below comparable visible matches — typically pulling integration diagnostics and user-suppressed entries to the bottom of the list rather than excluding them. Set to False to filter them out entirely.')]",
+          "type": "Annotated[bool, Field(default=True, description='Include entities marked hidden_by in the entity registry (default: True). Hidden entities still appear in results but receive a score penalty so they sort below comparable visible matches — typically pulling integration diagnostics and user-suppressed entries to the bottom of the list rather than excluding them. Set to False to filter them out entirely.')]",
           "default": true
         },
         "per_domain_limit": {
-          "type": "Annotated[int | str | None, Field(default=None, description='When group_by_domain=True, cap results per domain to this number. Applied after the global limit — use a high limit (e.g. limit=200) with per_domain_limit=5 to get up to 5 entities from each domain. Ignored when group_by_domain=False. None = no per-domain cap (default).')]",
+          "type": "Annotated[int | None, Field(default=None, description='When group_by_domain=True, cap results per domain to this number. Applied after the global limit — use a high limit (e.g. limit=200) with per_domain_limit=5 to get up to 5 entities from each domain. Ignored when group_by_domain=False. None = no per-domain cap (default).')]",
           "default": null
         },
         "state_filter": {
@@ -2593,7 +2593,7 @@
           "type": "str | list[dict[str, Any]]"
         },
         "parallel": {
-          "type": "bool | str",
+          "type": "bool",
           "default": true
         }
       },
@@ -2657,15 +2657,15 @@
           "default": null
         },
         "return_response": {
-          "type": "bool | str",
+          "type": "bool",
           "default": false
         },
         "wait": {
-          "type": "bool | str",
+          "type": "bool",
           "default": true
         },
         "verbose": {
-          "type": "Annotated[bool | str, Field(description=\"Return HA's raw service response unchanged (default: False). Use as an escape hatch when you need the full propagation chain or raw attribute payload (debug / inspection). WARNING: brings back token-bloat for nested-group targets — prefer result_fields / result_attribute_keys for targeted control.\")]",
+          "type": "Annotated[bool, Field(description=\"Return HA's raw service response unchanged (default: False). Use as an escape hatch when you need the full propagation chain or raw attribute payload (debug / inspection). WARNING: brings back token-bloat for nested-group targets — prefer result_fields / result_attribute_keys for targeted control.\")]",
           "default": false
         },
         "result_fields": {
@@ -2731,11 +2731,11 @@
           "default": null
         },
         "limit": {
-          "type": "Annotated[int | str, Field(default=50, description='Max services to return per page (default: 50)')]",
+          "type": "Annotated[int, Field(default=50, ge=1, le=200, description='Max services to return per page (default: 50)')]",
           "default": 50
         },
         "offset": {
-          "type": "Annotated[int | str, Field(default=0, description='Number of services to skip for pagination (default: 0)')]",
+          "type": "Annotated[int, Field(default=0, ge=0, description='Number of services to skip for pagination (default: 0)')]",
           "default": 0
         },
         "detail_level": {
@@ -2796,7 +2796,7 @@
           "default": "configuration.yaml"
         },
         "backup": {
-          "type": "Annotated[bool | str, Field(default=True, description='Create a backup before editing. Defaults to True. Backups are saved to .ha_mcp_tools_backups/.')]",
+          "type": "Annotated[bool, Field(default=True, description='Create a backup before editing. Defaults to True. Backups are saved to .ha_mcp_tools_backups/.')]",
           "default": true
         }
       },
@@ -2826,11 +2826,11 @@
           "default": null
         },
         "include_skipped": {
-          "type": "Annotated[bool | str, Field(description='When listing all updates, include updates that have been skipped (default: False)', default=False)]",
+          "type": "Annotated[bool, Field(description='When listing all updates, include updates that have been skipped (default: False)', default=False)]",
           "default": false
         },
         "include_release_notes": {
-          "type": "Annotated[bool | str, Field(description='When getting a Core update entity, fetch multi-version release notes and breaking changes for all versions between installed and latest (default: False). Adds breaking_changes, multi_version_release_notes, and installed_integrations to the response.', default=False)]",
+          "type": "Annotated[bool, Field(description='When getting a Core update entity, fetch multi-version release notes and breaking changes for all versions between installed and latest (default: False). Adds breaking_changes, multi_version_release_notes, and installed_integrations to the response.', default=False)]",
           "default": false
         }
       }
@@ -2969,7 +2969,7 @@
     "inputSchema": {
       "properties": {
         "confirm": {
-          "type": "bool | str",
+          "type": "bool",
           "default": false
         }
       }
@@ -3098,7 +3098,7 @@
           "default": 3
         },
         "report_errors": {
-          "type": "bool | str",
+          "type": "bool",
           "default": true
         }
       },

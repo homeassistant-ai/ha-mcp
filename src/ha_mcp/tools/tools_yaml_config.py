@@ -33,7 +33,7 @@ from .tools_filesystem import (
     _assert_mcp_tools_available,
     call_mcp_tools_service,
 )
-from .util_helpers import coerce_bool_param, unwrap_service_response
+from .util_helpers import unwrap_service_response
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +183,7 @@ class YamlConfigTools:
             ),
         ] = "configuration.yaml",
         backup: Annotated[
-            bool | str,
+            bool,
             Field(
                 default=True,
                 description=(
@@ -253,9 +253,6 @@ class YamlConfigTools:
                     )
                 )
 
-            # Coerce boolean parameter
-            backup_bool = coerce_bool_param(backup, "backup", default=True)
-
             # Per-key gate: reject before the custom-component round
             # trip when the yaml_path top-level segment matches a
             # disabled PACKAGES_ONLY key AND the target file is under
@@ -320,7 +317,7 @@ class YamlConfigTools:
                 "file": file,
                 "action": action,
                 "yaml_path": yaml_path,
-                "backup": backup_bool,
+                "backup": backup,
                 "disabled_packages_keys": disabled_keys,
             }
             if content is not None:

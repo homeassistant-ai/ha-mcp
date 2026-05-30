@@ -10,10 +10,11 @@ This module provides tools for Home Assistant system administration including:
 import asyncio
 import logging
 from collections.abc import Coroutine
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
+from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
@@ -24,8 +25,6 @@ from .helpers import (
     register_tool_methods,
 )
 from .util_helpers import (
-    coerce_bool_param,
-    coerce_int_param,
     fetch_integration_diagnostics,
     filter_active_repairs,
     parse_diagnostics_fields,
@@ -114,7 +113,7 @@ class SystemTools:
     @log_tool_usage
     async def ha_restart(
         self,
-        confirm: bool | str = False,
+        confirm: bool = False,
     ) -> dict[str, Any]:
         """
         Restart Home Assistant.
@@ -144,10 +143,7 @@ class SystemTools:
         **Alternative:** For configuration changes, consider using ha_reload_core()
         instead, which reloads specific components without a full restart.
         """
-        # Coerce boolean parameter that may come as string from XML-style calls
-        confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
-
-        if not confirm_bool:
+        if not confirm:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -365,14 +361,14 @@ class SystemTools:
     async def ha_get_system_health(
         self,
         include: str | None = None,
-        include_dismissed_repairs: bool | str | None = False,
+        include_dismissed_repairs: bool | None = False,
         config_entry_id: str | None = None,
         device_id: str | None = None,
         diagnostics_fields: list[str] | str | None = None,
-        diagnostics_truncate_at_bytes: int | str | None = None,
+        diagnostics_truncate_at_bytes: Annotated[int, Field(ge=1)] | None = None,
         diagnostics_data_path: str | None = None,
-        diagnostics_data_offset: int | str | None = 0,
-        diagnostics_data_limit: int | str | None = None,
+        diagnostics_data_offset: Annotated[int, Field(ge=0)] | None = 0,
+        diagnostics_data_limit: Annotated[int, Field(ge=1)] | None = None,
     ) -> dict[str, Any]:
         """
         Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
@@ -432,13 +428,7 @@ class SystemTools:
           with ``diagnostics_data_offset=10`` for the next slice.
         """
         includes = self._parse_includes(include)
-        include_dismissed_repairs_bool = bool(
-            coerce_bool_param(
-                include_dismissed_repairs,
-                "include_dismissed_repairs",
-                default=False,
-            )
-        )
+        include_dismissed_repairs_bool = bool(include_dismissed_repairs)
 
         ws_client = None
 
@@ -547,28 +537,15 @@ class SystemTools:
             # canonicalised values — passing ``diagnostics_data_offset=20``
             # without ``include=diagnostics`` would otherwise slip past the gate.
             fields_list = parse_diagnostics_fields(diagnostics_fields)
-            truncate_bytes = coerce_int_param(
-                diagnostics_truncate_at_bytes,
-                "diagnostics_truncate_at_bytes",
-                default=None,
-                min_value=1,
+            truncate_bytes = diagnostics_truncate_at_bytes
+            data_offset_int = (
+                diagnostics_data_offset if diagnostics_data_offset is not None else 0
             )
-            data_offset_int = coerce_int_param(
-                diagnostics_data_offset,
-                "diagnostics_data_offset",
-                default=0,
-                min_value=0,
-            )
-            data_limit_int = coerce_int_param(
-                diagnostics_data_limit,
-                "diagnostics_data_limit",
-                default=None,
-                min_value=1,
-            )
+            data_limit_int = diagnostics_data_limit
             # Type-guard ``diagnostics_data_path`` here so a bad caller (dict /
             # list) surfaces as ``VALIDATION_INVALID_PARAMETER`` instead of
             # leaking as ``INTERNAL_ERROR`` from the resolver's ``.strip()``
-            # downstream. Mirrors the coerce_int_param guards above.
+            # downstream.
             if diagnostics_data_path is not None and not isinstance(
                 diagnostics_data_path, str
             ):

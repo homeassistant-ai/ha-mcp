@@ -352,35 +352,6 @@ class TestHelperWaitParameter:
             assert result["success"] is True
             mock_wait.assert_not_called()
 
-    async def test_set_helper_wait_string_true(self, register_tools, mock_client):
-        """wait='true' (string) is coerced to True."""
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-        ) as mock_wait:
-            mock_wait.return_value = True
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
-                wait="true",
-            )
-            assert result["success"] is True
-            mock_wait.assert_called_once()
-
-    async def test_set_helper_wait_string_false(self, register_tools, mock_client):
-        """wait='false' (string) is coerced to False."""
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-        ) as mock_wait:
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
-                wait="false",
-            )
-            assert result["success"] is True
-            mock_wait.assert_not_called()
-
     async def test_update_helper_wait_default_true(self, register_tools, mock_client):
         """UPDATE path: wait defaults to True and polls for entity registration."""
         mock_client.send_websocket_message.side_effect = [

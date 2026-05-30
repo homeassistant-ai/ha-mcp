@@ -9,9 +9,10 @@ import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from .._version import is_running_in_addon
 from ..client.rest_client import (
@@ -23,8 +24,6 @@ from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
     add_timezone_metadata,
-    coerce_bool_param,
-    coerce_int_param,
     normalize_log_level,
 )
 
@@ -83,29 +82,23 @@ class UtilityTools:
 
     @staticmethod
     def _coerce_limit(
-        limit: int | str | None,
+        limit: int | None,
         default: int = DEFAULT_LIMIT,
         suggestion_example: str = "50",
     ) -> int:
-        """Coerce and validate a limit parameter, raising a structured tool error on failure."""
-        try:
-            return coerce_int_param(
-                limit,
-                param_name="limit",
-                default=default,
-                min_value=1,
-                max_value=MAX_LIMIT,
-            )
-        except ValueError as e:
+        """Validate a limit parameter, raising a structured tool error on failure."""
+        effective = limit if limit is not None else default
+        if effective < 1:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
+                    f"limit must be at least 1, got {effective}",
                     suggestions=[
                         f"Provide limit as an integer (e.g., {suggestion_example})"
                     ],
                 )
             )
+        return min(effective, MAX_LIMIT)
 
     @staticmethod
     def _validate_log_level(level: str | None) -> str | None:
@@ -198,13 +191,13 @@ class UtilityTools:
     async def _fetch_log_source(
         self,
         source: str,
-        limit: int | str | None,
+        limit: int | None,
         search: str | None,
-        hours_back: int | str,
+        hours_back: int,
         entity_id: str | None,
         end_time: str | None,
-        offset: int | str,
-        compact: bool | str,
+        offset: int,
+        compact: bool,
         level: str | None,
         slug: str | None,
     ) -> dict[str, Any]:
@@ -235,13 +228,13 @@ class UtilityTools:
     async def get_logs(
         self,
         source: str,
-        limit: int | str | None,
+        limit: int | None,
         search: str | None,
-        hours_back: int | str,
+        hours_back: int,
         entity_id: str | None,
         end_time: str | None,
-        offset: int | str,
-        compact: bool | str,
+        offset: int,
+        compact: bool,
         level: str | None,
         slug: str | None,
     ) -> dict[str, Any]:
@@ -266,42 +259,12 @@ class UtilityTools:
 
     @staticmethod
     def _coerce_logbook_params(
-        hours_back: int | str,
-        limit: int | str | None,
-        offset: int | str,
+        hours_back: int,
+        limit: int | None,
+        offset: int,
     ) -> tuple[int, int, int]:
-        try:
-            hours_back_int = coerce_int_param(
-                hours_back,
-                param_name="hours_back",
-                default=1,
-                min_value=1,
-            )
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                    suggestions=["Provide hours_back as an integer (e.g., 24)"],
-                )
-            )
         effective_limit = UtilityTools._coerce_limit(limit)
-        try:
-            offset_int = coerce_int_param(
-                offset,
-                param_name="offset",
-                default=0,
-                min_value=0,
-            )
-        except ValueError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    str(e),
-                    suggestions=["Provide offset as an integer (e.g., 0)"],
-                )
-            )
-        return hours_back_int, effective_limit, offset_int
+        return hours_back, effective_limit, offset
 
     @staticmethod
     def _build_pagination_hint(
@@ -338,17 +301,15 @@ class UtilityTools:
 
     async def _get_logbook(
         self,
-        hours_back: int | str = 1,
+        hours_back: int = 1,
         entity_id: str | None = None,
         end_time: str | None = None,
-        limit: int | str | None = None,
-        offset: int | str = 0,
+        limit: int | None = None,
+        offset: int = 0,
         search: str | None = None,
-        compact: bool | str = True,
+        compact: bool = True,
     ) -> dict[str, Any]:
         """Fetch logbook entries with search and pagination."""
-        compact_bool = coerce_bool_param(compact, "compact", default=True)
-        assert compact_bool is not None  # default=True guarantees non-None
         hours_back_int, effective_limit, offset_int = self._coerce_logbook_params(
             hours_back, limit, offset
         )
@@ -390,7 +351,7 @@ class UtilityTools:
             # In compact mode, strip entries to essential fields only.
             # This prevents full attribute dictionaries from exhausting
             # the LLM context window during debugging workflows.
-            if compact_bool and isinstance(paginated_entries, list):
+            if compact and isinstance(paginated_entries, list):
                 paginated_entries = _compact_logbook_entries(paginated_entries)
 
             logbook_data: dict[str, Any] = {
@@ -421,7 +382,7 @@ class UtilityTools:
                     end_time,
                     entity_id,
                     search,
-                    compact_bool,
+                    compact,
                 )
 
             return await add_timezone_metadata(self._client, logbook_data)
@@ -456,7 +417,7 @@ class UtilityTools:
 
     async def _get_system_log(
         self,
-        limit: int | str | None = None,
+        limit: int | None = None,
         search: str | None = None,
         level: str | None = None,
     ) -> dict[str, Any]:
@@ -534,7 +495,7 @@ class UtilityTools:
 
     async def _get_error_log(
         self,
-        limit: int | str | None = None,
+        limit: int | None = None,
         search: str | None = None,
         level: str | None = None,
     ) -> dict[str, Any]:
@@ -617,7 +578,7 @@ class UtilityTools:
 
     async def _get_logger_info(
         self,
-        limit: int | str | None = None,
+        limit: int | None = None,
         search: str | None = None,
     ) -> dict[str, Any]:
         """Fetch per-integration log levels via the ``logger/log_info`` WS command."""
@@ -698,7 +659,7 @@ class UtilityTools:
     async def _get_supervisor_log(
         self,
         slug: str,
-        limit: int | str | None = None,
+        limit: int | None = None,
         search: str | None = None,
     ) -> dict[str, Any]:
         """Fetch add-on container logs.
@@ -828,7 +789,7 @@ class UtilityTools:
     async def _get_system_service_log(
         self,
         service: str,
-        limit: int | str | None = None,
+        limit: int | None = None,
         search: str | None = None,
     ) -> dict[str, Any]:
         """Fetch HA system-service logs from Supervisor's per-service endpoint.
@@ -952,13 +913,8 @@ class UtilityTools:
             )
 
     async def eval_template(
-        self, template: str, timeout: int, report_errors: bool | str
+        self, template: str, timeout: int, report_errors: bool
     ) -> dict[str, Any]:
-        # Coerce boolean parameter that may come as string from XML-style calls
-        report_errors_bool = coerce_bool_param(
-            report_errors, "report_errors", default=True
-        )
-        assert report_errors_bool is not None  # default=True guarantees non-None
 
         try:
             request_id = int(time.time() * 1000) % 1000000  # Simple unique ID
@@ -967,7 +923,7 @@ class UtilityTools:
                 "type": "render_template",
                 "template": template,
                 "timeout": timeout,
-                "report_errors": report_errors_bool,
+                "report_errors": report_errors,
                 "id": request_id,
             }
 
@@ -1067,14 +1023,14 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "logger",
         ] = "logbook",
         # Shared parameters
-        limit: int | str | None = None,
+        limit: int | None = None,
         search: str | None = None,
         # Logbook-specific (ignored for other sources)
-        hours_back: int | str = 1,
+        hours_back: Annotated[int, Field(ge=1)] = 1,
         entity_id: str | None = None,
         end_time: str | None = None,
-        offset: int | str = 0,
-        compact: bool | str = True,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        compact: bool = True,
         # System/error_log-specific
         level: str | None = None,
         # Supervisor + system_service-specific (different namespaces)
@@ -1124,7 +1080,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_eval_template(
-        template: str, timeout: int = 3, report_errors: bool | str = True
+        template: str, timeout: int = 3, report_errors: bool = True
     ) -> dict[str, Any]:
         """
         Evaluate Jinja2 templates using Home Assistant's template engine.

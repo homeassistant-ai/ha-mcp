@@ -571,40 +571,6 @@ class TestHaSetEntityCombined:
         assert result["exposure_succeeded"] == {"conversation": True}
 
     @pytest.mark.asyncio
-    async def test_enabled_invalid_value_raises_tool_error(self, mock_mcp, mock_client):
-        """Invalid value for enabled should raise ToolError."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(entity_id="light.test", enabled="maybe")
-
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        error = result.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "enabled" in error_msg.lower() or "boolean" in error_msg.lower()
-
-    @pytest.mark.asyncio
-    async def test_hidden_invalid_value_raises_tool_error(self, mock_mcp, mock_client):
-        """Invalid value for hidden should raise ToolError."""
-        register_entity_tools(mock_mcp, mock_client)
-        tool = self.registered_tools["ha_set_entity"]
-
-        with pytest.raises(ToolError) as exc_info:
-            await tool(entity_id="light.test", hidden="maybe")
-
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        error = result.get("error", {})
-        error_msg = (
-            error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        )
-        assert "hidden" in error_msg.lower() or "boolean" in error_msg.lower()
-
-    @pytest.mark.asyncio
     async def test_expose_to_all_three_assistants(self, mock_mcp, mock_client):
         """All 3 assistants in a single expose_to call should work."""
         entity_entry = {
@@ -1196,32 +1162,6 @@ class TestHaSetEntityRegistryDisableGuardrail:
 
         error_text = str(exc_info.value)
         assert "script" in error_text.lower()
-        assert "turn_off" in error_text
-        mock_client.send_websocket_message.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_disable_automation_string_false_blocked(
-        self, set_entity_tool, mock_client
-    ):
-        """enabled='false' (string) on automation entity should also be blocked."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="automation.morning", enabled="false")
-
-        error_text = str(exc_info.value)
-        assert "automation" in error_text.lower()
-        assert "turn_off" in error_text
-        mock_client.send_websocket_message.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_disable_automation_string_capital_false_blocked(
-        self, set_entity_tool, mock_client
-    ):
-        """enabled='False' (capital F, common from Python agents) should also be blocked."""
-        with pytest.raises(ToolError) as exc_info:
-            await set_entity_tool(entity_id="automation.evening", enabled="False")
-
-        error_text = str(exc_info.value)
-        assert "automation" in error_text.lower()
         assert "turn_off" in error_text
         mock_client.send_websocket_message.assert_not_called()
 
