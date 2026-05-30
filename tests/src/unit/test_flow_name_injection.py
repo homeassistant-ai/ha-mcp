@@ -31,15 +31,16 @@ def register_tools(mock_client):
 
     registered_tools: dict[str, Any] = {}
 
-    def capture_tool(**kwargs):
-        def decorator(fn):
-            registered_tools[fn.__name__] = fn
-            return fn
-
-        return decorator
+    def capture_add_tool(method):
+        name = (
+            method.__fastmcp__.name
+            if hasattr(method, "__fastmcp__")
+            else method.__name__
+        )
+        registered_tools[name] = method
 
     mock_mcp = MagicMock()
-    mock_mcp.tool = capture_tool
+    mock_mcp.add_tool = capture_add_tool
     register_config_helper_tools(mock_mcp, mock_client)
     return registered_tools
 
@@ -82,18 +83,14 @@ def _make_start_config_flow(
                 "type": "form",
                 "flow_id": flow_id + "-intro",
                 "step_id": "user",
-                "data_schema": [
-                    {"name": fname} for fname in schema_fields
-                ],
+                "data_schema": [{"name": fname} for fname in schema_fields],
             }
         # Real flow phase
         return {
             "type": "form",
             "flow_id": flow_id,
             "step_id": "user",
-            "data_schema": [
-                {"name": fname} for fname in (schema_fields or ["name"])
-            ],
+            "data_schema": [{"name": fname} for fname in (schema_fields or ["name"])],
         }
 
     async def submit(_flow_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -161,9 +158,7 @@ class TestTemplateAndFormHelperNameInjected:
     """Helpers whose user step accepts `name` (template, min_max, etc.)
     must still receive the top-level `name` in their submitted config."""
 
-    async def test_min_max_create_includes_name(
-        self, register_tools, mock_client
-    ):
+    async def test_min_max_create_includes_name(self, register_tools, mock_client):
         submit_capture: list[dict] = []
         start_flow, submit = _make_start_config_flow(
             schema_fields=["name", "entity_ids", "type"],
@@ -280,9 +275,7 @@ class TestUpdateStripsName:
     """Options flows reject `name` as an extra key. The tool must strip it
     from caller-supplied config and surface a warning."""
 
-    async def test_update_strips_name_and_warns(
-        self, register_tools, mock_client
-    ):
+    async def test_update_strips_name_and_warns(self, register_tools, mock_client):
         submit_capture: list[dict] = []
 
         mock_client.get_config_entry = AsyncMock(
@@ -328,15 +321,13 @@ class TestUpdateStripsName:
         # No submission should have carried `name` to the options flow.
         for payload in submit_capture:
             assert "name" not in payload, (
-                f"options flow submission must not include 'name', "
-                f"got: {payload}"
+                f"options flow submission must not include 'name', got: {payload}"
             )
 
         # The result must surface a warning explaining the strip.
         assert "warnings" in result, result
         assert any(
-            "name" in w.lower() and "rename" in w.lower()
-            for w in result["warnings"]
+            "name" in w.lower() and "rename" in w.lower() for w in result["warnings"]
         ), f"expected rename warning, got: {result['warnings']}"
 
     async def test_update_without_name_in_config_no_warning(

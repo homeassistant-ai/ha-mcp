@@ -310,15 +310,16 @@ class TestHelperWaitParameter:
 
         registered_tools: dict[str, Any] = {}
 
-        def capture_tool(**kwargs):
-            def decorator(fn):
-                registered_tools[fn.__name__] = fn
-                return fn
-
-            return decorator
+        def capture_add_tool(method):
+            name = (
+                method.__fastmcp__.name
+                if hasattr(method, "__fastmcp__")
+                else method.__name__
+            )
+            registered_tools[name] = method
 
         mock_mcp = MagicMock()
-        mock_mcp.tool = capture_tool
+        mock_mcp.add_tool = capture_add_tool
         register_config_helper_tools(mock_mcp, mock_client)
         return registered_tools
 

@@ -20,8 +20,11 @@ def mock_client():
     """Mock client that records every WS message sent."""
     client = MagicMock()
 
-    def make_ws_responses(helper_type: str, unique_id: str = "abc123",
-                         existing_config: dict[str, Any] | None = None):
+    def make_ws_responses(
+        helper_type: str,
+        unique_id: str = "abc123",
+        existing_config: dict[str, Any] | None = None,
+    ):
         """Build a ws_handler. ``existing_config`` is what {type}/list returns."""
         existing = existing_config or {
             "id": unique_id,
@@ -75,15 +78,16 @@ def register_tools(mock_client):
 
     registered: dict[str, Any] = {}
 
-    def capture_tool(**kwargs):
-        def decorator(fn):
-            registered[fn.__name__] = fn
-            return fn
-
-        return decorator
+    def capture_add_tool(method: Any) -> None:
+        name = (
+            method.__fastmcp__.name
+            if hasattr(method, "__fastmcp__")
+            else method.__name__
+        )
+        registered[name] = method
 
     mock_mcp = MagicMock()
-    mock_mcp.tool = capture_tool
+    mock_mcp.add_tool = capture_add_tool
     register_config_helper_tools(mock_mcp, mock_client)
     return registered
 
@@ -105,7 +109,9 @@ def _find_msg(client: Any, msg_type: str) -> dict | None:
 class TestInputNumberInitialPersistence:
     """input_number create+update must include `initial` in the WS payload (Bug 1, 1b)."""
 
-    async def test_create_includes_initial_in_payload(self, register_tools, mock_client):
+    async def test_create_includes_initial_in_payload(
+        self, register_tools, mock_client
+    ):
         """Bug 1: input_number CREATE message must contain `initial` if caller passed it."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=mock_client._make_ws_responses("input_number")
@@ -130,7 +136,9 @@ class TestInputNumberInitialPersistence:
             f"Sent: {create_msg!r}"
         )
 
-    async def test_update_includes_initial_in_payload(self, register_tools, mock_client):
+    async def test_update_includes_initial_in_payload(
+        self, register_tools, mock_client
+    ):
         """Bug 1b: input_number UPDATE message must contain `initial` if caller passed it."""
         existing = {
             "id": "abc123",
@@ -142,7 +150,9 @@ class TestInputNumberInitialPersistence:
             "initial": 72,
         }
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=mock_client._make_ws_responses("input_number", existing_config=existing)
+            side_effect=mock_client._make_ws_responses(
+                "input_number", existing_config=existing
+            )
         )
         with patch(
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
@@ -187,7 +197,9 @@ class TestUpdateMergePreservesExistingFields:
             "icon": "mdi:thermometer",
         }
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=mock_client._make_ws_responses("input_number", existing_config=existing)
+            side_effect=mock_client._make_ws_responses(
+                "input_number", existing_config=existing
+            )
         )
         with patch(
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
@@ -227,7 +239,9 @@ class TestUpdateMergePreservesExistingFields:
             "icon": "mdi:note-text",
         }
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=mock_client._make_ws_responses("input_text", existing_config=existing)
+            side_effect=mock_client._make_ws_responses(
+                "input_text", existing_config=existing
+            )
         )
         with patch(
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
@@ -263,7 +277,9 @@ class TestUpdateMergePreservesExistingFields:
             "icon": "mdi:counter",
         }
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=mock_client._make_ws_responses("counter", existing_config=existing)
+            side_effect=mock_client._make_ws_responses(
+                "counter", existing_config=existing
+            )
         )
         with patch(
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
@@ -297,7 +313,9 @@ class TestUpdateMergePreservesExistingFields:
             "icon": "mdi:timer",
         }
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=mock_client._make_ws_responses("timer", existing_config=existing)
+            side_effect=mock_client._make_ws_responses(
+                "timer", existing_config=existing
+            )
         )
         with patch(
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
@@ -327,7 +345,9 @@ class TestUpdateMergePreservesExistingFields:
             "icon": "mdi:toggle-switch-on",
         }
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=mock_client._make_ws_responses("input_boolean", existing_config=existing)
+            side_effect=mock_client._make_ws_responses(
+                "input_boolean", existing_config=existing
+            )
         )
         with patch(
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
@@ -343,7 +363,9 @@ class TestUpdateMergePreservesExistingFields:
         msg = _find_msg(mock_client, "input_boolean/update")
         assert msg is not None
         assert msg.get("initial") is True, f"Bug 8: initial wiped. msg={msg!r}"
-        assert msg.get("icon") == "mdi:toggle-switch-on", f"Bug 8: icon wiped. msg={msg!r}"
+        assert msg.get("icon") == "mdi:toggle-switch-on", (
+            f"Bug 8: icon wiped. msg={msg!r}"
+        )
 
     async def test_input_datetime_update_name_only_preserves_has_date_has_time_initial(
         self, register_tools, mock_client
@@ -358,7 +380,9 @@ class TestUpdateMergePreservesExistingFields:
             "icon": "mdi:calendar",
         }
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=mock_client._make_ws_responses("input_datetime", existing_config=existing)
+            side_effect=mock_client._make_ws_responses(
+                "input_datetime", existing_config=existing
+            )
         )
         with patch(
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
@@ -375,7 +399,9 @@ class TestUpdateMergePreservesExistingFields:
         assert msg is not None
         assert msg.get("has_date") is True, f"Bug 8: has_date wiped. msg={msg!r}"
         assert msg.get("has_time") is True, f"Bug 8: has_time wiped. msg={msg!r}"
-        assert msg.get("initial") == "2026-12-31 23:59:59", f"Bug 8: initial wiped. msg={msg!r}"
+        assert msg.get("initial") == "2026-12-31 23:59:59", (
+            f"Bug 8: initial wiped. msg={msg!r}"
+        )
         assert msg.get("icon") == "mdi:calendar", f"Bug 8: icon wiped. msg={msg!r}"
 
     async def test_input_select_update_name_only_preserves_options_initial_icon(
@@ -390,7 +416,9 @@ class TestUpdateMergePreservesExistingFields:
             "icon": "mdi:menu",
         }
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=mock_client._make_ws_responses("input_select", existing_config=existing)
+            side_effect=mock_client._make_ws_responses(
+                "input_select", existing_config=existing
+            )
         )
         with patch(
             "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
@@ -405,6 +433,8 @@ class TestUpdateMergePreservesExistingFields:
 
         msg = _find_msg(mock_client, "input_select/update")
         assert msg is not None
-        assert msg.get("options") == ["Alpha", "Beta", "Gamma"], f"Bug 8: options wiped. msg={msg!r}"
+        assert msg.get("options") == ["Alpha", "Beta", "Gamma"], (
+            f"Bug 8: options wiped. msg={msg!r}"
+        )
         assert msg.get("initial") == "Beta", f"Bug 8: initial wiped. msg={msg!r}"
         assert msg.get("icon") == "mdi:menu", f"Bug 8: icon wiped. msg={msg!r}"

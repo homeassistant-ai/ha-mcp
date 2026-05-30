@@ -146,7 +146,6 @@ ignore = [
 # C901 ignores for tools files with complex methods (see #925).
 # Remove lines as individual methods are simplified below threshold.
 "src/ha_mcp/tools/tools_config_dashboards.py" = ["C901"]
-"src/ha_mcp/tools/tools_config_helpers.py" = ["C901"]
 "src/ha_mcp/tools/tools_entities.py" = ["C901"]
 "src/ha_mcp/tools/tools_registry.py" = ["C901"]
 "src/ha_mcp/tools/tools_search.py" = ["C901"]
