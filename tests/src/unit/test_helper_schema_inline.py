@@ -143,6 +143,44 @@ class TestSimpleHelperSchemasInvariants:
                 f"or cross-cutting set: {extras}"
             )
 
+    def test_create_and_update_builder_tables_cover_simple_helper_types(self) -> None:
+        """Every type in SIMPLE_HELPER_TYPES must have an entry in both dispatch tables.
+
+        input_button is a deliberate exception — it has no type-specific fields beyond
+        name/icon, so there is no builder for it.
+        """
+        from ha_mcp.tools.tools_config_helpers import (
+            _SIMPLE_CREATE_FIELD_BUILDERS,
+            _SIMPLE_UPDATE_FIELD_BUILDERS,
+        )
+
+        # input_button has no type-specific fields; name+icon only is correct.
+        no_builder_types = {"input_button"}
+        expected = SIMPLE_HELPER_TYPES - no_builder_types
+
+        missing_create = expected - frozenset(_SIMPLE_CREATE_FIELD_BUILDERS)
+        assert not missing_create, (
+            f"Missing create builders for: {missing_create}. "
+            "Add a _create_fields_<type> function and register it."
+        )
+
+        # Update builders only cover the standard {type}/update path; person/zone/
+        # schedule/tag use dedicated executors and are intentionally absent.
+        update_builder_types = {
+            "input_select",
+            "input_number",
+            "input_text",
+            "input_boolean",
+            "input_datetime",
+            "counter",
+            "timer",
+        }
+        missing_update = update_builder_types - frozenset(_SIMPLE_UPDATE_FIELD_BUILDERS)
+        assert not missing_update, (
+            f"Missing update builders for: {missing_update}. "
+            "Add a _update_fields_<type> function and register it."
+        )
+
 
 # ---------------------------------------------------------------------------
 # 2. get_simple_helper_schema and context builders
@@ -355,9 +393,7 @@ class TestFetchHelperFlowInfo:
         )
         client.abort_config_flow = AsyncMock(return_value={})
 
-        info = await fetch_helper_flow_info(
-            client, "template", menu_choice="sensor"
-        )
+        info = await fetch_helper_flow_info(client, "template", menu_choice="sensor")
 
         # menu_options is intentionally NOT surfaced when a choice was
         # picked — the caller already has it.
@@ -461,9 +497,7 @@ class TestFetchHelperFlowInfo:
         )
         client.abort_config_flow = AsyncMock(return_value={})
 
-        info = await fetch_helper_flow_info(
-            client, "template", menu_choice="sensor"
-        )
+        info = await fetch_helper_flow_info(client, "template", menu_choice="sensor")
 
         assert info == {}
 

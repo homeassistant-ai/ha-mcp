@@ -1277,6 +1277,8 @@ async def _find_collision_in_flow_helpers(
             {"type": "config_entries/get", "domain": helper_type}
         )
     except (HomeAssistantAPIError, ConnectionError, TimeoutError):
+        # Connectivity issue — fail open so a transient outage doesn't block legit creates;
+        # HA will auto-suffix duplicates on its own.
         return None
     entries = result.get("result", []) if isinstance(result, dict) else result
     if not isinstance(entries, list):
@@ -1319,6 +1321,8 @@ async def _find_collision_in_simple_helpers(
     try:
         result = await client.send_websocket_message({"type": f"{helper_type}/list"})
     except (HomeAssistantAPIError, ConnectionError, TimeoutError):
+        # Connectivity issue — fail open so a transient outage doesn't block legit creates;
+        # HA will auto-suffix duplicates on its own.
         return None
     for item in _flatten_helper_list_result(result):
         if not isinstance(item, dict):
@@ -1653,6 +1657,8 @@ async def _normalize_flow_config(
     helper_type: str,
 ) -> dict[str, Any]:
     """Normalize config to a dict. Raises ToolError on invalid input."""
+    # Treat empty string as "nothing passed" — parse_json_param("") would raise
+    # a confusing "Invalid JSON" error rather than signalling an absent config.
     if config == "":
         return {}
     if isinstance(config, str):
@@ -2311,7 +2317,8 @@ async def _execute_create_simple_helper(
         entity_id = f"{helper_type}.{helper_data['id']}"
 
     warnings: list[str] = []
-    # Tags live in their own registry and never appear in /api/states/<entity_id>.
+    # Tags live in their own tag registry and never appear in /api/states/<entity_id> —
+    # polling there always 404s for the full timeout (~10s per tag), burning CI time.
     if wait and entity_id and helper_type != "tag":
         try:
             registered = await wait_for_entity_registered(client, entity_id)
@@ -2513,7 +2520,13 @@ def _build_standard_update_message(
     icon: str | None,
     **kw: Any,
 ) -> dict[str, Any]:
-    """Build the {type}/update WS message for standard input_* types (full-replace)."""
+    """Build the {type}/update WS message for standard input_* types.
+
+    HA's storage-collection update is full-replace (not patch): all vol.Required
+    fields must be present even for partial updates, so callers fetch the existing
+    config first and merge — passing the new value if provided, else preserving
+    the existing value.
+    """
     message: dict[str, Any] = {
         "type": f"{helper_type}/update",
         f"{helper_type}_id": unique_id,
@@ -3934,6 +3947,14 @@ class HelperConfigTools:
                     wait,
                     MandatoryBPS,
                     **type_kw,
+                )
+
+            if action != "update":
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        f"Unexpected action: {action}",
+                    )
                 )
 
             # helper_id is guaranteed non-None by _validate_set_helper_action for update
