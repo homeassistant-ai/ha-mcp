@@ -16,6 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ha_mcp.settings_ui import (
+    _SETTINGS_CSS,
     _SETTINGS_HTML,
     _SETTINGS_JS,
     FEATURE_GATED_TOOLS,
@@ -431,12 +432,28 @@ class TestSettingsJsExtraction:
     """
 
     def test_inline_script_body_equals_settings_js(self) -> None:
-        """The served HTML's inline <script> body must equal _SETTINGS_JS
-        (post token-substitution), proving the extracted file is what ships.
+        """Round-trip guard: the inline <script> body extracted back out of
+        the served HTML equals _SETTINGS_JS.
+
+        Both sides derive from the same in-memory _SETTINGS_JS, so this does
+        NOT prove the on-disk file is what ships — the sentinel-substitution
+        ImportError guard in settings_ui.py is the real file<->Python sync
+        check, and the packaging tests assert the file is distributed. What
+        this locks is the inline embedding itself: that injection produced
+        exactly one inline <script> and that _SETTINGS_JS carries no stray
+        </script> that would truncate the tag and silently drop part of the
+        page (see test_settings_js_has_no_closing_script_tag).
         """
         from ._js_harness import extract_script_body
 
         assert extract_script_body(_SETTINGS_HTML) == _SETTINGS_JS
+
+    def test_settings_js_has_no_closing_script_tag(self) -> None:
+        """_SETTINGS_JS is injected between bare <script>/</script> tags, so a
+        literal </script> inside it would truncate the inline block and break
+        the page. The round-trip test assumes this; assert it explicitly.
+        """
+        assert "</script>" not in _SETTINGS_JS
 
     def test_injection_tokens_fully_substituted(self) -> None:
         """No sentinel token may survive into the rendered JS — an unfilled
@@ -444,6 +461,33 @@ class TestSettingsJsExtraction:
         """
         assert "__HA_MCP_" not in _SETTINGS_JS
         assert "__HA_MCP_" not in _SETTINGS_HTML
+
+
+class TestSettingsCssExtraction:
+    """The page CSS lives in settings.css (extracted from the Python string)
+    but is injected inline into the served HTML's <style> block, mirroring the
+    settings.js mechanism. These guards lock the file and the rendered page
+    together so they can never silently drift.
+    """
+
+    def test_inline_style_body_equals_settings_css(self) -> None:
+        """Round-trip guard for the CSS, mirroring the <script> body test.
+
+        Both sides derive from the same in-memory _SETTINGS_CSS (the
+        FileNotFoundError->ImportError guard in settings_ui.py covers a
+        missing file); this locks that injection produced exactly one inline
+        <style> block and that _SETTINGS_CSS carries no stray </style> (see
+        test_settings_css_has_no_closing_style_tag).
+        """
+        from ._js_harness import extract_style_body
+
+        assert extract_style_body(_SETTINGS_HTML) == _SETTINGS_CSS
+
+    def test_settings_css_has_no_closing_style_tag(self) -> None:
+        """_SETTINGS_CSS is injected between bare <style>/</style> tags, so a
+        literal </style> inside it would truncate the inline block.
+        """
+        assert "</style>" not in _SETTINGS_CSS
 
 
 class TestSaveToolsValidation:
