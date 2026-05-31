@@ -624,9 +624,13 @@ for _sentinel in ("__HA_MCP_DEFAULT_PINNED__", "__HA_MCP_MANDATORY__"):
             f"settings.js is out of sync: sentinel {_sentinel} not found. "
             "The Python injection and settings.js have drifted."
         )
+# sorted(), not list(): DEFAULT_PINNED_TOOLS / MANDATORY_TOOLS are sets, so
+# json.dumps(list(...)) is per-process-ordered -- the only reason proving the
+# original extraction byte-identical needed PYTHONHASHSEED pinned. sorted()
+# makes the two injected arrays deterministic across processes.
 _SETTINGS_JS = _settings_js_template.replace(
-    "__HA_MCP_DEFAULT_PINNED__", json.dumps(list(DEFAULT_PINNED_TOOLS))
-).replace("__HA_MCP_MANDATORY__", json.dumps(list(MANDATORY_TOOLS)))
+    "__HA_MCP_DEFAULT_PINNED__", json.dumps(sorted(DEFAULT_PINNED_TOOLS))
+).replace("__HA_MCP_MANDATORY__", json.dumps(sorted(MANDATORY_TOOLS)))
 
 
 # The settings-UI CSS lives in settings.css, extracted the same way as

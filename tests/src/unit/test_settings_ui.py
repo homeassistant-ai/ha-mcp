@@ -462,6 +462,17 @@ class TestSettingsJsExtraction:
         assert "__HA_MCP_" not in _SETTINGS_JS
         assert "__HA_MCP_" not in _SETTINGS_HTML
 
+    def test_injected_constant_lists_have_expected_values(self) -> None:
+        """Each sentinel must be replaced with the *correct* value, not just
+        some value. The negative no-token-survives check can't catch a
+        substitution wired to the wrong set; assert the exact deterministic
+        (sorted) JSON arrays appear in the rendered JS.
+        """
+        from ha_mcp.transforms import DEFAULT_PINNED_TOOLS
+
+        assert json.dumps(sorted(DEFAULT_PINNED_TOOLS)) in _SETTINGS_JS
+        assert json.dumps(sorted(MANDATORY_TOOLS)) in _SETTINGS_JS
+
 
 class TestSettingsCssExtraction:
     """The page CSS lives in settings.css (extracted from the Python string)
