@@ -17,12 +17,13 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, NotRequired, TypedDict
 
 import httpx
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from ._version import get_version, is_running_in_addon
 from .backup_manager import get_backup_manager
@@ -5970,8 +5971,11 @@ def build_settings_handlers(
 # cloudflared tunnel, another add-on) for a direct port-9583 hit.
 SUPERVISOR_INGRESS_IP = "172.30.32.2"
 
+# A settings-UI route handler: async (Request) -> Response.
+_SettingsRoute = Callable[[Request], Awaitable[Response]]
 
-def _ingress_only(handler):
+
+def _ingress_only(handler: _SettingsRoute) -> _SettingsRoute:
     """Wrap a root-mounted add-on route so only HA ingress can reach it.
 
     Add-on root routes carry no MCP secret, so without this guard a direct
@@ -5985,7 +5989,7 @@ def _ingress_only(handler):
     """
 
     @functools.wraps(handler)
-    async def _guarded(request: Request) -> JSONResponse:
+    async def _guarded(request: Request) -> Response:
         peer = request.client.host if request.client else None
         if peer != SUPERVISOR_INGRESS_IP:
             logger.warning(

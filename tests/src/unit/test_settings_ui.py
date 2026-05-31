@@ -441,7 +441,11 @@ class TestSaveToolsValidation:
 
         def custom_route_factory(path, methods):
             def decorator(fn):
-                if path == "/api/settings/tools" and "POST" in methods:
+                # Match both the root and secret-path mounts; the secret mount
+                # registers last, so `captured["save"]` ends up the unguarded
+                # handler (the root mount is wrapped in _ingress_only). This
+                # test exercises body validation, not the ingress gate.
+                if path.endswith("/api/settings/tools") and "POST" in methods:
                     captured["save"] = fn
                 return fn
 
