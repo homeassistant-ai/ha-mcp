@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -5957,6 +5958,59 @@ def build_settings_handlers(
     return handlers
 
 
+# Home Assistant proxies every ingress request ("Open Web UI") from the
+# Supervisor's fixed network address. Per the add-on ingress contract
+# (https://developers.home-assistant.io/docs/add-ons/presentation/#ingress —
+# "Only connections from 172.30.32.2 must be allowed") the app must reject
+# every other source. This holds under host_network too: the Supervisor
+# reaches a host-network add-on by connecting to the hassio bridge gateway
+# from its own 172.30.32.2 address (supervisor/docker/app.py ip_address():
+# host_network -> network.gateway), so the transport peer the add-on sees is
+# 172.30.32.2 for genuine ingress and some other address (a LAN host, the
+# cloudflared tunnel, another add-on) for a direct port-9583 hit.
+SUPERVISOR_INGRESS_IP = "172.30.32.2"
+
+
+def _ingress_only(handler):
+    """Wrap a root-mounted add-on route so only HA ingress can reach it.
+
+    Add-on root routes carry no MCP secret, so without this guard a direct
+    caller on the published port — a LAN peer, a reverse proxy / tunnel
+    forwarding the bare root, or a CSRF POST from a LAN browser — could
+    rewrite tool config, flip the tool-security-policy, or restart the
+    add-on with no authentication. We gate on the *transport* peer
+    (``request.client.host``), never ``X-Forwarded-For`` (which a caller can
+    forge). The same handlers stay reachable under ``secret_prefix``, where
+    the MCP secret path is the auth for direct/remote access.
+    """
+
+    @functools.wraps(handler)
+    async def _guarded(request: Request) -> JSONResponse:
+        peer = request.client.host if request.client else None
+        if peer != SUPERVISOR_INGRESS_IP:
+            logger.warning(
+                "Blocked non-ingress request to add-on root route %s from "
+                "peer %r (only the Supervisor at %s may reach root routes; "
+                "use the MCP secret path for direct/remote access).",
+                request.url.path,
+                peer,
+                SUPERVISOR_INGRESS_IP,
+            )
+            return JSONResponse(
+                {
+                    "error": (
+                        "This endpoint is only reachable through Home "
+                        "Assistant ingress. For direct or remote access, use "
+                        "the settings UI under your MCP secret path."
+                    )
+                },
+                status_code=403,
+            )
+        return await handler(request)
+
+    return _guarded
+
+
 def register_settings_routes(
     mcp: FastMCP,
     server: HomeAssistantSmartMCPServer,
@@ -6031,18 +6085,26 @@ def register_settings_routes(
         ("/api/policy/value-source", ["GET"], "policy_get_value_source"),
     ]
 
-    def _mount(prefix: str) -> None:
+    def _mount(prefix: str, *, guard: bool = False) -> None:
+        # guard=True wraps each handler in _ingress_only so the route only
+        # answers HA ingress (the Supervisor) — used for the add-on root
+        # mount, whose port 9583 is reachable without the MCP secret.
         for path, methods, handler_key in routes:
-            mcp.custom_route(f"{prefix}{path}", methods=methods)(handlers[handler_key])
+            handler = handlers[handler_key]
+            if guard:
+                handler = _ingress_only(handler)
+            mcp.custom_route(f"{prefix}{path}", methods=methods)(handler)
 
     if is_addon:
-        # Root mount lets HA ingress proxy localhost:9583/ → settings UI.
-        # Direct port 9583 LAN access also reaches these routes; in this
-        # respect they share the existing add-on networking model where
-        # port 9583 is exposed via host_network and the secret path is
-        # the auth for direct access. Document this in DOCS.md.
-        mcp.custom_route("/", methods=["GET"])(handlers["root_page"])
-        _mount("")
+        # Root mount lets HA ingress proxy localhost:9583/ → the settings UI
+        # ("Open Web UI" button). The published port 9583 also makes these
+        # routes reachable by direct callers that present no MCP secret, so
+        # the root mount is gated with _ingress_only: only the Supervisor
+        # (HA ingress, 172.30.32.2) may reach root; every other caller gets
+        # 403 and must use the secret-path mount below. The "Open Web UI"
+        # button is unaffected — its traffic arrives from the Supervisor.
+        mcp.custom_route("/", methods=["GET"])(_ingress_only(handlers["root_page"]))
+        _mount("", guard=True)
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
