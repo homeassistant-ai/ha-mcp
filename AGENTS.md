@@ -518,7 +518,6 @@ src/ha_mcp/
 - `ha_report_issue`, `ha_import_blueprint`
 - `ha_read_file`, `ha_write_file`, `ha_deep_search`, `ha_bulk_control`
 - `ha_install_mcp_tools`
-- `ha_hacs_*` family (`ha_hacs_search`, `ha_hacs_download`, `ha_hacs_add_repository`, `ha_hacs_repository_info`) — grandfathered; pre-dates this convention
 
 **Adding new verbs**: When no existing verb fits a new tool's purpose, add the verb to the approved-verbs list above rather than forcing a poor fit. `.gemini/styleguide.md` points back to this section as the single source of truth, so updates here propagate automatically.
 

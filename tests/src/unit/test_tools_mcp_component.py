@@ -106,7 +106,7 @@ class TestWaitForRepoRegistration:
 
     Lives in ``tools_hacs`` so both the installer flow
     (``ha_install_mcp_tools``) and the download flow
-    (``ha_hacs_download`` via ``_resolve_hacs_repo_id``) can share it.
+    (``ha_manage_hacs`` via ``_resolve_hacs_repo_id``) can share it.
     """
 
     @pytest.mark.asyncio

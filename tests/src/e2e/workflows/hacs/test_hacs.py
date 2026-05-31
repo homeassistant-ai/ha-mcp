@@ -120,16 +120,16 @@ class TestHacsSearchInstalled:
 
     async def test_list_all_installed(self, mcp_client):
         """
-        Test: List all installed HACS repositories via ha_hacs_search
+        Test: List all installed HACS repositories via ha_get_hacs_info
 
         This test validates listing installed repositories using the
         installed_only parameter. In a fresh test environment, there
         should be no installed repos.
         """
-        logger.info("Testing ha_hacs_search with installed_only=True...")
+        logger.info("Testing ha_get_hacs_info with installed_only=True...")
 
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True}
+            mcp_client, "ha_get_hacs_info", {"action": "search", "installed_only": True}
         )
 
         if not data.get("success"):
@@ -168,12 +168,12 @@ class TestHacsSearchInstalled:
         Exercises the code path where installed_only=True AND query is non-empty,
         ensuring only installed repos are returned even when scoring by relevance.
         """
-        logger.info("Testing ha_hacs_search with installed_only=True and query...")
+        logger.info("Testing ha_get_hacs_info with installed_only=True and query...")
 
         data = await safe_hacs_call(
             mcp_client,
-            "ha_hacs_search",
-            {"query": "hacs", "installed_only": True},
+            "ha_get_hacs_info",
+            {"action": "search", "query": "hacs", "installed_only": True},
         )
 
         if not data.get("success"):
@@ -195,17 +195,17 @@ class TestHacsSearchInstalled:
         """
         Test: List installed HACS repositories filtered by category
 
-        Test filtering by different categories using ha_hacs_search with installed_only.
+        Test filtering by different categories using ha_get_hacs_info with installed_only.
         """
-        logger.info("Testing ha_hacs_search installed_only with category filter...")
+        logger.info("Testing ha_get_hacs_info installed_only with category filter...")
 
         categories = ["integration", "lovelace", "theme"]
 
         for category in categories:
             data = await safe_hacs_call(
                 mcp_client,
-                "ha_hacs_search",
-                {"installed_only": True, "category": category},
+                "ha_get_hacs_info",
+                {"action": "search", "installed_only": True, "category": category},
             )
 
             if not data.get("success"):
@@ -242,10 +242,12 @@ class TestHacsSearch:
 
         Search for a common term that should return results.
         """
-        logger.info("Testing ha_hacs_search basic search...")
+        logger.info("Testing ha_get_hacs_info basic search...")
 
         # Search for something likely to exist in HACS
-        data = await safe_hacs_call(mcp_client, "ha_hacs_search", {"query": "mushroom"})
+        data = await safe_hacs_call(
+            mcp_client, "ha_get_hacs_info", {"action": "search", "query": "mushroom"}
+        )
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
@@ -281,10 +283,12 @@ class TestHacsSearch:
 
         Search within a specific category.
         """
-        logger.info("Testing ha_hacs_search with category filter...")
+        logger.info("Testing ha_get_hacs_info with category filter...")
 
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"query": "card", "category": "lovelace"}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "query": "card", "category": "lovelace"},
         )
 
         if not data.get("success"):
@@ -313,10 +317,12 @@ class TestHacsSearch:
 
         Verify pagination/limiting works correctly.
         """
-        logger.info("Testing ha_hacs_search with max_results...")
+        logger.info("Testing ha_get_hacs_info with max_results...")
 
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"query": "integration", "max_results": 5}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "query": "integration", "max_results": 5},
         )
 
         if not data.get("success"):
@@ -340,10 +346,12 @@ class TestHacsSearch:
 
         Search for something that shouldn't exist.
         """
-        logger.info("Testing ha_hacs_search with no results...")
+        logger.info("Testing ha_get_hacs_info with no results...")
 
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"query": "xyznonexistent12345abcdef"}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "query": "xyznonexistent12345abcdef"},
         )
 
         if not data.get("success"):
@@ -370,12 +378,12 @@ class TestHacsRepositoryInfo:
 
         Should return an appropriate error.
         """
-        logger.info("Testing ha_hacs_repository_info with nonexistent repo...")
+        logger.info("Testing ha_get_hacs_info with nonexistent repo...")
 
         parsed = await safe_call_tool(
             mcp_client,
-            "ha_hacs_repository_info",
-            {"repository_id": "nonexistent/repo12345"},
+            "ha_get_hacs_info",
+            {"action": "info", "repository_id": "nonexistent/repo12345"},
         )
         data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
 
@@ -406,11 +414,13 @@ class TestHacsRepositoryInfo:
 
         First search for a repo, then get its details.
         """
-        logger.info("Testing ha_hacs_repository_info with valid repo...")
+        logger.info("Testing ha_get_hacs_info with valid repo...")
 
         # First search for a popular repo
         search_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"query": "hacs", "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "query": "hacs", "max_results": 1},
         )
 
         if not search_data.get("success"):
@@ -436,7 +446,9 @@ class TestHacsRepositoryInfo:
         logger.info(f"Getting info for repository: {identifier}")
 
         info_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_repository_info", {"repository_id": identifier}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "info", "repository_id": identifier},
         )
 
         if not info_data.get("success"):
@@ -471,12 +483,16 @@ class TestHacsWriteOperations:
 
         Should fail with validation error.
         """
-        logger.info("Testing ha_hacs_add_repository with invalid format...")
+        logger.info("Testing ha_manage_hacs with invalid format...")
 
         parsed = await safe_call_tool(
             mcp_client,
-            "ha_hacs_add_repository",
-            {"repository": "invalid-format-no-slash", "category": "integration"},
+            "ha_manage_hacs",
+            {
+                "action": "add_repository",
+                "repository": "invalid-format-no-slash",
+                "category": "integration",
+            },
         )
         data = (
             parsed.get("data", parsed)
@@ -503,12 +519,12 @@ class TestHacsWriteOperations:
 
         Should fail with not found error.
         """
-        logger.info("Testing ha_hacs_download with nonexistent repo...")
+        logger.info("Testing ha_manage_hacs with nonexistent repo...")
 
         parsed = await safe_call_tool(
             mcp_client,
-            "ha_hacs_download",
-            {"repository_id": "nonexistent/fake-repo-12345"},
+            "ha_manage_hacs",
+            {"action": "download", "repository_id": "nonexistent/fake-repo-12345"},
         )
         data = (
             parsed.get("data", parsed)
@@ -548,7 +564,9 @@ async def test_hacs_discovery(mcp_client):
     logger.info("Testing basic HACS discovery...")
 
     data = await safe_hacs_call(
-        mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+        mcp_client,
+        "ha_get_hacs_info",
+        {"action": "search", "installed_only": True, "max_results": 1},
     )
 
     unavailable, reason = is_hacs_unavailable(data)
@@ -587,7 +605,9 @@ class TestMcpToolsInstallation:
         """
         logger.info("Pre-flight check: verifying HACS availability...")
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "max_results": 1},
         )
 
         unavailable, reason = is_hacs_unavailable(data)
@@ -611,7 +631,9 @@ class TestMcpToolsInstallation:
 
         # Before installation, verify HACS is available and ready
         info_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "max_results": 1},
         )
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
@@ -671,7 +693,9 @@ class TestMcpToolsInstallation:
 
         # Before installation, verify HACS is available and ready
         info_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "max_results": 1},
         )
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
@@ -715,7 +739,9 @@ class TestMcpToolsInstallation:
 
         # Before installation, verify HACS is available and ready
         info_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "max_results": 1},
         )
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
@@ -738,8 +764,8 @@ class TestMcpToolsInstallation:
         # Now check HACS search for installed integrations
         list_data = await safe_hacs_call(
             mcp_client,
-            "ha_hacs_search",
-            {"installed_only": True, "category": "integration"},
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "category": "integration"},
         )
 
         if not list_data.get("success"):

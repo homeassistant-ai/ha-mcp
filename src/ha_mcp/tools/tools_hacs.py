@@ -95,543 +95,490 @@ async def _assert_hacs_available() -> None:
 
 
 class HacsTools:
-    """HACS integration tools for Home Assistant."""
+    """HACS integration tools for Home Assistant.
+
+    Two action-based tools split along the read/write boundary so the
+    read path keeps ``readOnlyHint`` and is never flagged ``destructive``:
+
+    - ``ha_get_hacs_info`` (read): ``search`` the store / ``info`` for one repo.
+    - ``ha_manage_hacs`` (write): ``download`` install/update / ``add_repository``.
+    """
 
     def __init__(self, client: Any) -> None:
         self._client = client
 
     @tool(
-        name="ha_hacs_search",
+        name="ha_get_hacs_info",
         tags={"HACS"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Search HACS Store",
+            "title": "Get HACS Info",
         },
     )
     @log_tool_usage
-    async def ha_hacs_search(
+    async def ha_get_hacs_info(
         self,
-        query: str = "",
+        action: Annotated[
+            Literal["search", "info"],
+            Field(description="'search' the store, or 'info' for one repository"),
+        ],
+        query: Annotated[
+            str, Field(description="Search keyword (action='search')")
+        ] = "",
         category: Annotated[
             Literal["integration", "lovelace", "theme", "appdaemon", "python_script"]
             | None,
-            Field(
-                default=None,
-                description="Filter by category (optional)",
-            ),
+            Field(description="Filter by category (action='search')"),
         ] = None,
         installed_only: Annotated[
             bool,
             Field(
-                default=False,
-                description="Only return installed repositories (default: False)",
+                description="Only return installed repositories (action='search', default: False)"
             ),
         ] = False,
         max_results: Annotated[
             int,
             Field(
-                default=10,
                 ge=1,
                 le=100,
-                description="Maximum number of results to return (default: 10, max: 100)",
+                description="Maximum number of results (action='search', default: 10, max: 100)",
             ),
         ] = 10,
         offset: Annotated[
             int,
             Field(
-                default=0,
                 ge=0,
-                description="Number of results to skip for pagination (default: 0)",
+                description="Results to skip for pagination (action='search', default: 0)",
             ),
         ] = 0,
+        repository_id: Annotated[
+            str | None,
+            Field(description="Numeric HACS ID or 'owner/repo' path (action='info')"),
+        ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Search HACS store for repositories, or list installed repositories.
+        """Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
 
-        **Search mode** (default): Searches by keyword across name, description, and authors.
-        **Browse mode** (no query, `installed_only=False`): Returns all HACS store repos
-        sorted alphabetically, paginated by `max_results` and `offset`.
-        **Installed mode** (`installed_only=True`): Lists installed repos (no query needed).
+        Use ``action="search"`` to search/browse/list store repositories, or
+        ``action="info"`` for one repository's full details (README, versions, GitHub
+        stats). This tool is read-only; to install or add repositories use
+        ``ha_manage_hacs``, and for non-HACS entities/config use the domain-specific tools.
 
-        **DASHBOARD TIP:** Use `installed_only=True, category="lovelace"` to discover
-        installed custom cards for use with `ha_config_set_dashboard()`.
-
-        **Examples:**
-        - Find custom cards: `ha_hacs_search("mushroom", category="lovelace")`
-        - Find integrations: `ha_hacs_search("nest", category="integration")`
-        - List installed: `ha_hacs_search(installed_only=True)`
-        - Installed by category: `ha_hacs_search(installed_only=True, category="lovelace")`
-
-        Args:
-            query: Search query (repository name, description, author). Empty string with
-                  installed_only=True lists all installed repos.
-            category: Filter by category (optional)
-            installed_only: Only return installed repositories (default: False)
-            max_results: Maximum results to return (default: 10, max: 100)
-            offset: Number of results to skip for pagination (default: 0)
-        """
-        try:
-            await safe_info(
-                ctx,
-                f"ha_hacs_search starting: query={query!r} "
-                f"category={category} installed_only={installed_only}",
-            )
-            await safe_progress(
-                ctx,
-                progress=0,
-                total=3,
-                message="checking HACS availability",
-            )
-
-            # Check if HACS is available
-            await _assert_hacs_available()
-
-            # Get all repositories via WebSocket
-            from ..client.websocket_client import get_websocket_client
-
-            ws_client = await get_websocket_client()
-
-            # Build command parameters - map user-friendly category to HACS internal name
-            kwargs_cmd: dict[str, Any] = {}
-            if category:
-                hacs_category = CATEGORY_MAP.get(category, category)
-                kwargs_cmd["categories"] = [hacs_category]
-
-            await safe_progress(
-                ctx,
-                progress=1,
-                total=3,
-                message="fetching HACS repository list",
-            )
-
-            response = await ws_client.send_command(
-                "hacs/repositories/list", **kwargs_cmd
-            )
-
-            if not response.get("success"):
-                exception_to_structured_error(
-                    Exception(f"HACS search request failed: {response}"),
-                    context={
-                        "command": "hacs/repositories/list",
-                        "query": query,
-                        "category": category,
-                    },
-                    raise_error=True,
-                )
-
-            all_repositories = response.get("result", [])
-            await safe_progress(
-                ctx,
-                progress=2,
-                total=3,
-                message=f"filtering {len(all_repositories)} repositories",
-            )
-            matches = _filter_and_score_repos(all_repositories, query, installed_only)
-            await safe_progress(
-                ctx,
-                progress=3,
-                total=3,
-                message=f"matched {len(matches)} repositories",
-            )
-
-            limited_matches = matches[offset : offset + max_results]
-            has_more = (offset + len(limited_matches)) < len(matches)
-
-            return await add_timezone_metadata(
-                self._client,
-                {
-                    "success": True,
-                    "query": query if query.strip() else None,
-                    "category_filter": category,
-                    "installed_only": installed_only,
-                    "total_matches": len(matches),
-                    "offset": offset,
-                    "limit": max_results,
-                    "count": len(limited_matches),
-                    "has_more": has_more,
-                    "next_offset": offset + max_results if has_more else None,
-                    "results": limited_matches,
-                },
-            )
-
-        except ToolError:
-            raise
-        except Exception as e:
-            exception_to_structured_error(
-                e,
-                context={
-                    "tool": "ha_hacs_search",
-                    "query": query,
-                    "category": category,
-                },
-                suggestions=[
-                    "Verify HACS is installed: https://hacs.xyz/",
-                    "Try a simpler search query",
-                    "Check category name is valid: integration, lovelace, theme, appdaemon, python_script",
-                ],
-            )
-
-    @tool(
-        name="ha_hacs_repository_info",
-        tags={"HACS"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Get HACS Repository Info",
-        },
-    )
-    @log_tool_usage
-    async def ha_hacs_repository_info(self, repository_id: str) -> dict[str, Any]:
-        """Get detailed repository information including README and documentation.
-
-        Returns comprehensive information about a HACS repository:
-        - Basic info (name, description, category, authors)
-        - Installation status and versions
-        - README content (useful for configuration examples)
-        - Available releases and versions
-        - GitHub stats (stars, issues)
-        - Configuration examples (if available)
-
-        **Use Cases:**
-        - Get card configuration examples: `ha_hacs_repository_info("441028036")`
-        - Check integration setup instructions
-        - Find theme customization options
-
-        **Note:** The repository_id is the numeric ID from HACS, not the GitHub path.
-        Use `ha_hacs_search()` to find the numeric ID.
-
-        Args:
-            repository_id: Repository numeric ID (e.g., "441028036") or GitHub path (e.g., "dvd-dev/hilo")
-
-        Returns:
-            Detailed repository information or error if not found.
-        """
-        try:
-            # Check if HACS is available
-            await _assert_hacs_available()
-
-            from ..client.websocket_client import get_websocket_client
-
-            ws_client = await get_websocket_client()
-
-            # If repository_id contains a slash, it's a GitHub path - need to look up numeric ID
-            actual_id, _ = await _resolve_hacs_repo_id(ws_client, repository_id)
-
-            # Get repository info via WebSocket using numeric ID
-            response = await ws_client.send_command(
-                "hacs/repository/info", repository_id=actual_id
-            )
-
-            if not response.get("success"):
-                exception_to_structured_error(
-                    Exception(f"HACS repository info request failed: {response}"),
-                    context={
-                        "command": "hacs/repository/info",
-                        "repository_id": repository_id,
-                    },
-                    raise_error=True,
-                )
-
-            result = response.get("result", {})
-
-            # Extract and structure the most useful information
-            return await add_timezone_metadata(
-                self._client,
-                {
-                    "success": True,
-                    "repository_id": repository_id,
-                    "name": result.get("name"),
-                    "full_name": result.get("full_name"),
-                    "description": result.get("description"),
-                    "category": result.get("category"),
-                    "authors": result.get("authors", []),
-                    "domain": result.get("domain"),  # For integrations
-                    "installed": result.get("installed", False),
-                    "installed_version": result.get("installed_version"),
-                    "available_version": result.get("available_version"),
-                    "pending_update": result.get("pending_upgrade", False),
-                    "stars": result.get("stars", 0),
-                    "downloads": result.get("downloads", 0),
-                    "topics": result.get("topics", []),
-                    "releases": result.get("releases", []),
-                    "default_branch": result.get("default_branch"),
-                    "readme": result.get("readme"),  # Full README content
-                    "data": result,  # Full response for advanced use
-                },
-            )
-
-        except ToolError:
-            raise
-        except Exception as e:
-            exception_to_structured_error(
-                e,
-                context={
-                    "tool": "ha_hacs_repository_info",
-                    "repository_id": repository_id,
-                },
-                suggestions=[
-                    "Verify HACS is installed: https://hacs.xyz/",
-                    "Check repository ID format (e.g., 'hacs/integration' or 'owner/repo')",
-                    "Use ha_hacs_search() to find the correct repository ID",
-                ],
-            )
-
-    @tool(
-        name="ha_hacs_add_repository",
-        tags={"HACS"},
-        annotations={"destructiveHint": True, "title": "Add HACS Repository"},
-    )
-    @log_tool_usage
-    async def ha_hacs_add_repository(
-        self,
-        repository: str,
-        category: Annotated[
-            Literal["integration", "lovelace", "theme", "appdaemon", "python_script"],
-            Field(
-                description="Repository category (required)",
-            ),
-        ],
-    ) -> dict[str, Any]:
-        """Add a custom GitHub repository to HACS.
-
-        Allows adding custom repositories that are not in the default HACS store.
-        This is useful for:
-        - Adding custom integrations from GitHub
-        - Installing custom Lovelace cards
-        - Adding custom themes
-        - Installing beta/development versions
-
-        **Requirements:**
-        - Repository must be a valid GitHub repository
-        - Repository must follow HACS structure guidelines
-        - Category must match the repository type
+        **DASHBOARD TIP:** ``action="search", installed_only=True, category="lovelace"``
+        discovers installed custom cards to wire into ``ha_config_set_dashboard()``.
 
         **Examples:**
-        ```python
-        # Add custom integration
-        ha_hacs_add_repository("owner/custom-integration", category="integration")
+        - Search the store: ha_get_hacs_info(action="search", query="mushroom", category="lovelace")
+        - List installed: ha_get_hacs_info(action="search", installed_only=True)
+        - Repository details: ha_get_hacs_info(action="info", repository_id="441028036")
 
-        # Add custom card
-        ha_hacs_add_repository("owner/custom-card", category="lovelace")
-
-        # Add custom theme
-        ha_hacs_add_repository("owner/custom-theme", category="theme")
-        ```
-
-        Args:
-            repository: GitHub repository in format "owner/repo"
-            category: Repository category (integration, lovelace, theme, appdaemon, python_script)
-
-        Returns:
-            Success status and repository ID if added successfully.
+        **Caveats:** ``info`` fetches full repository detail from GitHub, so it can hit GitHub
+        rate limits / needs HACS's configured GitHub token; ``search`` reads HACS's locally
+        cached repository index. ``repository_id`` accepts a numeric HACS ID or an
+        ``owner/repo`` path.
         """
         try:
-            # Check if HACS is available
-            await _assert_hacs_available()
-
-            # Validate repository format
-            if "/" not in repository:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Invalid repository format. Must be 'owner/repo'",
-                        suggestions=[
-                            "Use format: 'owner/repo' (e.g., 'hacs/integration')",
-                            "Check the repository exists on GitHub",
-                        ],
-                    )
+            if action == "search":
+                return await self._hacs_search(
+                    query, category, installed_only, max_results, offset, ctx
                 )
 
-            # Add repository via WebSocket
-            from ..client.websocket_client import get_websocket_client
-
-            ws_client = await get_websocket_client()
-
-            # Map user-friendly category to HACS internal name
-            hacs_category = CATEGORY_MAP.get(category, category)
-
-            response = await ws_client.send_command(
-                "hacs/repositories/add",
-                repository=repository,
-                category=hacs_category,
+            # action == "info"
+            repository_id = validate_identifier_not_empty(
+                repository_id,
+                "repository_id",
+                message="repository_id is required for action='info'",
+                suggestions=[
+                    "Pass repository_id (numeric HACS ID or 'owner/repo')",
+                    "Use action='search' to find the repository first",
+                ],
             )
-
-            if not response.get("success"):
-                exception_to_structured_error(
-                    Exception(f"HACS add repository request failed: {response}"),
-                    context={
-                        "command": "hacs/repositories/add",
-                        "repository": repository,
-                        "category": category,
-                    },
-                    raise_error=True,
-                )
-
-            result = response.get("result", {})
-
-            return await add_timezone_metadata(
-                self._client,
-                {
-                    "success": True,
-                    "repository": repository,
-                    "category": category,
-                    "repository_id": result.get("id"),
-                    "message": f"Successfully added {repository} to HACS",
-                    "data": result,
-                },
-            )
+            return await self._hacs_info(repository_id)
 
         except ToolError:
             raise
         except Exception as e:
             exception_to_structured_error(
                 e,
-                context={
-                    "tool": "ha_hacs_add_repository",
-                    "repository": repository,
-                    "category": category,
-                },
+                context={"tool": "ha_get_hacs_info", "action": action},
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
-                    "Check repository format: 'owner/repo'",
-                    "Verify the repository exists on GitHub",
-                    "Ensure category matches repository type",
-                    "Check repository follows HACS guidelines: https://hacs.xyz/docs/publish/start",
+                    "For action='search', try a simpler query or a valid category",
+                    "For action='info', pass a valid repository_id (numeric ID or 'owner/repo')",
                 ],
             )
 
     @tool(
-        name="ha_hacs_download",
+        name="ha_manage_hacs",
         tags={"HACS"},
         annotations={
             "destructiveHint": True,
-            "title": "Download/Install HACS Repository",
+            "title": "Manage HACS",
         },
     )
     @log_tool_usage
-    async def ha_hacs_download(
+    async def ha_manage_hacs(
         self,
-        repository_id: str,
-        version: Annotated[
+        action: Annotated[
+            Literal["download", "add_repository"],
+            Field(description="'download' to install/update, or 'add_repository'"),
+        ],
+        repository_id: Annotated[
             str | None,
             Field(
-                default=None,
-                description="Specific version to install (e.g., 'v1.2.3'). If not specified, installs the latest version.",
+                description="Numeric HACS ID or 'owner/repo' path (action='download')"
             ),
         ] = None,
+        version: Annotated[
+            str | None,
+            Field(description="Specific version to install (action='download')"),
+        ] = None,
+        repository: Annotated[
+            str | None,
+            Field(
+                description="GitHub repo 'owner/repo' to add (action='add_repository')"
+            ),
+        ] = None,
+        category: Annotated[
+            Literal["integration", "lovelace", "theme", "appdaemon", "python_script"]
+            | None,
+            Field(description="Repository category (action='add_repository')"),
+        ] = None,
     ) -> dict[str, Any]:
-        """Download and install a HACS repository.
+        """Manage HACS (Home Assistant Community Store) — install/update or add custom repositories.
 
-        This installs a repository from HACS to your Home Assistant instance.
-        For integrations, a restart of Home Assistant may be required after installation.
-
-        **Prerequisites:**
-        - The repository must already be in HACS (either from the default store or added via `ha_hacs_add_repository`)
-        - Use `ha_hacs_search()` to find the repository ID
+        Use ``action="download"`` to install or update a repository, or
+        ``action="add_repository"`` to register a custom GitHub repository with HACS. This
+        tool performs writes; to search the store or read repository details use
+        ``ha_get_hacs_info``.
 
         **Examples:**
-        ```python
-        # Install latest version of a repository
-        ha_hacs_download("441028036")
+        - Install latest: ha_manage_hacs(action="download", repository_id="441028036")
+        - Install a version: ha_manage_hacs(action="download", repository_id="piitaya/lovelace-mushroom", version="v4.0.0")
+        - Add a custom repo: ha_manage_hacs(action="add_repository", repository="owner/repo", category="lovelace")
 
-        # Install specific version
-        ha_hacs_download("441028036", version="v2.0.0")
-
-        # Install by GitHub path (will look up the numeric ID)
-        ha_hacs_download("piitaya/lovelace-mushroom", version="v4.0.0")
-        ```
-
-        **Note:** For integrations, you may need to restart Home Assistant after installation.
-        For Lovelace cards, clear your browser cache to see the new card.
-
-        Args:
-            repository_id: Repository numeric ID or GitHub path (e.g., "441028036" or "owner/repo")
-            version: Specific version to install (optional, defaults to latest)
-
-        Returns:
-            Success status and installation details.
+        **Caveats:** Installing an integration usually needs a Home Assistant restart to
+        activate; new Lovelace cards need a browser cache clear. ``repository_id`` accepts a
+        numeric HACS ID or an ``owner/repo`` path; ``add_repository`` requires ``owner/repo``
+        format plus a matching ``category``.
         """
         try:
-            # Empty/whitespace repository_id would either be passed straight
-            # into ``_resolve_hacs_repo_id`` (which has no empty-check and
-            # would fall through to a HACS lookup miss) or — for a numeric
-            # candidate — reach ``hacs/repository/download`` with an empty
-            # repository field. Same destructive-WS-call class as
-            # ``ha_manage_addon``: guard up-front so the caller learns the
-            # identifier was unusable before any backend call.
-            validate_identifier_not_empty(
-                repository_id,
-                "repository_id",
+            if action == "download":
+                return await self._hacs_download(repository_id, version)
+
+            # action == "add_repository"
+            repository = validate_identifier_not_empty(
+                repository,
+                "repository",
+                suggestions=["Pass repository in 'owner/repo' format"],
+            )
+            # ``category`` is a Literal param, so bind the validated value to a
+            # new ``str`` name rather than reassigning (str is wider than the Literal).
+            valid_category = validate_identifier_not_empty(
+                category,
+                "category",
                 suggestions=[
-                    "Use ha_hacs_search() to find valid repository IDs",
-                    "Or pass a GitHub path like 'owner/repo' to install by name",
+                    "Pass category (integration, lovelace, theme, appdaemon, python_script)"
                 ],
             )
-            # Check if HACS is available
-            await _assert_hacs_available()
-
-            from ..client.websocket_client import get_websocket_client
-
-            ws_client = await get_websocket_client()
-
-            # Resolve GitHub path to numeric ID if needed
-            actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
-
-            # Build download command parameters
-            download_kwargs: dict[str, Any] = {"repository": actual_id}
-            if version:
-                download_kwargs["version"] = version
-
-            # Download/install the repository
-            response = await ws_client.send_command(
-                "hacs/repository/download", **download_kwargs
-            )
-
-            if not response.get("success"):
-                exception_to_structured_error(
-                    Exception(f"HACS download request failed: {response}"),
-                    context={
-                        "command": "hacs/repository/download",
-                        "repository_id": repository_id,
-                        "version": version,
-                    },
-                    raise_error=True,
-                )
-
-            result = response.get("result", {})
-
-            return await add_timezone_metadata(
-                self._client,
-                {
-                    "success": True,
-                    "repository_id": actual_id,
-                    "repository": repo_name,
-                    "version": version or "latest",
-                    "message": f"Successfully installed {repo_name}"
-                    + (f" version {version}" if version else ""),
-                    "note": "For integrations, restart Home Assistant to activate. For Lovelace cards, clear browser cache.",
-                    "data": result,
-                },
-            )
+            return await self._hacs_add_repository(repository, valid_category)
 
         except ToolError:
             raise
         except Exception as e:
             exception_to_structured_error(
                 e,
+                context={"tool": "ha_manage_hacs", "action": action},
+                suggestions=[
+                    "Verify HACS is installed: https://hacs.xyz/",
+                    "For action='download', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
+                    "For action='add_repository', use 'owner/repo' format and a matching category",
+                ],
+            )
+
+    # --- Private action handlers ------------------------------------------
+    # The public tools above are thin dispatchers; each handler raises a
+    # structured ToolError on failure, caught by the dispatcher's wrapper.
+
+    async def _hacs_search(
+        self,
+        query: str,
+        category: str | None,
+        installed_only: bool,
+        max_results: int,
+        offset: int,
+        ctx: Context | None,
+    ) -> dict[str, Any]:
+        await safe_info(
+            ctx,
+            f"ha_get_hacs_info search starting: query={query!r} "
+            f"category={category} installed_only={installed_only}",
+        )
+        await safe_progress(
+            ctx, progress=0, total=3, message="checking HACS availability"
+        )
+
+        # Check if HACS is available
+        await _assert_hacs_available()
+
+        # Get all repositories via WebSocket
+        from ..client.websocket_client import get_websocket_client
+
+        ws_client = await get_websocket_client()
+
+        # Build command parameters - map user-friendly category to HACS internal name
+        kwargs_cmd: dict[str, Any] = {}
+        if category:
+            hacs_category = CATEGORY_MAP.get(category, category)
+            kwargs_cmd["categories"] = [hacs_category]
+
+        await safe_progress(
+            ctx, progress=1, total=3, message="fetching HACS repository list"
+        )
+
+        response = await ws_client.send_command("hacs/repositories/list", **kwargs_cmd)
+
+        if not response.get("success"):
+            exception_to_structured_error(
+                Exception(f"HACS search request failed: {response}"),
                 context={
-                    "tool": "ha_hacs_download",
+                    "command": "hacs/repositories/list",
+                    "query": query,
+                    "category": category,
+                },
+                raise_error=True,
+            )
+
+        all_repositories = response.get("result", [])
+        await safe_progress(
+            ctx,
+            progress=2,
+            total=3,
+            message=f"filtering {len(all_repositories)} repositories",
+        )
+        matches = _filter_and_score_repos(all_repositories, query, installed_only)
+        await safe_progress(
+            ctx, progress=3, total=3, message=f"matched {len(matches)} repositories"
+        )
+
+        limited_matches = matches[offset : offset + max_results]
+        has_more = (offset + len(limited_matches)) < len(matches)
+
+        return await add_timezone_metadata(
+            self._client,
+            {
+                "success": True,
+                "query": query if query.strip() else None,
+                "category_filter": category,
+                "installed_only": installed_only,
+                "total_matches": len(matches),
+                "offset": offset,
+                "limit": max_results,
+                "count": len(limited_matches),
+                "has_more": has_more,
+                "next_offset": offset + max_results if has_more else None,
+                "results": limited_matches,
+            },
+        )
+
+    async def _hacs_info(self, repository_id: str) -> dict[str, Any]:
+        # Check if HACS is available
+        await _assert_hacs_available()
+
+        from ..client.websocket_client import get_websocket_client
+
+        ws_client = await get_websocket_client()
+
+        # If repository_id contains a slash, it's a GitHub path - look up numeric ID
+        actual_id, _ = await _resolve_hacs_repo_id(ws_client, repository_id)
+
+        # Get repository info via WebSocket using numeric ID
+        response = await ws_client.send_command(
+            "hacs/repository/info", repository_id=actual_id
+        )
+
+        if not response.get("success"):
+            exception_to_structured_error(
+                Exception(f"HACS repository info request failed: {response}"),
+                context={
+                    "command": "hacs/repository/info",
+                    "repository_id": repository_id,
+                },
+                raise_error=True,
+            )
+
+        result = response.get("result", {})
+
+        # Extract and structure the most useful information
+        return await add_timezone_metadata(
+            self._client,
+            {
+                "success": True,
+                "repository_id": repository_id,
+                "name": result.get("name"),
+                "full_name": result.get("full_name"),
+                "description": result.get("description"),
+                "category": result.get("category"),
+                "authors": result.get("authors", []),
+                "domain": result.get("domain"),  # For integrations
+                "installed": result.get("installed", False),
+                "installed_version": result.get("installed_version"),
+                "available_version": result.get("available_version"),
+                "pending_update": result.get("pending_upgrade", False),
+                "stars": result.get("stars", 0),
+                "downloads": result.get("downloads", 0),
+                "topics": result.get("topics", []),
+                "releases": result.get("releases", []),
+                "default_branch": result.get("default_branch"),
+                "readme": result.get("readme"),  # Full README content
+                "data": result,  # Full response for advanced use
+            },
+        )
+
+    async def _hacs_download(
+        self, repository_id: str | None, version: str | None
+    ) -> dict[str, Any]:
+        # Empty/whitespace repository_id would either be passed straight
+        # into ``_resolve_hacs_repo_id`` (which has no empty-check and
+        # would fall through to a HACS lookup miss) or — for a numeric
+        # candidate — reach ``hacs/repository/download`` with an empty
+        # repository field. Same destructive-WS-call class as
+        # ``ha_manage_addon``: guard up-front so the caller learns the
+        # identifier was unusable before any backend call.
+        repository_id = validate_identifier_not_empty(
+            repository_id,
+            "repository_id",
+            suggestions=[
+                "Use ha_get_hacs_info(action='search') to find valid repository IDs",
+                "Or pass a GitHub path like 'owner/repo' to install by name",
+            ],
+        )
+        # Check if HACS is available
+        await _assert_hacs_available()
+
+        from ..client.websocket_client import get_websocket_client
+
+        ws_client = await get_websocket_client()
+
+        # Resolve GitHub path to numeric ID if needed
+        actual_id, repo_name = await _resolve_hacs_repo_id(ws_client, repository_id)
+
+        # Build download command parameters
+        download_kwargs: dict[str, Any] = {"repository": actual_id}
+        if version:
+            download_kwargs["version"] = version
+
+        # Download/install the repository
+        response = await ws_client.send_command(
+            "hacs/repository/download", **download_kwargs
+        )
+
+        if not response.get("success"):
+            exception_to_structured_error(
+                Exception(f"HACS download request failed: {response}"),
+                context={
+                    "command": "hacs/repository/download",
                     "repository_id": repository_id,
                     "version": version,
                 },
-                suggestions=[
-                    "Verify HACS is installed: https://hacs.xyz/",
-                    "Check repository ID is valid (use ha_hacs_search() to find it)",
-                    "Ensure the repository is in HACS (use ha_hacs_add_repository() if needed)",
-                    "Check version format (e.g., 'v1.2.3' or '1.2.3')",
-                ],
+                raise_error=True,
             )
+
+        result = response.get("result", {})
+
+        return await add_timezone_metadata(
+            self._client,
+            {
+                "success": True,
+                "repository_id": actual_id,
+                "repository": repo_name,
+                "version": version or "latest",
+                "message": f"Successfully installed {repo_name}"
+                + (f" version {version}" if version else ""),
+                "note": "For integrations, restart Home Assistant to activate. For Lovelace cards, clear browser cache.",
+                "data": result,
+            },
+        )
+
+    async def _hacs_add_repository(
+        self, repository: str, category: str
+    ) -> dict[str, Any]:
+        # Check if HACS is available
+        await _assert_hacs_available()
+
+        # Validate repository format
+        if "/" not in repository:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Invalid repository format. Must be 'owner/repo'",
+                    suggestions=[
+                        "Use format: 'owner/repo' (e.g., 'hacs/integration')",
+                        "Check the repository exists on GitHub",
+                    ],
+                )
+            )
+
+        # Add repository via WebSocket
+        from ..client.websocket_client import get_websocket_client
+
+        ws_client = await get_websocket_client()
+
+        # Map user-friendly category to HACS internal name
+        hacs_category = CATEGORY_MAP.get(category, category)
+
+        response = await ws_client.send_command(
+            "hacs/repositories/add",
+            repository=repository,
+            category=hacs_category,
+        )
+
+        if not response.get("success"):
+            exception_to_structured_error(
+                Exception(f"HACS add repository request failed: {response}"),
+                context={
+                    "command": "hacs/repositories/add",
+                    "repository": repository,
+                    "category": category,
+                },
+                raise_error=True,
+            )
+
+        # HACS' add command returns ``success`` on acceptance but registers the
+        # repository asynchronously and returns no id in the ack. Confirm it
+        # actually registered (mirroring the download path) — an accepted-but-
+        # never-registered add (archived repo, bad structure, wrong category)
+        # would otherwise report a misleading "Successfully added".
+        repo = await wait_for_repo_registration(
+            ws_client, repository, timeout=HACS_ADD_REGISTRATION_TIMEOUT
+        )
+        if repo is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"HACS accepted the request but '{repository}' did not "
+                    "register as a custom repository.",
+                    suggestions=[
+                        "Verify the repository exists and follows HACS structure (e.g. has hacs.json)",
+                        "Check that the repository is not archived",
+                        "Ensure the category matches the repository type",
+                    ],
+                )
+            )
+
+        repo_id = repo.get("id")
+        return await add_timezone_metadata(
+            self._client,
+            {
+                "success": True,
+                "repository": repository,
+                "category": category,
+                "repository_id": str(repo_id) if repo_id is not None else None,
+                "message": f"Successfully added {repository} to HACS",
+                "data": repo,
+            },
+        )
 
 
 def register_hacs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -736,6 +683,15 @@ HACS_SUBSCRIBE_TIMEOUT = 10.0
 # lossy for any reason. Larger than the old 1.0 s because we expect
 # the nudge to do the heavy lifting; this is belt-and-braces only.
 HACS_REPO_BACKSTOP_POLL_INTERVAL = 5.0
+
+# Wall-clock budget for confirming a custom repository registered after an
+# ``hacs/repositories/add``. Shorter than the resolve/download budget: a valid
+# repo registers in seconds, and failing fast turns an accepted-but-never-
+# registered add (archived/invalid repo, wrong category) into a prompt error
+# instead of a 30 s stall. Not exercised by the e2e suite (the only e2e add
+# fails at the owner/repo format guard), so the HAOS-load tuning behind the
+# 30 s resolve budget does not apply here.
+HACS_ADD_REGISTRATION_TIMEOUT = 10.0
 
 
 async def _find_repo_in_list_by_full_name(
@@ -945,8 +901,8 @@ async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str
 
     For GitHub-path identifiers, this uses the HACS dispatch-signal
     waiter so that a caller running immediately after
-    ``ha_hacs_add_repository`` doesn't race against HACS' internal
-    registration — the same flake class that affected
+    ``ha_manage_hacs(action="add_repository")`` doesn't race against
+    HACS' internal registration — the same flake class that affected
     ``ha_install_mcp_tools``.
     """
     if "/" not in repository_id:
@@ -962,10 +918,9 @@ async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str
             ErrorCode.RESOURCE_NOT_FOUND,
             f"Repository '{repository_id}' not found in HACS",
             suggestions=[
-                "Use ha_hacs_search() to find the repository",
+                "Use ha_get_hacs_info(action='search') to find the repository",
                 "Check the repository name is correct (case-insensitive)",
                 "The repository may need to be added to HACS first",
             ],
         )
     )
-    return repository_id, repository_id  # unreachable, but satisfies type checker

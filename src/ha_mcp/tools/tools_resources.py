@@ -330,7 +330,7 @@ class ResourceTools:
             resource_type="module"
         )
 
-        Add HACS card (after installing via ha_hacs_download):
+        Add HACS card (after installing via ha_manage_hacs(action='download')):
         ha_config_set_dashboard_resource(
             url="/hacsfiles/lovelace-mushroom/mushroom.js",
             resource_type="module"

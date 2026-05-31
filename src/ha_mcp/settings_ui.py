@@ -1618,7 +1618,7 @@ function render() {
       `<span class="group-count">${groupEnabled}/${tools.length} enabled</span>` +
       `</div>` +
       `<label class="switch group-master" title="Enable/disable all tools in this group">` +
-        `<input type="checkbox" ${anyEnabled ? 'checked' : ''} ${toggleable.length === 0 ? 'disabled' : ''}>` +
+        `<input type="checkbox" name="tool-group:${escapeHtml(tag)}" ${anyEnabled ? 'checked' : ''} ${toggleable.length === 0 ? 'disabled' : ''}>` +
         `<span class="slider"></span>` +
       `</label>`;
 
@@ -1722,20 +1722,20 @@ function render() {
         `</div>` +
         `<div class="tool-toggles">` +
           `<div class="toggle-group">` +
-            `<label class="switch"><input type="checkbox" data-tool="${escapeHtml(t.name)}" data-field="enabled" ` +
+            `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:enabled" data-tool="${escapeHtml(t.name)}" data-field="enabled" ` +
               `${isEnabled ? 'checked' : ''} ${lockEnabled ? 'disabled' : ''}>` +
               `<span class="slider"></span></label>` +
             `<span>enabled</span>` +
           `</div>` +
           `<div class="toggle-group ${!isEnabled ? 'disabled-toggle' : ''}">` +
-            `<label class="switch"><input type="checkbox" data-tool="${escapeHtml(t.name)}" data-field="pinned" ` +
+            `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:pinned" data-tool="${escapeHtml(t.name)}" data-field="pinned" ` +
               `${isPinned ? 'checked' : ''} ${lockPinned ? 'disabled' : ''}>` +
               `<span class="slider"></span></label>` +
             `<span>pinned</span>` +
           `</div>` +
           `<div class="toggle-group ${(policyState.enabled && isEnabled) ? '' : 'disabled-toggle'}" ` +
                `title="${policyState.enabled ? '' : 'Enable Tool Security Policies in addon config first.'}">` +
-            `<label class="switch"><input type="checkbox" data-tool="${escapeHtml(t.name)}" data-field="gated" ` +
+            `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:gated" data-tool="${escapeHtml(t.name)}" data-field="gated" ` +
               `${policyState.gatedTools.has(t.name) ? 'checked' : ''} ` +
               `${(policyState.enabled && isEnabled) ? '' : 'disabled'}>` +
               `<span class="slider"></span></label>` +
@@ -1926,16 +1926,16 @@ function renderBackupConfig() {
     row.className = 'backup-field';
     let controlHtml;
     if (typeof f.value === 'boolean') {
-      controlHtml = `<input type="checkbox" data-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="checkbox" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
     } else if (typeof f.value === 'string') {
       // Path / freeform string fields (auto_backup_dir).
-      controlHtml = `<input type="text" data-field="${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="text" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
     } else {
       let min = 1;
       let max = 10000;
       if (f.field === 'auto_backup_throttle_minutes') { min = 0; max = 1440; }
       else if (f.field === 'auto_backup_calendar_lookahead_days') { min = 1; max = 365; }
-      controlHtml = `<input type="number" data-field="${escapeHtml(f.field)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="number" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
     }
     let originMsg;
     if (f.origin === 'env') {
@@ -2396,6 +2396,7 @@ function renderFeatureFlags(flags) {
       label.className = 'switch';
       const input = document.createElement('input');
       input.type = 'checkbox';
+      input.name = 'feature:' + fieldName;
       input.checked = !!f.value;
       input.disabled = !f.editable || lockedByMaster;
       input.addEventListener('change', () => {
@@ -2444,6 +2445,7 @@ function renderFeatureFlags(flags) {
     } else if (f.type === 'int') {
       const input = document.createElement('input');
       input.type = 'number';
+      input.name = 'feature:' + fieldName;
       input.value = f.value;
       if (typeof f.min === 'number') input.min = f.min;
       if (typeof f.max === 'number') input.max = f.max;
@@ -2514,6 +2516,7 @@ function renderYamlPackagesSubRows(flags, parentEl, masterOn, parentOn) {
     label.className = 'switch';
     const input = document.createElement('input');
     input.type = 'checkbox';
+    input.name = 'feature:' + fieldName;
     input.checked = !!f.value;
     input.disabled = !f.editable || lockedByGate;
     input.addEventListener('change', () => {
@@ -2605,6 +2608,7 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
     }
     inputEl.disabled = disabled;
     inputEl.dataset.advField = f.field;
+    inputEl.name = 'adv:' + f.field;
     inputEl.addEventListener('change', () => {
       let v;
       if (f.type === 'int') v = parseInt(inputEl.value, 10);
@@ -2817,15 +2821,15 @@ function renderPolicyCard(toolName, rule) {
       '<div class="policy-predicate-form" style="display:none;">' +
         '<div class="policy-form-row">' +
           '<label class="policy-form-label">Argument:</label>' +
-          '<select class="policy-predicate-path-select">' +
+          '<select name="policy:predicate-path" class="policy-predicate-path-select">' +
             '<option value="">(loading...)</option>' +
           '</select>' +
-          '<input type="text" class="policy-predicate-path-custom" ' +
+          '<input type="text" name="policy:predicate-path-custom" class="policy-predicate-path-custom" ' +
             'placeholder="e.g. args.color_temp" style="display:none">' +
         '</div>' +
         '<div class="policy-form-row">' +
           '<label class="policy-form-label">Match when:</label>' +
-          '<select class="policy-predicate-op">' +
+          '<select name="policy:predicate-op" class="policy-predicate-op">' +
             '<option value="exists">is present (any value)</option>' +
             '<option value="eq">equals</option>' +
             '<option value="neq">does NOT equal</option>' +
@@ -2850,7 +2854,7 @@ function renderPolicyCard(toolName, rule) {
     '</div>' +
     '<div class="policy-rule-lifetime">' +
       '<label>Remember approval for:' +
-        '<input type="number" min="0" max="1440" class="policy-remember-minutes" ' +
+        '<input type="number" name="policy:remember-minutes" min="0" max="1440" class="policy-remember-minutes" ' +
           'value="' + (rule.remember_minutes || 0) + '">' +
         'minutes (0 = single-shot)' +
       '</label>' +
@@ -3084,7 +3088,7 @@ function renderPolicyCard(toolName, rule) {
     const existingArr = Array.isArray(existingValue)
       ? existingValue
       : (existingValue !== undefined && existingValue !== null ? [existingValue] : []);
-    let html = '<select class="policy-predicate-value-control"' +
+    let html = '<select name="policy:predicate-value" class="policy-predicate-value-control"' +
       (isMulti ? ' multiple size="6" style="min-width:220px"' : '') +
       '>';
     if (!isMulti) {
@@ -3114,7 +3118,7 @@ function renderPolicyCard(toolName, rule) {
     const initial = (existingValue === undefined || existingValue === null)
       ? ''
       : JSON.stringify(existingValue);
-    valueSlotEl.innerHTML = '<input type="text" ' +
+    valueSlotEl.innerHTML = '<input type="text" name="policy:predicate-value" ' +
       'class="policy-predicate-value-control policy-predicate-value" ' +
       'placeholder="' + escapeHtml(placeholder) + '" ' +
       'value="' + escapeHtml(initial) + '">';
@@ -3643,22 +3647,22 @@ function renderAdvancedSection(containerId, fields) {
     const meta = ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' };
     let controlHtml;
     if (f.choices) {
-      controlHtml = `<select data-adv-field="${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>` +
+      controlHtml = `<select name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>` +
         f.choices.map(c =>
           `<option value="${escapeHtml(c)}" ${String(f.value) === c ? 'selected' : ''}>${escapeHtml(c)}</option>`
         ).join('') +
         '</select>';
     } else if (f.type === 'bool') {
-      controlHtml = `<input type="checkbox" data-adv-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="checkbox" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
     } else if (f.type === 'int' || f.type === 'float') {
-      controlHtml = `<input type="number" data-adv-field="${escapeHtml(f.field)}" value="${Number(f.value)}" ` +
+      controlHtml = `<input type="number" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" value="${Number(f.value)}" ` +
         (f.min !== undefined ? `min="${f.min}" ` : '') +
         (f.max !== undefined ? `max="${f.max}" ` : '') +
         (f.type === 'float' ? 'step="0.1" ' : '') +
         (f.editable ? '' : 'disabled') + '>';
     } else {
       // str
-      controlHtml = `<input type="text" data-adv-field="${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="text" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
     }
     let originMsg = '';
     if (f.origin === 'env') {

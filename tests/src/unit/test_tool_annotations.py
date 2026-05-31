@@ -18,19 +18,25 @@ def get_tools_dir() -> Path:
 
 def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -> dict:
     """Parse decorator arguments into a tool info dict."""
-    has_read_only = 'readOnlyHint' in decorator_args and 'True' in decorator_args.split('readOnlyHint')[1][:20]
-    has_destructive = 'destructiveHint' in decorator_args and 'True' in decorator_args.split('destructiveHint')[1][:20]
-    has_title = 'title' in decorator_args
-    has_tags = 'tags=' in decorator_args or 'tags =' in decorator_args
+    has_read_only = (
+        "readOnlyHint" in decorator_args
+        and "True" in decorator_args.split("readOnlyHint")[1][:20]
+    )
+    has_destructive = (
+        "destructiveHint" in decorator_args
+        and "True" in decorator_args.split("destructiveHint")[1][:20]
+    )
+    has_title = "title" in decorator_args
+    has_tags = "tags=" in decorator_args or "tags =" in decorator_args
 
     return {
-        'file': file_name,
-        'function': func_name,
-        'has_read_only_hint': has_read_only,
-        'has_destructive_hint': has_destructive,
-        'has_title': has_title,
-        'has_tags': has_tags,
-        'decorator_args': decorator_args.strip(),
+        "file": file_name,
+        "function": func_name,
+        "has_read_only_hint": has_read_only,
+        "has_destructive_hint": has_destructive,
+        "has_title": has_title,
+        "has_tags": has_tags,
+        "decorator_args": decorator_args.strip(),
     }
 
 
@@ -38,31 +44,37 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
     """Extract @mcp.tool and @tool decorator information from a Python file."""
     content = file_path.read_text(encoding="utf-8")
     # Pattern 1: @mcp.tool(...) — closure pattern
-    pattern = r'@mcp\.tool\(([^)]*)\)\s*(?:@\w+\s*)*async def (\w+)'
+    pattern = r"@mcp\.tool\(([^)]*)\)\s*(?:@\w+\s*)*async def (\w+)"
     tools = [
         _parse_decorator_args(m.group(1), m.group(2), file_path.name)
         for m in re.finditer(pattern, content, re.DOTALL)
     ]
 
     # Pattern 2: @tool(name="ha_*", ...) — class method pattern
-    class_pattern = r'@tool\(\s*\n?\s*name="(ha_\w+)"[,\s]*([^)]*)\)\s*(?:@\w+\s*)*async def \w+'
+    class_pattern = (
+        r'@tool\(\s*\n?\s*name="(ha_\w+)"[,\s]*([^)]*)\)\s*(?:@\w+\s*)*async def \w+'
+    )
     tools.extend(
-        _parse_decorator_args(f'name="{m.group(1)}", {m.group(2)}', m.group(1), file_path.name)
+        _parse_decorator_args(
+            f'name="{m.group(1)}", {m.group(2)}', m.group(1), file_path.name
+        )
         for m in re.finditer(class_pattern, content, re.DOTALL)
     )
 
     # Also find bare @mcp.tool without arguments
-    bare_pattern = r'@mcp\.tool\s*\n\s*(?:@\w+\s*)*async def (\w+)'
+    bare_pattern = r"@mcp\.tool\s*\n\s*(?:@\w+\s*)*async def (\w+)"
     for match in re.finditer(bare_pattern, content):
         func_name = match.group(1)
-        tools.append({
-            'file': file_path.name,
-            'function': func_name,
-            'has_read_only_hint': False,
-            'has_destructive_hint': False,
-            'has_title': False,
-            'decorator_args': '',
-        })
+        tools.append(
+            {
+                "file": file_path.name,
+                "function": func_name,
+                "has_read_only_hint": False,
+                "has_destructive_hint": False,
+                "has_title": False,
+                "decorator_args": "",
+            }
+        )
 
     return tools
 
@@ -92,8 +104,8 @@ class TestToolAnnotations:
         both_hints = []
 
         for tool in tools:
-            has_read = tool['has_read_only_hint']
-            has_destructive = tool['has_destructive_hint']
+            has_read = tool["has_read_only_hint"]
+            has_destructive = tool["has_destructive_hint"]
 
             if not has_read and not has_destructive:
                 missing_hints.append(f"{tool['file']}:{tool['function']}")
@@ -121,7 +133,7 @@ class TestToolAnnotations:
         missing_titles = [
             f"{tool['file']}:{tool['function']}"
             for tool in tools
-            if not tool['has_title']
+            if not tool["has_title"]
         ]
 
         assert not missing_titles, (
@@ -136,7 +148,7 @@ class TestToolAnnotations:
         missing_tags = [
             f"{tool['file']}:{tool['function']}"
             for tool in tools
-            if not tool['has_tags']
+            if not tool["has_tags"]
         ]
 
         assert not missing_tags, (
@@ -153,11 +165,15 @@ class TestToolAnnotations:
         assert len(tools) >= 50, f"Only found {len(tools)} tools, expected at least 50"
 
         # We should have a mix of read-only and destructive tools
-        read_only_count = sum(1 for t in tools if t['has_read_only_hint'])
-        destructive_count = sum(1 for t in tools if t['has_destructive_hint'])
+        read_only_count = sum(1 for t in tools if t["has_read_only_hint"])
+        destructive_count = sum(1 for t in tools if t["has_destructive_hint"])
 
-        assert read_only_count >= 20, f"Only {read_only_count} read-only tools, expected at least 20"
-        assert destructive_count >= 20, f"Only {destructive_count} destructive tools, expected at least 20"
+        assert read_only_count >= 20, (
+            f"Only {read_only_count} read-only tools, expected at least 20"
+        )
+        assert destructive_count >= 19, (
+            f"Only {destructive_count} destructive tools, expected at least 19"
+        )
 
     def test_total_tool_count_limit(self):
         """Ensure total tool count doesn't exceed reasonable limits.
@@ -199,18 +215,31 @@ class TestToolAnnotations:
         """Tools with readOnlyHint should have read-only names (get, list, search, etc)."""
         tools = get_all_tools()
 
-        read_only_tools = [t for t in tools if t['has_read_only_hint']]
+        read_only_tools = [t for t in tools if t["has_read_only_hint"]]
 
         # These prefixes/patterns indicate read-only operations
-        read_only_patterns = ['get', 'list', 'search', 'check', 'eval', 'render']
+        read_only_patterns = ["get", "list", "search", "check", "eval", "render"]
 
         suspicious = []
         for tool in read_only_tools:
-            func = tool['function'].lower()
+            func = tool["function"].lower()
             # If it starts with a modifying verb, it's suspicious
             # Note: "list_updates" is OK (listing updates), "update_zone" is suspicious
-            modifying_prefixes = ['create_', 'set_', 'delete_', 'update_', 'add_', 'remove_', 'assign_', 'restart', 'reload']
-            if any(func.startswith(f'ha_{prefix}') or func.startswith(prefix) for prefix in modifying_prefixes):
+            modifying_prefixes = [
+                "create_",
+                "set_",
+                "delete_",
+                "update_",
+                "add_",
+                "remove_",
+                "assign_",
+                "restart",
+                "reload",
+            ]
+            if any(
+                func.startswith(f"ha_{prefix}") or func.startswith(prefix)
+                for prefix in modifying_prefixes
+            ):
                 suspicious.append(f"{tool['file']}:{tool['function']}")
 
         assert not suspicious, (
@@ -222,21 +251,41 @@ class TestToolAnnotations:
         """Tools with destructiveHint should have modifying names."""
         tools = get_all_tools()
 
-        destructive_tools = [t for t in tools if t['has_destructive_hint']]
+        destructive_tools = [t for t in tools if t["has_destructive_hint"]]
 
         # These patterns indicate destructive/modifying operations
-        destructive_patterns = ['create', 'set', 'delete', 'update', 'add', 'remove', 'assign', 'restart', 'reload', 'restore', 'import', 'rename', 'call', 'bulk', 'config_set', 'config_delete']
+        destructive_patterns = [
+            "create",
+            "set",
+            "delete",
+            "update",
+            "add",
+            "remove",
+            "assign",
+            "restart",
+            "reload",
+            "restore",
+            "import",
+            "rename",
+            "call",
+            "bulk",
+            "config_set",
+            "config_delete",
+        ]
 
         suspicious = []
         for tool in destructive_tools:
-            func = tool['function'].lower()
+            func = tool["function"].lower()
             # If it has only get/list/search patterns and destructiveHint, that's suspicious
             if not any(pattern in func for pattern in destructive_patterns):
                 # Exception: ha_call_service and ha_bulk_control are correctly destructive
-                if func not in ['ha_call_service', 'ha_bulk_control']:
+                if func not in ["ha_call_service", "ha_bulk_control"]:
                     suspicious.append(f"{tool['file']}:{tool['function']}")
 
         # This is a warning, not a hard failure - some tools might legitimately be destructive
         # even without obvious naming
         if suspicious:
-            print("\nNote: These destructive tools don't have typical modifying names:\n  " + "\n  ".join(suspicious))
+            print(
+                "\nNote: These destructive tools don't have typical modifying names:\n  "
+                + "\n  ".join(suspicious)
+            )

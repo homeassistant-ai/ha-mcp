@@ -962,7 +962,6 @@ class TestEnvPinnedToolRows:
         # the HTML `disabled` attribute. Coarse `"disabled" in result.dom`
         # would also pass on CSS class names elsewhere in the page; pin
         # the regex to the actual input element.
-        import re
 
         enabled_input_match = re.search(
             r'<input[^>]*data-field="enabled"[^>]*>',
@@ -1019,7 +1018,6 @@ class TestEnvPinnedToolRows:
             f"dom tail: {result.dom[-3000:]}"
         )
         # Pinned-toggle input for ha_bar must be disabled.
-        import re
 
         pin_input_match = re.search(
             r'<input[^>]*data-field="pinned"[^>]*>',
@@ -1119,7 +1117,6 @@ class TestAdvancedSectionRender:
             invoke="await new Promise(r => setTimeout(r, 200));",
         )
         _assert_clean_init(result)
-        import re
 
         select_match = re.search(
             r'<select[^>]*data-adv-field="log_level"[^>]*>(.*?)</select>',
@@ -1160,7 +1157,6 @@ class TestAdvancedSectionRender:
             invoke="await new Promise(r => setTimeout(r, 200));",
         )
         _assert_clean_init(result)
-        import re
 
         m = re.search(
             r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>',
@@ -1169,6 +1165,495 @@ class TestAdvancedSectionRender:
         assert m is not None, "expected number input for fuzzy_threshold"
         assert 'min="1"' in m.group(0)
         assert 'max="100"' in m.group(0)
+
+
+class TestFormControlAccessibility:
+    """Every generated form control must carry a ``name`` (or ``id``) so it
+    is not flagged by the "form field should have an id or name attribute"
+    accessibility rule. ``name`` is additive — no JS selects on it
+    (selection is via ``data-*`` attributes), so behaviour is unchanged.
+    """
+
+    def test_tool_toggles_carry_name_attribute(self, settings_script: str) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_foo",
+                            "title": "Foo",
+                            "primary_tag": "Utilities",
+                            "tags": ["Utilities"],
+                            "description": "Test tool",
+                            "annotations": {},
+                        }
+                    ],
+                    "states": {"ha_foo": "enabled"},
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        for field in ("enabled", "pinned", "gated"):
+            m = re.search(rf'<input[^>]*data-field="{field}"[^>]*>', result.dom)
+            assert m is not None, f"expected {field} toggle in DOM"
+            assert f'name="tool:ha_foo:{field}"' in m.group(0), (
+                f"expected name on {field} toggle; got {m.group(0)}"
+            )
+
+    def test_advanced_field_input_carries_name_attribute(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
+                            "type": "int",
+                            "section": "search",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1,
+                            "max": 100,
+                        }
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 200));",
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>', result.dom)
+        assert m is not None, "expected advanced input for fuzzy_threshold"
+        assert 'name="adv:fuzzy_threshold"' in m.group(0), (
+            f"expected name on advanced input; got {m.group(0)}"
+        )
+
+    def test_no_rendered_input_lacks_name_or_id(self, settings_script: str) -> None:
+        """Holistic guard: render every form surface present at default page
+        init — tool toggles + group master, feature flags, the yaml-packages
+        sub-flags, the code-mode numeric sub-rows, advanced fields and a
+        choices dropdown — then assert every rendered <input> AND <select>
+        carries a name or id, exactly the rule the accessibility audit flags.
+        (The backup-config and policy forms load on tab activation — including
+        via the ?tab= deep-link path — not at default init, so they are
+        covered by their own tests below; the policy predicate <select>s
+        render there.)
+        """
+
+        def flag(env: str) -> dict:
+            return {
+                "value": True,
+                "origin": "default",
+                "editable": True,
+                "type": "bool",
+                "env_var": env,
+            }
+
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [
+                        {
+                            "name": "ha_foo",
+                            "title": "Foo",
+                            "primary_tag": "Utilities",
+                            "tags": ["Utilities"],
+                            "description": "Test tool",
+                            "annotations": {},
+                        }
+                    ],
+                    "states": {"ha_foo": "enabled"},
+                },
+            },
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_beta_features": flag("ENABLE_BETA_FEATURES"),
+                        "enable_code_mode": flag("ENABLE_CODE_MODE"),
+                        "enable_yaml_config_editing": flag(
+                            "ENABLE_YAML_CONFIG_EDITING"
+                        ),
+                        "enable_yaml_packages_automation": flag(
+                            "ENABLE_YAML_PACKAGES_AUTOMATION"
+                        ),
+                        "enable_yaml_packages_script": flag(
+                            "ENABLE_YAML_PACKAGES_SCRIPT"
+                        ),
+                        "enable_yaml_packages_scene": flag(
+                            "ENABLE_YAML_PACKAGES_SCENE"
+                        ),
+                        # int-typed feature flag -> exercises the number-input
+                        # branch of the feature-flag generator.
+                        "tool_search_max_results": {
+                            "value": 50,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "int",
+                            "env_var": "TOOL_SEARCH_MAX_RESULTS",
+                            "min": 1,
+                            "max": 200,
+                        },
+                    },
+                    "beta_sub_flags": [
+                        "enable_code_mode",
+                        "enable_yaml_config_editing",
+                    ],
+                    "is_addon": False,
+                },
+            },
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "fuzzy_threshold",
+                            "env_var": "FUZZY_THRESHOLD",
+                            "value": 70,
+                            "type": "int",
+                            "section": "search",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1,
+                            "max": 100,
+                        },
+                        {
+                            "field": "code_mode_max_duration",
+                            "env_var": "CODE_MODE_MAX_DURATION",
+                            "value": 30.0,
+                            "type": "float",
+                            "section": "beta_codemode",
+                            "origin": "default",
+                            "editable": True,
+                            "min": 1.0,
+                            "max": 300.0,
+                        },
+                        {
+                            # choices -> renders a <select>, so the guard
+                            # also exercises the dropdown generator.
+                            "field": "log_level",
+                            "env_var": "LOG_LEVEL",
+                            "value": "INFO",
+                            "type": "str",
+                            "section": "diagnostics",
+                            "origin": "default",
+                            "editable": True,
+                            "choices": ["DEBUG", "INFO", "WARNING", "ERROR"],
+                        },
+                    ]
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="await new Promise(r => setTimeout(r, 300));",
+        )
+        _assert_clean_init(result)
+        controls = re.findall(r"<(?:input|select)\b[^>]*>", result.dom)
+        assert controls, "expected at least one rendered form control"
+        missing = [c for c in controls if "name=" not in c and "id=" not in c]
+        assert not missing, (
+            f"{len(missing)} rendered form control(s) lack name/id (a11y): {missing}"
+        )
+        # Sanity: the expanded fixture really did exercise the extra
+        # surfaces, not silently render nothing. `adv:code_mode_max_duration`
+        # is emitted by both the Advanced-panel field generator (the fixture
+        # lists it as an advanced field) and renderCodeModeSubRows, so this
+        # assert only proves *a* control with that name rendered — not the
+        # code-mode sub-row specifically.
+        assert 'name="adv:code_mode_max_duration"' in result.dom, (
+            "no control named adv:code_mode_max_duration rendered — "
+            "fixture/holistic-guard drift"
+        )
+        assert 'name="feature:enable_yaml_packages_automation"' in result.dom, (
+            "yaml-packages sub-row did not render — fixture/holistic-guard drift"
+        )
+        assert '<select name="adv:log_level"' in result.dom, (
+            "advanced choices <select> did not render — fixture/guard drift"
+        )
+        assert 'name="tool-group:' in result.dom, (
+            "tool group-master toggle did not render — fixture/guard drift"
+        )
+        assert 'name="feature:tool_search_max_results"' in result.dom, (
+            "int feature-flag input did not render — fixture/guard drift"
+        )
+
+    def test_backup_config_inputs_carry_name_attribute(
+        self, settings_script: str
+    ) -> None:
+        """The backup-config form loads on backups-tab activation (not at
+        page init), so drive ``loadBackupConfig()`` directly and assert its
+        bool / text / number inputs each carry a ``name``.
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/backup-config": {
+                "status": 200,
+                "json": {
+                    "fields": [
+                        {
+                            "field": "auto_backup_enabled",
+                            "env_var": "AUTO_BACKUP_ENABLED",
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                        },
+                        {
+                            "field": "auto_backup_dir",
+                            "env_var": "AUTO_BACKUP_DIR",
+                            "value": "/backups",
+                            "origin": "default",
+                            "editable": True,
+                        },
+                        {
+                            "field": "auto_backup_throttle_minutes",
+                            "env_var": "AUTO_BACKUP_THROTTLE_MINUTES",
+                            "value": 5,
+                            "origin": "default",
+                            "editable": True,
+                        },
+                    ],
+                    "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke=(
+                "await loadBackupConfig(); await new Promise(r => setTimeout(r, 100));"
+            ),
+        )
+        _assert_clean_init(result)
+        for field in (
+            "auto_backup_enabled",
+            "auto_backup_dir",
+            "auto_backup_throttle_minutes",
+        ):
+            # Element-scoped: the name must sit on a single <input> tag, not
+            # merely appear somewhere in the whole-DOM string.
+            m = re.search(
+                rf'<input[^>]*name="backup:{re.escape(field)}"[^>]*>', result.dom
+            )
+            assert m is not None, (
+                f"expected backup <input> carrying name=backup:{field}; "
+                f"dom tail: {result.dom[-2000:]}"
+            )
+
+    def test_policy_predicate_controls_carry_name_attribute(
+        self, settings_script: str
+    ) -> None:
+        """The policy-rule editor renders on tab activation, not page init.
+        Drive ``policyLoadConfig()`` with one rule so ``renderPolicyCard``
+        emits the predicate form, and assert its always-rendered controls
+        carry a ``name``. (The predicate *value* control renders only after
+        the predicate form is opened, and re-renders on op/path edits, so it
+        has its own dedicated test below —
+        ``test_policy_predicate_value_control_carries_name_attribute`` —
+        which drives both generator sites.)
+        """
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {"enable_tool_security_policies": {"value": True}},
+                },
+            },
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "rules": [
+                        {
+                            "tool_name": "ha_config_set_helper",
+                            "when": [
+                                {
+                                    "path": "args.helper_type",
+                                    "op": "eq",
+                                    "value": "input_boolean",
+                                }
+                            ],
+                            "remember_minutes": 0,
+                        }
+                    ],
+                },
+            },
+            "/api/policy/pending": {
+                "status": 503,
+                "json": {"error": "irrelevant for this test"},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await window.policyLoadConfig();",
+        )
+        _assert_clean_init(result)
+        for nm in (
+            "policy:predicate-path",
+            "policy:predicate-op",
+            "policy:predicate-path-custom",
+            "policy:remember-minutes",
+        ):
+            # Element-scoped: the name must sit on a single <input>/<select>
+            # tag, not merely appear somewhere in the whole-DOM string.
+            m = re.search(
+                rf'<(?:input|select)\b[^>]*name="{re.escape(nm)}"[^>]*>', result.dom
+            )
+            assert m is not None, (
+                f"expected policy control element carrying name={nm!r} in the "
+                f"rendered card; dom tail: {result.dom[-2500:]}"
+            )
+
+    def test_policy_predicate_value_control_carries_name_attribute(
+        self, settings_script: str
+    ) -> None:
+        """The predicate *value* control is the last generated surface that
+        renders only after the predicate form is opened (click add-condition),
+        re-rendering on op/path edits. ``name="policy:predicate-value"`` is
+        emitted at both generator sites, so drive each through the JS harness:
+
+        - **Free-text branch** (``renderFreeTextValue`` -> ``<input>``): a
+          failed tool-schema fetch degrades gracefully to the free-text JSON
+          input, exactly the default path on form-open with no schema.
+        - **<select> branch** (``renderChoiceSelect`` -> ``<select>``): a
+          schema ``enum`` on the chosen path upgrades the value control to a
+          choice dropdown.
+
+        Opening the form is driven via ``policyLoadConfig()`` + a real click on
+        ``.policy-add-predicate`` (``openForm`` precedent already in this
+        class), so no internal function is poked directly.
+        """
+        base_fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {"enable_tool_security_policies": {"value": True}},
+                },
+            },
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "rules": [
+                        {
+                            "tool_name": "ha_config_set_helper",
+                            "when": [],
+                            "remember_minutes": 0,
+                        }
+                    ],
+                },
+            },
+            "/api/policy/pending": {
+                "status": 503,
+                "json": {"error": "irrelevant for this test"},
+            },
+        }
+
+        # --- Free-text branch: tool-schema 503 -> free-text <input> ---------
+        free_text = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **base_fetches,
+                "/api/policy/tool-schema": {
+                    "status": 503,
+                    "json": {"error": "no schema available"},
+                },
+            },
+            invoke="""
+              await window.policyLoadConfig();
+              const card = document.querySelector('.policy-rule-card');
+              card.querySelector('.policy-add-predicate').click();
+              await new Promise(r => setTimeout(r, 100));
+            """,
+        )
+        _assert_clean_init(free_text)
+        m = re.search(
+            r'<input[^>]*class="[^"]*policy-predicate-value\b[^"]*"[^>]*>',
+            free_text.dom,
+        )
+        assert m is not None, (
+            "expected free-text value <input> after opening the predicate "
+            f"form; dom tail: {free_text.dom[-2500:]}"
+        )
+        assert 'name="policy:predicate-value"' in m.group(0), (
+            f"free-text value <input> missing name; got {m.group(0)}"
+        )
+
+        # --- <select> branch: schema enum on the chosen path -> <select> ----
+        select_branch = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **base_fetches,
+                "/api/policy/tool-schema": {
+                    "status": 200,
+                    "json": {
+                        "paths": [
+                            {
+                                "path": "args.helper_type",
+                                "label": "Helper type",
+                                "type": "str",
+                                "enum": ["input_boolean", "input_number"],
+                            }
+                        ],
+                        "value_sources": {},
+                    },
+                },
+            },
+            invoke="""
+              await window.policyLoadConfig();
+              const card = document.querySelector('.policy-rule-card');
+              card.querySelector('.policy-add-predicate').click();
+              await new Promise(r => setTimeout(r, 100));
+              // op defaults to eq; pick the enum-backed path so the value
+              // control upgrades from free-text to a <select>.
+              const pathSel = card.querySelector('.policy-predicate-path-select');
+              pathSel.value = 'args.helper_type';
+              pathSel.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+            """,
+        )
+        _assert_clean_init(select_branch)
+        m = re.search(
+            r'<select[^>]*class="[^"]*policy-predicate-value-control[^"]*"[^>]*>',
+            select_branch.dom,
+        )
+        assert m is not None, (
+            "expected choice <select> after selecting the enum-backed path; "
+            f"dom tail: {select_branch.dom[-2500:]}"
+        )
+        assert 'name="policy:predicate-value"' in m.group(0), (
+            f"choice <select> missing name; got {m.group(0)}"
+        )
 
 
 class TestAddonModeLockedBannerCopy:
@@ -2145,7 +2630,6 @@ class TestBetaMasterToggleLiveRender:
         )
         _assert_clean_init(result)
         # Row has beta-sub class but NOT dimmed.
-        import re
 
         beta_sub_rows = re.findall(
             r'<div[^>]*class="[^"]*beta-sub[^"]*"[^>]*>',
@@ -2326,7 +2810,6 @@ class TestCodeModeNesting:
             invoke="await new Promise(r => setTimeout(r, 300));",
         )
         _assert_clean_init(result)
-        import re
 
         cm_rows = re.findall(
             r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
@@ -2349,7 +2832,6 @@ class TestCodeModeNesting:
             invoke="await new Promise(r => setTimeout(r, 300));",
         )
         _assert_clean_init(result)
-        import re
 
         cm_rows = re.findall(
             r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
@@ -2371,7 +2853,6 @@ class TestCodeModeNesting:
             invoke="await new Promise(r => setTimeout(r, 300));",
         )
         _assert_clean_init(result)
-        import re
 
         cm_rows = re.findall(
             r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
