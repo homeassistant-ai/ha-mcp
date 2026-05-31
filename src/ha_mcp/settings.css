@@ -1,0 +1,325 @@
+
+  :root {
+    --bg: #1c1c1e; --surface: #2c2c2e; --surface-hover: #3a3a3c;
+    --text: #f5f5f7; --text-secondary: #98989d; --accent: #0a84ff;
+    --accent-hover: #409cff; --danger: #ff453a; --success: #30d158;
+    --warning: #ffd60a; --border: #38383a; --disabled-bg: #1a1a1c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5; padding: 16px; }
+  /* Small unobtrusive version label at the bottom of every settings
+     page so an operator can see the running build without leaving
+     the UI. Empty until the /api/settings/info GET populates it. */
+  .version-footer { margin-top: 32px; padding: 12px 0; font-size: 0.75rem;
+    color: var(--text-secondary); text-align: center;
+    border-top: 1px solid var(--border); opacity: 0.7; }
+  .header { display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .header h1 { font-size: 1.5rem; font-weight: 600; }
+  .status { font-size: 0.85rem; padding: 4px 12px; border-radius: 12px;
+    background: var(--surface); color: var(--text-secondary); }
+  .status.saved { background: #0d3b1e; color: var(--success); }
+  .search { width: 100%; padding: 10px 16px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 0.95rem; margin-bottom: 16px;
+    outline: none; }
+  .search:focus { border-color: var(--accent); }
+  .readonly-notice { background: #1a2a3a; border: 1px solid #1a4a7a; border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 16px; font-size: 0.85rem; color: #6cb4ff; }
+  .group { background: var(--surface); border-radius: 12px; margin-bottom: 8px;
+    overflow: hidden; border: 1px solid var(--border); }
+  .group-header { display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; cursor: pointer; user-select: none; gap: 12px; }
+  .group-header:hover { background: var(--surface-hover); }
+  .group-header-left { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .group-name { font-weight: 600; font-size: 0.95rem; }
+  .group-count { font-size: 0.8rem; color: var(--text-secondary); }
+  .group-chevron { transition: transform 0.2s; color: var(--text-secondary);
+    display: inline-block; width: 12px; }
+  .group-chevron.open { transform: rotate(90deg); }
+  .group-master { flex-shrink: 0; }
+  .group-tools { display: none; border-top: 1px solid var(--border); }
+  .group-tools.open { display: block; }
+  .tool { display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .tool:last-child { border-bottom: none; }
+  .tool.hidden { display: none; }
+  .tool.env-pinned .tool-name { color: var(--text-secondary); }
+  .tool-info { flex: 1; min-width: 0; }
+  .tool-name { font-size: 0.9rem; font-weight: 500; }
+  .tool-meta { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
+  .tool-desc { font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { display: inline-block; font-size: 0.7rem; padding: 1px 6px;
+    border-radius: 4px; margin-left: 6px; font-weight: 500; }
+  .badge.readonly { background: #1a2a3a; color: #6cb4ff; }
+  .badge.destructive { background: #3a1a1a; color: #ff6b6b; }
+  .badge.mandatory { background: #1a3a1a; color: #6bff6b; }
+  .tool-toggles { display: flex; gap: 16px; align-items: center; }
+  .toggle-group { display: flex; flex-direction: column; align-items: center; gap: 2px;
+    font-size: 0.7rem; color: var(--text-secondary); }
+  .toggle-group.disabled-toggle { opacity: 0.35; }
+  .switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+    background: #555; border-radius: 10px; transition: background 0.2s; }
+  .slider::before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px;
+    top: 3px; background: var(--text); border-radius: 50%; transition: transform 0.2s; }
+  input:checked + .slider { background: var(--accent); }
+  input:checked + .slider::before { transform: translateX(16px); }
+  input:disabled + .slider { cursor: not-allowed; opacity: 0.4; }
+  .disabled-by-note { font-size: 0.7rem; color: var(--warning); margin-top: 2px;
+    font-style: italic; }
+  .summary { display: flex; gap: 16px; padding: 8px 0; margin-bottom: 16px;
+    font-size: 0.85rem; color: var(--text-secondary); flex-wrap: wrap; }
+  .summary span { background: var(--surface); padding: 4px 12px; border-radius: 8px; }
+  .pin-notice { background: #3a2e1a; border: 1px solid #7a5a1a; border-radius: 10px;
+    padding: 10px 16px; margin-bottom: 12px; font-size: 0.85rem; color: #ffd680; display: none; }
+  .pin-notice.show { display: block; }
+  .restart-notice { background: #3a1a1a; border: 1px solid #7a1a1a; border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 12px; font-size: 0.9rem; color: #ff9090;
+    font-weight: 500; display: none; align-items: center; justify-content: space-between; gap: 12px; }
+  .restart-notice.show { display: flex; }
+  .restart-notice-text { flex: 1; }
+  .restart-btn { padding: 8px 16px; border-radius: 8px; border: none;
+    background: var(--accent); color: white; font-weight: 600; cursor: pointer;
+    font-size: 0.85rem; flex-shrink: 0; }
+  .restart-btn:hover { background: var(--accent-hover); }
+  .restart-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Destructive variant — visually distinct from the primary accent
+     so a glance at the page makes "Disable settings server"
+     obviously not a routine click. Matches the restart-notice red
+     family so the danger semantic reads even without label text. */
+  .danger-btn { padding: 7px 14px; border-radius: 8px;
+    border: 1px solid #7a1a1a; background: transparent; color: #ff9090;
+    font-weight: 600; cursor: pointer; font-size: 0.8rem; flex-shrink: 0; }
+  .danger-btn:hover { background: #2a0e0e; }
+  .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Tabs — generic structure other tabs can stack onto without
+     touching existing markup. New tabs add a button to .tabs and
+     a sibling .panel below; the JS switcher dispatches via the
+     data-panel attribute. */
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .tab { padding: 10px 16px; border: none; background: transparent; color: var(--text-secondary);
+    font-size: 0.95rem; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500; }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  /* Backups */
+  .backup-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .backup-filters input { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 0.85rem; }
+  .backup-filters input:focus { border-color: var(--accent); outline: none; }
+  .backup-filters button { padding: 8px 12px; border-radius: 8px; border: none;
+    background: var(--surface); color: var(--text); font-size: 0.85rem; cursor: pointer; }
+  .backup-filters button:hover { background: var(--surface-hover); }
+  .backup-filters button.danger { background: #3a1a1a; color: #ff6b6b; }
+  .backup-state { background: var(--surface); border-radius: 10px; padding: 10px 16px; margin-bottom: 12px;
+    font-size: 0.85rem; color: var(--text-secondary); display: flex; gap: 16px; flex-wrap: wrap; }
+  .backup-state span { display: inline-block; }
+  .backup-state strong { color: var(--text); }
+  .backup-row { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 6px; display: flex; align-items: center; gap: 12px; }
+  .backup-row-info { flex: 1; min-width: 0; }
+  .backup-row-name { font-size: 0.9rem; font-weight: 500; word-break: break-all; }
+  .backup-row-meta { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
+  .backup-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .backup-row-actions button { padding: 6px 10px; border-radius: 6px; border: none;
+    background: var(--accent); color: white; font-size: 0.8rem; cursor: pointer; }
+  .backup-row-actions button:hover { background: var(--accent-hover); }
+  .backup-row-actions button.danger { background: var(--danger); }
+  .backup-row-actions button.secondary { background: var(--surface-hover); color: var(--text); }
+  .backup-empty { padding: 24px; text-align: center; color: var(--text-secondary); font-size: 0.9rem;
+    background: var(--surface); border: 1px dashed var(--border); border-radius: 10px; }
+  .backup-config { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 12px; }
+  .backup-config-form { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .backup-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .backup-field-label { min-width: 200px; font-size: 0.9rem; font-weight: 500; }
+  .backup-field-control input[type="number"] { width: 120px; padding: 6px 10px;
+    border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .backup-field-control input[type="number"]:disabled { opacity: 0.55; cursor: not-allowed; }
+  .backup-field-locked { background: #2a2520; color: #f4b860; font-size: 0.78rem;
+    padding: 2px 8px; border-radius: 999px; }
+  .backup-field-help { font-size: 0.75rem; color: var(--text-secondary); flex-basis: 100%; margin-left: 200px; }
+  .backup-config-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px;
+    padding-top: 10px; border-top: 1px solid var(--border); }
+  .backup-config-actions button { padding: 8px 16px; border-radius: 6px; border: none;
+    background: var(--accent); color: white; font-size: 0.9rem; cursor: pointer; font-weight: 500; }
+  .backup-config-actions button:hover { background: var(--accent-hover); }
+  .backup-config-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Modal */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    display: none; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+  .modal-backdrop.show { display: flex; }
+  .modal { background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+    max-width: 900px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; }
+  .modal-header { padding: 14px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .modal-title { font-size: 1.05rem; font-weight: 600; word-break: break-all; }
+  .modal-close { background: transparent; border: none; color: var(--text-secondary);
+    font-size: 1.4rem; cursor: pointer; padding: 0 8px; }
+  .modal-body { flex: 1; overflow: auto; padding: 16px; }
+  .modal-body pre { background: var(--surface); padding: 12px; border-radius: 8px;
+    font-size: 0.8rem; overflow: auto; line-height: 1.4; }
+  .diff-add { color: #6bff6b; }
+  .diff-rem { color: #ff6b6b; }
+  .diff-hdr { color: #6cb4ff; }
+  /* Server-settings rows (#863). One row per FEATURE_FLAG_FIELDS
+     entry. Locked rows (env / addon origin) get the dim treatment +
+     a small inline note pointing at the env var to adjust. */
+  .features-sub { font-size: 0.75rem; color: var(--text-secondary);
+    margin-bottom: 8px; }
+  .feature-row { display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .feature-row:first-child { border-top: none; }
+  .feature-info { flex: 1; min-width: 0; }
+  .feature-name { font-size: 0.9rem; font-weight: 500; }
+  .feature-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;
+    line-height: 1.4; }
+  .feature-help code { background: #111; padding: 1px 5px; border-radius: 4px;
+    font-size: 0.72rem; }
+  .feature-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px;
+    font-style: italic; }
+  .feature-control { flex-shrink: 0; display: flex; align-items: center; }
+  .feature-control input[type="number"] { width: 64px; padding: 4px 8px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 0.85rem; }
+  .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
+  .feature-row.locked .feature-name { color: var(--text-secondary); }
+  /* Beta master toggle + nested sub-rows. The master row
+     ``.beta-master-row`` is visually distinguished as a section
+     header. The 5 sub-rows ``.beta-sub`` are indented with a vertical
+     connector line on the left; when master is off they get
+     ``.dimmed`` (reduced opacity + disabled inputs) to make the
+     gated state visible without removing rows from the DOM. */
+  .feature-row.beta-master-row { font-weight: 600; padding-top: 16px;
+    border-top: 2px solid var(--border); margin-top: 8px; }
+  .feature-row.beta-master-row .feature-help { font-weight: 400; }
+  .feature-row.beta-sub { padding-left: 32px; position: relative; }
+  .feature-row.beta-sub::before { content: ""; position: absolute;
+    left: 12px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.beta-sub.dimmed { opacity: 0.55; }
+  .feature-row.beta-sub.dimmed input { cursor: not-allowed; }
+  /* Code-mode sub-numerics — second-level nesting under the
+     enable_code_mode beta sub-row. Same dimming
+     logic as beta-sub but deeper-indented and gated by
+     enable_code_mode rather than the master. */
+  .feature-row.codemode-sub { padding-left: 56px; position: relative; }
+  .feature-row.codemode-sub::before { content: ""; position: absolute;
+    left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.codemode-sub.dimmed { opacity: 0.55; }
+  .feature-row.codemode-sub.dimmed input { cursor: not-allowed; }
+  /* YAML packages per-key sub-rows — second-level nested under
+     enable_yaml_config_editing. Same dimming logic as codemode-sub
+     but gated by enable_yaml_config_editing (the parent flag) rather
+     than enable_code_mode. */
+  .feature-row.yaml-packages-sub { padding-left: 56px; position: relative; }
+  .feature-row.yaml-packages-sub::before { content: ""; position: absolute;
+    left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.yaml-packages-sub.dimmed { opacity: 0.55; }
+  .feature-row.yaml-packages-sub.dimmed input { cursor: not-allowed; }
+  /* Advanced settings sections — one row per
+     ADVANCED_SETTINGS_FIELDS entry, grouped by section. Visually
+     matches the .feature-row treatment so the Server Settings tab
+     reads as one coherent surface. */
+  .adv-section-title { font-size: 0.85rem; font-weight: 600;
+    color: var(--text-secondary); margin: 20px 0 4px; text-transform: uppercase;
+    letter-spacing: 0.05em; }
+  /* Beta section header is visually distinct (warning color, slightly
+     larger) so the dangerous-features block at the bottom is impossible
+     to miss as a category boundary. */
+  .adv-section-title.beta-section-title { color: var(--warning);
+    font-size: 0.95rem; margin-top: 32px;
+    border-top: 1px solid var(--warning); padding-top: 16px; }
+  /* Two-step save note + primary-CTA save button.
+     The default <button> in this UI is intentionally small/neutral
+     because most surfaces have many of them; the Save row gets a
+     dedicated, larger primary style so users don't miss the action.
+     Duplicated at top and bottom so scrolling either way reaches it. */
+  .adv-save-note { background: rgba(255, 152, 0, 0.08);
+    border-left: 3px solid var(--warning); padding: 10px 14px;
+    border-radius: 6px; margin: 12px 0; color: var(--text);
+    font-size: 0.85rem; line-height: 1.4; }
+  .adv-save-note strong { color: var(--warning); }
+  .adv-save-row { display: flex; align-items: center; gap: 12px;
+    margin: 16px 0; padding: 8px 0; }
+  .adv-save-btn { padding: 10px 22px; font-size: 1rem; font-weight: 600;
+    border: none; border-radius: 8px; background: var(--accent);
+    color: white; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    transition: background 0.15s ease, transform 0.05s ease; }
+  .adv-save-btn:hover { background: var(--accent-hover); }
+  .adv-save-btn:active { transform: translateY(1px); }
+  .adv-save-btn:disabled { opacity: 0.55; cursor: not-allowed;
+    box-shadow: none; }
+  .adv-section { border-top: 1px solid var(--border); }
+  .adv-row { display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .adv-row:first-child { border-top: none; }
+  .adv-row.locked .adv-name { color: var(--text-secondary); }
+  .adv-info { flex: 1; min-width: 0; }
+  .adv-name { font-size: 0.9rem; font-weight: 500; }
+  .adv-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;
+    line-height: 1.4; }
+  .adv-help code { background: #111; padding: 1px 5px; border-radius: 4px;
+    font-size: 0.72rem; }
+  .adv-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px;
+    font-style: italic; }
+  .adv-control { flex-shrink: 0; display: flex; align-items: center; }
+  .adv-control input[type="text"],
+  .adv-control input[type="number"],
+  .adv-control select { padding: 4px 8px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+    font-size: 0.85rem; min-width: 120px; }
+  .adv-control input:disabled,
+  .adv-control select:disabled { opacity: 0.4; cursor: not-allowed; }
+  .adv-control input[type="checkbox"]:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* Tool Security Policies — per-tool card layout.
+     Cards reuse the surface/border variables already in use elsewhere
+     so they read consistently with backup-row / group blocks. */
+  .policy-rule-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; margin: 8px 0; }
+  .policy-rule-header { display: flex; justify-content: space-between;
+    align-items: center; margin-bottom: 8px; }
+  .policy-rule-header strong { font-size: 0.95rem; }
+  .policy-rule-remove { background: transparent; border: none;
+    color: var(--text-secondary); cursor: pointer; font-size: 1.1rem;
+    padding: 0 6px; }
+  .policy-rule-remove:hover { color: var(--danger); }
+  .policy-predicate-list { list-style: none; padding: 0; margin: 6px 0; }
+  .policy-predicate-row { padding: 4px 0; display: flex; align-items: center;
+    gap: 8px; flex-wrap: wrap; }
+  .policy-predicate-row code { background: var(--bg); padding: 3px 8px;
+    border-radius: 4px; font-size: 0.8rem; color: var(--text); }
+  .policy-predicate-row button { background: transparent; border: none;
+    color: var(--accent); cursor: pointer; font-size: 0.8rem; padding: 2px 4px; }
+  .policy-predicate-row button:hover { text-decoration: underline; }
+  .policy-add-predicate { background: transparent; border: 1px dashed var(--border);
+    color: var(--accent); padding: 6px 12px; border-radius: 6px;
+    cursor: pointer; font-size: 0.85rem; margin-top: 4px; }
+  .policy-add-predicate:hover { background: var(--surface-hover); }
+  .policy-predicate-form { background: var(--bg); padding: 10px;
+    margin: 6px 0; border: 1px dashed var(--border); border-radius: 6px;
+    display: flex; flex-direction: column; gap: 8px; }
+  .policy-predicate-form .policy-form-row { display: flex; flex-wrap: wrap;
+    gap: 6px; align-items: center; }
+  .policy-predicate-form .policy-form-label { min-width: 90px;
+    color: var(--text-secondary); font-size: 0.82rem; }
+  .policy-predicate-form select,
+  .policy-predicate-form input { padding: 5px 8px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); font-size: 0.85rem; }
+  .policy-predicate-form input.policy-predicate-path-custom { min-width: 200px; }
+  .policy-predicate-form input.policy-predicate-value { min-width: 220px;
+    font-family: monospace; }
+  .policy-predicate-form .policy-form-hint { font-size: 0.75rem;
+    color: var(--text-secondary); padding-left: 96px; margin-top: -4px; }
+  .policy-predicate-form-error { color: var(--danger); font-size: 0.78rem;
+    width: 100%; margin-top: 4px; }
+  .policy-rule-lifetime { margin: 10px 0; font-size: 0.85rem;
+    color: var(--text-secondary); }
+  .policy-rule-lifetime input { width: 64px; padding: 4px 8px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: 0.85rem; margin: 0 6px; }
+  .policy-save-status { margin-left: 10px; font-size: 0.8rem;
+    color: var(--text-secondary); }

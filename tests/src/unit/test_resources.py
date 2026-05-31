@@ -13,6 +13,7 @@ import pytest
 def _get_resources_dir() -> Path:
     """Get the resources directory from the ha_mcp package."""
     import ha_mcp
+
     return Path(ha_mcp.__file__).parent / "resources"
 
 
@@ -23,7 +24,9 @@ class TestResourcesAccessibility:
         """The resources directory should exist in the ha_mcp package."""
         resources_dir = _get_resources_dir()
         assert resources_dir.exists(), f"Resources directory not found: {resources_dir}"
-        assert resources_dir.is_dir(), f"Resources path is not a directory: {resources_dir}"
+        assert resources_dir.is_dir(), (
+            f"Resources path is not a directory: {resources_dir}"
+        )
 
     def test_skills_vendor_directory_exists(self):
         """The skills-vendor submodule directory should exist."""
@@ -60,7 +63,9 @@ class TestResourcesAccessibility:
         )
         assert ref.exists(), f"dashboard-guide.md reference not found: {ref}"
         content = ref.read_text()
-        assert "dashboard" in content.lower(), "dashboard-guide.md should contain dashboard content"
+        assert "dashboard" in content.lower(), (
+            "dashboard-guide.md should contain dashboard content"
+        )
 
     def test_dashboard_cards_reference_exists(self):
         """The dashboard-cards.md reference file should exist in the skill."""
@@ -74,7 +79,9 @@ class TestResourcesAccessibility:
         )
         assert ref.exists(), f"dashboard-cards.md reference not found: {ref}"
         content = ref.read_text()
-        assert "card" in content.lower(), "dashboard-cards.md should contain card content"
+        assert "card" in content.lower(), (
+            "dashboard-cards.md should contain card content"
+        )
 
     def test_domain_docs_reference_exists(self):
         """The domain-docs.md reference file should exist in the skill."""
@@ -98,6 +105,7 @@ class TestPyprojectPackageData:
         """pyproject.toml should include resource files in package-data."""
         # Find pyproject.toml relative to ha_mcp package
         import ha_mcp
+
         package_dir = Path(ha_mcp.__file__).parent
         project_root = package_dir.parent.parent  # src/ha_mcp -> project root
 
@@ -123,3 +131,52 @@ class TestPyprojectPackageData:
         assert "resources/skills-vendor/**/*" in content, (
             "pyproject.toml should include 'resources/skills-vendor/**/*' in package-data"
         )
+
+    def test_settings_assets_are_packaged(self):
+        """settings.js and settings.css must be declared for both the wheel
+        (pyproject package-data) and the sdist (MANIFEST.in).
+
+        settings_ui.py reads both files at import time, and the HA add-on's
+        Dockerfile copies only the installed .venv -- so the files reach the
+        add-on solely via wheel package-data. A future edit dropping either
+        entry would break 100% of installs at import, invisible to the unit
+        suite (the dev tree always has the files on disk). Lock the packaging
+        declarations here so that regression fails a test instead.
+        """
+        import ha_mcp
+
+        package_dir = Path(ha_mcp.__file__).parent
+        project_root = package_dir.parent.parent  # src/ha_mcp -> project root
+
+        candidate_roots = [project_root, project_root.parent]
+        pyproject_path = next(
+            (
+                root / "pyproject.toml"
+                for root in candidate_roots
+                if (root / "pyproject.toml").exists()
+            ),
+            None,
+        )
+        manifest_path = next(
+            (
+                root / "MANIFEST.in"
+                for root in candidate_roots
+                if (root / "MANIFEST.in").exists()
+            ),
+            None,
+        )
+        if pyproject_path is None or manifest_path is None:
+            pytest.skip(
+                "pyproject.toml / MANIFEST.in not found - likely installed from distribution"
+            )
+
+        pyproject = pyproject_path.read_text()
+        manifest = manifest_path.read_text()
+
+        for asset in ("settings.js", "settings.css"):
+            assert f'"{asset}"' in pyproject, (
+                f"pyproject.toml package-data must list {asset} (wheel + add-on rely on it)"
+            )
+            assert f"src/ha_mcp/{asset}" in manifest, (
+                f"MANIFEST.in must include src/ha_mcp/{asset} (sdist relies on it)"
+            )

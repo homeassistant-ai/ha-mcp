@@ -277,6 +277,28 @@ def extract_script_body(source: str, *, source_label: str = "<source>") -> str:
     raise ValueError(f"{source_label}: no inline <script> tag found")
 
 
+def extract_style_body(source: str, *, source_label: str = "<source>") -> str:
+    """Return the first inline ``<style>`` body in ``source``.
+
+    The CSS analogue of :func:`extract_script_body`: the body is everything
+    between the bare ``<style>`` opening tag's ``>`` and the next
+    ``</style>``. ``_SETTINGS_HTML`` carries a single inline ``<style>``
+    block (no ``<link rel="stylesheet">`` external form to skip), so this
+    deliberately stays simpler than the script extractor.
+
+    ``source_label`` is included in the raised ``ValueError`` so callers
+    know which surface was malformed.
+    """
+    match = re.search(r"<style\b[^>]*>", source)
+    if match is None:
+        raise ValueError(f"{source_label}: no inline <style> tag found")
+    start = match.end()
+    end = source.find("</style>", start)
+    if end == -1:
+        raise ValueError(f"{source_label}: unterminated <style> tag")
+    return source[start:end]
+
+
 # ---------------------------------------------------------------------------
 # Surface discovery
 # ---------------------------------------------------------------------------
