@@ -3158,18 +3158,24 @@ class TestBetaMasterGateInSave:
         _reset_global_settings()
 
 
-def _http_request(peer_ip: str | None, path: str = "/api/policy/config") -> Request:
+def _http_request(
+    peer_ip: str | None,
+    path: str = "/api/policy/config",
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> Request:
     """Build a minimal Starlette Request with a controllable transport peer.
 
     ``client`` is the ASGI peer tuple uvicorn fills from the real TCP
-    connection — the unspoofable signal the ingress guard checks. ``None``
-    models a connection with no peer info.
+    connection — the transport-level signal the ingress guard checks (the real
+    TCP peer, not ``X-Forwarded-For``-forgeable). ``None`` models a connection
+    with no peer info. ``headers`` lets a test attach request headers (e.g. a
+    forged ``X-Forwarded-For``) to prove they cannot influence the gate.
     """
     scope = {
         "type": "http",
         "method": "GET",
         "path": path,
-        "headers": [],
+        "headers": headers or [],
         "query_string": b"",
         "client": (peer_ip, 51234) if peer_ip is not None else None,
     }
@@ -3209,6 +3215,26 @@ class TestIngressOnlyGuard:
 
         resp = await _ingress_only(inner)(_http_request(None))
         assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_forged_xff_does_not_bypass_guard(self):
+        # The gate keys on the transport peer, never on headers. A forged
+        # X-Forwarded-For claiming the Supervisor IP, from a non-Supervisor
+        # peer, must still be blocked.
+        called = False
+
+        async def inner(_request):
+            nonlocal called
+            called = True
+            return JSONResponse({"ok": True})
+
+        req = _http_request(
+            "192.168.1.50",
+            headers=[(b"x-forwarded-for", SUPERVISOR_INGRESS_IP.encode())],
+        )
+        resp = await _ingress_only(inner)(req)
+        assert resp.status_code == 403
+        assert called is False
 
 
 class TestIngressGateApplied:
@@ -3256,4 +3282,38 @@ class TestIngressGateApplied:
         captured = self._capture(monkeypatch)
         secret = captured[("/private_x/api/policy/config", ("PUT",))]
         # Secret-path route is the bare handler — no ingress IP gate.
+        assert not hasattr(secret, "__wrapped__")
+
+    @pytest.mark.asyncio
+    async def test_root_page_route_is_ingress_guarded(self, monkeypatch):
+        # The "/" front door is wrapped separately from the routes table, so
+        # pin it explicitly: a refactor dropping that one wrap would otherwise
+        # silently un-gate the entry point with every other test still green.
+        captured = self._capture(monkeypatch)
+        root_page = captured[("/", ("GET",))]
+        assert getattr(root_page, "__wrapped__", None) is not None
+        resp = await root_page(_http_request("10.0.0.9", path="/"))
+        assert resp.status_code == 403
+
+    def test_secret_routes_unguarded_in_non_addon_mode(self, monkeypatch):
+        # Non-add-on (Docker/standalone, secret-only): no bare-root mount, and
+        # the secret-path handlers must stay raw — the secret is the only auth
+        # there, so a stray guard would 403 legitimate direct clients.
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        captured: dict = {}
+
+        def factory(path, methods):
+            def decorator(fn):
+                captured[(path, tuple(methods))] = fn
+                return fn
+
+            return decorator
+
+        mcp = MagicMock()
+        mcp.custom_route = MagicMock(side_effect=factory)
+        register_settings_routes(mcp, MagicMock(), secret_path="/private_x")
+        # No bare-root mount when not in add-on mode.
+        assert ("/", ("GET",)) not in captured
+        # Secret-path handlers are raw (no ingress IP gate).
+        secret = captured[("/private_x/api/policy/config", ("PUT",))]
         assert not hasattr(secret, "__wrapped__")

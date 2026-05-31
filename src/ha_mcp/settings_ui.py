@@ -5963,12 +5963,15 @@ def build_settings_handlers(
 # Supervisor's fixed network address. Per the add-on ingress contract
 # (https://developers.home-assistant.io/docs/add-ons/presentation/#ingress —
 # "Only connections from 172.30.32.2 must be allowed") the app must reject
-# every other source. This holds under host_network too: the Supervisor
-# reaches a host-network add-on by connecting to the hassio bridge gateway
-# from its own 172.30.32.2 address (supervisor/docker/app.py ip_address():
-# host_network -> network.gateway), so the transport peer the add-on sees is
-# 172.30.32.2 for genuine ingress and some other address (a LAN host, the
-# cloudflared tunnel, another add-on) for a direct port-9583 hit.
+# every other source. This holds under host_network too: ingress proxies to
+# http://{app.ip_address}:{ingress_port}/, and for a host-network add-on
+# app.ip_address is the hassio bridge gateway 172.30.32.1 — the DESTINATION the
+# Supervisor dials (supervisor/docker/app.py ip_address(): host_network ->
+# network.gateway). The Supervisor opens that connection from its own container
+# address 172.30.32.2, so the transport peer the add-on sees is 172.30.32.2 for
+# genuine ingress and some other address (a LAN host, the cloudflared tunnel at
+# 172.30.33.x, another add-on) for a direct port-9583 hit. Verified live via
+# netstat during an "Open Web UI" click.
 SUPERVISOR_INGRESS_IP = "172.30.32.2"
 
 # A settings-UI route handler: async (Request) -> Response.
