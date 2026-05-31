@@ -5990,7 +5990,7 @@ def register_settings_routes(
         )
         return
 
-    # Every settings-UI route except the add-on-only root mount is defined
+    # Every route this function mounts except the add-on-only root mount is defined
     # once in this table and mounted under each active prefix below: at root
     # in add-on mode (so HA ingress can proxy localhost:9583/), and under the
     # secret path when one is set (Docker / standalone direct access). A
