@@ -962,7 +962,6 @@ class TestEnvPinnedToolRows:
         # the HTML `disabled` attribute. Coarse `"disabled" in result.dom`
         # would also pass on CSS class names elsewhere in the page; pin
         # the regex to the actual input element.
-        import re
 
         enabled_input_match = re.search(
             r'<input[^>]*data-field="enabled"[^>]*>',
@@ -1019,7 +1018,6 @@ class TestEnvPinnedToolRows:
             f"dom tail: {result.dom[-3000:]}"
         )
         # Pinned-toggle input for ha_bar must be disabled.
-        import re
 
         pin_input_match = re.search(
             r'<input[^>]*data-field="pinned"[^>]*>',
@@ -1119,7 +1117,6 @@ class TestAdvancedSectionRender:
             invoke="await new Promise(r => setTimeout(r, 200));",
         )
         _assert_clean_init(result)
-        import re
 
         select_match = re.search(
             r'<select[^>]*data-adv-field="log_level"[^>]*>(.*?)</select>',
@@ -1160,7 +1157,6 @@ class TestAdvancedSectionRender:
             invoke="await new Promise(r => setTimeout(r, 200));",
         )
         _assert_clean_init(result)
-        import re
 
         m = re.search(
             r'<input[^>]*data-adv-field="fuzzy_threshold"[^>]*>',
@@ -2426,7 +2422,6 @@ class TestBetaMasterToggleLiveRender:
         )
         _assert_clean_init(result)
         # Row has beta-sub class but NOT dimmed.
-        import re
 
         beta_sub_rows = re.findall(
             r'<div[^>]*class="[^"]*beta-sub[^"]*"[^>]*>',
@@ -2607,7 +2602,6 @@ class TestCodeModeNesting:
             invoke="await new Promise(r => setTimeout(r, 300));",
         )
         _assert_clean_init(result)
-        import re
 
         cm_rows = re.findall(
             r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
@@ -2630,7 +2624,6 @@ class TestCodeModeNesting:
             invoke="await new Promise(r => setTimeout(r, 300));",
         )
         _assert_clean_init(result)
-        import re
 
         cm_rows = re.findall(
             r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
@@ -2652,7 +2645,6 @@ class TestCodeModeNesting:
             invoke="await new Promise(r => setTimeout(r, 300));",
         )
         _assert_clean_init(result)
-        import re
 
         cm_rows = re.findall(
             r'<div[^>]*class="[^"]*codemode-sub[^"]*"[^>]*>',
