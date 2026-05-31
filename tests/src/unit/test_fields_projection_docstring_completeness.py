@@ -58,7 +58,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
             # to a separate `projected` var, so it bypasses `fields=`
             # filtering and is always emitted when the sidecar is running.
             ("tools/tools_search.py", "ha_get_overview", "projected"),
-            ("tools/smart_search.py", "get_system_overview", "base_response"),
+            ("tools/smart_search.py", "_assemble_overview_response", "base_response"),
         ],
         "return_harvest": [],
     },
