@@ -280,7 +280,7 @@ async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tools_hacs.HacsTools.ha_get_hacs
+# tools_hacs.HacsTools.ha_get_hacs_info
 # ---------------------------------------------------------------------------
 
 
@@ -290,9 +290,9 @@ async def _identity_timezone(_client: Any, data: dict[str, Any]) -> dict[str, An
 
 
 @pytest.mark.asyncio
-async def test_ha_get_hacs_search_works_without_ctx() -> None:
+async def test_ha_get_hacs_info_search_works_without_ctx() -> None:
     client = _mock_ha_client()
-    hacs_tool = HacsTools(client).ha_get_hacs
+    hacs_tool = HacsTools(client).ha_get_hacs_info
 
     ws = AsyncMock()
     ws.send_command = AsyncMock(return_value={"success": True, "result": []})
@@ -318,9 +318,9 @@ async def test_ha_get_hacs_search_works_without_ctx() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ha_get_hacs_search_emits_progress_with_ctx() -> None:
+async def test_ha_get_hacs_info_search_emits_progress_with_ctx() -> None:
     client = _mock_ha_client()
-    hacs_tool = HacsTools(client).ha_get_hacs
+    hacs_tool = HacsTools(client).ha_get_hacs_info
     ctx = _make_ctx()
 
     ws = AsyncMock()

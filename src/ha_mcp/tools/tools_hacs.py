@@ -100,7 +100,7 @@ class HacsTools:
     Two action-based tools split along the read/write boundary so the
     read path keeps ``readOnlyHint`` and is never flagged ``destructive``:
 
-    - ``ha_get_hacs`` (read): ``search`` the store / ``info`` for one repo.
+    - ``ha_get_hacs_info`` (read): ``search`` the store / ``info`` for one repo.
     - ``ha_manage_hacs`` (write): ``download`` install/update / ``add_repository``.
     """
 
@@ -108,16 +108,16 @@ class HacsTools:
         self._client = client
 
     @tool(
-        name="ha_get_hacs",
+        name="ha_get_hacs_info",
         tags={"HACS"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get HACS",
+            "title": "Get HACS Info",
         },
     )
     @log_tool_usage
-    async def ha_get_hacs(
+    async def ha_get_hacs_info(
         self,
         action: Annotated[
             Literal["search", "info"],
@@ -164,9 +164,9 @@ class HacsTools:
         discovers installed custom cards to wire into ``ha_config_set_dashboard()``.
 
         **Examples:**
-        - Search the store: ha_get_hacs(action="search", query="mushroom", category="lovelace")
-        - List installed: ha_get_hacs(action="search", installed_only=True)
-        - Repository details: ha_get_hacs(action="info", repository_id="441028036")
+        - Search the store: ha_get_hacs_info(action="search", query="mushroom", category="lovelace")
+        - List installed: ha_get_hacs_info(action="search", installed_only=True)
+        - Repository details: ha_get_hacs_info(action="info", repository_id="441028036")
 
         **Caveats:** ``info`` fetches full repository detail from GitHub, so it can hit GitHub
         rate limits / needs HACS's configured GitHub token; ``search`` reads HACS's locally
@@ -196,7 +196,7 @@ class HacsTools:
         except Exception as e:
             exception_to_structured_error(
                 e,
-                context={"tool": "ha_get_hacs", "action": action},
+                context={"tool": "ha_get_hacs_info", "action": action},
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
                     "For action='search', try a simpler query or a valid category",
@@ -246,7 +246,7 @@ class HacsTools:
         Use ``action="download"`` to install or update a repository, or
         ``action="add_repository"`` to register a custom GitHub repository with HACS. This
         tool performs writes; to search the store or read repository details use
-        ``ha_get_hacs``.
+        ``ha_get_hacs_info``.
 
         **Examples:**
         - Install latest: ha_manage_hacs(action="download", repository_id="441028036")
@@ -287,7 +287,7 @@ class HacsTools:
                 context={"tool": "ha_manage_hacs", "action": action},
                 suggestions=[
                     "Verify HACS is installed: https://hacs.xyz/",
-                    "For action='download', pass a valid repository_id (use ha_get_hacs(action='search') to find it)",
+                    "For action='download', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
                     "For action='add_repository', use 'owner/repo' format and a matching category",
                 ],
             )
@@ -307,7 +307,7 @@ class HacsTools:
     ) -> dict[str, Any]:
         await safe_info(
             ctx,
-            f"ha_get_hacs search starting: query={query!r} "
+            f"ha_get_hacs_info search starting: query={query!r} "
             f"category={category} installed_only={installed_only}",
         )
         await safe_progress(
@@ -445,7 +445,7 @@ class HacsTools:
             repository_id,
             "repository_id",
             suggestions=[
-                "Use ha_get_hacs(action='search') to find valid repository IDs",
+                "Use ha_get_hacs_info(action='search') to find valid repository IDs",
                 "Or pass a GitHub path like 'owner/repo' to install by name",
             ],
         )
@@ -883,7 +883,7 @@ async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str
             ErrorCode.RESOURCE_NOT_FOUND,
             f"Repository '{repository_id}' not found in HACS",
             suggestions=[
-                "Use ha_get_hacs(action='search') to find the repository",
+                "Use ha_get_hacs_info(action='search') to find the repository",
                 "Check the repository name is correct (case-insensitive)",
                 "The repository may need to be added to HACS first",
             ],

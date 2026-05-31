@@ -65,7 +65,9 @@ class TestGetHacsInfo:
             }
         )
         with _patched_hacs(ws):
-            result = await tools.ha_get_hacs(action="info", repository_id="441028036")
+            result = await tools.ha_get_hacs_info(
+                action="info", repository_id="441028036"
+            )
 
         assert result["success"] is True
         # Echoes the caller's identifier and surfaces the structured fields.
@@ -141,9 +143,9 @@ class TestDispatcherErrorRouting:
             ),
             pytest.raises(ToolError) as excinfo,
         ):
-            await tools.ha_get_hacs(action="search")
+            await tools.ha_get_hacs_info(action="search")
         msg = str(excinfo.value)
-        assert "ha_get_hacs" in msg
+        assert "ha_get_hacs_info" in msg
         assert "search" in msg
 
     async def test_structured_toolerror_passes_through_unwrapped(self, tools):
@@ -154,6 +156,6 @@ class TestDispatcherErrorRouting:
             patch.object(HacsTools, "_hacs_info", new=AsyncMock(side_effect=sentinel)),
             pytest.raises(ToolError) as excinfo,
         ):
-            await tools.ha_get_hacs(action="info", repository_id="123")
+            await tools.ha_get_hacs_info(action="info", repository_id="123")
         assert "RESOURCE_NOT_FOUND" in str(excinfo.value)
         assert "INTERNAL_ERROR" not in str(excinfo.value)

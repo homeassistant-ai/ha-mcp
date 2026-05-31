@@ -54,7 +54,7 @@ class TestConfigPersistence:
     """Test load/save of tool_config.json."""
 
     def test_save_and_load(self, tmp_path: Path):
-        config = {"tools": {"ha_get_hacs": "disabled", "ha_restart": "pinned"}}
+        config = {"tools": {"ha_get_hacs_info": "disabled", "ha_restart": "pinned"}}
         config_path = tmp_path / "tool_config.json"
         with patch("ha_mcp.settings_ui._get_config_path", return_value=config_path):
             save_tool_config(config)
@@ -75,11 +75,11 @@ class TestConfigPersistence:
     def test_seed_from_env_vars(self, tmp_path: Path):
         config_path = tmp_path / "tool_config.json"
         settings = MagicMock()
-        settings.disabled_tools = "ha_get_hacs,ha_manage_hacs"
+        settings.disabled_tools = "ha_get_hacs_info,ha_manage_hacs"
         settings.pinned_tools = "ha_restart"
         with patch("ha_mcp.settings_ui._get_config_path", return_value=config_path):
             config = load_tool_config(settings)
-        assert config["tools"]["ha_get_hacs"] == "disabled"
+        assert config["tools"]["ha_get_hacs_info"] == "disabled"
         assert config["tools"]["ha_manage_hacs"] == "disabled"
         assert config["tools"]["ha_restart"] == "pinned"
         assert config_path.exists()
@@ -92,11 +92,11 @@ class TestApplyToolVisibility:
         mcp = MagicMock()
         settings = MagicMock()
         settings.enable_yaml_config_editing = True
-        config = {"tools": {"ha_get_hacs": "disabled", "ha_restart": "enabled"}}
+        config = {"tools": {"ha_get_hacs_info": "disabled", "ha_restart": "enabled"}}
         apply_tool_visibility(mcp, config, settings)
         mcp.disable.assert_called_once()
         disabled_names = mcp.disable.call_args[1]["names"]
-        assert "ha_get_hacs" in disabled_names
+        assert "ha_get_hacs_info" in disabled_names
         assert "ha_restart" not in disabled_names
 
     def test_mandatory_tools_not_disabled(self):
@@ -148,10 +148,10 @@ class TestApplyToolVisibility:
         mcp = MagicMock()
         settings = MagicMock()
         settings.enable_yaml_config_editing = True
-        config = {"tools": {"ha_restart": "pinned", "ha_get_hacs": "enabled"}}
+        config = {"tools": {"ha_restart": "pinned", "ha_get_hacs_info": "enabled"}}
         result = apply_tool_visibility(mcp, config, settings)
         assert "ha_restart" in result.pinned_names
-        assert "ha_get_hacs" not in result.pinned_names
+        assert "ha_get_hacs_info" not in result.pinned_names
 
     def test_returns_explicitly_enabled_names(self):
         """Tools toggled to ``"enabled"`` are surfaced so the server can
@@ -163,13 +163,13 @@ class TestApplyToolVisibility:
             "tools": {
                 "ha_manage_backup": "enabled",  # would otherwise be a default pin
                 "ha_restart": "pinned",
-                "ha_get_hacs": "disabled",
+                "ha_get_hacs_info": "disabled",
             }
         }
         result = apply_tool_visibility(mcp, config, settings)
         assert "ha_manage_backup" in result.enabled_names
         assert "ha_restart" not in result.enabled_names
-        assert "ha_get_hacs" not in result.enabled_names
+        assert "ha_get_hacs_info" not in result.enabled_names
 
     def test_empty_config_no_disable(self):
         mcp = MagicMock()

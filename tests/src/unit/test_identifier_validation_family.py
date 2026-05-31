@@ -1217,7 +1217,7 @@ class TestEnergyPrefsIdentifierValidation:
         tools._client.send_websocket_message.assert_not_called()
 
 
-# --- tools_hacs.py — ha_get_hacs / ha_manage_hacs action validation ------
+# --- tools_hacs.py — ha_get_hacs_info / ha_manage_hacs action validation ------
 
 
 class TestHacsActionValidation:
@@ -1251,7 +1251,7 @@ class TestHacsActionValidation:
         # on the download path above (both now share
         # ``validate_identifier_not_empty``).
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_get_hacs(action="info", repository_id=bad)
+            await tools.ha_get_hacs_info(action="info", repository_id=bad)
         _assert_invalid_param(excinfo)
         assert '"parameter": "repository_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.send_websocket_message.assert_not_called()
