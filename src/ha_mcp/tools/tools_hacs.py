@@ -540,17 +540,36 @@ class HacsTools:
                 raise_error=True,
             )
 
-        result = response.get("result", {})
+        # HACS' add command returns ``success`` on acceptance but registers the
+        # repository asynchronously and returns no id in the ack. Confirm it
+        # actually registered (mirroring the download path) — an accepted-but-
+        # never-registered add (archived repo, bad structure, wrong category)
+        # would otherwise report a misleading "Successfully added".
+        repo = await wait_for_repo_registration(ws_client, repository)
+        if repo is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"HACS accepted the request but '{repository}' did not "
+                    "register as a custom repository.",
+                    suggestions=[
+                        "Verify the repository exists and follows HACS structure (e.g. has hacs.json)",
+                        "Check that the repository is not archived",
+                        "Ensure the category matches the repository type",
+                    ],
+                )
+            )
 
+        repo_id = repo.get("id")
         return await add_timezone_metadata(
             self._client,
             {
                 "success": True,
                 "repository": repository,
                 "category": category,
-                "repository_id": result.get("id"),
+                "repository_id": str(repo_id) if repo_id is not None else None,
                 "message": f"Successfully added {repository} to HACS",
-                "data": result,
+                "data": repo,
             },
         )
 

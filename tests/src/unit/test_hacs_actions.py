@@ -96,12 +96,21 @@ class TestManageHacsDownload:
 
 
 class TestManageHacsAddRepository:
-    async def test_add_repository_translates_category_to_hacs_internal(self, tools):
+    async def test_add_repository_translates_category_and_returns_registered_id(
+        self, tools
+    ):
         # The user-facing "lovelace" category must reach HACS as its internal
-        # name "plugin" (CATEGORY_MAP). A regression here would otherwise only
-        # surface against a live HACS backend.
-        ws = _ws({"id": "999"})
-        with _patched_hacs(ws):
+        # name "plugin" (CATEGORY_MAP), and the returned id comes from the repo
+        # that actually registers — the add ack itself carries no id.
+        ws = _ws({})
+        registered = {"id": "999", "full_name": "owner/my-card", "name": "My Card"}
+        with (
+            _patched_hacs(ws),
+            patch(
+                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
+                new=AsyncMock(return_value=registered),
+            ),
+        ):
             result = await tools.ha_manage_hacs(
                 action="add_repository",
                 repository="owner/my-card",
@@ -114,6 +123,27 @@ class TestManageHacsAddRepository:
         assert ws.send_command.await_args.args[0] == "hacs/repositories/add"
         assert ws.send_command.await_args.kwargs["category"] == "plugin"
         assert ws.send_command.await_args.kwargs["repository"] == "owner/my-card"
+
+    async def test_add_repository_errors_when_repo_never_registers(self, tools):
+        # HACS accepts the add command but the repository never appears in the
+        # list (archived / invalid / wrong category). The tool must surface an
+        # error rather than a false "Successfully added".
+        ws = _ws({})
+        with (
+            _patched_hacs(ws),
+            patch(
+                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
+                new=AsyncMock(return_value=None),
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await tools.ha_manage_hacs(
+                action="add_repository",
+                repository="owner/archived",
+                category="integration",
+            )
+        assert "SERVICE_CALL_FAILED" in str(excinfo.value)
+        assert "did not register" in str(excinfo.value)
 
     async def test_add_repository_rejects_slashless_format_before_ws(self, tools):
         # The "owner/repo" format guard lives after _assert_hacs_available but
