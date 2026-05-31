@@ -5990,12 +5990,13 @@ def register_settings_routes(
         )
         return
 
-    # Every settings-UI route except the add-on-only root mount is mounted
-    # under both prefixes — once at root (so HA ingress can proxy
-    # localhost:9583/) and once under the secret path (Docker / standalone
-    # direct access). A single table keeps the two mounts from drifting;
-    # the frontend uses relative fetches (./api/settings/...) so the same
-    # handlers work at either prefix unchanged.
+    # Every settings-UI route except the add-on-only root mount is defined
+    # once in this table and mounted under each active prefix below: at root
+    # in add-on mode (so HA ingress can proxy localhost:9583/), and under the
+    # secret path when one is set (Docker / standalone direct access). A
+    # deployment hits either, both, or — guarded above — neither. Deriving
+    # the mounts from one table keeps them from drifting; the frontend uses
+    # relative fetches (./api/settings/...) so the handlers work at any prefix.
     routes: list[tuple[str, list[str], str]] = [
         ("/settings", ["GET"], "settings_page"),
         ("/api/settings/tools", ["GET"], "get_tools"),
