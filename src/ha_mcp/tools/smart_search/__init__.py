@@ -12,13 +12,13 @@ focused (see issue #925):
 
 import logging
 
-from ..client.rest_client import HomeAssistantClient
-from ..config import get_global_settings
-from ..utils.fuzzy_search import create_fuzzy_searcher
+from ...client.rest_client import HomeAssistantClient
+from ...config import get_global_settings
+from ...utils.fuzzy_search import create_fuzzy_searcher
 
 # Re-export shared constants so existing ``smart_search.<CONST>`` references
 # keep resolving.
-from ._search_config import (  # noqa: F401  (re-exported for back-compat)
+from ._config import (
     AUTOMATION_CONFIG_TIME_BUDGET,
     BULK_REST_TIMEOUT,
     BULK_WEBSOCKET_TIMEOUT,
@@ -28,9 +28,9 @@ from ._search_config import (  # noqa: F401  (re-exported for back-compat)
     SCENE_CONFIG_TIME_BUDGET,
     SCRIPT_CONFIG_TIME_BUDGET,
 )
-from ._search_deep import DeepSearchMixin
-from ._search_entities import EntitySearchMixin
-from ._search_overview import SystemOverviewMixin
+from ._deep import DeepSearchMixin
+from ._entities import EntitySearchMixin
+from ._overview import SystemOverviewMixin
 
 logger = logging.getLogger(__name__)
 

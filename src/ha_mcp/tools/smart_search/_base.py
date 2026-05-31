@@ -9,7 +9,7 @@ entity/area search mixins.
 import logging
 from typing import Any
 
-from ..client.rest_client import HomeAssistantClient
+from ...client.rest_client import HomeAssistantClient
 
 logger = logging.getLogger(__name__)
 

@@ -4,9 +4,9 @@ import asyncio
 import logging
 from typing import Any
 
-from ..utils.fuzzy_search import calculate_partial_ratio
-from ._search_base import _SearchBase
-from .helpers import exception_to_structured_error
+from ...utils.fuzzy_search import calculate_partial_ratio
+from ..helpers import exception_to_structured_error
+from ._base import _SearchBase
 
 logger = logging.getLogger(__name__)
 

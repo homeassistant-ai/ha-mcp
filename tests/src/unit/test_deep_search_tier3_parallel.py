@@ -183,7 +183,9 @@ class TestAttemptCParallelFetch:
 
         # Budget of 0.005s: batch 1 starts at t=0 (passes check), but by the
         # time it completes (~0.01s), the budget is exceeded so batch 2 is skipped.
-        with patch("ha_mcp.tools._search_deep.AUTOMATION_CONFIG_TIME_BUDGET", 0.005):
+        with patch(
+            "ha_mcp.tools.smart_search._deep.AUTOMATION_CONFIG_TIME_BUDGET", 0.005
+        ):
             await smart_tools.deep_search(
                 query="test",
                 search_types=["automation"],

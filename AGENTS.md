@@ -663,7 +663,7 @@ This project's tool count exceeds the [10-20 tool threshold](https://ai.google.d
 
 ### Module Size
 
-Keep modules focused. Past ~1000 lines (Pylint's `max-module-lines` default) a module usually spans multiple concerns and is worth splitting. To split a large class, prefer feature mixins over one giant class: a thin shell module keeps the public class + `__init__` (preserving import and monkeypatch paths) and composes mixins from sibling `_<area>_*.py` files, with shared constants in a dependency-free `_*_config.py` to avoid import cycles. Example: `smart_search.py` (shell) + `_search_{base,config,deep,overview,entities}.py`.
+Keep modules focused. Past ~1000 lines (Pylint's `max-module-lines` default) a module usually spans multiple concerns and should be split. To split a large class, prefer feature mixins in a package over one giant flat module: the package `__init__.py` is the public surface (keeps the class + `__init__`, preserving import and monkeypatch paths) and composes mixins from private submodules; put shared constants in a dependency-free `_config.py` to avoid import cycles. Example: `tools/smart_search/` (`__init__.py` shell + `_{base,config,deep,overview,entities}.py`).
 
 ## Tool Waiting Behavior
 

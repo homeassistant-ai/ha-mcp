@@ -5,9 +5,9 @@ import logging
 import random
 from typing import Any
 
-from ._search_base import _SearchBase
-from ._search_config import _simplify_states_summary
-from .helpers import exception_to_structured_error
+from ..helpers import exception_to_structured_error
+from ._base import _SearchBase
+from ._config import _simplify_states_summary
 
 logger = logging.getLogger(__name__)
 
