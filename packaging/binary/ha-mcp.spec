@@ -37,13 +37,14 @@ for dir_name in stdlib_dirs:
     if os.path.exists(dir_path):
         datas.append((dir_path, dir_name))
 
-# settings_ui.py reads settings.js via Path(__file__).parent at import.
-# collect_all('ha_mcp') below also picks it up via package-data, but add it
-# explicitly so the binary is guaranteed to ship it regardless of how the
-# package is installed for the build (PyInstaller dedups duplicate datas).
+# settings_ui.py reads settings.js via Path(__file__).parent at import, so a
+# missing file would build a working-looking but broken binary. collect_all(
+# 'ha_mcp') below also picks it up via package-data, but add it explicitly and
+# WITHOUT an existence guard: settings.js is mandatory, so let the build fail
+# loudly if it is absent rather than ship a broken binary (PyInstaller dedups
+# the duplicate datas entry).
 _settings_js = os.path.join(PROJECT_ROOT, 'src', 'ha_mcp', 'settings.js')
-if os.path.exists(_settings_js):
-    datas.append((_settings_js, 'ha_mcp'))
+datas.append((_settings_js, 'ha_mcp'))
 
 binaries = []
 hiddenimports = []
