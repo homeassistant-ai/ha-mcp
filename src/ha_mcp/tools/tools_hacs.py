@@ -168,9 +168,10 @@ class HacsTools:
         - List installed: ha_get_hacs(action="search", installed_only=True)
         - Repository details: ha_get_hacs(action="info", repository_id="441028036")
 
-        **Caveats:** ``search``/``info`` proxy the GitHub API, so they are subject to GitHub
-        rate limits and need HACS's configured GitHub token; ``repository_id`` accepts a
-        numeric HACS ID or an ``owner/repo`` path.
+        **Caveats:** ``info`` fetches full repository detail from GitHub, so it can hit GitHub
+        rate limits / needs HACS's configured GitHub token; ``search`` reads HACS's locally
+        cached repository index. ``repository_id`` accepts a numeric HACS ID or an
+        ``owner/repo`` path.
         """
         try:
             if action == "search":
@@ -179,17 +180,15 @@ class HacsTools:
                 )
 
             # action == "info"
-            if not repository_id:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "repository_id is required for action='info'",
-                        suggestions=[
-                            "Pass repository_id (numeric HACS ID or 'owner/repo')",
-                            "Use action='search' to find the repository first",
-                        ],
-                    )
-                )
+            repository_id = validate_identifier_not_empty(
+                repository_id,
+                "repository_id",
+                message="repository_id is required for action='info'",
+                suggestions=[
+                    "Pass repository_id (numeric HACS ID or 'owner/repo')",
+                    "Use action='search' to find the repository first",
+                ],
+            )
             return await self._hacs_info(repository_id)
 
         except ToolError:
@@ -264,18 +263,21 @@ class HacsTools:
                 return await self._hacs_download(repository_id, version)
 
             # action == "add_repository"
-            if repository is None or category is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "repository and category are required for action='add_repository'",
-                        suggestions=[
-                            "Pass repository in 'owner/repo' format",
-                            "Pass category (integration, lovelace, theme, appdaemon, python_script)",
-                        ],
-                    )
-                )
-            return await self._hacs_add_repository(repository, category)
+            repository = validate_identifier_not_empty(
+                repository,
+                "repository",
+                suggestions=["Pass repository in 'owner/repo' format"],
+            )
+            # ``category`` is a Literal param, so bind the validated value to a
+            # new ``str`` name rather than reassigning (str is wider than the Literal).
+            valid_category = validate_identifier_not_empty(
+                category,
+                "category",
+                suggestions=[
+                    "Pass category (integration, lovelace, theme, appdaemon, python_script)"
+                ],
+            )
+            return await self._hacs_add_repository(repository, valid_category)
 
         except ToolError:
             raise

@@ -1243,27 +1243,39 @@ class TestHacsActionValidation:
         assert '"parameter": "repository_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.send_websocket_message.assert_not_called()
 
-    async def test_get_hacs_info_requires_repository_id(self, tools):
+    @pytest.mark.parametrize("bad", [None, "", "   "])
+    async def test_get_hacs_info_requires_repository_id(self, tools, bad):
         # ``info`` has nothing to act on without a repository_id — the
-        # dispatcher must reject before any HACS availability check or
-        # WS round-trip, mirroring the up-front guard on the download
-        # path above.
+        # dispatcher must reject None / empty / whitespace before any HACS
+        # availability check or WS round-trip, mirroring the up-front guard
+        # on the download path above (both now share
+        # ``validate_identifier_not_empty``).
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_get_hacs(action="info")
+            await tools.ha_get_hacs(action="info", repository_id=bad)
         _assert_invalid_param(excinfo)
-        assert "repository_id" in str(excinfo.value), str(excinfo.value)
+        assert '"parameter": "repository_id"' in str(excinfo.value), str(excinfo.value)
         tools._client.send_websocket_message.assert_not_called()
 
     @pytest.mark.parametrize(
-        "kwargs",
-        [{}, {"repository": "owner/repo"}, {"category": "integration"}],
-        ids=["neither", "category-missing", "repository-missing"],
+        "kwargs, bad_param",
+        [
+            ({}, "repository"),
+            ({"category": "integration"}, "repository"),
+            ({"repository": "   ", "category": "integration"}, "repository"),
+            ({"repository": "owner/repo"}, "category"),
+            ({"repository": "owner/repo", "category": "   "}, "category"),
+        ],
+        ids=["both-missing", "repo-missing", "repo-blank", "cat-missing", "cat-blank"],
     )
-    async def test_manage_hacs_add_repository_requires_both_fields(self, tools, kwargs):
+    async def test_manage_hacs_add_repository_requires_both_fields(
+        self, tools, kwargs, bad_param
+    ):
         # ``add_repository`` needs both ``repository`` and ``category``;
-        # a partial call must be rejected up-front rather than sending a
-        # malformed ``hacs/repositories/add`` to the backend.
+        # a missing OR blank field must be rejected up-front (naming the
+        # offending parameter) rather than sending a malformed
+        # ``hacs/repositories/add`` to the backend.
         with pytest.raises(ToolError) as excinfo:
             await tools.ha_manage_hacs(action="add_repository", **kwargs)
         _assert_invalid_param(excinfo)
+        assert f'"parameter": "{bad_param}"' in str(excinfo.value), str(excinfo.value)
         tools._client.send_websocket_message.assert_not_called()
