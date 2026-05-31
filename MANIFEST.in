@@ -1,3 +1,4 @@
 include README.md
 include LICENSE
+include src/ha_mcp/settings.js
 recursive-include src/ha_mcp/resources *.md *.json
