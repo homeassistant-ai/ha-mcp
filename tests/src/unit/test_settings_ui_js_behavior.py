@@ -1250,13 +1250,15 @@ class TestFormControlAccessibility:
         )
 
     def test_no_rendered_input_lacks_name_or_id(self, settings_script: str) -> None:
-        """Holistic guard: render every page-load form surface — tool toggles
-        + group master, feature flags, the yaml-packages sub-flags, the
-        code-mode numeric sub-rows, advanced fields and a choices dropdown —
-        then assert every rendered <input> AND <select> carries a name or id,
-        exactly the rule the accessibility audit flags. (The backup-config
-        and policy forms load on tab activation, not at init — covered by
-        their own tests below; the policy predicate <select>s render there.)
+        """Holistic guard: render every form surface present at default page
+        init — tool toggles + group master, feature flags, the yaml-packages
+        sub-flags, the code-mode numeric sub-rows, advanced fields and a
+        choices dropdown — then assert every rendered <input> AND <select>
+        carries a name or id, exactly the rule the accessibility audit flags.
+        (The backup-config and policy forms load on tab activation — including
+        via the ?tab= deep-link path — not at default init, so they are
+        covered by their own tests below; the policy predicate <select>s
+        render there.)
         """
 
         def flag(env: str) -> dict:
@@ -1379,10 +1381,14 @@ class TestFormControlAccessibility:
             f"{len(missing)} rendered form control(s) lack name/id (a11y): {missing}"
         )
         # Sanity: the expanded fixture really did exercise the extra
-        # surfaces (code-mode sub-row + a yaml-packages sub-flag), not
-        # silently render nothing.
+        # surfaces, not silently render nothing. `adv:code_mode_max_duration`
+        # is emitted by both the Advanced-panel field generator (the fixture
+        # lists it as an advanced field) and renderCodeModeSubRows, so this
+        # assert only proves *a* control with that name rendered — not the
+        # code-mode sub-row specifically.
         assert 'name="adv:code_mode_max_duration"' in result.dom, (
-            "code-mode sub-row did not render — fixture/holistic-guard drift"
+            "no control named adv:code_mode_max_duration rendered — "
+            "fixture/holistic-guard drift"
         )
         assert 'name="feature:enable_yaml_packages_automation"' in result.dom, (
             "yaml-packages sub-row did not render — fixture/holistic-guard drift"
@@ -1450,8 +1456,14 @@ class TestFormControlAccessibility:
             "auto_backup_dir",
             "auto_backup_throttle_minutes",
         ):
-            assert f'name="backup:{field}"' in result.dom, (
-                f"expected name on backup input {field}; dom tail: {result.dom[-2000:]}"
+            # Element-scoped: the name must sit on a single <input> tag, not
+            # merely appear somewhere in the whole-DOM string.
+            m = re.search(
+                rf'<input[^>]*name="backup:{re.escape(field)}"[^>]*>', result.dom
+            )
+            assert m is not None, (
+                f"expected backup <input> carrying name=backup:{field}; "
+                f"dom tail: {result.dom[-2000:]}"
             )
 
     def test_policy_predicate_controls_carry_name_attribute(
@@ -1460,10 +1472,11 @@ class TestFormControlAccessibility:
         """The policy-rule editor renders on tab activation, not page init.
         Drive ``policyLoadConfig()`` with one rule so ``renderPolicyCard``
         emits the predicate form, and assert its always-rendered controls
-        carry a ``name``. (The predicate *value* control renders only on an
-        op-change — an async, fetch-backed path — so its name is covered by
-        review/code, not this render guard; it is set at both generator
-        sites.)
+        carry a ``name``. (The predicate *value* control renders only after
+        the predicate form is opened, and re-renders on op/path edits, so it
+        has its own dedicated test below —
+        ``test_policy_predicate_value_control_carries_name_attribute`` —
+        which drives both generator sites.)
         """
         fetches = {
             **DEFAULT_FETCHES,
@@ -1511,10 +1524,140 @@ class TestFormControlAccessibility:
             "policy:predicate-path-custom",
             "policy:remember-minutes",
         ):
-            assert f'name="{nm}"' in result.dom, (
-                f"expected policy control name={nm!r} in the rendered card; "
-                f"dom tail: {result.dom[-2500:]}"
+            # Element-scoped: the name must sit on a single <input>/<select>
+            # tag, not merely appear somewhere in the whole-DOM string.
+            m = re.search(
+                rf'<(?:input|select)\b[^>]*name="{re.escape(nm)}"[^>]*>', result.dom
             )
+            assert m is not None, (
+                f"expected policy control element carrying name={nm!r} in the "
+                f"rendered card; dom tail: {result.dom[-2500:]}"
+            )
+
+    def test_policy_predicate_value_control_carries_name_attribute(
+        self, settings_script: str
+    ) -> None:
+        """The predicate *value* control is the last generated surface that
+        renders only after the predicate form is opened (click add-condition),
+        re-rendering on op/path edits. ``name="policy:predicate-value"`` is
+        emitted at both generator sites, so drive each through the JS harness:
+
+        - **Free-text branch** (``renderFreeTextValue`` -> ``<input>``): a
+          failed tool-schema fetch degrades gracefully to the free-text JSON
+          input, exactly the default path on form-open with no schema.
+        - **<select> branch** (``renderChoiceSelect`` -> ``<select>``): a
+          schema ``enum`` on the chosen path upgrades the value control to a
+          choice dropdown.
+
+        Opening the form is driven via ``policyLoadConfig()`` + a real click on
+        ``.policy-add-predicate`` (``openForm`` precedent already in this
+        class), so no internal function is poked directly.
+        """
+        base_fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {"enable_tool_security_policies": {"value": True}},
+                },
+            },
+            "/api/policy/config": {
+                "status": 200,
+                "json": {
+                    "wait_seconds": 60,
+                    "approval_ttl_minutes": 5,
+                    "rules": [
+                        {
+                            "tool_name": "ha_config_set_helper",
+                            "when": [],
+                            "remember_minutes": 0,
+                        }
+                    ],
+                },
+            },
+            "/api/policy/pending": {
+                "status": 503,
+                "json": {"error": "irrelevant for this test"},
+            },
+        }
+
+        # --- Free-text branch: tool-schema 503 -> free-text <input> ---------
+        free_text = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **base_fetches,
+                "/api/policy/tool-schema": {
+                    "status": 503,
+                    "json": {"error": "no schema available"},
+                },
+            },
+            invoke="""
+              await window.policyLoadConfig();
+              const card = document.querySelector('.policy-rule-card');
+              card.querySelector('.policy-add-predicate').click();
+              await new Promise(r => setTimeout(r, 100));
+            """,
+        )
+        _assert_clean_init(free_text)
+        m = re.search(
+            r'<input[^>]*class="[^"]*policy-predicate-value\b[^"]*"[^>]*>',
+            free_text.dom,
+        )
+        assert m is not None, (
+            "expected free-text value <input> after opening the predicate "
+            f"form; dom tail: {free_text.dom[-2500:]}"
+        )
+        assert 'name="policy:predicate-value"' in m.group(0), (
+            f"free-text value <input> missing name; got {m.group(0)}"
+        )
+
+        # --- <select> branch: schema enum on the chosen path -> <select> ----
+        select_branch = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **base_fetches,
+                "/api/policy/tool-schema": {
+                    "status": 200,
+                    "json": {
+                        "paths": [
+                            {
+                                "path": "args.helper_type",
+                                "label": "Helper type",
+                                "type": "str",
+                                "enum": ["input_boolean", "input_number"],
+                            }
+                        ],
+                        "value_sources": {},
+                    },
+                },
+            },
+            invoke="""
+              await window.policyLoadConfig();
+              const card = document.querySelector('.policy-rule-card');
+              card.querySelector('.policy-add-predicate').click();
+              await new Promise(r => setTimeout(r, 100));
+              // op defaults to eq; pick the enum-backed path so the value
+              // control upgrades from free-text to a <select>.
+              const pathSel = card.querySelector('.policy-predicate-path-select');
+              pathSel.value = 'args.helper_type';
+              pathSel.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 100));
+            """,
+        )
+        _assert_clean_init(select_branch)
+        m = re.search(
+            r'<select[^>]*class="[^"]*policy-predicate-value-control[^"]*"[^>]*>',
+            select_branch.dom,
+        )
+        assert m is not None, (
+            "expected choice <select> after selecting the enum-backed path; "
+            f"dom tail: {select_branch.dom[-2500:]}"
+        )
+        assert 'name="policy:predicate-value"' in m.group(0), (
+            f"choice <select> missing name; got {m.group(0)}"
+        )
 
 
 class TestAddonModeLockedBannerCopy:
