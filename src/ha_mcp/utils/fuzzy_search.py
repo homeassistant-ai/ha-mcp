@@ -171,7 +171,11 @@ class FuzzyEntitySearcher:
         self.threshold = threshold
 
     def search_entities(
-        self, entities: list[dict[str, Any]], query: str, limit: int = 10, offset: int = 0
+        self,
+        entities: list[dict[str, Any]],
+        query: str,
+        limit: int = 10,
+        offset: int = 0,
     ) -> tuple[list[dict[str, Any]], int]:
         """Search entities using BM25 scoring with SequenceMatcher typo fallback.
 
@@ -196,7 +200,9 @@ class FuzzyEntitySearcher:
         # + entity registry aliases (when callers enrich entities with the
         # ``_aliases`` key — see smart_search.smart_entity_search).
         docs: list[list[str]] = []
-        meta: list[tuple[str, str, str, dict[str, Any], str]] = []  # eid, name, domain, attrs, state
+        meta: list[
+            tuple[str, str, str, dict[str, Any], str]
+        ] = []  # eid, name, domain, attrs, state
         # Track which entities matched on alias (for `match_type="alias_match"`).
         alias_hit: list[set[str]] = []
         # Track ``hidden_by`` per entity so the score-penalty pass can
@@ -289,18 +295,18 @@ class FuzzyEntitySearcher:
                 if hit_alias_tokens:
                     match_type = "alias_match"
                 else:
-                    match_type = self._get_match_type(
-                        eid, fname, domain, query_lower
-                    )
-                matches.append({
-                    "entity_id": eid,
-                    "friendly_name": fname,
-                    "domain": domain,
-                    "state": state,
-                    "attributes": attrs,
-                    "score": score,
-                    "match_type": match_type,
-                })
+                    match_type = self._get_match_type(eid, fname, domain, query_lower)
+                matches.append(
+                    {
+                        "entity_id": eid,
+                        "friendly_name": fname,
+                        "domain": domain,
+                        "state": state,
+                        "attributes": attrs,
+                        "score": score,
+                        "match_type": match_type,
+                    }
+                )
 
         # Tier-3 fallback: token-level SequenceMatcher only if BM25 scored
         # every document at zero. Firing the fallback when BM25 found valid
@@ -309,16 +315,14 @@ class FuzzyEntitySearcher:
         # exactly the noise floor the new absolute normalization is fixing.
         bm25_found_any = any(raw > 0 for raw in raw_scores)
         if not matches and not bm25_found_any:
-            matches = self._typo_fallback(
-                query_tokens, docs, meta, hidden_flags
-            )
+            matches = self._typo_fallback(query_tokens, docs, meta, hidden_flags)
 
         # Tie-break on entity_id so paginated requests return stable
         # ordering when several entities share a score (common with the
         # hidden-penalty bands at 100/80 and BM25's coarse score buckets).
         matches.sort(key=lambda x: (-x["score"], x["entity_id"]))
         total_matches = len(matches)
-        return matches[offset:offset + limit], total_matches
+        return matches[offset : offset + limit], total_matches
 
     # -- private helpers -----------------------------------------------------
 
@@ -375,22 +379,22 @@ class FuzzyEntitySearcher:
                     continue
 
             eid, fname, domain, attrs, state = meta[i]
-            entity_hidden = (
-                hidden_flags[i] if hidden_flags is not None else None
-            )
+            entity_hidden = hidden_flags[i] if hidden_flags is not None else None
             # Apply the hidden penalty after the threshold gate above
             # so borderline hidden matches still surface; the penalty
             # only re-ranks them.
             score = apply_hidden_penalty(best_token_score, entity_hidden)
-            results.append({
-                "entity_id": eid,
-                "friendly_name": fname,
-                "domain": domain,
-                "state": state,
-                "attributes": attrs,
-                "score": score,
-                "match_type": "typo_fallback",
-            })
+            results.append(
+                {
+                    "entity_id": eid,
+                    "friendly_name": fname,
+                    "domain": domain,
+                    "state": state,
+                    "attributes": attrs,
+                    "score": score,
+                    "match_type": "typo_fallback",
+                }
+            )
         return results
 
     def _calculate_entity_score(
