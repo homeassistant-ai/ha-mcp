@@ -55,7 +55,7 @@ All workflow automation is implemented as skills in `.claude/skills/` and invoke
 
 ## Project Overview
 
-**Home Assistant MCP Server** - A production MCP server enabling AI assistants to control Home Assistant smart homes. Provides 65+ tools for entity control, automations, device management, and more.
+**Home Assistant MCP Server** - A production MCP server enabling AI assistants to control Home Assistant smart homes. Provides tools for entity control, automations, device management, and more.
 
 - **Repo**: `homeassistant-ai/ha-mcp`
 - **Package**: `ha-mcp` on PyPI
@@ -331,7 +331,7 @@ If any are false: fix it now, or let it go. **Do not file an issue to "track" it
 
 **Scope is the user's call, not yours.** Before deferring anything, explicitly ask with a specific reason: *"I think this is out of scope because [X]. Fix here or defer?"* — do not silently drop it.
 
-The following phrases are red flags that you're making a scope decision unilaterally (list is non-exhaustive — match on intent, not exact string): "post-merge follow-up", "nice to have", "out of scope for this PR", "pre-existing — not touching it" (pre-existing is not a reason to skip; addressing pre-existing things is the point of this rule), "real design work, not N lines", "worth tracking as a follow-up issue".
+The following phrases are red flags that you're making a scope decision unilaterally (list is non-exhaustive — match on intent, not exact string): "post-merge follow-up", "follow-up consideration", "forward-looking note", "nice to have", "Happy to file an issue", "out of scope for this PR", "not blocking this PR", "pre-existing — not touching it" (pre-existing is not a reason to skip; addressing pre-existing things is the point of this rule), "real design work, not N lines", "worth tracking as a follow-up issue".
 
 **Code-review bot suggestions** (Gemini Code Assist, CodeRabbit, Copilot non-blocking nits): apply inline or dismiss. Never spawn a follow-up issue from a bot suggestion unless the user explicitly confirms it's a large, out-of-scope change. See `.gemini/styleguide.md` § *Non-Blocking Suggestions and Scope* for the bot-side rule.
 
@@ -389,7 +389,7 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 ### Setup
 ```bash
 uv sync --group dev        # Install with dev dependencies
-uv run ha-mcp              # Run MCP server (65+ tools)
+uv run ha-mcp              # Run MCP server
 cp .env.example .env       # Configure HA connection
 ```
 
@@ -463,7 +463,7 @@ src/ha_mcp/
 │   ├── rest_client.py       # HTTP REST API client
 │   ├── websocket_client.py  # Real-time state monitoring
 │   └── websocket_listener.py
-├── tools/             # 36 modules, 65+ tools
+├── tools/             # 36 modules, auto-discovered
 │   ├── registry.py          # Lazy auto-discovery
 │   ├── smart_search.py      # Fuzzy entity search
 │   ├── device_control.py    # WebSocket-verified control
@@ -477,9 +477,9 @@ src/ha_mcp/
 │   ├── skill_loader.py      # Skills-vendor file loader (used by ha_get_skill_guide and write tools)
 │   ├── usage_logger.py      # Per-tool usage telemetry
 │   ├── data_paths.py        # Canonical data directory paths
-│   ├── python_sandbox.py    # Sandboxed Python eval for ha_eval_template
-│   ├── kill_signal_diagnostics.py # Startup signal diagnostics
-│   └── config_hash.py       # Dashboard optimistic locking hash
+│   ├── python_sandbox.py    # Sandboxed Python-expression eval for python_transform on config tools
+│   ├── kill_signal_diagnostics.py # Kill-signal (SIGTERM/SIGINT/SIGHUP) shutdown diagnostics
+│   └── config_hash.py       # Shared optimistic-locking hash (automation/script/scene/dashboard/energy)
 └── resources/
     ├── card_types.json
     └── dashboard_guide.md
@@ -651,12 +651,16 @@ raise ToolError(json.dumps({...}))                    # Tool-level failure (isEr
 ### Tool Consolidation
 When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
 
-With 65+ tools, this project exceeds the [10-20 tool threshold](https://ai.google.dev/gemini-api/docs/function-calling) where tool selection accuracy degrades ([OpenAI](https://developers.openai.com/api/docs/guides/function-calling), [Google](https://ai.google.dev/gemini-api/docs/function-calling)). Reducing tool count is a priority, but how matters. Anthropic's [tool design blog](https://www.anthropic.com/engineering/writing-tools-for-agents) recommends combining frequently chained operations: "Instead of implementing a `list_users`, `list_events`, and `create_event` tools, consider implementing a `schedule_event` tool which finds availability and schedules an event." Their [context engineering guide](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) warns against "bloated tool sets that cover too much functionality or lead to ambiguous decision points about which tool to use." Each tool should have "a clear, distinct purpose" ([Anthropic](https://www.anthropic.com/engineering/writing-tools-for-agents)).
+This project's tool count exceeds the [10-20 tool threshold](https://ai.google.dev/gemini-api/docs/function-calling) where selection accuracy degrades. Reducing count is a priority — combine frequently chained operations into one tool and ensure each tool has a clear, distinct purpose. See [Anthropic's tool design blog](https://www.anthropic.com/engineering/writing-tools-for-agents) for guidance.
 
 | Pattern | Example | Guideline |
 |---------|---------|-----------|
 | Tool A is a strict subset of Tool B | `ha_dashboard_find_card` fully covered by `ha_config_get_dashboard` | Consolidate (remove A) |
 | Frequently chained operations | Multi-step workflows combined into one tool | Consolidate — reduces round-trips |
+
+**Breaking changes**: only removing functionality with no alternative requires a major bump. Consolidation and renaming are not breaking.
+
+**Context engineering**: provide minimum context; let models fetch more via `ha_get_skill_guide`. Favor statelessness and content-derived hashes for optimistic locking.
 
 ## Tool Waiting Behavior
 
@@ -708,8 +712,6 @@ gh search code "use_blueprint" --repo home-assistant/core path:tests --json path
 gh api /repos/home-assistant/core/contents/homeassistant/components/automation/config.py \
   --jq '.content' | base64 -d > /tmp/ha_config.py
 ```
-
-**Insight**: Collection-based components (helpers, scripts, automations) follow consistent patterns.
 
 ## Release Process
 

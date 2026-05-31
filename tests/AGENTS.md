@@ -78,4 +78,4 @@ CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/n
 When adding a new UI surface:
 - Python-rendered HTML: register the renderer in `_js_harness.py::_PY_RENDERERS`.
 - Astro page: drop the `.astro` file under `site/src/`; discovery walks automatically.
-- Behavioural tests: add a `test_<surface>_js_behavior.py` module alongside the existing ones.
+- Behavioural tests: add a `test_<surface>_js_behavior.py` module alongside the existing ones (`test_settings_ui_js_behavior.py`, `test_astro_setup_js_behavior.py`, `test_astro_tools_js_behavior.py`, `test_astro_layout_js_behavior.py`, `test_consent_form_js_behavior.py`) — one module per UI surface.
