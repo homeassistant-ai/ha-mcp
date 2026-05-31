@@ -55,9 +55,7 @@ async def test_addons_installed_via_mcp(mcp_client: Any) -> None:
     installed_names = {a.get("name") for a in payload.get("addons", [])}
     LOG.info("Installed addons on booted HAOS: %s", sorted(installed_names))
 
-    missing = [
-        name for name in INSTALLED_ADDON_NAMES if name not in installed_names
-    ]
+    missing = [name for name in INSTALLED_ADDON_NAMES if name not in installed_names]
     if missing:
         pytest.fail(
             f"Expected addons missing from HAOS install: {missing}. "
@@ -78,7 +76,9 @@ async def test_supervisor_info_via_mcp(mcp_client: Any) -> None:
     detail = payload.get("addon") or payload.get("data") or payload
     # Mosquitto is install=true, start=False in the build — so it should
     # be installed but not started. Either field name HA returns is fine.
-    assert detail.get("name") == "Mosquitto broker", f"Unexpected addon detail: {detail}"
+    assert detail.get("name") == "Mosquitto broker", (
+        f"Unexpected addon detail: {detail}"
+    )
 
 
 async def test_hacs_bootstrap_completed(mcp_client: Any) -> None:
@@ -92,10 +92,10 @@ async def test_hacs_bootstrap_completed(mcp_client: Any) -> None:
     tool to confirm the integration is reachable.
     """
     raw = await mcp_client.call_tool(
-        "ha_hacs_search", {"installed_only": True, "max_results": 1}
+        "ha_get_hacs", {"action": "search", "installed_only": True, "max_results": 1}
     )
     payload = parse_mcp_result(raw)
-    # ha_hacs_search wraps the payload as {"data": {"success": True, ...}}
+    # ha_get_hacs wraps the payload as {"data": {"success": True, ...}}
     # — the nested ``data`` envelope is the post-tool-formatter shape,
     # and ``success`` lives inside it. If HACS isn't loaded, the tool
     # raises ToolError (parse_mcp_result then surfaces it as
@@ -103,7 +103,7 @@ async def test_hacs_bootstrap_completed(mcp_client: Any) -> None:
     # either shape and only fail when neither is present.
     inner = payload.get("data", payload)
     assert inner.get("success"), (
-        f"HACS integration not reachable via ha_hacs_search — "
+        f"HACS integration not reachable via ha_get_hacs — "
         f"bootstrap from 'Get HACS' addon may have silently failed. "
         f"Response: {payload}"
     )

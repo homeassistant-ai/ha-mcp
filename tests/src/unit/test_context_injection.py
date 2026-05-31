@@ -280,7 +280,7 @@ async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
 
 
 # ---------------------------------------------------------------------------
-# tools_hacs.HacsTools.ha_hacs_search
+# tools_hacs.HacsTools.ha_get_hacs
 # ---------------------------------------------------------------------------
 
 
@@ -290,9 +290,9 @@ async def _identity_timezone(_client: Any, data: dict[str, Any]) -> dict[str, An
 
 
 @pytest.mark.asyncio
-async def test_ha_hacs_search_works_without_ctx() -> None:
+async def test_ha_get_hacs_search_works_without_ctx() -> None:
     client = _mock_ha_client()
-    hacs_tool = HacsTools(client).ha_hacs_search
+    hacs_tool = HacsTools(client).ha_get_hacs
 
     ws = AsyncMock()
     ws.send_command = AsyncMock(return_value={"success": True, "result": []})
@@ -311,16 +311,16 @@ async def test_ha_hacs_search_works_without_ctx() -> None:
             new=_identity_timezone,
         ),
     ):
-        result = await hacs_tool(query="anything")
+        result = await hacs_tool(action="search", query="anything")
 
     assert result["success"] is True
     assert result["total_matches"] == 0
 
 
 @pytest.mark.asyncio
-async def test_ha_hacs_search_emits_progress_with_ctx() -> None:
+async def test_ha_get_hacs_search_emits_progress_with_ctx() -> None:
     client = _mock_ha_client()
-    hacs_tool = HacsTools(client).ha_hacs_search
+    hacs_tool = HacsTools(client).ha_get_hacs
     ctx = _make_ctx()
 
     ws = AsyncMock()
@@ -340,7 +340,7 @@ async def test_ha_hacs_search_emits_progress_with_ctx() -> None:
             new=_identity_timezone,
         ),
     ):
-        result = await hacs_tool(query="anything", ctx=ctx)
+        result = await hacs_tool(action="search", query="anything", ctx=ctx)
 
     assert result["success"] is True
     ctx.info.assert_awaited()

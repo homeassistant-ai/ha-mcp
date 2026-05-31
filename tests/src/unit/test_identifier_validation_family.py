@@ -1217,10 +1217,10 @@ class TestEnergyPrefsIdentifierValidation:
         tools._client.send_websocket_message.assert_not_called()
 
 
-# --- tools_hacs.py (Iter7 — ha_hacs_download repository_id) --------------
+# --- tools_hacs.py — ha_get_hacs / ha_manage_hacs action validation ------
 
 
-class TestHacsIdentifierValidation:
+class TestHacsActionValidation:
     @pytest.fixture
     def tools(self, mock_ws_client):
         from ha_mcp.tools.tools_hacs import HacsTools
@@ -1228,7 +1228,7 @@ class TestHacsIdentifierValidation:
         return HacsTools(mock_ws_client)
 
     @pytest.mark.parametrize("bad", ["", "   "])
-    async def test_hacs_download_rejects_empty_repository_id(self, tools, bad):
+    async def test_manage_hacs_download_rejects_empty_repository_id(self, tools, bad):
         # Empty/whitespace ``repository_id`` would either fall through
         # ``_resolve_hacs_repo_id`` (no empty-check) into a HACS lookup
         # miss, or — for a numeric-looking candidate — reach
@@ -1238,7 +1238,32 @@ class TestHacsIdentifierValidation:
         # availability check) so neither the supervisor nor HACS sees
         # the empty id.
         with pytest.raises(ToolError) as excinfo:
-            await tools.ha_hacs_download(repository_id=bad)
+            await tools.ha_manage_hacs(action="download", repository_id=bad)
         _assert_invalid_param(excinfo)
         assert '"parameter": "repository_id"' in str(excinfo.value), str(excinfo.value)
+        tools._client.send_websocket_message.assert_not_called()
+
+    async def test_get_hacs_info_requires_repository_id(self, tools):
+        # ``info`` has nothing to act on without a repository_id — the
+        # dispatcher must reject before any HACS availability check or
+        # WS round-trip, mirroring the up-front guard on the download
+        # path above.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_get_hacs(action="info")
+        _assert_invalid_param(excinfo)
+        assert "repository_id" in str(excinfo.value), str(excinfo.value)
+        tools._client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{}, {"repository": "owner/repo"}, {"category": "integration"}],
+        ids=["neither", "category-missing", "repository-missing"],
+    )
+    async def test_manage_hacs_add_repository_requires_both_fields(self, tools, kwargs):
+        # ``add_repository`` needs both ``repository`` and ``category``;
+        # a partial call must be rejected up-front rather than sending a
+        # malformed ``hacs/repositories/add`` to the backend.
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_manage_hacs(action="add_repository", **kwargs)
+        _assert_invalid_param(excinfo)
         tools._client.send_websocket_message.assert_not_called()
