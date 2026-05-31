@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse
 
 from ha_mcp.settings_ui import (
     _SETTINGS_HTML,
+    _SETTINGS_JS,
     FEATURE_GATED_TOOLS,
     MANDATORY_TOOLS,
     TRANSFORM_GENERATED_TOOLS,
@@ -421,6 +422,28 @@ class TestFaviconSuppression:
 
     def test_settings_html_head_suppresses_favicon_request(self) -> None:
         assert '<link rel="icon" href="data:,">' in _SETTINGS_HTML
+
+
+class TestSettingsJsExtraction:
+    """The client JS lives in settings.js (extracted from the Python string)
+    but is injected inline into the served HTML. These guards lock the file
+    and the rendered page together so they can never silently drift.
+    """
+
+    def test_inline_script_body_equals_settings_js(self) -> None:
+        """The served HTML's inline <script> body must equal _SETTINGS_JS
+        (post token-substitution), proving the extracted file is what ships.
+        """
+        from ._js_harness import extract_script_body
+
+        assert extract_script_body(_SETTINGS_HTML) == _SETTINGS_JS
+
+    def test_injection_tokens_fully_substituted(self) -> None:
+        """No sentinel token may survive into the rendered JS — an unfilled
+        token would mean a broken page that still 'looks' extracted.
+        """
+        assert "__HA_MCP_" not in _SETTINGS_JS
+        assert "__HA_MCP_" not in _SETTINGS_HTML
 
 
 class TestSaveToolsValidation:
