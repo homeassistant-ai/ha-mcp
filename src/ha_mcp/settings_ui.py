@@ -5990,6 +5990,46 @@ def register_settings_routes(
         )
         return
 
+    # Every settings-UI route except the add-on-only root mount is mounted
+    # under both prefixes — once at root (so HA ingress can proxy
+    # localhost:9583/) and once under the secret path (Docker / standalone
+    # direct access). A single table keeps the two mounts from drifting;
+    # the frontend uses relative fetches (./api/settings/...) so the same
+    # handlers work at either prefix unchanged.
+    routes: list[tuple[str, list[str], str]] = [
+        ("/settings", ["GET"], "settings_page"),
+        ("/api/settings/tools", ["GET"], "get_tools"),
+        ("/api/settings/tools", ["POST"], "save_tools"),
+        ("/api/settings/restart", ["POST"], "restart_addon"),
+        ("/api/settings/info", ["GET"], "settings_info"),
+        ("/api/settings/features", ["GET"], "get_feature_flags"),
+        ("/api/settings/features", ["POST"], "save_feature_flags"),
+        # Advanced settings endpoints
+        ("/api/settings/advanced", ["GET"], "get_advanced_settings"),
+        ("/api/settings/advanced", ["POST"], "save_advanced_settings"),
+        # Auto-backup endpoints (#1288)
+        ("/api/settings/backups", ["GET"], "list_backups"),
+        ("/api/settings/backups", ["DELETE"], "delete_backups_bulk"),
+        ("/api/settings/backups/{name}", ["GET"], "view_backup"),
+        ("/api/settings/backups/{name}/diff", ["GET"], "diff_backup"),
+        ("/api/settings/backups/{name}/restore", ["POST"], "restore_backup"),
+        ("/api/settings/backups/{name}", ["DELETE"], "delete_backup"),
+        ("/api/settings/backup-config", ["GET"], "get_backup_config"),
+        ("/api/settings/backup-config", ["POST"], "save_backup_config"),
+        # Tool security policies endpoints
+        ("/api/policy/config", ["GET"], "policy_get_config"),
+        ("/api/policy/config", ["PUT"], "policy_put_config"),
+        ("/api/policy/pending", ["GET"], "policy_get_pending"),
+        ("/api/policy/approve", ["POST"], "policy_post_approve"),
+        ("/api/policy/deny", ["POST"], "policy_post_deny"),
+        ("/api/policy/tool-schema", ["GET"], "policy_get_tool_schema"),
+        ("/api/policy/value-source", ["GET"], "policy_get_value_source"),
+    ]
+
+    def _mount(prefix: str) -> None:
+        for path, methods, handler_key in routes:
+            mcp.custom_route(f"{prefix}{path}", methods=methods)(handlers[handler_key])
+
     if is_addon:
         # Root mount lets HA ingress proxy localhost:9583/ → settings UI.
         # Direct port 9583 LAN access also reaches these routes; in this
@@ -5997,155 +6037,10 @@ def register_settings_routes(
         # port 9583 is exposed via host_network and the secret path is
         # the auth for direct access. Document this in DOCS.md.
         mcp.custom_route("/", methods=["GET"])(handlers["root_page"])
-        mcp.custom_route("/settings", methods=["GET"])(handlers["settings_page"])
-        mcp.custom_route("/api/settings/tools", methods=["GET"])(handlers["get_tools"])
-        mcp.custom_route("/api/settings/tools", methods=["POST"])(
-            handlers["save_tools"]
-        )
-        mcp.custom_route("/api/settings/restart", methods=["POST"])(
-            handlers["restart_addon"]
-        )
-        mcp.custom_route("/api/settings/info", methods=["GET"])(
-            handlers["settings_info"]
-        )
-        mcp.custom_route("/api/settings/features", methods=["GET"])(
-            handlers["get_feature_flags"]
-        )
-        mcp.custom_route("/api/settings/features", methods=["POST"])(
-            handlers["save_feature_flags"]
-        )
-        # Advanced settings endpoints
-        mcp.custom_route("/api/settings/advanced", methods=["GET"])(
-            handlers["get_advanced_settings"]
-        )
-        mcp.custom_route("/api/settings/advanced", methods=["POST"])(
-            handlers["save_advanced_settings"]
-        )
-        # Auto-backup endpoints (#1288)
-        mcp.custom_route("/api/settings/backups", methods=["GET"])(
-            handlers["list_backups"]
-        )
-        mcp.custom_route("/api/settings/backups", methods=["DELETE"])(
-            handlers["delete_backups_bulk"]
-        )
-        mcp.custom_route("/api/settings/backups/{name}", methods=["GET"])(
-            handlers["view_backup"]
-        )
-        mcp.custom_route("/api/settings/backups/{name}/diff", methods=["GET"])(
-            handlers["diff_backup"]
-        )
-        mcp.custom_route("/api/settings/backups/{name}/restore", methods=["POST"])(
-            handlers["restore_backup"]
-        )
-        mcp.custom_route("/api/settings/backups/{name}", methods=["DELETE"])(
-            handlers["delete_backup"]
-        )
-        mcp.custom_route("/api/settings/backup-config", methods=["GET"])(
-            handlers["get_backup_config"]
-        )
-        mcp.custom_route("/api/settings/backup-config", methods=["POST"])(
-            handlers["save_backup_config"]
-        )
-        # Tool security policies endpoints
-        mcp.custom_route("/api/policy/config", methods=["GET"])(
-            handlers["policy_get_config"]
-        )
-        mcp.custom_route("/api/policy/config", methods=["PUT"])(
-            handlers["policy_put_config"]
-        )
-        mcp.custom_route("/api/policy/pending", methods=["GET"])(
-            handlers["policy_get_pending"]
-        )
-        mcp.custom_route("/api/policy/approve", methods=["POST"])(
-            handlers["policy_post_approve"]
-        )
-        mcp.custom_route("/api/policy/deny", methods=["POST"])(
-            handlers["policy_post_deny"]
-        )
-        mcp.custom_route("/api/policy/tool-schema", methods=["GET"])(
-            handlers["policy_get_tool_schema"]
-        )
-        mcp.custom_route("/api/policy/value-source", methods=["GET"])(
-            handlers["policy_get_value_source"]
-        )
+        _mount("")
 
     if secret_prefix:
         # Mount under the MCP secret path so Docker / standalone clients
         # need the same secret to reach the UI as they do for the MCP
-        # endpoint. The frontend uses relative fetches (./api/settings/...)
-        # so the JS works at either prefix unchanged.
-        mcp.custom_route(f"{secret_prefix}/settings", methods=["GET"])(
-            handlers["settings_page"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["GET"])(
-            handlers["get_tools"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/settings/tools", methods=["POST"])(
-            handlers["save_tools"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/settings/restart", methods=["POST"])(
-            handlers["restart_addon"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/settings/info", methods=["GET"])(
-            handlers["settings_info"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["GET"])(
-            handlers["get_feature_flags"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/settings/features", methods=["POST"])(
-            handlers["save_feature_flags"]
-        )
-        # Advanced settings endpoints
-        mcp.custom_route(f"{secret_prefix}/api/settings/advanced", methods=["GET"])(
-            handlers["get_advanced_settings"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/settings/advanced", methods=["POST"])(
-            handlers["save_advanced_settings"]
-        )
-        # Auto-backup endpoints (#1288)
-        mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["GET"])(
-            handlers["list_backups"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/settings/backups", methods=["DELETE"])(
-            handlers["delete_backups_bulk"]
-        )
-        mcp.custom_route(
-            f"{secret_prefix}/api/settings/backups/{{name}}", methods=["GET"]
-        )(handlers["view_backup"])
-        mcp.custom_route(
-            f"{secret_prefix}/api/settings/backups/{{name}}/diff", methods=["GET"]
-        )(handlers["diff_backup"])
-        mcp.custom_route(
-            f"{secret_prefix}/api/settings/backups/{{name}}/restore", methods=["POST"]
-        )(handlers["restore_backup"])
-        mcp.custom_route(
-            f"{secret_prefix}/api/settings/backups/{{name}}", methods=["DELETE"]
-        )(handlers["delete_backup"])
-        mcp.custom_route(
-            f"{secret_prefix}/api/settings/backup-config", methods=["GET"]
-        )(handlers["get_backup_config"])
-        mcp.custom_route(
-            f"{secret_prefix}/api/settings/backup-config", methods=["POST"]
-        )(handlers["save_backup_config"])
-        # Tool security policies endpoints
-        mcp.custom_route(f"{secret_prefix}/api/policy/config", methods=["GET"])(
-            handlers["policy_get_config"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/policy/config", methods=["PUT"])(
-            handlers["policy_put_config"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/policy/pending", methods=["GET"])(
-            handlers["policy_get_pending"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/policy/approve", methods=["POST"])(
-            handlers["policy_post_approve"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/policy/deny", methods=["POST"])(
-            handlers["policy_post_deny"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/policy/tool-schema", methods=["GET"])(
-            handlers["policy_get_tool_schema"]
-        )
-        mcp.custom_route(f"{secret_prefix}/api/policy/value-source", methods=["GET"])(
-            handlers["policy_get_value_source"]
-        )
+        # endpoint.
+        _mount(secret_prefix)
