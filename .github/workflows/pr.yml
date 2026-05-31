@@ -35,6 +35,21 @@ jobs:
     - name: Verify uv.lock is in sync with pyproject.toml
       run: uv lock --check
 
+  docs-size:
+    name: Docs Size Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Check AGENTS.md size
+      run: |
+        size=$(LC_ALL=C.UTF-8 wc -m < AGENTS.md)
+        if [ "$size" -gt 40000 ]; then
+          echo "::warning file=AGENTS.md::AGENTS.md is ${size} chars (>40k). Claude Code will show a startup performance warning."
+        fi
+
   lint:
     name: Ruff Lint
     runs-on: ubuntu-latest
