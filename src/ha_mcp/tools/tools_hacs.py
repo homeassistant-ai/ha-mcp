@@ -133,19 +133,24 @@ class HacsTools:
         ] = None,
         installed_only: Annotated[
             bool,
-            Field(description="Only return installed repositories (action='search')"),
+            Field(
+                description="Only return installed repositories (action='search', default: False)"
+            ),
         ] = False,
         max_results: Annotated[
             int,
             Field(
                 ge=1,
                 le=100,
-                description="Maximum number of results (action='search', max: 100)",
+                description="Maximum number of results (action='search', default: 10, max: 100)",
             ),
         ] = 10,
         offset: Annotated[
             int,
-            Field(ge=0, description="Results to skip for pagination (action='search')"),
+            Field(
+                ge=0,
+                description="Results to skip for pagination (action='search', default: 0)",
+            ),
         ] = 0,
         repository_id: Annotated[
             str | None,
@@ -545,7 +550,9 @@ class HacsTools:
         # actually registered (mirroring the download path) — an accepted-but-
         # never-registered add (archived repo, bad structure, wrong category)
         # would otherwise report a misleading "Successfully added".
-        repo = await wait_for_repo_registration(ws_client, repository)
+        repo = await wait_for_repo_registration(
+            ws_client, repository, timeout=HACS_ADD_REGISTRATION_TIMEOUT
+        )
         if repo is None:
             raise_tool_error(
                 create_error_response(
@@ -676,6 +683,15 @@ HACS_SUBSCRIBE_TIMEOUT = 10.0
 # lossy for any reason. Larger than the old 1.0 s because we expect
 # the nudge to do the heavy lifting; this is belt-and-braces only.
 HACS_REPO_BACKSTOP_POLL_INTERVAL = 5.0
+
+# Wall-clock budget for confirming a custom repository registered after an
+# ``hacs/repositories/add``. Shorter than the resolve/download budget: a valid
+# repo registers in seconds, and failing fast turns an accepted-but-never-
+# registered add (archived/invalid repo, wrong category) into a prompt error
+# instead of a 30 s stall. Not exercised by the e2e suite (the only e2e add
+# fails at the owner/repo format guard), so the HAOS-load tuning behind the
+# 30 s resolve budget does not apply here.
+HACS_ADD_REGISTRATION_TIMEOUT = 10.0
 
 
 async def _find_repo_in_list_by_full_name(

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_hacs import HacsTools
+from ha_mcp.tools.tools_hacs import HACS_ADD_REGISTRATION_TIMEOUT, HacsTools
 
 
 async def _identity_timezone(_client, data):
@@ -108,9 +108,10 @@ class TestManageHacsAddRepository:
             _patched_hacs(ws),
             patch(
                 "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
-                new=AsyncMock(return_value=registered),
-            ),
+                new_callable=AsyncMock,
+            ) as wait_mock,
         ):
+            wait_mock.return_value = registered
             result = await tools.ha_manage_hacs(
                 action="add_repository",
                 repository="owner/my-card",
@@ -119,6 +120,11 @@ class TestManageHacsAddRepository:
 
         assert result["success"] is True
         assert result["repository_id"] == "999"
+        # The add path confirms registration with the fail-fast budget, not the
+        # 30 s resolve/download default.
+        assert (
+            wait_mock.await_args.kwargs.get("timeout") == HACS_ADD_REGISTRATION_TIMEOUT
+        )
         ws.send_command.assert_awaited_once()
         assert ws.send_command.await_args.args[0] == "hacs/repositories/add"
         assert ws.send_command.await_args.kwargs["category"] == "plugin"
