@@ -169,7 +169,6 @@ class FuzzyEntitySearcher:
     def __init__(self, threshold: int = 60):
         """Initialize with fuzzy matching threshold."""
         self.threshold = threshold
-        self.entity_cache: dict[str, Any] = {}
 
     def search_entities(
         self, entities: list[dict[str, Any]], query: str, limit: int = 10, offset: int = 0
