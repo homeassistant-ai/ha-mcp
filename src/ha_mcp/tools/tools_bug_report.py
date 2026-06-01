@@ -345,7 +345,13 @@ def _sanitize_log_text(text: str) -> str:
     # the raw logs this text is copied from are left intact.
     configured = os.getenv("MCP_SECRET_PATH", "").rstrip("/")
     if configured and configured != "/mcp":
-        text = text.replace(configured, "[REDACTED_SECRET_PATH]")
+        # Anchor on a path-segment boundary so a short/substring-prone configured
+        # value (e.g. "/ha") cannot corrupt unrelated text (e.g. "/happy").
+        text = re.sub(
+            re.escape(configured) + r"(?![A-Za-z0-9_-])",
+            "[REDACTED_SECRET_PATH]",
+            text,
+        )
     text = re.sub(r"/private_[A-Za-z0-9_-]+", "[REDACTED_SECRET_PATH]", text)
     return text
 
@@ -632,11 +638,14 @@ class BugReportTools:
             "success": True,
             "diagnostic_info": diagnostic_info,
             "recent_logs": recent_logs,
-            # startup_logs is the only returned surface not already routed
-            # through _sanitize_log_text (the formatted_report summary and
-            # addon_logs are). Sanitize each message here so the connect-URL
-            # secret path and other secrets never reach a pasted report. This
-            # copies entries — the underlying log records stay raw.
+            # Scrub the startup-log *messages* — they aren't sanitized at source,
+            # so the connect-URL secret path can otherwise surface here.
+            # recent_logs is also returned, but its sensitive *parameters* are
+            # key-masked at the logging chokepoint and its error_message is
+            # returned as-is to the trusted client by design (see SECURITY.md);
+            # formatted_report and addon_logs already route through
+            # _sanitize_log_text. This copies entries — the underlying log
+            # records stay raw.
             "startup_logs": [
                 {**entry, "message": _sanitize_log_text(entry.get("message", ""))}
                 for entry in startup_logs

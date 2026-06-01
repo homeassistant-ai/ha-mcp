@@ -326,6 +326,74 @@ class TestBugReportTool:
         message = result["startup_logs"][0]["message"]
         assert "/private_T6tSJxqYuTESTtoken" not in message
         assert "[REDACTED_SECRET_PATH]" in message
+        # The same secret path must also be scrubbed from formatted_report,
+        # which embeds the startup-log summary.
+        assert "/private_T6tSJxqYuTESTtoken" not in result["formatted_report"]
+        assert "[REDACTED_SECRET_PATH]" in result["formatted_report"]
+
+    @pytest.mark.asyncio
+    async def test_startup_logs_configured_secret_path_redacted_in_output(
+        self, registered_tools, mock_client, monkeypatch
+    ):
+        """A custom configured ``MCP_SECRET_PATH`` is redacted end-to-end in
+        ``ha_report_issue`` output — the realistic worst case, since a custom
+        path has no ``/private_`` shape for the regex to fall back on."""
+        monkeypatch.setenv("MCP_SECRET_PATH", "/customhook")
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        ha_report_issue = registered_tools._tools["ha_report_issue"]
+        actual_func = ha_report_issue
+        while hasattr(actual_func, "__wrapped__"):
+            actual_func = actual_func.__wrapped__
+
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_startup_logs"
+        ) as mock_get_startup:
+            mock_get_startup.return_value = [
+                {
+                    "timestamp": "2024-12-01T10:00:00",
+                    "level": "INFO",
+                    "logger": "FastMCP",
+                    "message": "serving at http://ha.local:9583/customhook",
+                    "elapsed_seconds": 1.0,
+                }
+            ]
+            result = await actual_func(tool_call_count=5)
+
+        message = result["startup_logs"][0]["message"]
+        assert "/customhook" not in message
+        assert "[REDACTED_SECRET_PATH]" in message
+
+    @pytest.mark.asyncio
+    async def test_startup_logs_source_not_mutated(self, registered_tools, mock_client):
+        """The returned ``startup_logs`` is a sanitized copy; the underlying log
+        record handed to the tool must not be mutated."""
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        ha_report_issue = registered_tools._tools["ha_report_issue"]
+        actual_func = ha_report_issue
+        while hasattr(actual_func, "__wrapped__"):
+            actual_func = actual_func.__wrapped__
+
+        raw_message = "on http://0.0.0.0:9583/private_T6tSJxqYuTESTtoken"
+        raw_entry = {
+            "timestamp": "2024-12-01T10:00:00",
+            "level": "INFO",
+            "logger": "FastMCP",
+            "message": raw_message,
+            "elapsed_seconds": 1.0,
+        }
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_startup_logs"
+        ) as mock_get_startup:
+            mock_get_startup.return_value = [raw_entry]
+            result = await actual_func(tool_call_count=5)
+
+        assert "[REDACTED_SECRET_PATH]" in result["startup_logs"][0]["message"]
+        # The source record is untouched.
+        assert raw_entry["message"] == raw_message
 
     def test_sanitize_log_text_redacts_generated_secret_path(self):
         """The generated ``/private_<token>`` connect path is redacted."""
@@ -347,6 +415,16 @@ class TestBugReportTool:
         monkeypatch.delenv("MCP_SECRET_PATH", raising=False)
         out = _sanitize_log_text("on http://0.0.0.0:9583/mcp")
         assert "/mcp" in out
+
+    def test_sanitize_log_text_short_configured_path_does_not_corrupt(
+        self, monkeypatch
+    ):
+        """A short configured secret path must redact only its own path segment,
+        not unrelated text that happens to share the prefix."""
+        monkeypatch.setenv("MCP_SECRET_PATH", "/ha")
+        out = _sanitize_log_text("Connecting to /happy/path via /ha")
+        assert "/happy/path" in out
+        assert out.count("[REDACTED_SECRET_PATH]") == 1
 
     @pytest.mark.asyncio
     async def test_bug_report_log_formatting(self, registered_tools, mock_client):
