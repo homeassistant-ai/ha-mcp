@@ -1,0 +1,6 @@
+{
+  "home_assistant_url": "http://localhost:8123",
+  "access_token": "",
+  "chromium_executable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "keep_browser_open": false
+}

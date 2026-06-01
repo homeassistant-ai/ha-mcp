@@ -1,0 +1,11 @@
+{
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "home-assistant-js-websocket": "^9.4.0",
+    "puppeteer": "^24.26.1",
+    "sharp": "^0.34.4"
+  }
+}

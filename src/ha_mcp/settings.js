@@ -1088,6 +1088,10 @@ const FEATURE_META = {
     label: "Enable lite tool docstrings (beta)",
     help: "Beta feature — disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
   },
+  enable_dashboard_screenshot: {
+    label: "Enable dashboard screenshot mode (beta)",
+    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can see a rendered PNG of a Lovelace dashboard (e.g. to verify one they just created). Rendering runs in a separate, opt-in \"HA MCP Dashboard Screenshot Engine\" add-on (headless Chromium) which you install once from this repository's add-on store and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
+  },
 };
 
 // The 5 beta sub-flag fields gated by the master beta toggle. Populated

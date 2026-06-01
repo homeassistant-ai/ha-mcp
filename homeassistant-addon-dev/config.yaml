@@ -44,6 +44,7 @@ options:
   enable_yaml_packages_scene: false
   enable_filesystem_tools: false
   enable_custom_component_integration: false
+  enable_dashboard_screenshot: false
   enable_code_mode: false
   enable_lite_docstrings: false
   enable_mandatory_bps: true
@@ -69,6 +70,7 @@ schema:
   enable_mandatory_bps: bool?
   enable_filesystem_tools: bool?
   enable_custom_component_integration: bool?
+  enable_dashboard_screenshot: bool?
   enable_auto_backup: bool?
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?

@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import time
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -1778,6 +1778,49 @@ class AddOnTools:
                 )
             )
 
+    # Supervisor lifecycle endpoints. install/update live under /store; the
+    # rest under /addons. install/rebuild build a local image and can be slow,
+    # so they get a generous timeout.
+    _ACTION_ENDPOINTS: ClassVar[dict[str, tuple[str, int]]] = {
+        "install": ("/store/addons/{slug}/install", 1800),
+        "update": ("/store/addons/{slug}/update", 1800),
+        "rebuild": ("/addons/{slug}/rebuild", 1800),
+        "start": ("/addons/{slug}/start", 120),
+        "stop": ("/addons/{slug}/stop", 60),
+        "restart": ("/addons/{slug}/restart", 120),
+        "uninstall": ("/addons/{slug}/uninstall", 120),
+    }
+
+    async def _execute_action_mode(self, slug: str, action: str) -> dict[str, Any]:
+        """Run a Supervisor add-on lifecycle action (install/start/stop/etc.).
+
+        Powers the "install the engine for the user" flow: an LLM can install
+        an add-on from a registered store repository and start it, rather than
+        only updating config or proxying to an already-running add-on.
+        """
+        key = action.lower().strip()
+        endpoint_tmpl, timeout = self._ACTION_ENDPOINTS.get(key, (None, 0))
+        if endpoint_tmpl is None:
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid action: {action!r}. Must be one of: "
+                    f"{', '.join(sorted(self._ACTION_ENDPOINTS))}.",
+                    parameter="action",
+                )
+            )
+        endpoint = endpoint_tmpl.format(slug=slug)
+        result = await _supervisor_api_call(
+            self._client, endpoint, method="POST", timeout=timeout
+        )
+        if not result.get("success"):
+            raise_tool_error(result)
+        return {
+            "success": True,
+            "action": key,
+            "slug": slug,
+            "message": f"Add-on {slug} {key} completed.",
+        }
+
     async def _execute_config_mode(
         self,
         slug: str,
@@ -2068,6 +2111,7 @@ class AddOnTools:
         watchdog: bool | None,
         array_patch: dict[str, Any] | None,
         request_headers: dict[str, str] | None,
+        action: str | None = None,
     ) -> dict[str, Any]:
         validate_identifier_not_empty(
             slug,
@@ -2077,6 +2121,27 @@ class AddOnTools:
         config_data = self._build_config_payload(
             options, network, boot, auto_update, watchdog
         )
+
+        # Lifecycle mode takes precedence and is mutually exclusive with the
+        # proxy / config / array-patch modes.
+        if action is not None:
+            conflicts = []
+            if path is not None:
+                conflicts.append("path")
+            if config_data:
+                conflicts.append("config parameters")
+            if array_patch is not None:
+                conflicts.append("array_patch")
+            if conflicts:
+                raise_tool_error(
+                    create_validation_error(
+                        f"action='{action}' (lifecycle mode) cannot be combined "
+                        f"with {', '.join(conflicts)}. Use one mode at a time.",
+                        parameter="action",
+                    )
+                )
+            return await self._execute_action_mode(slug, action)
+
         self._validate_manage_mode(path, config_data)
 
         if config_data:
@@ -2474,10 +2539,30 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 default=None,
             ),
         ] = None,
+        action: Annotated[
+            str | None,
+            Field(
+                description="Lifecycle mode: run a Supervisor add-on action. One of "
+                "'install', 'uninstall', 'start', 'stop', 'restart', 'rebuild', "
+                "'update'. 'install'/'update' require the add-on's repository to be "
+                "registered (it appears in ha_get_addon(source='available')). "
+                "Mutually exclusive with path / config parameters / array_patch. "
+                "HA OS / Supervised only.",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage a Home Assistant add-on — update its configuration or call its internal API.
 
-        Three mutually exclusive operating modes:
+        Four mutually exclusive operating modes:
+
+        **Lifecycle mode** (when ``action`` is provided):
+        Runs a Supervisor add-on action: install, uninstall, start, stop,
+        restart, rebuild, or update. ``install`` / ``update`` go through the
+        store (the add-on's repository must be registered — it shows up in
+        ``ha_get_addon(source="available")``); the rest act on an installed
+        add-on. This is how an assistant brings an add-on online for the user
+        (e.g. installing + starting the dashboard screenshot engine).
 
         **Config mode** (when any of options/network/boot/auto_update/watchdog is provided):
         Updates the add-on's Supervisor configuration via POST /addons/{slug}/options.
@@ -2522,6 +2607,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **NOTE:** This tool only works with Home Assistant OS or Supervised installations.
 
         **Examples:**
+        - Install an add-on: ha_manage_addon(slug="...", action="install")
+        - Start an add-on: ha_manage_addon(slug="...", action="start")
         - Set add-on option: ha_manage_addon(slug="...", options={"log_level": "debug"})
           Note: only the fields you provide are updated — current values are fetched first
           and merged automatically. Fields not in the add-on's schema are ignored with a warning.
@@ -2577,4 +2664,5 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             watchdog=watchdog,
             array_patch=array_patch,
             request_headers=request_headers,
+            action=action,
         )

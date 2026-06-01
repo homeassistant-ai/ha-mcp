@@ -1,0 +1,15 @@
+{
+  "devices": {
+    "7.3in-spectra-e6": {
+      "name": "Spectra E6 7.3\"",
+      "width": 800,
+      "height": 480,
+      "colors": "000000,FFFFFF,0000FF,00FF00,FF0000,FFFF00",
+      "palette_colors": "191E21,E8E8E8,2157BA,125F20,B21318,EFDE44",
+      "dithering": "stucki"
+    }
+  },
+  "aliases": {
+    "seeed-reterminal-e1002": "7.3in-spectra-e6"
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Puppet Devices Configuration",
+  "description": "Configuration file for predefined device settings",
+  "type": "object",
+  "required": ["devices"],
+  "properties": {
+    "devices": {
+      "type": "object",
+      "description": "Device definitions with display settings",
+      "patternProperties": {
+        "^[a-z0-9.-]+$": {
+          "type": "object",
+          "required": ["width", "height"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Human-readable device name"
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 4000,
+              "description": "Viewport width in pixels"
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 4000,
+              "description": "Viewport height in pixels"
+            },
+            "colors": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{6}(,[0-9A-Fa-f]{6})*$",
+              "description": "Comma-separated hex color values (without #)"
+            },
+            "palette_colors": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{6}(,[0-9A-Fa-f]{6})*$",
+              "description": "Comma-separated palette hex color values (without #)"
+            },
+            "dithering": {
+              "type": "string",
+              "enum": [
+                "none",
+                "floyd-steinberg",
+                "atkinson",
+                "jarvis-judice-ninke",
+                "stucki",
+                "burkes",
+                "sierra",
+                "sierra-lite"
+              ],
+              "description": "Dithering algorithm to use"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "aliases": {
+      "type": "object",
+      "description": "Device aliases mapping to device IDs",
+      "patternProperties": {
+        "^[a-z0-9.-]+$": {
+          "type": "string",
+          "pattern": "^[a-z0-9.-]+$",
+          "description": "Target device ID"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

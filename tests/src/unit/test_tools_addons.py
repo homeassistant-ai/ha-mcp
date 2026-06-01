@@ -3715,3 +3715,101 @@ class TestSupervisorApiCall:
             )
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+
+class TestManageAddonActionMode:
+    """Lifecycle (action) mode: install/start/stop/etc. via Supervisor."""
+
+    def _tools(self):
+        from ha_mcp.tools.tools_addons import AddOnTools
+
+        return AddOnTools(_make_mock_client())
+
+    @pytest.mark.asyncio
+    async def test_install_posts_to_store_endpoint(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools._execute_action_mode(
+                "d6450bd1_ha_mcp_screenshot", "install"
+            )
+
+        assert result["success"] is True
+        assert result["action"] == "install"
+        assert result["slug"] == "d6450bd1_ha_mcp_screenshot"
+        endpoint = mock_call.call_args.args[1]
+        assert endpoint == "/store/addons/d6450bd1_ha_mcp_screenshot/install"
+        assert mock_call.call_args.kwargs["method"] == "POST"
+
+    @pytest.mark.asyncio
+    async def test_start_posts_to_addons_endpoint(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools._execute_action_mode("core_ssh", "start")
+
+        assert result["action"] == "start"
+        assert mock_call.call_args.args[1] == "/addons/core_ssh/start"
+
+    @pytest.mark.asyncio
+    async def test_invalid_action_rejected(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools._execute_action_mode("core_ssh", "frobnicate")
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_supervisor_failure_propagates(self):
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": False,
+                    "error": {"code": "SERVICE_CALL_FAILED", "message": "boom"},
+                },
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools._execute_action_mode("core_ssh", "start")
+        payload = _parse_tool_error(exc_info)
+        assert payload["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_action_mutually_exclusive_with_path(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                slug="core_ssh",
+                path="/info",
+                method="GET",
+                body=None,
+                debug=False,
+                port=None,
+                offset=0,
+                limit=None,
+                websocket=False,
+                wait_for_close=True,
+                message_limit=None,
+                message_offset=0,
+                summarize=True,
+                python_transform=None,
+                options=None,
+                network=None,
+                boot=None,
+                auto_update=None,
+                watchdog=None,
+                array_patch=None,
+                request_headers=None,
+                action="start",
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"

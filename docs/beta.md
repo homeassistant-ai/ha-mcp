@@ -14,6 +14,7 @@ Some ha-mcp tools are gated behind feature flags and disabled by default. They c
 | `ha_install_mcp_tools` | `enable_custom_component_integration` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` env vars | Installs the `ha_mcp_tools` custom component via HACS. |
 | `ha_manage_custom_tool` | `enable_code_mode` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_CODE_MODE=true` env vars | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev add-on). |
 | _(behaviour flag, no new tool)_ | `enable_lite_docstrings` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_LITE_DOCSTRINGS=true` env vars | Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_guide` (or its `skill://` resource). Reduces idle catalog token usage; relies on the LLM actually calling the skill tool/resource when it needs detail. See "Known limitations" below. |
+| `ha_get_dashboard_screenshot` (+ `include_screenshot` on `ha_config_get_dashboard`, `return_screenshot` on `ha_config_set_dashboard`) | `enable_dashboard_screenshot` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true` env vars | Render a Lovelace dashboard to a PNG so the AI can see what it reads or creates. Rendering runs in a separate, opt-in **HA MCP Dashboard Screenshot Engine** add-on (headless Chromium, vendored from balloob's Puppet, Apache-2.0) — nothing heavy is installed unless you enable this AND install the engine. |
 
 ## How to enable
 
@@ -142,3 +143,43 @@ Pair this toggle with one of the following to mitigate:
 **Recommended prerequisites:**
 - A client that lets you watch tool-call traces, so you can see whether the LLM is actually fetching the skill content before acting
 - Willingness to disable the flag if the model regresses on your prompts
+
+### Dashboard screenshot (`ha_get_dashboard_screenshot` / `include_screenshot` / `return_screenshot`)
+
+Rendering does not run inside ha-mcp; it runs in a separate **HA MCP Dashboard
+Screenshot Engine** add-on (headless Chromium). Operators should know:
+
+**Setup by deployment.**
+- *HA OS / Supervised:* install the engine add-on from this repository's
+  add-on store and start it. With no `access_token` set it authenticates
+  automatically via the add-on's Supervisor token — no long-lived token to
+  paste. ha-mcp discovers the running engine through the Supervisor.
+- *Docker / Container:* run the engine image as a sidecar and point ha-mcp at
+  it with `HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL=http://<engine-host>:10000`.
+- *stdio / standalone:* not supported (no place to host the engine); the tool
+  returns a clear error.
+
+**The engine holds a full-HA credential.** In auto-auth mode it wields the
+add-on's Supervisor token (full Home Assistant API access); with an
+`access_token` set, it uses that. Prefer a long-lived token from a dedicated,
+low-privilege HA user over the Supervisor token if you want to limit reach.
+
+**The engine's HTTP listener has no inbound auth.** The add-on publishes no
+host port; ha-mcp reaches it only over the internal Docker/Supervisor network,
+and the optional preview UI is fronted by HA's authenticated ingress. Do NOT
+expose the engine's port to an untrusted LAN or the internet — anyone who
+could reach it could pull fully-authenticated dashboard renders.
+
+**Charts are best-effort.** Canvas cards (ApexCharts, mini-graph-card,
+history-graph) paint after the dashboard reports "loaded". The default
+render-settle is generous, but a heavy chart card may still come back blank;
+raise the `wait_ms` parameter on `ha_get_dashboard_screenshot` for those.
+
+**Graceful by design.** If the feature is off or the engine is unreachable,
+`include_screenshot` / `return_screenshot` still return the dashboard config /
+write result with a `warnings` entry — they never fail the underlying read or
+write.
+
+**The rendered path comes from the caller.** `ha_get_dashboard_screenshot`
+validates `dashboard_path` (rejects URLs, query strings, fragments, `..`, and
+backslashes) so it can only target Lovelace frontend routes.

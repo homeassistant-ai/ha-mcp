@@ -65,8 +65,15 @@ _COLLECTION_FLOOR = 850
 # (14 tests started skipping silently because a marker was applied
 # too broadly).
 _SKIP_CEILING_PER_LANE = {
-    "container": 55,
-    "haos": 20,
+    # The 5 dashboard-screenshot E2E tests
+    # (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py) are marked
+    # haos_only + inaddon_only: they RUN only on the haos_inaddon lane (the
+    # only place the MCP server shares the Supervisor network and can reach the
+    # screenshot engine), and SKIP on both the container lane (haos_only) and
+    # the external-haos lane (inaddon_only). So both those ceilings gain 5;
+    # haos_inaddon is unchanged because the tests run there.
+    "container": 62,  # was 55 (observed 57 with these 5 added)
+    "haos": 25,  # was 20 (+5 for inaddon_only skips on the external tier)
     "haos_inaddon": 45,
 }
 
