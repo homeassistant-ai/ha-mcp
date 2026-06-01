@@ -26,7 +26,6 @@ on:
       - 'custom_components/ha_mcp_tools/**'
       - 'homeassistant-addon-webhook-proxy/**'
       - 'homeassistant-addon-screenshot/**'
-      - 'homeassistant-addon-dev/**'
       - '.github/workflows/haos-e2e-tests.yml'
       # Trigger on inaddon workflow changes too — both lanes share the
       # qcow2 cache key, so a change to either workflow's cache logic
@@ -92,7 +91,6 @@ jobs:
             custom_components/ha_mcp_tools \
             homeassistant-addon-webhook-proxy \
             homeassistant-addon-screenshot \
-            homeassistant-addon-dev \
             | sha256sum | cut -d' ' -f1 | head -c16)
           echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
 
@@ -139,7 +137,7 @@ jobs:
         run: |
           if git diff --name-only \
               "origin/${{ github.base_ref }}...HEAD" \
-              | grep -qE '^(tests/haos_image_build/|tests/initial_test_state/|custom_components/ha_mcp_tools/|homeassistant-addon-webhook-proxy/|homeassistant-addon-screenshot/|homeassistant-addon-dev/)'; then
+              | grep -qE '^(tests/haos_image_build/|tests/initial_test_state/|custom_components/ha_mcp_tools/|homeassistant-addon-webhook-proxy/|homeassistant-addon-screenshot/)'; then
             echo "bake_inputs_changed=true" >> "$GITHUB_OUTPUT"
             echo "PR modifies bake inputs; skipping GHCR fallback (would return stale master image)."
           fi
