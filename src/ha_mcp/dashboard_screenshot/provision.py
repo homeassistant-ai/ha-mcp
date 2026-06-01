@@ -34,23 +34,27 @@ ENGINE_SLUG_SUFFIX = "_ha_mcp_screenshot"
 
 _INSTALL_HELP = (
     "Dashboard screenshot mode is enabled, but the screenshot engine add-on "
-    "is not installed. On HA OS / Supervised, install + start it — either let "
-    "the assistant do it via ha_manage_addon(slug='<prefix>_ha_mcp_screenshot', "
-    "action='install') then action='start' (find the exact slug with "
-    "ha_get_addon(source='available', query='screenshot')), or install the "
-    "'HA MCP Dashboard Screenshot Engine' add-on yourself from this "
-    "repository's store under Settings > Add-ons. It authenticates "
-    "automatically via the add-on's Supervisor token, so no access token is "
-    "required (an access_token option is optional, only to target an external "
-    "HA URL). On Docker / Container, run the engine as a sidecar and set "
-    "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL to its URL "
-    "(e.g. http://ha-mcp-screenshot:10000)."
+    "is not installed. On HA OS / Supervised: (1) install + start it — either "
+    "let the assistant do it via "
+    "ha_manage_addon(slug='<prefix>_ha_mcp_screenshot', action='install') then "
+    "action='start' (find the exact slug with ha_get_addon(source='available', "
+    "query='screenshot')), or install the 'HA MCP Dashboard Screenshot Engine' "
+    "add-on yourself from this repository's store under Settings > Add-ons; and "
+    "(2) it REQUIRES a Home Assistant long-lived access token — create one in "
+    "Profile > Security (ideally for a dedicated low-privilege user), set it as "
+    "the add-on's 'access_token' option, and (re)start the add-on. Without a "
+    "token the engine only serves a configuration-instructions page. On "
+    "Docker / Container, run the engine as a sidecar (with its access_token "
+    "set) and point ha-mcp at it via "
+    "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL (e.g. http://ha-mcp-screenshot:10000)."
 )
 
 _NOT_STARTED_HELP = (
     "The 'HA MCP Dashboard Screenshot Engine' add-on is installed but not "
-    "started. Open Settings > Add-ons > HA MCP Dashboard Screenshot Engine "
-    "and start it (enable 'Start on boot' to keep it available)."
+    "started. Open Settings > Add-ons > HA MCP Dashboard Screenshot Engine, "
+    "set its 'access_token' option to a Home Assistant long-lived access token "
+    "(Profile > Security) if you haven't, and start it (enable 'Start on boot' "
+    "to keep it available)."
 )
 
 _STDIO_HELP = (

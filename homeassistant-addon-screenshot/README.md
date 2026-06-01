@@ -1,163 +1,67 @@
-# Screenshot Home Assistant using Puppeteer
+# HA MCP Dashboard Screenshot Engine
 
-Easily create screenshots of your Home Assistant dashboards. Allowing you to put them on e-ink screens or any other screen that can display images.
+Headless-Chromium engine that renders a Home Assistant Lovelace dashboard to a
+PNG. It backs the [ha-mcp](https://github.com/homeassistant-ai/ha-mcp)
+**dashboard screenshot** beta feature — the `ha_get_dashboard_screenshot` tool
+and the `include_screenshot` / `return_screenshot` options on the dashboard
+config tools — so an AI assistant can *see* a dashboard it reads or creates.
 
-[![Open your Home Assistant instance and show the dashboard of an add-on.](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=0f1cc410_puppet&repository_url=https%3A%2F%2Fgithub.com%2Fballoob%2Fhome-assistant-addons)
+This add-on is **optional**. Install it only if you enable dashboard screenshot
+mode in ha-mcp. It runs Chromium, so it is heavier than the MCP server itself;
+keeping it separate is what lets the default ha-mcp install stay lightweight.
 
-![UI Screenshot](example/ui.png)
+## Credit
 
-![UI Screenshot](example/device.jpg)
+This add-on is **derived from the Puppet add-on by Paulus Schoutsen
+(balloob)** — https://github.com/balloob/home-assistant-addons — and is
+vendored largely verbatim from it under the Apache-2.0 license. All credit for
+the screenshot engine goes to that project. See [`NOTICE.md`](./NOTICE.md) and
+[`LICENSE`](./LICENSE) for attribution and the list of ha-mcp modifications.
 
-You will need to create a long lived access token and add it as an add-on option.
+## Setup
 
-Enable the watch dog option to restart the add-on when the browser fails to launch (happens sometimes, still investigating).
+1. Install and start this add-on.
+2. **Create a Home Assistant long-lived access token** (Profile > Security,
+   bottom of the page — ideally under a dedicated, low-privilege user) and set
+   it as this add-on's **`access_token`** option, then restart the add-on.
+3. In ha-mcp, enable the **dashboard screenshot mode** beta feature.
 
-_This is a prototype, there is NO security. Anyone can access the server and make screenshots of any Home Assistant page._
+A token is required: Home Assistant's frontend only renders for a browser
+holding a valid user session, and the add-on's Supervisor token is not such a
+credential (Home Assistant Core rejects it). Without an `access_token`, the
+add-on serves only a configuration-instructions page.
 
-[![ESPHome device showing a screenshot of a Home Assistant dashboard](https://raw.githubusercontent.com/balloob/home-assistant-addons/main/puppet/example/screenshot.jpg)](./example/)
+## Options
 
-## Configuration
+- `access_token` — **required in practice.** A Home Assistant long-lived access
+  token; injected into the browser to authenticate.
+- `home_assistant_url` — base URL the engine's browser opens. Defaults to the
+  internal `http://homeassistant:8123`. Override only if your instance must be
+  reached via a different hostname/port.
+- `keep_browser_open` — keep Chromium alive between requests (faster repeat
+  renders, more memory).
 
-- access_token: Long-lived access token used to authenticate against Home Assistant.
+## Security
 
-## Advanced configuration
+The engine's HTTP listener performs **no inbound authentication** and holds a
+Home Assistant credential, so it must stay on the internal Supervisor/Docker
+network only — do not publish its port to an untrusted LAN or the internet.
+Prefer a token scoped to a dedicated low-privilege Home Assistant user.
 
-- home_assistant_url: Base URL of your Home Assistant instance that the add-on browser should open when taking screenshots. Defaults to `http://homeassistant:8123` which is the internal URL at which the add-on can reach Home Assistant. You can override it if your instance has configured SSL certificates inside Home Assistant and requires to be reached via a different hostname or port (e.g., http://my-ha.local:8123 or https://example.duckdns.org).
-- keep_browser_open: If true, keeps the Chromium browser alive between requests.
+## Docker / Container (no Supervisor)
 
-## Web UI
+If you run Home Assistant in plain Docker (no add-on store), run this image as a
+sidecar with `access_token` set, on an internal network, and point ha-mcp at it
+with `HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL=http://<engine-host>:10000`. See
+[`docker-compose.screenshot.yml`](../docker-compose.screenshot.yml).
 
-The add-on now includes a web-based user interface to help you easily configure and preview screenshots. You can access it by:
+## HTTP API (reference)
 
-1. Opening the add-on's Web UI from the Home Assistant Supervisor interface
-2. Or navigating directly to `http://homeassistant.local:10000/`
-
-The Web UI provides:
-- Interactive form to configure screenshot parameters (path, viewport size, format, theme, etc.)
-- Live preview of screenshots
-- Automatically generated URL that you can copy and use in your automations or external applications
-
-This is particularly useful for testing different settings and finding the perfect configuration before using the URLs in your automations.
-
-## Usage
-
-Starting the add-on will launch a new server on port 10000. Any path you request will return a screenshot of that page. You will need to specify the viewport size you want.
-
-For example, to get a 1000px x 1000px screenshot of your default dashboard, fetch:
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000
-```
-
-### e-ink displays
-
-To reduce the color palette for e-ink displays, you can add the `colors` parameter. The value is a comma-separated list of hex colors to use. For example, for a 2-color e-ink display (black and white):
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&colors=000000,FFFFFF
-```
-
-You can also invert the colors by adding the `invert` parameter:
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&colors=000000,FFFFFF&invert
-```
-
-It's recommended to use an e-ink theme like [Graphite](https://github.com/TilmanGriesel/graphite?tab=readme-ov-file#e-ink-themes) to optimize readability.
-
-### Set Theme
-
-You can set the theme of the Home Assistant interface for the screenshot by adding the `theme` query parameter. The value should be a theme name that Home Assistant supports (e.g., `Graphite E-ink Light`).
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&theme=Graphite%20E-ink%20Light
-```
-
-**Note:** Theme changes apply to all sessions of the user whose token is used. To avoid having your normal browsing sessions affected by screenshot themes (e.g., e-ink themes), create a separate user account specifically for Puppet and use that user's long-lived access token in the addon configuration.
-
-### Finish loading detection
-
-By default, on a cold start the server will wait for 2.5 extra seconds after the loading is considered done, to give things that are not tracked by loading spinners to load (ie icons, pictures). When the browser is active, it waits 750ms. You can control this wait time by adding a `wait` query parameter. For example, to wait 10 seconds:
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&wait=10000
-```
-
-You can control the zoom level of the page using the `zoom` query parameter. The default zoom level is 1. For example, to zoom in 1.3x:
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&zoom=1.3
-```
-
-### Output formats
-
-By default, the output format is PNG. You can request a JPEG, WebP or BMP image by adding the `format=jpeg`, `format=webp`, `format=bmp` query parameter:
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&format=jpeg
-```
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&format=webp
-```
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&format=bmp
-```
-
-### Rotate screenshot
-
-You can rotate the screenshot by adding the `rotate` query parameter. Valid values are 90, 180, and 270.
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&rotate=90
-```
-
-### Set Language
-
-You can set the language of the Home Assistant interface for the screenshot by adding the `lang` query parameter. The value should be a language code that Home Assistant supports (e.g., `en`, `nl`, `de`, `ko`, `ja`, `zh-Hans`, `zh-Hant`).
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&lang=nl
-```
-
-### Set Dark Mode
-
-You can enable dark mode for the screenshot by adding the `dark` query parameter. This parameter doesn't require a value.
-
-```
-http://homeassistant.local:10000/home?viewport=1000x1000&dark
-```
-
-### Preloading requests
-
-To improve performance for subsequent requests, you can schedule the browser to navigate to the desired page ahead of time using the `next` parameter. Provide the number of seconds when you expect the *next* screenshot request to occur. The add-on will attempt to navigate the browser to the specified path 10 seconds *before* this timestamp.
-
-```
-# Example how the browser will warm up so it's ready to take a screenshot
-# in 300 seconds.
-http://homeassistant.local:10000/home?next=300
-```
-
-Providing a `next` parameter will not affect the current request. It will only be used for the next request.
-
-## Using images inside Home Assistant
-
-You can use a template image entity to pull Puppet output into Home Assistant to make it possible to send it in notifications or use for other purposes.
-
-```
-template:
-  - image:
-      name: My dashboard
-      url: "http://homeassistant.local:10000/home?viewport=1000x1000"
-```
-
-## Proxmox
-
-If you're running Home Assistant OS in a virtual machine under Proxmox, make sure the host type of your virtual machine is set to `host`.
-
-## Speed (or lack thereof)
-
-This add-on is slow. On a Home Assistant Green, on cold-start, it takes ~10s. The browser is kept alive for up to 30 seconds.
-
-If the same page is requested, a screenshot is returned as fast as possible (0.6s on HA Green). If a different page is requested, it takes ~1.5s because it needs to navigate.
+ha-mcp calls the engine for you; you normally don't hit it directly. The engine
+serves on port `10000` and any path you request is rendered:
+`GET /<dashboard-path>?viewport=WxH` returns an image. Supported query
+parameters (inherited from upstream Puppet): `viewport=WxH`, `zoom=N`,
+`wait=<ms>` (extra settle time for slow/chart cards), `format=png|jpeg|webp|bmp`,
+`rotate=90|180|270`, `theme=<name>`, `dark`, `lang=<code>`, and `colors=` /
+`invert` for e-ink palettes. ha-mcp's `ha_get_dashboard_screenshot` exposes the
+common ones (width/height/zoom/wait_ms) as tool parameters.

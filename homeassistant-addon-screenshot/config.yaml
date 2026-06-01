@@ -7,7 +7,10 @@ url: "https://github.com/homeassistant-ai/ha-mcp"
 # (same pattern as homeassistant-addon-webhook-proxy), so there is no
 # multi-arch publish pipeline to maintain. Opt-in: only users who enable
 # dashboard screenshot mode install it, so Chromium is never pulled otherwise.
-homeassistant_api: true
+#
+# No `homeassistant_api` — the engine authenticates to HA only with the
+# user-configured long-lived access_token (injected into the browser), never
+# the Supervisor token, so it needs no Supervisor-granted HA API access.
 init: false
 startup: application
 boot: auto
@@ -15,11 +18,10 @@ arch:
   - aarch64
   - amd64
 # No host `ports:` mapping — the engine's HTTP listener performs NO inbound
-# auth and (in auto-auth mode) wields the add-on's Supervisor token, so it
-# must never be reachable from the LAN. ha-mcp reaches it over the internal
-# Docker/Supervisor network by hostname (see dashboard_screenshot/provision.py),
-# which does not require a published port. The optional preview UI is fronted
-# by HA's authenticated ingress proxy instead of a raw host port.
+# auth, so it must never be reachable from the LAN. ha-mcp reaches it over the
+# internal Docker/Supervisor network by hostname (see
+# dashboard_screenshot/provision.py), which does not require a published port.
+# The optional preview UI is fronted by HA's authenticated ingress proxy.
 ingress: true
 ingress_port: 10000
 options:

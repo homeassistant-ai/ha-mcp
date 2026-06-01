@@ -1,13 +1,7 @@
 import puppeteer from "puppeteer";
 import sharp from "sharp"; // Import sharp
 import { BMPEncoder } from "./bmp.js";
-import {
-  debug,
-  isAddOn,
-  chromiumExecutable,
-  currentHassToken,
-  useSupervisorAuth,
-} from "./const.js";
+import { debug, isAddOn, chromiumExecutable } from "./const.js";
 import { CannotOpenPageError } from "./error.js";
 
 const HEADER_HEIGHT = 56;
@@ -399,20 +393,6 @@ export class Browser {
       let defaultWait = isAddOn ? 750 : 500;
       let openedNewPage = false;
 
-      // In Supervisor auto-auth mode the Supervisor token rotates, so refresh
-      // from the live environment before each render. Otherwise a long-lived
-      // keep_browser_open session would keep injecting the stale snapshot
-      // captured at import and silently render the login page after a rotation.
-      if (useSupervisorAuth) {
-        const fresh = currentHassToken();
-        if (fresh && fresh !== this.token) {
-          this.token = fresh;
-          // Force a full re-navigation so the refreshed token is re-injected
-          // into localStorage (the SPA-nav branch below does not re-seed).
-          this.lastRequestedPath = undefined;
-        }
-      }
-
       // If we're still on about:blank, navigate to HA UI
       if (this.lastRequestedPath === undefined) {
         openedNewPage = true;
@@ -535,13 +515,19 @@ export class Browser {
 
       // Fail loudly if auth landed us on the login screen instead of an
       // authenticated dashboard. Returning a 200 login-page PNG would be a
-      // confusing silent failure (most likely a stale/invalid token). Throwing
-      // resets lastRequestedPath in screenshotPage's catch, forcing a fresh
-      // navigation + token re-seed on the next request.
+      // confusing silent failure (an absent / invalid / expired access_token).
+      // Throwing resets lastRequestedPath in screenshotPage's catch so the next
+      // request re-navigates. Detect via BOTH the redirect URL (HA bounces an
+      // unauthenticated request to /auth/authorize) AND the ha-authorize
+      // element — the URL check is the reliable signal (the live failure showed
+      // the element query alone missed it), and it MUST run before the
+      // language/theme evaluate calls below, which call frontend internals
+      // (_selectLanguage / dispatchEvent settheme) that throw on the
+      // not-fully-booted login page.
       const onLoginScreen = await page.evaluate(() => {
+        if (location.pathname.startsWith("/auth/authorize")) return true;
         const haEl = document.querySelector("home-assistant");
-        const authEl = haEl?.shadowRoot?.querySelector("ha-authorize");
-        return !!authEl;
+        return !!haEl?.shadowRoot?.querySelector("ha-authorize");
       });
       if (onLoginScreen) {
         throw new CannotOpenPageError(401, pagePath);
@@ -552,9 +538,10 @@ export class Browser {
       // but that doesn't seem to work
       if (lang !== this.lastRequestedLang) {
         await page.evaluate((newLang) => {
-          document
-            .querySelector("home-assistant")
-            ._selectLanguage(newLang, false);
+          const haEl = document.querySelector("home-assistant");
+          if (haEl && typeof haEl._selectLanguage === "function") {
+            haEl._selectLanguage(newLang, false);
+          }
         }, lang || "en");
         this.lastRequestedLang = lang;
         defaultWait += 1000;
@@ -567,11 +554,14 @@ export class Browser {
       ) {
         await page.evaluate(
           ({ theme, dark }) => {
-            document.querySelector("home-assistant").dispatchEvent(
-              new CustomEvent("settheme", {
-                detail: { theme, dark },
-              }),
-            );
+            const haEl = document.querySelector("home-assistant");
+            if (haEl) {
+              haEl.dispatchEvent(
+                new CustomEvent("settheme", {
+                  detail: { theme, dark },
+                }),
+              );
+            }
           },
           { theme: theme || "", dark },
         );

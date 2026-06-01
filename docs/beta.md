@@ -151,18 +151,23 @@ Screenshot Engine** add-on (headless Chromium). Operators should know:
 
 **Setup by deployment.**
 - *HA OS / Supervised:* install the engine add-on from this repository's
-  add-on store and start it. With no `access_token` set it authenticates
-  automatically via the add-on's Supervisor token — no long-lived token to
-  paste. ha-mcp discovers the running engine through the Supervisor.
-- *Docker / Container:* run the engine image as a sidecar and point ha-mcp at
-  it with `HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL=http://<engine-host>:10000`.
+  add-on store, set its `access_token` option to a Home Assistant long-lived
+  access token, and start it. ha-mcp discovers the running engine through the
+  Supervisor. (The assistant can install + start it for you via
+  `ha_manage_addon(action="install"/"start")`, but you must supply the token.)
+- *Docker / Container:* run the engine image as a sidecar (with `access_token`
+  set) and point ha-mcp at it with
+  `HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL=http://<engine-host>:10000`.
 - *stdio / standalone:* not supported (no place to host the engine); the tool
   returns a clear error.
 
-**The engine holds a full-HA credential.** In auto-auth mode it wields the
-add-on's Supervisor token (full Home Assistant API access); with an
-`access_token` set, it uses that. Prefer a long-lived token from a dedicated,
-low-privilege HA user over the Supervisor token if you want to limit reach.
+**A long-lived access token is required.** The engine authenticates by
+injecting a Home Assistant long-lived access token (the `access_token` option)
+into the browser. There is no token-less mode: the add-on's Supervisor token is
+not a valid HA frontend credential (HA Core rejects it), and a token cannot be
+minted programmatically. Create the token under Profile > Security — ideally
+for a dedicated, low-privilege user, since the engine holds whatever access
+that token grants.
 
 **The engine's HTTP listener has no inbound auth.** The add-on publishes no
 host port; ha-mcp reaches it only over the internal Docker/Supervisor network,
