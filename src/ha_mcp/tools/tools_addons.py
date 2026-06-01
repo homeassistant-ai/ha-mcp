@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from collections.abc import Coroutine
-from typing import Annotated, Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal, NoReturn
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -1880,12 +1880,12 @@ class AddOnTools:
             noop = self._repo_noop_verb(key, str(e))
             if noop:
                 return self._repo_noop_result(key, repository, noop)
-            raise_tool_error(self._repo_action_error(key, repository, str(e)))
+            self._raise_repo_action_error(key, repository, str(e))
         if not result.get("success"):
             noop = self._repo_noop_verb(key, str(result))
             if noop:
                 return self._repo_noop_result(key, repository, noop)
-            raise_tool_error(self._repo_action_error(key, repository, str(result)))
+            self._raise_repo_action_error(key, repository, str(result))
         return {
             "success": True,
             "action": key,
@@ -1916,8 +1916,8 @@ class AddOnTools:
         }
 
     @staticmethod
-    def _repo_action_error(key: str, repository: str, detail: str) -> dict[str, Any]:
-        """Build a repository-action-specific error response.
+    def _raise_repo_action_error(key: str, repository: str, detail: str) -> NoReturn:
+        """Raise a repository-action-specific error.
 
         ``_supervisor_api_call`` attaches a generic "check your HA connection"
         suggestion to every failure, which is misleading for a store-repository
@@ -1936,11 +1936,13 @@ class AddOnTools:
                 "A repository that still has installed add-ons can't be removed "
                 "until those add-ons are uninstalled",
             ]
-        return create_error_response(
-            ErrorCode.SERVICE_CALL_FAILED,
-            f"Could not {key.replace('_', ' ')} {repository!r}.",
-            details=detail,
-            suggestions=suggestions,
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Could not {key.replace('_', ' ')} {repository!r}.",
+                details=detail,
+                suggestions=suggestions,
+            )
         )
 
     async def _execute_config_mode(
