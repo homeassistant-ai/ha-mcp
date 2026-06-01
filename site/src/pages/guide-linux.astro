@@ -1,0 +1,386 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Nav from '../components/Nav.astro';
+import PlatformIcon from '../components/PlatformIcon.astro';
+
+const base = import.meta.env.BASE_URL;
+
+const withBase = (path: string) => {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${cleanPath}`;
+};
+
+// Single source of truth for the demo server + script locations, so they don't
+// drift across the page if they ever change.
+const demoUrl = 'https://ha-mcp-demo-server.qc-h.net';
+const scriptsBase = 'https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts';
+---
+
+<Layout title="Linux Setup Guide - Home Assistant MCP">
+  <Nav active="setup" />
+
+  <div class="container mx-auto px-4 py-8 max-w-3xl">
+    <!-- Header -->
+    <header class="mb-10">
+      <div class="flex items-center gap-2 text-sm text-slate-400 mb-4">
+        <a href={withBase('/setup')} class="hover:text-white">&larr; Back to Setup</a>
+      </div>
+      <div class="flex items-center gap-4 mb-4">
+        <PlatformIcon icon="linux" size={40} class="text-[var(--text-secondary)] flex-shrink-0" />
+        <div>
+          <h1 class="text-3xl font-bold text-white">Linux Setup Guide</h1>
+          <p class="text-slate-400">Connect Claude to Home Assistant on Linux in ~10 minutes</p>
+        </div>
+      </div>
+      <div class="bg-green-900/20 border border-green-700/50 rounded-xl p-4">
+        <p class="text-green-300 font-medium">A free option is available — the community Claude Desktop build works with a free Claude account. The official Claude Code path needs a paid Claude plan.</p>
+      </div>
+    </header>
+
+    <!-- Step 1 (shared) -->
+    <section class="guide-step mb-8">
+      <div class="step-header">
+        <span class="step-number">1</span>
+        <h2 class="text-xl font-semibold text-white">Create a Claude Account</h2>
+      </div>
+      <div class="step-content">
+        <p class="text-slate-300 mb-4">Go to <a href="https://claude.ai" class="text-blue-400 hover:underline" target="_blank">claude.ai</a> and create an account.</p>
+        <p class="text-slate-400 text-sm">A free account is enough for the community <strong>Claude Desktop</strong> path below. <strong>Claude Code</strong> (the official CLI) requires a paid plan — Pro, Max, Team, or Enterprise.</p>
+      </div>
+    </section>
+
+    <!-- Choose your path -->
+    <section class="mb-10">
+      <h2 class="text-xl font-semibold text-white mb-1">Choose your path</h2>
+      <p class="text-slate-400 mb-4">Anthropic doesn't ship Claude Desktop for Linux, so there are two ways to connect. Pick one:</p>
+      <div class="grid md:grid-cols-2 gap-4">
+        <a href="#path-claude-code" class="path-card">
+          <div class="flex items-center gap-2 mb-2">
+            <h3 class="text-lg font-semibold text-white">Claude Code</h3>
+            <span class="path-badge path-badge-official">Official</span>
+          </div>
+          <p class="text-slate-400 text-sm">Anthropic's official CLI. Configured with <code class="bg-slate-800 px-1 rounded">claude mcp add</code>. Best if you're comfortable in a terminal.</p>
+          <p class="text-amber-300/90 text-sm mt-2">Requires a paid Claude plan.</p>
+        </a>
+        <a href="#path-claude-desktop" class="path-card">
+          <div class="flex items-center gap-2 mb-2">
+            <h3 class="text-lg font-semibold text-white">Claude Desktop</h3>
+            <span class="path-badge path-badge-free">Free</span>
+          </div>
+          <p class="text-slate-400 text-sm">The desktop app via the <strong>community</strong> <code class="bg-slate-800 px-1 rounded">aaddrick/claude-desktop-debian</code> build. Works with a free Claude account.</p>
+          <p class="text-slate-400 text-sm mt-2">Unofficial — not maintained by Anthropic.</p>
+        </a>
+      </div>
+    </section>
+
+    <!-- ===================== Path A: Claude Code ===================== -->
+    <div id="path-claude-code" class="path-section">
+      <div class="flex items-center gap-3 mb-2">
+        <h2 class="text-2xl font-bold text-white">Path A — Claude Code</h2>
+        <span class="path-badge path-badge-official">Official</span>
+      </div>
+      <p class="text-slate-400 mb-6">The officially-supported way to run an MCP server on Linux. <a href="https://code.claude.com/docs/en/setup#authenticate" class="text-blue-400 hover:underline" target="_blank" rel="noopener">Requires a paid Claude plan</a> (Pro, Max, Team, or Enterprise).</p>
+
+      <div class="space-y-8">
+        <!-- A2 -->
+        <section class="guide-step">
+          <div class="step-header">
+            <span class="step-number">2</span>
+            <h2 class="text-xl font-semibold text-white">Install Claude Code</h2>
+          </div>
+          <div class="step-content">
+            <p class="text-slate-300 mb-4">Open <strong>Terminal</strong> and run the official installer:</p>
+            <pre class="code-block"><code>curl -fsSL https://claude.ai/install.sh | bash</code></pre>
+            <p class="text-slate-400 text-sm mt-3">Supported on Ubuntu 20.04+, Debian 10+, and Alpine 3.19+. You can also install via <a href="https://code.claude.com/docs/en/setup#install-with-linux-package-managers" class="text-blue-400 hover:underline" target="_blank" rel="noopener">apt / dnf / apk</a> or <code class="bg-slate-800 px-1 rounded">npm install -g @anthropic-ai/claude-code</code>. Verify with <code class="bg-slate-800 px-1 rounded">claude --version</code>.</p>
+          </div>
+        </section>
+
+        <!-- A3 -->
+        <section class="guide-step">
+          <div class="step-header">
+            <span class="step-number">3</span>
+            <h2 class="text-xl font-semibold text-white">Add the Home Assistant MCP Server</h2>
+          </div>
+          <div class="step-content">
+            <p class="text-slate-300 mb-4">Run the installer with the <code class="bg-slate-800 px-1 rounded">--claude-code</code> flag — it installs <code class="bg-slate-800 px-1 rounded">uv</code> and registers ha-mcp for the demo environment:</p>
+            <pre class="code-block"><code>{`curl -LsSf ${scriptsBase}/install.sh | sh -s -- --claude-code`}</code></pre>
+
+            <details class="mt-4">
+              <summary class="text-slate-400 hover:text-white cursor-pointer font-medium">Manual setup (if the installer doesn't work)</summary>
+              <div class="mt-4 pl-4 border-l-2 border-slate-700">
+                <h4 class="font-medium text-white mb-2">Install uv</h4>
+                <pre class="code-block mb-4"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+
+                <h4 class="font-medium text-white mb-2">Register the server</h4>
+                <pre class="code-block"><code>{`claude mcp add home-assistant --scope user \\
+  --env HOMEASSISTANT_URL=${demoUrl} \\
+  --env HOMEASSISTANT_TOKEN=demo \\
+  -- uvx --python 3.13 ha-mcp@latest`}</code></pre>
+                <p class="text-slate-400 text-sm mt-3"><code class="bg-slate-800 px-1 rounded">--scope user</code> makes the server available in every project (the default scope is the current project only).</p>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <!-- A4 -->
+        <section class="guide-step">
+          <div class="step-header">
+            <span class="step-number">4</span>
+            <h2 class="text-xl font-semibold text-white">Test It</h2>
+          </div>
+          <div class="step-content">
+            <p class="text-slate-300 mb-4">Start Claude Code and confirm the server is connected:</p>
+            <pre class="code-block"><code>claude</code></pre>
+            <p class="text-slate-400 text-sm mt-3">On first launch you'll be prompted to log in (this is where the paid plan is required). Then run <code class="bg-slate-800 px-1 rounded">/mcp</code> to confirm <strong>home-assistant</strong> is listed, and ask:</p>
+            <pre class="code-block mt-3"><code>Can you see my Home Assistant?</code></pre>
+            <div class="mt-4 text-sm text-slate-400 space-y-1">
+              <p><code class="bg-slate-800 px-1 rounded">claude mcp list</code> — list configured MCP servers</p>
+              <p><code class="bg-slate-800 px-1 rounded">claude mcp remove home-assistant --scope user</code> — remove this server</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- ===================== Path B: Claude Desktop ===================== -->
+    <div id="path-claude-desktop" class="path-section">
+      <div class="flex items-center gap-3 mb-2">
+        <h2 class="text-2xl font-bold text-white">Path B — Claude Desktop</h2>
+        <span class="path-badge path-badge-free">Free</span>
+      </div>
+      <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mb-6">
+        <p class="text-amber-200/90 text-sm">Anthropic doesn't ship Claude Desktop for Linux. This path uses the community-maintained <a href="https://github.com/aaddrick/claude-desktop-debian" class="text-blue-400 hover:underline" target="_blank" rel="noopener">aaddrick/claude-desktop-debian</a> build, which repackages the official app for Debian/Ubuntu/Fedora/Arch. It's a well-regarded project, but it's <strong>unofficial</strong> — if it ever lags an Anthropic Desktop release, this path can break until it catches up.</p>
+      </div>
+
+      <div class="space-y-8">
+        <!-- B2 -->
+        <section class="guide-step">
+          <div class="step-header">
+            <span class="step-number">2</span>
+            <h2 class="text-xl font-semibold text-white">Install the Community Claude Desktop Build</h2>
+          </div>
+          <div class="step-content">
+            <p class="text-slate-300 mb-4">Follow the instructions for your distro on the <a href="https://github.com/aaddrick/claude-desktop-debian" class="text-blue-400 hover:underline" target="_blank" rel="noopener">aaddrick/claude-desktop-debian</a> project (it ships <code class="bg-slate-800 px-1 rounded">.deb</code>, <code class="bg-slate-800 px-1 rounded">.rpm</code>, AUR, Nix, and AppImage builds).</p>
+            <p class="text-slate-400 text-sm">Then sign in to Claude Desktop with your free Claude account.</p>
+          </div>
+        </section>
+
+        <!-- B3 -->
+        <section class="guide-step">
+          <div class="step-header">
+            <span class="step-number">3</span>
+            <h2 class="text-xl font-semibold text-white">Run the Installer</h2>
+          </div>
+          <div class="step-content">
+            <p class="text-slate-300 mb-4">In <strong>Terminal</strong>, paste:</p>
+            <pre class="code-block"><code>{`curl -LsSf ${scriptsBase}/install-linux.sh | sh`}</code></pre>
+            <p class="text-slate-400 text-sm mt-3">This installs the required tools and configures Claude Desktop for the demo environment.</p>
+
+            <details class="mt-4">
+              <summary class="text-slate-400 hover:text-white cursor-pointer font-medium">Manual Installation (if the installer doesn't work)</summary>
+              <div class="mt-4 pl-4 border-l-2 border-slate-700">
+                <h4 class="font-medium text-white mb-2">Install uv</h4>
+                <pre class="code-block mb-4"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+
+                <h4 class="font-medium text-white mb-2">Configure Claude Desktop</h4>
+                <ol class="text-slate-300 space-y-2 mb-4">
+                  <li>1. Open Claude Desktop</li>
+                  <li>2. <strong>Settings</strong> &rarr; <strong>Developer</strong> &rarr; <strong>Edit Config</strong></li>
+                  <li>3. Paste the following configuration:</li>
+                </ol>
+                <pre class="code-block"><code>{`{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "/home/YOUR_USER/.local/bin/uvx",
+      "args": ["--python", "3.13", "ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "${demoUrl}",
+        "HOMEASSISTANT_TOKEN": "demo"
+      }
+    }
+  }
+}`}</code></pre>
+                <p class="text-slate-400 text-sm mt-3">Replace <code class="bg-slate-800 px-1 rounded">/home/YOUR_USER/.local/bin/uvx</code> with the output of <code class="bg-slate-800 px-1 rounded">which uvx</code>. Claude Desktop doesn't inherit your shell's <code class="bg-slate-800 px-1 rounded">PATH</code>, so a bare <code class="bg-slate-800 px-1 rounded">uvx</code> will fail with "command not found" on most systems.</p>
+                <p class="text-slate-400 text-sm mt-3">4. Save and restart Claude Desktop.</p>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <!-- B4 -->
+        <section class="guide-step">
+          <div class="step-header">
+            <span class="step-number">4</span>
+            <h2 class="text-xl font-semibold text-white">Restart Claude Desktop & Test</h2>
+          </div>
+          <div class="step-content">
+            <p class="text-slate-300 mb-4">Quit and reopen Claude Desktop so it picks up the new configuration, then ask:</p>
+            <pre class="code-block"><code>Can you see my Home Assistant?</code></pre>
+            <p class="text-slate-400 text-sm mt-3">Claude should respond with a list of entities from the demo environment (lights, sensors, switches, etc.).</p>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- ===================== Shared: explore + connect + troubleshooting ===================== -->
+    <div class="space-y-8 mt-10">
+      <!-- Explore -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">5</span>
+          <h2 class="text-xl font-semibold text-white">Explore the Demo</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">The demo environment is a real Home Assistant you can experiment with:</p>
+          <div class="bg-slate-800/50 rounded-lg p-4 mb-4">
+            <p class="text-slate-300"><strong>Web UI:</strong> <a href={demoUrl} class="text-blue-400 hover:underline" target="_blank">{demoUrl.replace('https://', '')}</a></p>
+            <p class="text-slate-300"><strong>Login:</strong> <code class="bg-slate-700 px-1 rounded">mcp</code> / <code class="bg-slate-700 px-1 rounded">mcp</code></p>
+            <p class="text-slate-400 text-sm mt-2">Note: Resets weekly - your changes won't persist</p>
+          </div>
+          <p class="text-slate-300 mb-2">Try asking Claude:</p>
+          <ul class="text-slate-400 space-y-1 list-disc list-inside">
+            <li>"Turn on the kitchen lights"</li>
+            <li>"What's the temperature in the living room?"</li>
+            <li>"Create an automation that turns off all lights at midnight"</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Connect your own HA -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">6</span>
+          <h2 class="text-xl font-semibold text-white">Connect Your Home Assistant</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">Ready to use your own Home Assistant? You'll need a long-lived access token:</p>
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mb-6">
+            <h4 class="font-medium text-amber-300 mb-2">To get your token:</h4>
+            <ol class="text-amber-200/80 space-y-1 text-sm">
+              <li>1. Open Home Assistant in your browser</li>
+              <li>2. Click your username (bottom left)</li>
+              <li>3. <strong>Security</strong> tab &rarr; <strong>Long-lived access tokens</strong></li>
+              <li>4. Create token &rarr; Copy immediately (shown only once)</li>
+            </ol>
+          </div>
+
+          <h4 class="font-medium text-white mb-2">Claude Code</h4>
+          <p class="text-slate-400 text-sm mb-2">Re-register the server with your own URL and token:</p>
+          <pre class="code-block mb-6"><code>{`claude mcp remove home-assistant --scope user
+claude mcp add home-assistant --scope user \\
+  --env HOMEASSISTANT_URL=http://homeassistant.local:8123 \\
+  --env HOMEASSISTANT_TOKEN=your_long_lived_token \\
+  -- uvx --python 3.13 ha-mcp@latest`}</code></pre>
+
+          <h4 class="font-medium text-white mb-2">Claude Desktop</h4>
+          <p class="text-slate-400 text-sm mb-2">Open the config in your editor (swap <code class="bg-slate-800 px-1 rounded">nano</code> for your preferred one):</p>
+          <pre class="code-block mb-4"><code>nano ~/.config/Claude/claude_desktop_config.json</code></pre>
+          <p class="text-slate-300 mb-2">Replace the demo values:</p>
+          <pre class="code-block"><code>{`{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "/home/YOUR_USER/.local/bin/uvx",
+      "args": ["--python", "3.13", "ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token"
+      }
+    }
+  }
+}`}</code></pre>
+          <p class="text-slate-400 mt-4">Then quit and reopen Claude Desktop.</p>
+        </div>
+      </section>
+
+      <!-- Troubleshooting -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">?</span>
+          <h2 class="text-xl font-semibold text-white">Troubleshooting: Can't Connect to Local HA?</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">If the demo server works but your local Home Assistant doesn't, check the following:</p>
+
+          <div class="space-y-4">
+            <div>
+              <p class="text-white font-medium mb-2">1. Running under WSL?</p>
+              <p class="text-slate-300">The <strong>Claude Desktop</strong> path doesn't work in WSL — Claude Desktop runs on Windows and reads its config from <code class="bg-slate-800 px-1 rounded">%APPDATA%\Claude\</code>, not the WSL filesystem. Use the <a href={withBase('/guide-windows')} class="text-blue-400 hover:underline">Windows guide</a> instead, or use the <strong>Claude Code</strong> path, which runs fine inside WSL.</p>
+            </div>
+
+            <div>
+              <p class="text-white font-medium mb-2">2. Firewall rules</p>
+              <p class="text-slate-300">If you run <code class="bg-slate-800 px-1 rounded">ufw</code> or <code class="bg-slate-800 px-1 rounded">firewalld</code>, make sure outbound connections to your Home Assistant IP and port are allowed. The MCP server runs as a subprocess that needs network access.</p>
+            </div>
+
+            <div>
+              <p class="text-white font-medium mb-2">3. http:// vs https://</p>
+              <p class="text-slate-300">HA in container mode (Docker, K3s) uses HTTP by default. Use <code class="bg-slate-800 px-1 rounded">http://</code> unless you configured SSL/TLS or a reverse proxy.</p>
+            </div>
+
+            <div>
+              <p class="text-white font-medium mb-2">4. Python 3.13 required</p>
+              <p class="text-slate-300 mb-2">ha-mcp requires Python 3.13 (specifically 3.13.x). Older Python can't install the current ha-mcp.</p>
+              <pre class="code-block"><code>uv python install 3.13
+uvx --refresh ha-mcp@latest</code></pre>
+              <p class="text-slate-400 text-sm mt-2">If uvx still picks the old Python, make sure <code class="bg-slate-800 px-1 rounded">"--python", "3.13"</code> is in your config args (as shown above).</p>
+            </div>
+          </div>
+
+          <p class="text-slate-400 text-sm mt-4">See the <a href={withBase('/faq')} class="text-blue-400 hover:underline">FAQ & Troubleshooting Guide</a> for more.</p>
+        </div>
+      </section>
+
+      <!-- Feedback -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">7</span>
+          <h2 class="text-xl font-semibold text-white">Share Your Feedback</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">We'd love to hear how you're using ha-mcp!</p>
+          <ul class="space-y-2">
+            <li><a href="https://github.com/homeassistant-ai/ha-mcp/discussions" class="text-blue-400 hover:underline" target="_blank">GitHub Discussions</a> — Share your automations, ask questions</li>
+            <li><a href="https://github.com/homeassistant-ai/ha-mcp/issues" class="text-blue-400 hover:underline" target="_blank">GitHub Issues</a> — Report bugs or request features</li>
+          </ul>
+        </div>
+      </section>
+    </div>
+
+    <!-- Footer -->
+    <div class="mt-12 pt-8 border-t border-slate-800">
+      <p class="text-slate-400 text-center">
+        Having issues? See the <a href={withBase('/faq')} class="text-blue-400 hover:underline">FAQ & Troubleshooting Guide</a>
+      </p>
+    </div>
+  </div>
+</Layout>
+
+<style>
+  .guide-step {
+    @apply bg-slate-800/30 rounded-xl border border-slate-700/50 p-6;
+  }
+  .step-header {
+    @apply flex items-center gap-3 mb-4;
+  }
+  .step-number {
+    @apply w-8 h-8 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0;
+  }
+  .step-content {
+    @apply pl-11;
+  }
+  .path-card {
+    @apply block p-5 rounded-xl border border-slate-700 bg-slate-800/50 hover:bg-slate-700/50 hover:border-blue-500 transition-all no-underline;
+  }
+  .path-section {
+    @apply scroll-mt-20 mb-12 pt-2;
+  }
+  .path-badge {
+    @apply px-2 py-0.5 text-xs rounded-full font-medium;
+  }
+  .path-badge-official {
+    @apply bg-blue-900/50 text-blue-300;
+  }
+  .path-badge-free {
+    @apply bg-green-900/50 text-green-300;
+  }
+</style>

@@ -276,7 +276,14 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     <!-- Hero Section -->
     <header class="text-center mb-10">
       <h1 class="text-3xl font-bold text-white mb-2">Home Assistant MCP Setup Wizard</h1>
-      <p class="text-slate-400 mb-8">Configure the Home Assistant MCP Server for your AI assistant</p>
+      <p class="text-slate-400 mb-6">Configure the Home Assistant MCP Server for your AI assistant</p>
+
+      <!-- HA OS Add-on quick option -->
+      <div class="flex flex-wrap items-center justify-center gap-3 mb-8">
+        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="inline-flex" title="Add the ha-mcp add-on repository to your Home Assistant (HAOS)">
+          <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add ha-mcp add-on repository to your Home Assistant" height="36" />
+        </a>
+      </div>
 
       <!-- Get Started Quick Options -->
       <div class="mb-8">
@@ -284,7 +291,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <span class="inline-flex rounded-full h-2 w-2 bg-green-500"></span>
           Get Started - Easy Setup
         </div>
-        <div class="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
+        <div class="grid md:grid-cols-3 gap-6 max-w-3xl mx-auto">
           <a href={withBase('/guide-macos')} class="quick-start-card group">
             <div class="flex items-center gap-4">
               <PlatformIcon icon="apple" size={40} class="text-[var(--text-secondary)]" />
@@ -294,6 +301,16 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
               </div>
             </div>
             <span class="quick-start-badge" title="10 minutes to get you started. No subscription needed.">Quick start</span>
+          </a>
+          <a href={withBase('/guide-linux')} class="quick-start-card group">
+            <div class="flex items-center gap-4">
+              <PlatformIcon icon="linux" size={40} class="text-[var(--text-secondary)]" />
+              <div class="text-left">
+                <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">Linux + Claude</h3>
+                <p class="text-slate-400">Claude Code or Desktop</p>
+              </div>
+            </div>
+            <span class="quick-start-badge" title="10 minutes to get you started. Free community Claude Desktop build, or official Claude Code.">Quick start</span>
           </a>
           <a href={withBase('/guide-windows')} class="quick-start-card group">
             <div class="flex items-center gap-4">
