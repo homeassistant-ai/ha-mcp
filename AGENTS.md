@@ -11,6 +11,7 @@ This repository uses a worktree-based development workflow.
 - `CLAUDE.md` is a symlink pointing to `AGENTS.md`
 - Read either file - they're the same content
 - Commit changes to `AGENTS.md`, the symlink will automatically reflect them
+- Codex low-token delta: `prompts/PROJECT_CODEX_LOW_TOKEN_MODE_PROMPT.md`
 
 **Directory Structure:**
 ```
