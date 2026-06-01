@@ -61,51 +61,6 @@ class SystemTools:
         self._client = client
 
     @tool(
-        name="ha_check_config",
-        tags={"System"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Check Configuration",
-        },
-    )
-    @log_tool_usage
-    async def ha_check_config(self) -> dict[str, Any]:
-        """
-        Check Home Assistant configuration for errors.
-
-        Validates configuration files without applying changes.
-        Always run this before ha_restart() to ensure configuration is valid.
-        """
-        try:
-            config_result = await self._client.check_config()
-
-            # The API returns {"result": "valid"} or {"result": "invalid", "errors": [...]}
-            is_valid = config_result.get("result") == "valid"
-            errors = config_result.get("errors") or []  # Handle None case
-
-            return {
-                "success": True,
-                "result": "valid" if is_valid else "invalid",
-                "is_valid": is_valid,
-                "errors": errors,
-                "message": (
-                    "Configuration is valid"
-                    if is_valid
-                    else f"Configuration has {len(errors)} error(s)"
-                ),
-            }
-
-        except Exception as e:
-            exception_to_structured_error(
-                e,
-                suggestions=[
-                    "Ensure Home Assistant is running and accessible",
-                    "Check your connection settings",
-                ],
-            )
-
-    @tool(
         name="ha_restart",
         tags={"System"},
         annotations={"destructiveHint": True, "title": "Restart Home Assistant"},
@@ -127,15 +82,16 @@ class SystemTools:
                    measure to prevent accidental restarts.
 
         **Best Practices:**
-        1. Always run ha_check_config() first to ensure configuration is valid
+        1. Config is validated automatically before the restart proceeds; to
+           pre-check, call ha_get_system_health(include="config_check")
         2. Notify users before restarting (if applicable)
         3. Schedule restarts during low-activity periods
 
         **Example Usage:**
         ```python
-        # Always check config first
-        config = ha_check_config()
-        if config["result"] == "valid":
+        # Optional pre-check (ha_restart also validates config automatically)
+        health = ha_get_system_health(include="config_check")
+        if health["config_check"]["is_valid"]:
             # Restart with confirmation
             result = ha_restart(confirm=True)
         ```
@@ -153,7 +109,7 @@ class SystemTools:
                         "This is a safety measure to prevent accidental restarts."
                     ),
                     suggestions=[
-                        "Run ha_check_config() first to validate configuration",
+                        'Pre-check config via ha_get_system_health(include="config_check")',
                         "Call ha_restart(confirm=True) to proceed with restart",
                         "Consider using ha_reload_core() for config-only changes",
                     ],
@@ -391,7 +347,10 @@ class SystemTools:
             be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with
             ``diagnostics_fields`` or ``diagnostics_truncate_at_bytes`` to fit the LLM
             context budget.
-          - Example: include="repairs,zha_network,zwave_network"
+          - "config_check": Validate HA configuration via POST /config/core/check_config
+            (the pre-restart safety check; ha_restart runs it automatically). Returns
+            {result: valid|invalid, is_valid, errors}; read-only/idempotent, takes no args.
+          - Example: include="repairs,zha_network,zwave_network,config_check"
           - Example: include="diagnostics", config_entry_id="abc123..."
         - include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when "repairs" is in `include`.
         - config_entry_id: Required when ``include`` contains ``diagnostics``. The config
@@ -430,10 +389,36 @@ class SystemTools:
         includes = self._parse_includes(include)
         include_dismissed_repairs_bool = bool(include_dismissed_repairs)
 
+        # Sections that require the system_health WebSocket connection; the
+        # REST-based sections (config_check, diagnostics) do not.
+        ws_backed = {"repairs", "zha_network", "zha_network_full", "zwave_network"}
+
         ws_client = None
 
         try:
-            ws_client, result = await self._fetch_health_info()
+            try:
+                ws_client, result = await self._fetch_health_info()
+            except ToolError as health_err:
+                # The system_health/info baseline (WebSocket) is unavailable —
+                # degrade gracefully instead of sinking the whole tool, so the
+                # REST-based sections still return. WS-backed sections can't run
+                # without the connection and are reported as unavailable below.
+                # config_check is the pure-REST replacement for the removed
+                # ha_check_config tool, so it must not depend on the health
+                # WebSocket succeeding (the system_health/info command carries
+                # its own 10s timeout and can hang/be absent on some installs).
+                logger.warning("system_health baseline unavailable: %s", health_err)
+                ws_client = None
+                result = {
+                    "success": True,
+                    "health_info": {},
+                    "component_count": 0,
+                    "message": "System health baseline unavailable.",
+                    "warnings": [
+                        "system_health baseline unavailable; "
+                        "returning REST-based sections only."
+                    ],
+                }
 
             # Warn about unrecognized include values
             VALID_INCLUDES = {
@@ -442,6 +427,7 @@ class SystemTools:
                 "zha_network_full",
                 "zwave_network",
                 "diagnostics",
+                "config_check",
             }
             unknown = includes - VALID_INCLUDES
             if unknown:
@@ -463,6 +449,18 @@ class SystemTools:
             want_repairs = "repairs" in includes
             want_zha = zha_full or zha_summary
             want_zwave = "zwave_network" in includes
+
+            if ws_client is None:
+                # Health WebSocket unavailable: WS-backed sections can't run.
+                # Surface which requested sections were dropped, then skip them
+                # so the REST-based sections below still return.
+                unavailable = sorted(includes & ws_backed)
+                if unavailable:
+                    result.setdefault("warnings", []).append(
+                        "These sections require the system_health WebSocket, "
+                        f"which is unavailable: {', '.join(unavailable)}"
+                    )
+                want_repairs = want_zha = want_zwave = False
 
             sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
             if want_repairs:
@@ -592,6 +590,14 @@ class SystemTools:
                     "were provided but ignored because 'diagnostics' is not "
                     "in include"
                 )
+
+            if "config_check" in includes:
+                # REST call on self._client (POST /config/core/check_config),
+                # not a ws_client command — so it runs inline like diagnostics
+                # rather than in the ws ``sections`` gather above. Standalone
+                # ``if`` (not chained to diagnostics) so both can be requested
+                # in one call.
+                result["config_check"] = await self._fetch_config_check()
 
             return result
 
@@ -817,6 +823,37 @@ class SystemTools:
                 f"Z-Wave JS integration not available or error: {e}"
             )
         return zwave_network
+
+    async def _fetch_config_check(self) -> dict[str, Any]:
+        """Validate HA configuration via POST /config/core/check_config.
+
+        Returns an embeddable sub-dict (matching the ``_fetch_repairs`` /
+        ``_fetch_zha_network`` convention): baseline keys always present, with
+        an ``error`` field on backend failure. Never raises, so a config-check
+        failure surfaces as ``result["config_check"]["error"]`` without sinking
+        the rest of ha_get_system_health. Instance method (not @staticmethod)
+        because it calls the REST client, mirroring the diagnostics path.
+        """
+        config_check: dict[str, Any] = {
+            "result": "unknown",
+            "is_valid": False,
+            "errors": [],
+        }
+        try:
+            config_result = await self._client.check_config()
+            # The API returns {"result": "valid"} or
+            # {"result": "invalid", "errors": [...]}.
+            is_valid = config_result.get("result") == "valid"
+            errors = config_result.get("errors") or []  # Handle None case
+            config_check = {
+                "result": "valid" if is_valid else "invalid",
+                "is_valid": is_valid,
+                "errors": errors,
+            }
+        except Exception as e:
+            logger.warning("Failed to check config: %s", e)
+            config_check["error"] = f"Config check not available: {e}"
+        return config_check
 
 
 def register_system_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

@@ -744,3 +744,138 @@ class TestGetSystemHealthDiagnostics:
         err_payload = json.loads(str(excinfo.value))
         assert err_payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "diagnostics_data_path" in err_payload["error"]["message"]
+
+
+class TestGetSystemHealthConfigCheck:
+    """Wire-up tests for ha_get_system_health's include='config_check' branch —
+    the folded-in replacement for the removed standalone ha_check_config tool."""
+
+    @pytest.mark.asyncio
+    async def test_config_check_populates_section_when_valid(self):
+        """include='config_check' calls client.check_config() (REST) and embeds
+        the result/is_valid/errors sub-dict the old ha_check_config returned."""
+        client = MagicMock()
+        client.check_config = AsyncMock(return_value={"result": "valid"})
+        tools = SystemTools(client)
+        with _patch_health_info_baseline():
+            result = await tools.ha_get_system_health(include="config_check")
+        assert "config_check" in result
+        assert result["config_check"]["is_valid"] is True
+        assert result["config_check"]["result"] == "valid"
+        assert result["config_check"]["errors"] == []
+        client.check_config.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_config_check_surfaces_invalid_with_errors(self):
+        client = MagicMock()
+        client.check_config = AsyncMock(
+            return_value={"result": "invalid", "errors": ["bad yaml at line 3"]}
+        )
+        tools = SystemTools(client)
+        with _patch_health_info_baseline():
+            result = await tools.ha_get_system_health(include="config_check")
+        assert result["config_check"]["is_valid"] is False
+        assert result["config_check"]["result"] == "invalid"
+        assert result["config_check"]["errors"] == ["bad yaml at line 3"]
+
+    @pytest.mark.asyncio
+    async def test_config_check_absent_when_not_requested(self):
+        """No include → config_check section absent and check_config not called
+        (parity with test_no_sections_when_include_omitted)."""
+        client = MagicMock()
+        client.check_config = AsyncMock(return_value={"result": "valid"})
+        tools = SystemTools(client)
+        with _patch_health_info_baseline():
+            result = await tools.ha_get_system_health()
+        client.check_config.assert_not_awaited()
+        assert "config_check" not in result
+
+    @pytest.mark.asyncio
+    async def test_config_check_backend_failure_embeds_error_not_raises(self):
+        """A check_config backend failure surfaces as an embedded error sub-dict;
+        the parent tool still succeeds (the _fetch_* never-raise convention)."""
+        client = MagicMock()
+        client.check_config = AsyncMock(side_effect=RuntimeError("boom"))
+        tools = SystemTools(client)
+        with _patch_health_info_baseline():
+            result = await tools.ha_get_system_health(include="config_check")
+        assert result.get("success") is True
+        assert "error" in result["config_check"]
+        assert "boom" in result["config_check"]["error"]
+        # Pin the safe baseline contract: on failure config must read as
+        # NOT valid so a caller never mistakes a transient error for "config OK".
+        assert result["config_check"]["is_valid"] is False
+        assert result["config_check"]["result"] == "unknown"
+        assert result["config_check"]["errors"] == []
+
+    @pytest.mark.asyncio
+    async def test_config_check_non_dict_check_config_result_embeds_error(self):
+        """client.check_config() returning None (non-dict) is caught and embedded
+        as an error, not raised (defensive boundary the old tool also had)."""
+        client = MagicMock()
+        client.check_config = AsyncMock(return_value=None)
+        tools = SystemTools(client)
+        with _patch_health_info_baseline():
+            result = await tools.ha_get_system_health(include="config_check")
+        assert result.get("success") is True
+        assert "error" in result["config_check"]
+        assert result["config_check"]["is_valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_config_check_returns_even_when_health_ws_unavailable(self):
+        """If the system_health WebSocket baseline fails, config_check (pure REST)
+        must STILL return — it must not be sunk by the WS dependency. This is the
+        graceful-degradation guarantee that keeps config_check as robust as the
+        REST-only ha_check_config tool it replaced."""
+        client = MagicMock()
+        client.check_config = AsyncMock(return_value={"result": "valid"})
+        tools = SystemTools(client)
+        with patch.object(
+            SystemTools,
+            "_fetch_health_info",
+            new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
+        ):
+            result = await tools.ha_get_system_health(include="config_check")
+        assert result["success"] is True
+        assert result["config_check"]["is_valid"] is True
+        assert result["config_check"]["result"] == "valid"
+        client.check_config.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ws_backed_section_reported_unavailable_when_health_fails(self):
+        """When the health WS baseline fails, a requested WS-backed section
+        (repairs) is dropped with a warning rather than crashing the tool, while
+        the REST config_check still returns."""
+        client = MagicMock()
+        client.check_config = AsyncMock(return_value={"result": "valid"})
+        tools = SystemTools(client)
+        with patch.object(
+            SystemTools,
+            "_fetch_health_info",
+            new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
+        ):
+            result = await tools.ha_get_system_health(include="repairs,config_check")
+        assert result["success"] is True
+        assert result["config_check"]["is_valid"] is True
+        assert "repairs" not in result
+        assert any("repairs" in w for w in result.get("warnings", []))
+
+    @pytest.mark.asyncio
+    async def test_config_check_combined_with_repairs(self):
+        """include='repairs,config_check' populates both — proves the standalone
+        ``if`` is not mutually exclusive with the ws-gather sections."""
+        client = MagicMock()
+        client.check_config = AsyncMock(return_value={"result": "valid"})
+        tools = SystemTools(client)
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools,
+                "_fetch_repairs",
+                new=AsyncMock(return_value={"issues": [], "count": 0}),
+            ),
+        ):
+            result = await tools.ha_get_system_health(include="repairs,config_check")
+        assert "repairs" in result
+        assert "config_check" in result
+        assert result["config_check"]["is_valid"] is True

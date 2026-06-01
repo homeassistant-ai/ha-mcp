@@ -514,7 +514,7 @@ src/ha_mcp/
 - `ha_config_<verb>_<noun>` — config-management tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_remove_automation`, `ha_config_delete_dashboard`)
 
 **Accepted exceptions**: A small set of tools name a single, distinct operation where forcing a `<verb>_<noun>` shape would read worse than the natural name. These are accepted as-is and should not be flagged:
-- `ha_restart`, `ha_reload_core`, `ha_check_config`, `ha_eval_template`
+- `ha_restart`, `ha_reload_core`, `ha_eval_template`
 - `ha_report_issue`, `ha_import_blueprint`
 - `ha_read_file`, `ha_write_file`, `ha_deep_search`, `ha_bulk_control`
 - `ha_install_mcp_tools`

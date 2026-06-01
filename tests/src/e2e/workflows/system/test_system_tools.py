@@ -5,11 +5,10 @@ NOTE: Run these tests with the Docker test environment:
     HAMCP_ENV_FILE=tests/.env.test uv run pytest tests/src/e2e/workflows/system/test_system_tools.py -v
 
 Tests for system management MCP tools:
-- ha_check_config: Configuration validation
 - ha_restart: Home Assistant restart (with safety measures)
 - ha_reload_core: Reload specific configuration components
 - ha_get_overview: Get system information and entity overview
-- ha_get_system_health: Get system health data
+- ha_get_system_health: System health data + config validation (include="config_check")
 
 Note: ha_restart is tested carefully to avoid disrupting the test environment.
 We verify the safety mechanisms work but do not actually restart HA during tests.
@@ -29,37 +28,41 @@ class TestSystemTools:
     """Test system management tools."""
 
     @pytest.mark.asyncio
-    async def test_check_config_valid(self, mcp_client):
+    async def test_config_check_via_system_health(self, mcp_client):
         """
-        Test: Check Home Assistant configuration for errors.
+        Test: Validate HA configuration via ha_get_system_health(include="config_check").
 
-        This test validates that we can check the HA configuration
-        and that the test environment has valid configuration.
+        The standalone ha_check_config tool was folded into ha_get_system_health;
+        configuration validation now lives under the "config_check" include section.
         """
-        logger.info("Checking Home Assistant configuration...")
+        logger.info("Checking Home Assistant configuration via system health...")
 
-        result = await mcp_client.call_tool("ha_check_config", {})
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "config_check"}
+        )
         data = parse_mcp_result(result)
 
-        logger.info(f"Config check result: {data}")
+        logger.info(f"System health (config_check) result: {data}")
 
         # Verify the tool executed successfully
-        assert data.get("success") is True, f"Config check failed: {data.get('error')}"
+        assert data.get("success") is True, f"Health check failed: {data.get('error')}"
 
-        # Verify we got the expected fields
-        assert "result" in data, "Missing 'result' field"
-        assert "is_valid" in data, "Missing 'is_valid' field"
-        assert "errors" in data, "Missing 'errors' field"
+        # Verify the folded config_check section is present with expected fields
+        assert "config_check" in data, "Missing 'config_check' section"
+        config_check = data["config_check"]
+        assert "result" in config_check, "Missing 'result' field"
+        assert "is_valid" in config_check, "Missing 'is_valid' field"
+        assert "errors" in config_check, "Missing 'errors' field"
 
         # The test environment should have valid config
-        if data.get("is_valid"):
+        if config_check.get("is_valid"):
             logger.info("Configuration is valid")
-            assert data["result"] == "valid"
-            errors = data.get("errors") or []
+            assert config_check["result"] == "valid"
+            errors = config_check.get("errors") or []
             assert len(errors) == 0, f"Valid config should have no errors: {errors}"
         else:
             # Log errors if config is invalid (unexpected in test env)
-            logger.warning(f"Configuration has errors: {data['errors']}")
+            logger.warning(f"Configuration has errors: {config_check['errors']}")
 
         logger.info("Config check test completed successfully")
 
@@ -619,13 +622,16 @@ class TestSystemToolsIntegration:
         """
         logger.info("Testing check config -> reload workflow...")
 
-        # Step 1: Check configuration
-        config_result = await mcp_client.call_tool("ha_check_config", {})
+        # Step 1: Check configuration (folded into ha_get_system_health)
+        config_result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "config_check"}
+        )
         config_data = parse_mcp_result(config_result)
 
         assert config_data.get("success") is True, "Config check should succeed"
+        config_check = config_data.get("config_check", {})
 
-        if config_data.get("is_valid"):
+        if config_check.get("is_valid"):
             logger.info("Config is valid, proceeding with reload...")
 
             # Step 2: Reload automations
@@ -658,19 +664,20 @@ class TestSystemToolsIntegration:
         info_result = await mcp_client.call_tool("ha_get_overview", {})
         info_data = parse_mcp_result(info_result)
 
-        # Get system health (may not be available in test environment)
-        health_result = await mcp_client.call_tool("ha_get_system_health", {})
+        # Get system health + config status. Config validation is folded into
+        # ha_get_system_health as the "config_check" include section, so one
+        # call covers both. (May not be available in minimal test containers.)
+        health_result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "config_check"}
+        )
         health_data = parse_mcp_result(health_result)
-
-        # Get config status
-        config_result = await mcp_client.call_tool("ha_check_config", {})
-        config_data = parse_mcp_result(config_result)
 
         # Verify essential tools returned successfully
         assert info_data.get("success") is True, "System overview should succeed"
-        assert config_data.get("success") is True, "Config check should succeed"
-        # Health data might not be available in test containers - don't require it
+        # Health data (and the folded config_check) might not be available in
+        # test containers - don't require it
         health_available = health_data.get("success") is True
+        config_check = health_data.get("config_check", {}) if health_available else {}
 
         # Extract system_info from overview
         system_info = info_data.get("system_info", {})
@@ -683,7 +690,7 @@ class TestSystemToolsIntegration:
         logger.info(f"Location: {system_info.get('location_name')}")
         logger.info(f"Timezone: {system_info.get('time_zone')}")
         logger.info(f"Components: {system_info.get('components_loaded')}")
-        logger.info(f"Config Status: {config_data.get('result')}")
+        logger.info(f"Config Status: {config_check.get('result', 'not available')}")
         if health_available:
             logger.info(f"Health Components: {health_data.get('component_count')}")
         else:
