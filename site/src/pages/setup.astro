@@ -276,7 +276,14 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     <!-- Hero Section -->
     <header class="text-center mb-10">
       <h1 class="text-3xl font-bold text-white mb-2">Home Assistant MCP Setup Wizard</h1>
-      <p class="text-slate-400 mb-8">Configure the Home Assistant MCP Server for your AI assistant</p>
+      <p class="text-slate-400 mb-6">Configure the Home Assistant MCP Server for your AI assistant</p>
+
+      <!-- HA OS Add-on quick option -->
+      <div class="flex flex-wrap items-center justify-center gap-3 mb-8">
+        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="inline-flex" title="Add the ha-mcp add-on repository to your Home Assistant (HAOS)">
+          <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add ha-mcp add-on repository to your Home Assistant" height="36" />
+        </a>
+      </div>
 
       <!-- Get Started Quick Options -->
       <div class="mb-8">

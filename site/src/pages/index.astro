@@ -26,9 +26,12 @@ const withBase = (path: string) => {
         A Model Context Protocol server that enables AI assistants to interact with Home Assistant.
         Control devices, query states, manage automations, and configure dashboards using natural language.
       </p>
-      <div class="flex flex-wrap justify-center gap-4 fade-up fade-up-delay-1">
+      <div class="flex flex-wrap items-center justify-center gap-4 fade-up fade-up-delay-1">
         <a href={withBase('/setup')} class="px-7 py-3 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors brand-glow">
           Get Started
+        </a>
+        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="flex items-center" title="Add the ha-mcp add-on repository to your Home Assistant (HAOS)">
+          <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add ha-mcp add-on repository to your Home Assistant" height="40" />
         </a>
         <a href="https://github.com/homeassistant-ai/ha-mcp" class="px-7 py-3 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors">
           View on GitHub
@@ -50,7 +53,7 @@ const withBase = (path: string) => {
         <p class="text-[var(--text-secondary)]">No paid subscription required. Copy-paste one command to install.</p>
       </div>
 
-      <div class="grid md:grid-cols-2 gap-5 max-w-4xl mx-auto">
+      <div class="grid md:grid-cols-3 gap-5 max-w-5xl mx-auto">
         <!-- macOS -->
         <div class="glass-card rounded-2xl p-6">
           <div class="flex items-center gap-3 mb-5">
@@ -71,6 +74,29 @@ const withBase = (path: string) => {
             <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">3.</span> <a href="https://claude.ai/download" class="text-brand hover:underline">Download Claude Desktop</a></li>
             <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">4.</span> Ask Claude: <em class="text-white/70">"Can you see my Home Assistant?"</em></li>
           </ol>
+        </div>
+
+        <!-- Linux -->
+        <div class="glass-card rounded-2xl p-6">
+          <div class="flex items-center gap-3 mb-5">
+            <div class="w-10 h-10 rounded-xl bg-white/[0.05] flex items-center justify-center">
+              <PlatformIcon icon="linux" size={20} class="text-[var(--text-secondary)]" />
+            </div>
+            <div>
+              <h3 class="font-display font-semibold text-white text-lg">Linux</h3>
+              <p class="text-sm text-[var(--text-muted)]">Terminal</p>
+            </div>
+          </div>
+          <ol class="text-[var(--text-secondary)] space-y-3 text-sm mb-5">
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">1.</span> Sign in to <a href="https://claude.ai" class="text-brand hover:underline">claude.ai</a></li>
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">2.</span> Run in Terminal:</li>
+          </ol>
+          <pre class="bg-surface-0 p-3.5 rounded-xl text-sm overflow-x-auto mb-5 border border-white/[0.04]"><code class="text-brand">curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-linux.sh | sh</code></pre>
+          <ol class="text-[var(--text-secondary)] space-y-2 text-sm" start="3">
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">3.</span> Install the community <a href="https://github.com/aaddrick/claude-desktop-debian" class="text-brand hover:underline">Claude Desktop for Linux</a> build</li>
+            <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">4.</span> Ask Claude: <em class="text-white/70">"Can you see my Home Assistant?"</em></li>
+          </ol>
+          <p class="text-[var(--text-muted)] text-xs mt-4">Prefer the official CLI? <a href={withBase('/guide-linux')} class="text-brand hover:underline">Claude Code setup &rarr;</a></p>
         </div>
 
         <!-- Windows -->
