@@ -833,13 +833,16 @@ def _log_settings_url(host: str, port: int, path: str) -> None:
     bind host is the wildcard (``0.0.0.0`` / ``::``) the process can't know its
     externally reachable address, so we log a ``<host>`` placeholder.
     """
-    display_host = host if host not in ("0.0.0.0", "::") else "<host>"
+    is_wildcard = host in ("0.0.0.0", "::")
+    if is_wildcard:
+        display_host = "<host>"
+    elif ":" in host:
+        # IPv6 literal (e.g. ::1, 2001:db8::1) needs brackets in a URL.
+        display_host = f"[{host}]"
+    else:
+        display_host = host
     url = f"http://{display_host}:{port}{path.rstrip('/')}/settings"
-    note = (
-        "  (substitute this server's address for <host>)"
-        if display_host == "<host>"
-        else ""
-    )
+    note = "  (substitute this server's address for <host>)" if is_wildcard else ""
     logger.info(f"Settings UI available at: {url}{note}")
 
 

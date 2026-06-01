@@ -433,6 +433,42 @@ class TestHaGetOverviewSettingsUrl:
         assert "settings_url" not in result
         assert "settings_url_hint" not in result
 
+    @pytest.mark.asyncio
+    async def test_settings_url_hint_normalizes_trailing_slash(
+        self, overview_tool, monkeypatch
+    ):
+        """A prefix with a trailing slash must not yield ``//settings``.
+
+        ``MCP_SECRET_PATH`` flows unnormalized, so ``/mcp/`` is a reachable
+        prefix; the hint uses ``rstrip('/')`` to collapse it.
+        """
+        monkeypatch.setattr(
+            "ha_mcp.stdio_settings_sidecar.read_sidecar_url", lambda: None
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui.get_http_settings_prefix", lambda: "/mcp/"
+        )
+        result = await overview_tool(detail_level="minimal")
+        hint = result.get("settings_url_hint", "")
+        assert "/mcp/settings" in hint
+        assert "/mcp//settings" not in hint
+
+    @pytest.mark.asyncio
+    async def test_settings_url_hint_survives_fields_projection(
+        self, overview_tool, monkeypatch
+    ):
+        """Like ``settings_url``, the HTTP hint is emitted post-projection so a
+        narrow ``fields=`` request still surfaces it."""
+        monkeypatch.setattr(
+            "ha_mcp.stdio_settings_sidecar.read_sidecar_url", lambda: None
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui.get_http_settings_prefix", lambda: "/mcp"
+        )
+        result = await overview_tool(fields=["system_info"])
+        assert "system_info" in result
+        assert "/mcp/settings" in result.get("settings_url_hint", "")
+
 
 class TestHaGetOverviewAlwaysEmittedKeys:
     """Keys advertised in the ``fields=`` docstring must always be in

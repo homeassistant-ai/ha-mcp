@@ -27,6 +27,7 @@ from ha_mcp.settings_ui import (
     _get_tool_metadata,
     _ingress_only,
     apply_tool_visibility,
+    get_http_settings_prefix,
     load_tool_config,
     register_settings_routes,
     save_tool_config,
@@ -382,6 +383,17 @@ class TestFeatureGatedTools:
 class TestRouteRegistration:
     """Test register_settings_routes mounting under secret_path (Patch76 G1)."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_http_settings_prefix(self):
+        # _http_settings_prefix is process-global; isolate each test so the
+        # recording assertions below are not order-dependent (issue #1458).
+        import ha_mcp.settings_ui as _su
+
+        saved = _su._http_settings_prefix
+        _su._http_settings_prefix = None
+        yield
+        _su._http_settings_prefix = saved
+
     def _collect_paths(self, mcp):
         return [call.args[0] for call in mcp.custom_route.call_args_list]
 
@@ -396,6 +408,8 @@ class TestRouteRegistration:
         assert "/settings" in paths
         assert "/private_x/settings" in paths
         assert "/private_x/api/settings/tools" in paths
+        # The secret-path mount is recorded for ha_get_overview's hint (#1458)
+        assert get_http_settings_prefix() == "/private_x"
 
     def test_secret_path_only_when_not_addon(self, monkeypatch):
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
@@ -408,6 +422,7 @@ class TestRouteRegistration:
         assert "/settings" not in paths
         assert "/mcp/settings" in paths
         assert "/mcp/api/settings/tools" in paths
+        assert get_http_settings_prefix() == "/mcp"
 
     def test_no_routes_when_no_addon_and_no_secret(self, monkeypatch):
         # Refuse to mount publicly: no auth → no routes.
@@ -416,6 +431,8 @@ class TestRouteRegistration:
         mcp.custom_route = MagicMock(return_value=lambda fn: fn)
         register_settings_routes(mcp, MagicMock(), secret_path="")
         assert mcp.custom_route.call_count == 0
+        # Nothing mounted → no hint prefix recorded (stays None, not "")
+        assert get_http_settings_prefix() is None
 
 
 class TestFaviconSuppression:
