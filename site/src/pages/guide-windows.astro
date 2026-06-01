@@ -84,6 +84,10 @@ const withBase = (path: string) => {
               <p class="text-slate-400 text-sm mt-3">4. Save and restart Claude: <strong>File &rarr; Exit</strong>, then reopen.</p>
             </div>
           </details>
+
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mt-4">
+            <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">Behind antivirus or a corporate proxy?</strong> If <code class="bg-slate-800 px-1 rounded">uvx</code> fails with <code class="bg-slate-800 px-1 rounded">invalid peer certificate: UnknownIssuer</code> when downloading ha-mcp, your security software's HTTPS scanning is breaking the PyPI download. Add <code class="bg-slate-800 px-1 rounded">"UV_NATIVE_TLS": "1"</code> to your config's <code class="bg-slate-800 px-1 rounded">env</code> block &mdash; see the <a href={withBase('/faq#uv-tls-interception')} class="underline hover:text-white">FAQ</a>.</p>
+          </div>
         </div>
       </section>
 

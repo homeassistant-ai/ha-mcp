@@ -29,6 +29,7 @@ const withBase = (path: string) => {
         <li><a href="#demo" class="text-blue-400 hover:underline">Try Without Your Own Home Assistant</a></li>
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
         <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
+        <li class="ml-4"><a href="#uv-tls-interception" class="text-blue-400 hover:underline">uvx Certificate Errors (proxy / antivirus)</a></li>
         <li class="ml-4"><a href="#webhook-proxy" class="text-blue-400 hover:underline">Webhook Proxy Alternative</a></li>
         <li class="ml-4"><a href="#webhook-proxy-security" class="text-blue-400 hover:underline">Webhook Proxy: securing the URL</a></li>
         <li class="ml-4"><a href="#antigravity-troubleshooting" class="text-blue-400 hover:underline">Antigravity Client Troubleshooting</a></li>
@@ -205,6 +206,30 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
   ...</code></pre>
             </li>
           </ol>
+        </div>
+
+        <div class="faq-item" id="uv-tls-interception">
+          <h3 class="text-lg font-medium text-white mb-2">uvx fails with <code class="bg-slate-800 px-1 rounded">invalid peer certificate: UnknownIssuer</code></h3>
+          <p class="text-slate-300 mb-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> can't download ha-mcp (or <code class="bg-slate-800 px-1 rounded">mcp-proxy</code>, if you connect to the add-on through it) and the log shows a certificate error fetching from PyPI, the failure is in <code class="bg-slate-800 px-1 rounded">uv</code>'s package download — it never reaches Home Assistant:</p>
+          <pre class="code-block mb-3"><code>Failed to fetch: https://pypi.org/simple/mcp-proxy/
+  invalid peer certificate: UnknownIssuer</code></pre>
+          <p class="text-slate-300 mb-3">In Claude Desktop this often shows up as the server briefly connecting, then "transport closed unexpectedly" — <code class="bg-slate-800 px-1 rounded">uvx</code> exits when it can't fetch the package.</p>
+          <p class="text-slate-300 mb-3"><strong class="text-white">Cause:</strong> <code class="bg-slate-800 px-1 rounded">uv</code> (which backs <code class="bg-slate-800 px-1 rounded">uvx</code>) ships its own bundled root-certificate store and ignores the operating-system certificate store by default. If anything on your machine intercepts HTTPS — a corporate proxy, Zscaler, or antivirus with HTTPS/SSL scanning (Kaspersky, ESET, Bitdefender, etc.) — it presents a certificate chained to a root your OS trusts but <code class="bg-slate-800 px-1 rounded">uv</code>'s bundled store does not, producing <code class="bg-slate-800 px-1 rounded">UnknownIssuer</code>. This is most common on Windows.</p>
+          <p class="text-slate-300 mb-2"><strong class="text-white">Fix:</strong> point <code class="bg-slate-800 px-1 rounded">uv</code> at the OS native certificate store by adding <code class="bg-slate-800 px-1 rounded">UV_NATIVE_TLS=1</code> to the server's <code class="bg-slate-800 px-1 rounded">env</code> block:</p>
+          <pre class="code-block"><code>{`{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token",
+        "UV_NATIVE_TLS": "1"
+      }
+    }
+  }
+}`}</code></pre>
+          <p class="text-slate-400 text-sm mt-3">Connecting to the HA add-on through <code class="bg-slate-800 px-1 rounded">uvx mcp-proxy</code> instead? Add the same <code class="bg-slate-800 px-1 rounded">UV_NATIVE_TLS=1</code> entry to that config's <code class="bg-slate-800 px-1 rounded">env</code> block. The equivalent <code class="bg-slate-800 px-1 rounded">--native-tls</code> flag also works, but it is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come before the package name. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1506" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1506</a>.</p>
         </div>
 
         <div class="faq-item">
