@@ -25,10 +25,11 @@ const withBase = (path: string) => {
       <h2 class="text-lg font-semibold text-white mb-4">On this page</h2>
       <ul class="space-y-2 text-sm">
         <li><a href="#general-questions" class="text-blue-400 hover:underline">General Questions</a></li>
-        <li class="ml-4"><a href="#tool-settings-page" class="text-blue-400 hover:underline">Changing Which Tools Are Enabled</a></li>
+        <li class="ml-4"><a href="#tool-settings-page" class="text-blue-400 hover:underline">The Settings Page (Tools, Backups &amp; More)</a></li>
         <li><a href="#demo" class="text-blue-400 hover:underline">Try Without Your Own Home Assistant</a></li>
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
         <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
+        <li class="ml-4"><a href="#uv-tls-interception" class="text-blue-400 hover:underline">uvx Certificate Errors (proxy / antivirus)</a></li>
         <li class="ml-4"><a href="#webhook-proxy" class="text-blue-400 hover:underline">Webhook Proxy Alternative</a></li>
         <li class="ml-4"><a href="#webhook-proxy-security" class="text-blue-400 hover:underline">Webhook Proxy: securing the URL</a></li>
         <li class="ml-4"><a href="#antigravity-troubleshooting" class="text-blue-400 hover:underline">Antigravity Client Troubleshooting</a></li>
@@ -103,14 +104,15 @@ const withBase = (path: string) => {
         </div>
 
         <div class="faq-item" id="tool-settings-page">
-          <h3 class="text-lg font-medium text-white mb-2">How do I change which tools are enabled / pinned?</h3>
-          <p class="text-slate-300">ha-mcp ships a small settings page where you can enable, disable, and pin individual MCP tools. It's reachable a few different ways depending on how you installed:</p>
+          <h3 class="text-lg font-medium text-white mb-2">How do I open the ha-mcp settings page?</h3>
+          <p class="text-slate-300">ha-mcp ships a web settings page where you can enable, disable, and pin individual MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests. How you reach it depends on how ha-mcp is running:</p>
           <ul class="list-disc pl-6 text-slate-300 mt-3 space-y-2">
-            <li><strong>Claude Desktop / Claude Code / any stdio install (<code class="bg-slate-800 px-1 rounded">uvx ha-mcp</code>):</strong> a localhost settings server spawns automatically alongside the MCP process. The easiest way to find the URL is to <strong>ask the AI</strong> something like <em>"how do I change which MCP tools are enabled?"</em> — the URL is included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response. You can also read it directly from <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/ui.url</code>. The URL is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path generated on first launch.</li>
-            <li><strong>HA Add-on:</strong> use the "Open Web UI" button on the add-on page, or visit <code class="bg-slate-800 px-1 rounded">http://homeassistant.local:9583/settings</code>.</li>
-            <li><strong><code class="bg-slate-800 px-1 rounded">ha-mcp-web</code> / Docker HTTP:</strong> append <code class="bg-slate-800 px-1 rounded">/settings</code> to your MCP secret-path URL (e.g. <code class="bg-slate-800 px-1 rounded">http://127.0.0.1:8086/private_xxx/settings</code>).</li>
+            <li><strong>Claude Desktop / Claude Code / any stdio install (<code class="bg-slate-800 px-1 rounded">uvx ha-mcp</code>):</strong> a localhost settings server spawns automatically alongside the MCP process. The easiest way to find the URL is to <strong>ask the AI</strong> something like <em>"how do I open the ha-mcp settings page?"</em> — the URL is included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response. You can also read it directly from <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/ui.url</code> (Windows: <code class="bg-slate-800 px-1 rounded">%USERPROFILE%\.ha-mcp\ui.url</code>). The URL is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path generated when the settings server starts.</li>
+            <li><strong>HA Add-on:</strong> easiest is the <strong>"Open Web UI"</strong> button on the add-on page (served over Home Assistant ingress — no secret needed). For direct or remote access outside the HA UI, the page lives behind the add-on's secret path: <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code>. Find <code class="bg-slate-800 px-1 rounded">&lt;secret-path&gt;</code> in the add-on's <strong>Configuration</strong> tab ("Secret path override") or in <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>. The bare <code class="bg-slate-800 px-1 rounded">:9583/settings</code> without the secret path is rejected for non-ingress callers.</li>
+            <li><strong><code class="bg-slate-800 px-1 rounded">ha-mcp-web</code> / Docker (HTTP):</strong> append <code class="bg-slate-800 px-1 rounded">/settings</code> to your MCP secret-path URL. The default <code class="bg-slate-800 px-1 rounded">MCP_SECRET_PATH</code> is <code class="bg-slate-800 px-1 rounded">/mcp</code>, so the page is at <code class="bg-slate-800 px-1 rounded">http://&lt;host&gt;:8086/mcp/settings</code>; if you set a custom secret path, use that instead (e.g. <code class="bg-slate-800 px-1 rounded">http://&lt;host&gt;:8086/private_xxx/settings</code>).</li>
+            <li><strong>Remote (Cloudflare Tunnel / reverse proxy):</strong> same as Docker/HTTP — the page sits under your secret path wherever the MCP endpoint is reachable, e.g. <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/&lt;secret-path&gt;/settings</code>.</li>
           </ul>
-          <p class="text-slate-400 text-sm mt-3">Changes apply on the next MCP-server restart. To stop the stdio sidecar entirely, click the "Stop settings server" button on the page, set <code class="bg-slate-800 px-1 rounded">HA_MCP_DISABLE_SETTINGS_UI=1</code> in your MCP client config, or create an empty <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/settings_ui_disabled</code> file.</p>
+          <p class="text-slate-400 text-sm mt-3">Changes apply on the next MCP-server restart. To stop the stdio sidecar entirely, click the "Permanently disable settings server" button on the page, set <code class="bg-slate-800 px-1 rounded">HA_MCP_DISABLE_SETTINGS_UI=1</code> in your MCP client config, or create an empty <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/settings_ui_disabled</code> file.</p>
         </div>
       </div>
     </section>
@@ -205,6 +207,30 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
   ...</code></pre>
             </li>
           </ol>
+        </div>
+
+        <div class="faq-item" id="uv-tls-interception">
+          <h3 class="text-lg font-medium text-white mb-2">uvx fails with <code class="bg-slate-800 px-1 rounded">invalid peer certificate: UnknownIssuer</code></h3>
+          <p class="text-slate-300 mb-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> can't download ha-mcp (or <code class="bg-slate-800 px-1 rounded">mcp-proxy</code>, if you connect to the add-on through it) and the log shows a certificate error fetching from PyPI, the failure is in <code class="bg-slate-800 px-1 rounded">uv</code>'s package download — it never reaches Home Assistant:</p>
+          <pre class="code-block mb-3"><code>Failed to fetch: https://pypi.org/simple/ha-mcp/
+  invalid peer certificate: UnknownIssuer</code></pre>
+          <p class="text-slate-300 mb-3">In Claude Desktop this often shows up as the server briefly connecting, then "transport closed unexpectedly" — <code class="bg-slate-800 px-1 rounded">uvx</code> exits when it can't fetch the package.</p>
+          <p class="text-slate-300 mb-3"><strong class="text-white">Cause:</strong> <code class="bg-slate-800 px-1 rounded">uv</code> (which backs <code class="bg-slate-800 px-1 rounded">uvx</code>) ships its own bundled root-certificate store and ignores the operating-system certificate store by default. If anything on your machine intercepts HTTPS — a corporate proxy, Zscaler, or antivirus with HTTPS/SSL scanning (Kaspersky, ESET, Bitdefender, etc.) — it presents a certificate chained to a root your OS trusts but <code class="bg-slate-800 px-1 rounded">uv</code>'s bundled store does not, producing <code class="bg-slate-800 px-1 rounded">UnknownIssuer</code>. This is most common on Windows.</p>
+          <p class="text-slate-300 mb-2"><strong class="text-white">Fix:</strong> point <code class="bg-slate-800 px-1 rounded">uv</code> at the OS native certificate store by adding <code class="bg-slate-800 px-1 rounded">UV_NATIVE_TLS=1</code> to the server's <code class="bg-slate-800 px-1 rounded">env</code> block:</p>
+          <pre class="code-block"><code>{`{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token",
+        "UV_NATIVE_TLS": "1"
+      }
+    }
+  }
+}`}</code></pre>
+          <p class="text-slate-400 text-sm mt-3">Connecting to the HA add-on through <code class="bg-slate-800 px-1 rounded">uvx mcp-proxy</code> instead? Add the same <code class="bg-slate-800 px-1 rounded">UV_NATIVE_TLS=1</code> entry to that config's <code class="bg-slate-800 px-1 rounded">env</code> block. The equivalent <code class="bg-slate-800 px-1 rounded">--native-tls</code> flag also works, but it is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come before the package name. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1506" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1506</a>.</p>
         </div>
 
         <div class="faq-item">

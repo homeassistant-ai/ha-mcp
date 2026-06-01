@@ -3017,6 +3017,25 @@ def _ingress_only(handler: _SettingsRoute) -> _SettingsRoute:
     return _guarded
 
 
+# Mount prefix the settings UI is served under in long-lived HTTP transports
+# (Docker / standalone ha-mcp-web / OAuth / the add-on's secret-path mount).
+# Recorded by register_settings_routes so ha_get_overview can point users at
+# the settings page in modes that have no stdio sidecar URL file to surface
+# (issue #1458). Stays None in pure stdio mode, where the sidecar writes
+# ~/.ha-mcp/ui.url instead.
+_http_settings_prefix: str | None = None
+
+
+def get_http_settings_prefix() -> str | None:
+    """Return the settings-UI mount prefix for HTTP transports, or None.
+
+    Set by :func:`register_settings_routes` when the page is mounted on a
+    long-lived HTTP server. ``ha_get_overview`` reads it to hint at the
+    settings page when there is no stdio sidecar URL to hand the user.
+    """
+    return _http_settings_prefix
+
+
 def register_settings_routes(
     mcp: FastMCP,
     server: HomeAssistantSmartMCPServer,
@@ -3117,3 +3136,7 @@ def register_settings_routes(
         # need the same secret to reach the UI as they do for the MCP
         # endpoint.
         _mount(secret_prefix)
+        # Record the mount so ha_get_overview can point users at the settings
+        # page in HTTP transports that have no stdio sidecar URL file (#1458).
+        global _http_settings_prefix
+        _http_settings_prefix = secret_prefix

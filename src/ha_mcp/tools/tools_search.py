@@ -1136,10 +1136,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "device_types, service_availability, system_info, "
                     "notification_count, notifications, repair_count, "
                     "dismissed_repair_count, repairs, repairs_error, "
-                    "tool_discovery, settings_url. Note: ``settings_url`` "
-                    "(stdio mode only, see tool description) is emitted "
-                    "regardless of ``fields=`` projection — it is always "
-                    "included when the settings-UI sidecar is running."
+                    "tool_discovery, settings_url, settings_url_hint. Note: "
+                    "``settings_url`` (stdio mode) and ``settings_url_hint`` "
+                    "(HTTP/Docker/OAuth mode) are emitted regardless of "
+                    "``fields=`` projection so the settings page stays "
+                    "discoverable; see the tool description."
                 ),
             ),
         ] = None,
@@ -1167,6 +1168,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         projection (so it stays discoverable even when callers
         minimize the response) but only when the sidecar URL file
         actually exists.
+
+        In HTTP / Docker / OAuth modes there is no sidecar URL file and the
+        server can't know its externally reachable host, so the response
+        instead carries a ``settings_url_hint`` string telling the user where
+        the page is mounted and to read the full URL from the startup logs.
+        Hand whichever of the two fields is present to the user.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields" (ha_get_overview has no outer try/except, so
@@ -1368,6 +1375,24 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         sidecar_url = read_sidecar_url()
         if sidecar_url:
             projected["settings_url"] = sidecar_url
+        else:
+            # No stdio sidecar URL file. In HTTP / Docker / OAuth modes the
+            # settings page is mounted on this server, but the process binds
+            # 0.0.0.0 and can't know its externally reachable host — so hint
+            # at the page (and the startup-log URL) instead of guessing a
+            # wrong absolute URL (issue #1458).
+            from ..settings_ui import get_http_settings_prefix
+
+            http_prefix = get_http_settings_prefix()
+            if http_prefix:
+                settings_path = f"{http_prefix.rstrip('/')}/settings"
+                projected["settings_url_hint"] = (
+                    "The settings page (enable/disable/pin tools, feature "
+                    "flags, advanced settings, backups, tool-approval) is "
+                    f"served at '{settings_path}' on this MCP server. Find the "
+                    "full URL in the ha-mcp startup logs, or append it to the "
+                    "base URL your client connects to."
+                )
 
         return projected
 

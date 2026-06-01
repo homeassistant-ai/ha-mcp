@@ -2253,18 +2253,40 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
       instructions.push(uiSteps);
     }
 
-    // Stdio installs (uvx / docker stdio) spawn a localhost settings UI
-    // sidecar that lets users enable / disable / pin MCP tools. The URL
-    // surfaces via ``ha_get_overview`` so the AI client can hand it to
-    // the user on request, but a "what's next" hint here is cheaper
-    // than waiting for the user to ask. HTTP modes mount the same page
-    // directly on their existing server and don't need this nudge.
-    if (isStdio) {
-      instructions.push(`<div class="instruction-block border-slate-700/50 bg-slate-800/30">
-        <h4 class="instruction-title">After it's running: changing which tools are enabled</h4>
-        <p class="text-slate-300 mb-2">ha-mcp ships a small localhost settings page where you can enable, disable, and pin individual MCP tools. To find the URL, ask the AI something like <em>"how do I change which MCP tools are enabled?"</em> — it's included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response.</p>
-        <p class="text-slate-400 text-sm">The URL is also written to <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/ui.url</code>. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a> for how to disable the sidecar entirely.</p>
-      </div>`);
+    // ha-mcp ships a web settings page (enable/disable/pin tools, feature
+    // flags, advanced/beta settings, auto-backups, tool-approval prompts).
+    // Non-add-on HTTP/Docker users often don't know it exists or where the
+    // URL is (issue #1458), so surface a "what's next" hint for every
+    // deployment, with the access method matched to how it's running.
+    {
+      let settingsHint = '';
+      if (isStdio) {
+        const uiUrlPath = platformId === 'windows' ? '%USERPROFILE%\\.ha-mcp\\ui.url' : '~/.ha-mcp/ui.url';
+        settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
+        <h4 class="instruction-title">After it's running: the settings page</h4>
+        <p class="text-slate-300 mb-2">ha-mcp ships a local web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests. To find the URL, ask the AI something like <em>"how do I open the ha-mcp settings page?"</em> — it's included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response.</p>
+        <p class="text-slate-400 text-sm">The URL is also written to <code class="bg-slate-800 px-1 rounded">${uiUrlPath}</code>. It's bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> and gated by a random secret path. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a> for all access methods and how to disable the sidecar.</p>
+      </div>`;
+      } else if (derivedDeployment === 'ha-addon' || state.proxy === 'webhook-proxy') {
+        settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
+        <h4 class="instruction-title">After it's running: the settings page</h4>
+        <p class="text-slate-300 mb-2">The MCP Server add-on ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
+        <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the add-on page (Home Assistant ingress &mdash; no secret needed). For direct or remote access it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the add-on's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+      </div>`;
+      } else if (isRemote) {
+        settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
+        <h4 class="instruction-title">After it's running: the settings page</h4>
+        <p class="text-slate-300 mb-2">ha-mcp ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
+        <p class="text-slate-400 text-sm">It's served under the same secret path as your MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your public server URL using the secret path you set above, e.g. <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/&lt;secret-path&gt;/settings</code>. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+      </div>`;
+      } else {
+        settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
+        <h4 class="instruction-title">After it's running: the settings page</h4>
+        <p class="text-slate-300 mb-2">ha-mcp ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
+        <p class="text-slate-400 text-sm">It's served by your MCP server under the same secret path as the MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your server URL (e.g. <code class="bg-slate-800 px-1 rounded">http://YOUR_IP:8086/mcp/settings</code> with the default secret path). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+      </div>`;
+      }
+      instructions.push(settingsHint);
     }
 
     // Render all instructions (including UI client steps added during config generation)

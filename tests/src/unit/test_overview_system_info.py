@@ -398,6 +398,77 @@ class TestHaGetOverviewSettingsUrl:
         # extra survivor (plus the always-retained success/warnings).
         assert "system_info" in result
 
+    @pytest.mark.asyncio
+    async def test_settings_url_hint_when_http_mounted(
+        self, overview_tool, monkeypatch
+    ):
+        """No sidecar URL but HTTP settings mounted → a hint points at the
+        page (issue #1458).
+
+        In HTTP/Docker/OAuth modes the server binds 0.0.0.0 and can't know its
+        externally reachable host, so it emits a ``settings_url_hint`` that
+        references the mount path + startup logs rather than a guessed URL.
+        """
+        monkeypatch.setattr(
+            "ha_mcp.stdio_settings_sidecar.read_sidecar_url", lambda: None
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui.get_http_settings_prefix", lambda: "/mcp"
+        )
+        result = await overview_tool(detail_level="minimal")
+        assert "settings_url" not in result
+        assert "/mcp/settings" in result.get("settings_url_hint", "")
+
+    @pytest.mark.asyncio
+    async def test_no_settings_fields_without_sidecar_or_http_mount(
+        self, overview_tool, monkeypatch
+    ):
+        """No sidecar URL and no HTTP mount (stdio with the sidecar disabled)
+        → neither settings field is emitted."""
+        monkeypatch.setattr(
+            "ha_mcp.stdio_settings_sidecar.read_sidecar_url", lambda: None
+        )
+        monkeypatch.setattr("ha_mcp.settings_ui.get_http_settings_prefix", lambda: None)
+        result = await overview_tool(detail_level="minimal")
+        assert "settings_url" not in result
+        assert "settings_url_hint" not in result
+
+    @pytest.mark.asyncio
+    async def test_settings_url_hint_normalizes_trailing_slash(
+        self, overview_tool, monkeypatch
+    ):
+        """A prefix with a trailing slash must not yield ``//settings``.
+
+        ``MCP_SECRET_PATH`` flows unnormalized, so ``/mcp/`` is a reachable
+        prefix; the hint uses ``rstrip('/')`` to collapse it.
+        """
+        monkeypatch.setattr(
+            "ha_mcp.stdio_settings_sidecar.read_sidecar_url", lambda: None
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui.get_http_settings_prefix", lambda: "/mcp/"
+        )
+        result = await overview_tool(detail_level="minimal")
+        hint = result.get("settings_url_hint", "")
+        assert "/mcp/settings" in hint
+        assert "/mcp//settings" not in hint
+
+    @pytest.mark.asyncio
+    async def test_settings_url_hint_survives_fields_projection(
+        self, overview_tool, monkeypatch
+    ):
+        """Like ``settings_url``, the HTTP hint is emitted post-projection so a
+        narrow ``fields=`` request still surfaces it."""
+        monkeypatch.setattr(
+            "ha_mcp.stdio_settings_sidecar.read_sidecar_url", lambda: None
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui.get_http_settings_prefix", lambda: "/mcp"
+        )
+        result = await overview_tool(fields=["system_info"])
+        assert "system_info" in result
+        assert "/mcp/settings" in result.get("settings_url_hint", "")
+
 
 class TestHaGetOverviewAlwaysEmittedKeys:
     """Keys advertised in the ``fields=`` docstring must always be in
