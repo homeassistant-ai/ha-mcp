@@ -2273,11 +2273,17 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
         <p class="text-slate-300 mb-2">The MCP Server add-on ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
         <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the add-on page (Home Assistant ingress &mdash; no secret needed). For direct or remote access it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the add-on's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
+      } else if (isRemote) {
+        settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
+        <h4 class="instruction-title">After it's running: the settings page</h4>
+        <p class="text-slate-300 mb-2">ha-mcp ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
+        <p class="text-slate-400 text-sm">It's served under the same secret path as your MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your public server URL using the secret path you set above, e.g. <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/&lt;secret-path&gt;/settings</code>. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+      </div>`;
       } else {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h4 class="instruction-title">After it's running: the settings page</h4>
         <p class="text-slate-300 mb-2">ha-mcp ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">It's served by your MCP server under the same secret path as the MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your server URL (e.g. <code class="bg-slate-800 px-1 rounded">http://YOUR_IP:8086/mcp/settings</code>, or your custom secret path). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-400 text-sm">It's served by your MCP server under the same secret path as the MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your server URL (e.g. <code class="bg-slate-800 px-1 rounded">http://YOUR_IP:8086/mcp/settings</code> with the default secret path). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       }
       instructions.push(settingsHint);
