@@ -1378,11 +1378,11 @@ def install_screenshot_addon(ws: HAWebSocket) -> str:
     source is at ``/supervisor/addons/local/ha_mcp_screenshot/``.
 
     Install-only — ``boot`` is set to ``manual`` so the cached qcow2 doesn't
-    auto-start it on resume (the haos_only test starts it via a session
-    fixture, mirroring the webhook-proxy pattern). No ``access_token`` option
-    is set, so the engine exercises its Supervisor-token auto-auth path
-    (config.yaml declares homeassistant_api: true) — proving screenshots work
-    for whoever installs it without pasting a long-lived token.
+    auto-start it on resume (the haos_only test starts it via a module
+    fixture, mirroring the webhook-proxy pattern). ``access_token`` is left
+    empty so no credential is baked into the cached qcow2; the engine cannot
+    authenticate without one, so the runtime fixture injects a real HA access
+    token via the addon options API and starts the addon then.
 
     Returns the installed slug (``local_ha_mcp_screenshot``).
     """
@@ -1397,7 +1397,7 @@ def install_screenshot_addon(ws: HAWebSocket) -> str:
     # addon build in the bake.
     ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=1800.0)
 
-    LOG.info("Setting screenshot-engine addon options (boot=manual, auto-auth)")
+    LOG.info("Setting screenshot-engine addon options (boot=manual, empty token)")
     ws.supervisor_api(
         f"/addons/{slug}/options",
         method="post",
@@ -1720,7 +1720,8 @@ def build(work_dir: Path, output: Path) -> None:
             # finds a target on first start.
             install_webhook_proxy_addon(ws)
             # Screenshot engine — independent of the other addons; installs
-            # its Chromium image (boot=manual, Supervisor-token auto-auth).
+            # its Chromium image (boot=manual, empty token; the runtime fixture
+            # injects a real HA access token and starts it).
             install_screenshot_addon(ws)
             install_advanced_ssh(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED

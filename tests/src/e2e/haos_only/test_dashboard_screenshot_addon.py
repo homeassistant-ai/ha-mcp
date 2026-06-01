@@ -1,17 +1,21 @@
 """Dashboard screenshot-engine addon runtime E2E for the HAOS test tier.
 
 The screenshot engine addon (``homeassistant-addon-screenshot/``, vendored
-ha-puppet) is baked into the qcow2 with ``boot: manual`` (see
+ha-puppet) is baked into the qcow2 with ``boot: manual`` and an empty
+``access_token`` (see
 ``tests/haos_image_build/build_image.py::install_screenshot_addon``). The
 bake validates that the addon installs cleanly and pre-builds its Chromium
-Docker image; a session fixture starts it so runtime tests run once per
-session against a known-good container.
+Docker image.
 
-Crucially, the bake sets NO ``access_token`` option, so the engine exercises
-its Supervisor-token AUTO-AUTH path (``ha-puppet/const.js`` falls back to
-``SUPERVISOR_TOKEN`` when no token is configured). This is the path "whoever
-installs the addon" hits with zero setup — proving it works end to end is the
-point of this module.
+The engine authenticates the headless browser with a Home Assistant
+long-lived/user access token — the add-on's Supervisor token is NOT a valid
+frontend credential (HA Core rejects it with 401), so without a real token the
+engine can only reach the login screen. Rather than bake a token into the
+cached qcow2, the module fixture mints one at runtime via the same login flow
+the rest of the suite uses (``conftest`` exposes it as
+``ha_container_with_fresh_config['token']``), writes it to the engine's
+``access_token`` option, and starts the addon. A ~30-min access token is ample
+for one module's renders.
 
 Tests:
 
@@ -21,10 +25,11 @@ Tests:
 3. ``ha_config_get_dashboard(include_screenshot=True)`` returns config + PNG.
 4. ``ha_config_set_dashboard(return_screenshot=True)`` returns the write
    result + a PNG (the dashboard create-and-see loop).
-5. AUTH PROOF: with a deliberately-invalid configured token (which overrides
-   auto-auth), the engine can only reach the login screen and FAILS to render
-   a real dashboard, whereas the no-token auto-auth baseline renders a valid
-   PNG. The contrast proves the Supervisor token is what authenticates.
+5. AUTH PROOF: replacing the valid token with a deliberately-invalid one means
+   the HA frontend rejects it and the engine can only reach the login screen,
+   so it FAILS to reproduce the working render. The contrast proves the
+   configured access token is what authenticates (fails closed: if the token
+   were ignored, both renders would match).
 """
 
 from __future__ import annotations
@@ -242,8 +247,22 @@ async def _wait_engine_serving(
 
 
 @pytest.fixture(scope="module")
-async def screenshot_engine_started(mcp_client: Any) -> Any:
-    """Start the baked (boot=manual) screenshot engine for this module."""
+async def screenshot_engine_started(
+    mcp_client: Any, ha_container_with_fresh_config: Any
+) -> Any:
+    """Configure a real token on the baked engine, then start it.
+
+    The bake leaves the engine installed with an empty ``access_token`` (no
+    secret in the cached qcow2). Inject the suite's runtime HA access token —
+    the only credential the engine's headless browser can authenticate with —
+    then start the (boot=manual) addon for this module's lifetime.
+    """
+    token = ha_container_with_fresh_config.get("token")
+    assert token, (
+        "ha_container_with_fresh_config did not expose an HA access token; "
+        "the screenshot engine cannot authenticate without one."
+    )
+    await _set_options(mcp_client, SCREENSHOT_ADDON_SLUG, {"access_token": token})
     result = await _addon_action(mcp_client, SCREENSHOT_ADDON_SLUG, "start")
     assert result.get("success"), (
         f"Fixture failed to start screenshot engine addon: {result}"
@@ -283,9 +302,9 @@ async def test_get_dashboard_screenshot_returns_png(
 ) -> None:
     """ha_get_dashboard_screenshot returns a valid PNG of the requested size.
 
-    Auto-auth path (no token configured): a valid, correctly-dimensioned,
-    non-trivial PNG proves the engine launched Chromium, authenticated to HA
-    Core via the Supervisor token, navigated the dashboard, and rendered.
+    A valid, correctly-dimensioned, non-trivial PNG proves the engine launched
+    Chromium, authenticated to HA Core with the configured access token,
+    navigated the dashboard, and rendered.
     """
     png = await _screenshot(mcp_client, DEFAULT_DASHBOARD_PATH, width=1024, height=768)
     width, height = _png_dimensions(png)
@@ -359,32 +378,34 @@ async def test_set_dashboard_return_screenshot(
             LOG.exception("Failed to delete screenshot E2E dashboard")
 
 
-async def test_supervisor_token_auth_is_what_authenticates(
-    mcp_client: Any, screenshot_engine_started: Any
+async def test_token_is_what_authenticates(
+    mcp_client: Any,
+    ha_container_with_fresh_config: Any,
+    screenshot_engine_started: Any,
 ) -> None:
-    """Auto-auth renders a real dashboard; an invalid token cannot.
+    """A valid token renders a real dashboard; an invalid token cannot.
 
-    The baked engine has no ``access_token``, so it authenticates via the
-    add-on's Supervisor token and renders a valid PNG (asserted as the
-    baseline). Setting a deliberately-invalid ``access_token`` overrides that
-    with a token the HA frontend rejects, so the engine can only reach the
-    login screen — it does NOT produce a valid dashboard render identical to
-    the baseline.
+    The fixture configured a valid HA access token, so the engine renders a
+    valid PNG (asserted as the baseline). Replacing it with a
+    deliberately-invalid ``access_token`` gives the engine a credential the HA
+    frontend rejects, so it can only reach the login screen — it does NOT
+    reproduce the working dashboard render.
 
     This is deterministic without depending on the engine's exact bad-auth
     behavior: whether it fails to render (engine raises) or renders a
-    different (login) page, the outcome must differ from the working auto-auth
-    baseline. If auto-auth were a no-op, both would render the same login page
-    and match — so this fails closed on a regression. Runs last; restores the
-    no-token state in ``finally`` and verifies the restore committed.
+    different (login) page, the outcome must differ from the working baseline.
+    If the token were ignored, both would render the same page and match — so
+    this fails closed on a regression. Runs last; restores the valid token in
+    ``finally`` and verifies the restore committed.
     """
     slug = SCREENSHOT_ADDON_SLUG
+    good_token = ha_container_with_fresh_config["token"]
 
-    # Baseline: auto-auth (the baked, no-token state) renders a valid PNG.
+    # Baseline: the configured valid token renders a real dashboard PNG.
     authed_png = await _screenshot(mcp_client, DEFAULT_DASHBOARD_PATH)
     _png_dimensions(authed_png)
     assert len(authed_png) > 3000, (
-        f"Auto-auth baseline render is suspiciously small ({len(authed_png)}B)"
+        f"Valid-token baseline render is suspiciously small ({len(authed_png)}B)"
     )
 
     try:
@@ -397,24 +418,24 @@ async def test_supervisor_token_auth_is_what_authenticates(
         outcome = await _engine_outcome_after_restart(mcp_client)
         if outcome is None:
             # Invalid token blocked rendering entirely (engine raised) — a
-            # clear contrast with the working auto-auth baseline.
+            # clear contrast with the working valid-token baseline.
             pass
         else:
             assert outcome != authed_png, (
-                "Invalid-token render is byte-identical to the no-token "
-                "auto-auth render — the Supervisor-token auto-auth path is "
-                "NOT what authenticates (both produced the same image)."
+                "Invalid-token render is byte-identical to the valid-token "
+                "render — the configured access token is NOT what "
+                "authenticates (both produced the same image)."
             )
     finally:
-        await _set_options(mcp_client, slug, {"access_token": ""})
+        await _set_options(mcp_client, slug, {"access_token": good_token})
         await _addon_action(mcp_client, slug, "restart")
         await _wait_for_state(mcp_client, slug, "started")
-        # Confirm the no-token (auto-auth) state actually committed, so a
-        # leaked invalid token can't poison the next run's baseline.
+        # Confirm the valid token actually re-committed, so a leaked invalid
+        # token can't poison a retry's baseline within the session.
         detail = await _get_addon_detail(mcp_client, slug)
-        assert (detail.get("options") or {}).get("access_token", "") == "", (
-            "Restore of auto-auth (no-token) state did not commit; "
-            f"options.access_token still set: {detail.get('options')}"
+        assert (detail.get("options") or {}).get("access_token", "") == good_token, (
+            "Restore of the valid token did not commit; "
+            f"options.access_token unexpected: {detail.get('options')}"
         )
 
 
