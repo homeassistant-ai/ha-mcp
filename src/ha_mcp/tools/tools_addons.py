@@ -1880,12 +1880,12 @@ class AddOnTools:
             noop = self._repo_noop_verb(key, str(e))
             if noop:
                 return self._repo_noop_result(key, repository, noop)
-            raise
+            raise_tool_error(self._repo_action_error(key, repository, str(e)))
         if not result.get("success"):
             noop = self._repo_noop_verb(key, str(result))
             if noop:
                 return self._repo_noop_result(key, repository, noop)
-            raise_tool_error(result)
+            raise_tool_error(self._repo_action_error(key, repository, str(result)))
         return {
             "success": True,
             "action": key,
@@ -1914,6 +1914,34 @@ class AddOnTools:
             "repository": repository,
             "message": f"Repository {repository} is {verb}; no change needed.",
         }
+
+    @staticmethod
+    def _repo_action_error(key: str, repository: str, detail: str) -> dict[str, Any]:
+        """Build a repository-action-specific error response.
+
+        ``_supervisor_api_call`` attaches a generic "check your HA connection"
+        suggestion to every failure, which is misleading for a store-repository
+        domain error (bad URL, or a repo still used by installed add-ons). Give
+        actionable, action-specific guidance instead.
+        """
+        if key == "add_repository":
+            suggestions = [
+                "Verify the repository is a valid Home Assistant add-on "
+                "repository URL, e.g. https://github.com/<owner>/<repo>",
+            ]
+        else:
+            suggestions = [
+                "Verify the repository slug — list current repositories with "
+                "ha_get_addon(source='available')",
+                "A repository that still has installed add-ons can't be removed "
+                "until those add-ons are uninstalled",
+            ]
+        return create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"Could not {key.replace('_', ' ')} {repository!r}.",
+            details=detail,
+            suggestions=suggestions,
+        )
 
     async def _execute_config_mode(
         self,

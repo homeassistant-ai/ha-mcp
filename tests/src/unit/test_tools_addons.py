@@ -3995,8 +3995,10 @@ class TestManageAddonRepositoryAction:
         assert result["action"] == "remove_repository"
 
     @pytest.mark.asyncio
-    async def test_add_repository_other_error_still_raises(self):
-        """A non-duplicate failure (e.g. invalid URL) still surfaces as an error."""
+    async def test_add_repository_other_error_gives_repo_specific_suggestion(self):
+        """A non-duplicate failure (e.g. invalid URL) still raises, but with a
+        repository-specific suggestion — not the generic 'check your HA
+        connection' one that _supervisor_api_call attaches."""
         tools = self._tools()
         err = ToolError(
             json.dumps(
@@ -4005,6 +4007,9 @@ class TestManageAddonRepositoryAction:
                     "error": {
                         "code": "SERVICE_CALL_FAILED",
                         "message": "Command failed: invalid repository",
+                        "suggestions": [
+                            "Check Home Assistant connection and Supervisor availability"
+                        ],
                     },
                 }
             )
@@ -4015,13 +4020,53 @@ class TestManageAddonRepositoryAction:
                 new_callable=AsyncMock,
                 side_effect=err,
             ),
-            pytest.raises(ToolError),
+            pytest.raises(ToolError) as exc_info,
         ):
             await tools.manage_addon(
                 **_manage_addon_kwargs(
                     action="add_repository", repository="https://example.com/bad"
                 )
             )
+        payload = _parse_tool_error(exc_info)
+        err_obj = payload["error"]
+        suggestions = " ".join(
+            [err_obj.get("suggestion", "")] + err_obj.get("suggestions", [])
+        )
+        assert "add-on repository URL" in suggestions
+        assert "connection" not in suggestions.lower()
+
+    async def test_remove_repository_in_use_suggests_uninstall(self):
+        """Removing a repo still used by installed add-ons suggests uninstalling
+        them, not checking the connection."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": "Command failed: Can't remove ... used by installed apps",
+                    },
+                }
+            )
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(action="remove_repository", repository="abc123")
+            )
+        payload = _parse_tool_error(exc_info)
+        err_obj = payload["error"]
+        suggestions = " ".join(
+            [err_obj.get("suggestion", "")] + err_obj.get("suggestions", [])
+        )
+        assert "uninstalled" in suggestions
 
     @pytest.mark.asyncio
     async def test_add_repository_uses_generous_timeout(self):
