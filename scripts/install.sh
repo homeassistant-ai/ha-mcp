@@ -147,6 +147,10 @@ if [ "$CLIENT" = "claude-code" ]; then
         }
         # The official installer is a bash script; fall back to sh if bash is absent.
         INSTALL_SHELL=$(command -v bash || command -v sh)
+        if [ -z "$INSTALL_SHELL" ]; then
+            printf "${RED}  No bash or sh found to run the Claude Code installer.${NC}\n" >&2
+            exit 1
+        fi
         printf '%s\n' "$CC_INSTALLER" | "$INSTALL_SHELL" || {
             printf "${RED}  Claude Code installation failed.${NC}\n" >&2
             printf "  See https://code.claude.com/docs/en/setup for manual steps.\n" >&2
@@ -264,18 +268,22 @@ if [ -f "$CONFIG_FILE" ]; then
         exit 1
     fi
 
-    # Use Python to merge the config
-    python3 << EOF
+    # Use Python to merge the config. Values are passed via the environment and the
+    # heredoc delimiter is quoted ('EOF'), so paths with quotes/backslashes/newlines
+    # can't break the Python source or inject code.
+    HA_CONFIG_FILE="$CONFIG_FILE" HA_BACKUP_FILE="$BACKUP_FILE" \
+    HA_DEMO_URL="$DEMO_URL" HA_DEMO_TOKEN="$DEMO_TOKEN" HA_UVX_PATH="$UVX_PATH" \
+    python3 << 'EOF'
 import json
 import os
 import sys
 import tempfile
 
-config_file = "$CONFIG_FILE"
-backup_file = "$BACKUP_FILE"
-demo_url = "$DEMO_URL"
-demo_token = "$DEMO_TOKEN"
-uvx_path = "$UVX_PATH"
+config_file = os.environ["HA_CONFIG_FILE"]
+backup_file = os.environ["HA_BACKUP_FILE"]
+demo_url = os.environ["HA_DEMO_URL"]
+demo_token = os.environ["HA_DEMO_TOKEN"]
+uvx_path = os.environ["HA_UVX_PATH"]
 
 try:
     with open(config_file, 'r') as f:
@@ -324,8 +332,11 @@ print("  Configuration updated successfully")
 EOF
 else
     # Create new config file (using full path for Claude Desktop compatibility).
-    # Write to a temp file then move into place so a crash can't leave a partial config.
-    cat > "${CONFIG_FILE}.tmp" << EOF
+    # Write to a private temp file then move into place so a crash can't leave a
+    # partial config, and so the token is never briefly world-readable.
+    TMP_CONFIG="${CONFIG_FILE}.tmp"
+    trap 'rm -f "$TMP_CONFIG"' EXIT INT TERM
+    if ! cat > "$TMP_CONFIG" << EOF
 {
   "mcpServers": {
     "Home Assistant": {
@@ -339,7 +350,16 @@ else
   }
 }
 EOF
-    mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+    then
+        printf "${RED}  Failed to write config (disk full or permission denied?).${NC}\n" >&2
+        exit 1
+    fi
+    chmod 600 "$TMP_CONFIG" 2>/dev/null || true
+    if ! mv "$TMP_CONFIG" "$CONFIG_FILE"; then
+        printf "${RED}  Failed to move config into place: %s${NC}\n" "$CONFIG_FILE" >&2
+        exit 1
+    fi
+    trap - EXIT INT TERM
     printf "  Created new configuration file\n"
 fi
 printf "${GREEN}  Claude Desktop configured${NC}\n"
@@ -366,7 +386,7 @@ printf "\n"
 printf "${YELLOW}Next steps:${NC}\n"
 printf "\n"
 if [ "$CLAUDE_NOT_INSTALLED" = true ]; then
-    printf "$CLAUDE_DESKTOP_STEP"
+    printf "%b" "$CLAUDE_DESKTOP_STEP"
     printf "  2. Create a free account at claude.ai (if you haven't)\n"
     printf "  3. Open Claude Desktop and ask: \"Can you see my Home Assistant?\"\n"
 else

@@ -319,7 +319,7 @@ claude mcp add home-assistant --scope user \\
 
             <div>
               <p class="text-white font-medium mb-2">4. Python 3.13 required</p>
-              <p class="text-slate-300 mb-2">ha-mcp requires Python 3.13+. Older versions get outdated ha-mcp with known bugs.</p>
+              <p class="text-slate-300 mb-2">ha-mcp requires Python 3.13 (specifically 3.13.x). Older Python can't install the current ha-mcp.</p>
               <pre class="code-block"><code>uv python install 3.13
 uvx --refresh ha-mcp@latest</code></pre>
               <p class="text-slate-400 text-sm mt-2">If uvx still picks the old Python, make sure <code class="bg-slate-800 px-1 rounded">"--python", "3.13"</code> is in your config args (as shown above).</p>

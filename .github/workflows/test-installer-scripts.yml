@@ -84,6 +84,14 @@ jobs:
           grep -q '"Home Assistant"' "$CONFIG_FILE" || (echo "Home Assistant config not found" && exit 1)
           grep -q 'ha-mcp@latest' "$CONFIG_FILE" || (echo "ha-mcp not configured" && exit 1)
 
+      - name: Merge preserves other MCP servers and writes valid JSON
+        run: |
+          CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/Claude/claude_desktop_config.json"
+          # Seed an unrelated MCP server, then re-run; the merge must keep it.
+          python3 -c "import json; c=json.load(open('$CONFIG_FILE')); c['mcpServers']['Keepme']={'command':'x'}; json.dump(c, open('$CONFIG_FILE','w'))"
+          sh scripts/install.sh
+          python3 -c "import json; c=json.load(open('$CONFIG_FILE')); assert 'Keepme' in c['mcpServers'], 'merge dropped an existing MCP server'; assert 'Home Assistant' in c['mcpServers']; print('OK: merge preserved other servers and JSON is valid')"
+
   test-windows:
     runs-on: windows-latest
     steps:
@@ -140,3 +148,56 @@ jobs:
           # Verify the demo Home Assistant server is responding
           curl -sf "https://ha-mcp-demo-server.qc-h.net/" -o /dev/null
           echo "Demo server is up and responding"
+
+  test-claude-code-args:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: --claude-code must not write a Claude Desktop config
+        run: |
+          # Stub a 'claude' binary so the --claude-code branch runs without a real install.
+          mkdir -p "$HOME/bin"
+          printf '#!/bin/sh\nexit 0\n' > "$HOME/bin/claude"
+          chmod +x "$HOME/bin/claude"
+          export PATH="$HOME/bin:$PATH"
+          sh scripts/install.sh --claude-code
+          CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/Claude/claude_desktop_config.json"
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "BUG: --claude-code wrote a Claude Desktop config"; cat "$CONFIG_FILE"; exit 1
+          fi
+          echo "OK: --claude-code did not create a Desktop config"
+
+      - name: --help advertises --claude-code and exits 0
+        run: |
+          out=$(sh scripts/install.sh --help)
+          echo "$out" | grep -q -- '--claude-code' || (echo "help missing --claude-code" && exit 1)
+
+  test-wsl-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: WSL is detected and the Desktop path is refused (no config written)
+        run: |
+          set +e
+          WSL_DISTRO_NAME=Ubuntu sh scripts/install.sh
+          rc=$?
+          set -e
+          [ "$rc" -eq 1 ] || (echo "Expected exit 1 under WSL, got $rc" && exit 1)
+          CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/Claude/claude_desktop_config.json"
+          [ ! -f "$CONFIG_FILE" ] || (echo "WSL guard wrote a config anyway" && exit 1)
+          echo "OK: WSL Desktop path refused, no config written"
+
+      - name: WSL + --claude-code is allowed past the guard
+        run: |
+          # Stub claude so the allowed path doesn't do a real install.
+          mkdir -p "$HOME/bin"
+          printf '#!/bin/sh\nexit 0\n' > "$HOME/bin/claude"
+          chmod +x "$HOME/bin/claude"
+          export PATH="$HOME/bin:$PATH"
+          out=$(WSL_DISTRO_NAME=Ubuntu sh scripts/install.sh --claude-code 2>&1) || true
+          if echo "$out" | grep -qi 'Detected WSL'; then
+            echo "guard wrongly fired for --claude-code under WSL"; exit 1
+          fi
+          echo "OK: --claude-code not blocked under WSL"
