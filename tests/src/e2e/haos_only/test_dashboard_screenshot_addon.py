@@ -320,19 +320,49 @@ async def test_get_dashboard_screenshot_returns_png(
 async def test_get_dashboard_include_screenshot(
     mcp_client: Any, screenshot_engine_started: Any
 ) -> None:
-    """ha_config_get_dashboard(include_screenshot=True) returns config + PNG."""
-    raw = await mcp_client.call_tool(
-        "ha_config_get_dashboard",
-        {"url_path": "default", "include_screenshot": True},
-    )
-    payload = parse_mcp_result(raw)
-    assert payload.get("success"), f"get_dashboard failed: {payload}"
-    png = _extract_png_bytes(raw)
-    assert png is not None, (
-        "include_screenshot=True did not return an image content block "
-        f"(warnings: {payload.get('warnings')})"
-    )
-    _png_dimensions(png)
+    """ha_config_get_dashboard(include_screenshot=True) returns config + PNG.
+
+    Creates a storage-mode dashboard first: the auto-generated ``default``
+    dashboard has no stored Lovelace config, so retrieving it raises
+    "No config found" before screenshots are even reached.
+    """
+    url_path = "screenshot-get-e2e"
+    config = {
+        "views": [
+            {
+                "title": "Get E2E",
+                "cards": [{"type": "markdown", "content": "# Get E2E"}],
+            }
+        ]
+    }
+    try:
+        setup = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_config_set_dashboard",
+                {"url_path": url_path, "config": config, "title": "Get E2E"},
+            )
+        )
+        assert setup.get("success"), f"dashboard create failed: {setup}"
+
+        raw = await mcp_client.call_tool(
+            "ha_config_get_dashboard",
+            {"url_path": url_path, "include_screenshot": True},
+        )
+        payload = parse_mcp_result(raw)
+        assert payload.get("success"), f"get_dashboard failed: {payload}"
+        png = _extract_png_bytes(raw)
+        assert png is not None, (
+            "include_screenshot=True did not return an image content block "
+            f"(warnings: {payload.get('warnings')})"
+        )
+        _png_dimensions(png)
+    finally:
+        try:
+            await mcp_client.call_tool(
+                "ha_config_delete_dashboard", {"url_path": url_path}
+            )
+        except Exception:  # pragma: no cover - cleanup best-effort
+            LOG.exception("Failed to delete screenshot get-E2E dashboard")
 
 
 async def test_set_dashboard_return_screenshot(
