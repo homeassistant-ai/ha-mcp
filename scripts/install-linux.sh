@@ -6,4 +6,4 @@ set -e
 TMPFILE=$(mktemp)
 trap 'rm -f "$TMPFILE"' EXIT
 curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install.sh -o "$TMPFILE"
-sh "$TMPFILE"
+sh "$TMPFILE" "$@"

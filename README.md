@@ -62,15 +62,27 @@ You're now connected to the demo environment! [Connect your own Home Assistant �
 <details>
 <summary><b>🐧 Linux</b></summary>
 
-1. Go to [claude.ai](https://claude.ai) and sign in (or create a free account)
+Anthropic doesn't ship Claude Desktop for Linux, so pick one path:
+
+**Claude Desktop** — free, via the community build:
+
+1. Install the community [Claude Desktop for Linux](https://github.com/aaddrick/claude-desktop-debian) build and sign in with a free [claude.ai](https://claude.ai) account
 2. Open **Terminal** and run:
    ```sh
    curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install-linux.sh | sh
    ```
-3. [Download Claude Desktop](https://claude.ai/download) (or restart it)
-4. Ask Claude: **"Can you see my Home Assistant?"**
+3. Restart Claude Desktop, then ask: **"Can you see my Home Assistant?"**
 
-You're now connected to the demo environment!
+**Claude Code** — official CLI, requires a paid Claude plan:
+
+1. Install Claude Code: `curl -fsSL https://claude.ai/install.sh | bash`
+2. Configure ha-mcp, then run `claude`:
+   ```sh
+   curl -LsSf https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/scripts/install.sh | sh -s -- --claude-code
+   ```
+3. Start `claude`, run `/mcp` to confirm, then ask: **"Can you see my Home Assistant?"**
+
+[Full Linux guide →](https://homeassistant-ai.github.io/ha-mcp/guide-linux/)
 
 </details>
 
