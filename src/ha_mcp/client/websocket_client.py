@@ -531,20 +531,16 @@ class HomeAssistantWebSocketClient:
         """Cancel and drop a stored event future."""
         self._state.cancel_event_response(message_id)
 
-    async def send_command(
-        self,
-        command_type: str,
-        wait_timeout: float = 30.0,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+    async def send_command(self, command_type: str, **kwargs: Any) -> dict[str, Any]:
         """Send command and wait for response.
 
         Args:
             command_type: Type of command to send
-            wait_timeout: Seconds to wait for the response. The default suits
-                fast commands; long-running ones (e.g. a ``supervisor/api``
-                add-on install) must raise this so the client doesn't give up
-                before Home Assistant replies.
+            wait_timeout: Seconds to wait for the response (consumed from
+                ``kwargs``, not forwarded to Home Assistant). Defaults to 30s,
+                which suits fast commands; long-running ones (e.g. a
+                ``supervisor/api`` add-on install) must raise this so the
+                client doesn't give up before Home Assistant replies.
             **kwargs: Command parameters (merged into the outgoing message)
 
         Returns:
@@ -552,6 +548,13 @@ class HomeAssistantWebSocketClient:
         """
         if not self._state.is_ready:
             raise HomeAssistantConnectionError("WebSocket not authenticated")
+
+        # Pull wait_timeout out of kwargs rather than making it a positional
+        # parameter: callers unpack a ``dict[str, object]`` via
+        # ``send_command(cmd, **message)``, and a typed positional param would
+        # break that call shape under mypy. Pop so it never leaks into the
+        # outgoing message either.
+        wait_timeout: float = kwargs.pop("wait_timeout", 30.0)
 
         message_id = self.get_next_message_id()
         message = {"id": message_id, "type": command_type, **kwargs}
