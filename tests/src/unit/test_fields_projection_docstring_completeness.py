@@ -58,7 +58,11 @@ TOOL_SPECS: list[dict[str, Any]] = [
             # to a separate `projected` var, so it bypasses `fields=`
             # filtering and is always emitted when the sidecar is running.
             ("tools/tools_search.py", "ha_get_overview", "projected"),
-            ("tools/smart_search.py", "get_system_overview", "base_response"),
+            (
+                "tools/smart_search/_overview.py",
+                "_assemble_overview_response",
+                "base_response",
+            ),
         ],
         "return_harvest": [],
     },
@@ -71,7 +75,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
         ],
         "return_harvest": [
             ("tools/tools_search.py", "_exact_match_search"),
-            ("tools/smart_search.py", "smart_entity_search"),
+            ("tools/smart_search/_entities.py", "smart_entity_search"),
         ],
         # ha_search_entities composes the projectable dict under many
         # local names (``area_search_data``, ``empty_area_data``,
@@ -86,7 +90,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 frozenset({"success", "results", "query"}),
             ),
             (
-                "tools/smart_search.py",
+                "tools/smart_search/_entities.py",
                 "smart_entity_search",
                 frozenset({"success", "results", "query", "matches"}),
             ),

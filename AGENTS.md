@@ -661,6 +661,10 @@ This project's tool count exceeds the [10-20 tool threshold](https://ai.google.d
 
 **Context engineering**: provide minimum context; let models fetch more via `ha_get_skill_guide`. Favor statelessness and content-derived hashes for optimistic locking.
 
+### Module Size
+
+Keep modules focused. Past ~1000 lines (Pylint's `max-module-lines` default) a module usually spans multiple concerns and is worth splitting along those concerns. Pick whatever decomposition fits and fix the internal imports (and any test patch targets) that reference the moved code as part of the move. There's no external import contract to preserve: it's one project, and MCP tools are resolved dynamically at runtime by name (and renaming isn't breaking either, see Tool Consolidation).
+
 ## Tool Waiting Behavior
 
 **Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
