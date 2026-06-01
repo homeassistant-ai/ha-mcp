@@ -825,6 +825,24 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
         )
 
 
+def _log_settings_url(host: str, port: int, path: str) -> None:
+    """Log the web settings-UI URL at HTTP startup.
+
+    Non-add-on operators (Docker / standalone) otherwise have no easy way to
+    discover the settings page or its secret-path URL (issue #1458). When the
+    bind host is the wildcard (``0.0.0.0`` / ``::``) the process can't know its
+    externally reachable address, so we log a ``<host>`` placeholder.
+    """
+    display_host = host if host not in ("0.0.0.0", "::") else "<host>"
+    url = f"http://{display_host}:{port}{path.rstrip('/')}/settings"
+    note = (
+        "  (substitute this server's address for <host>)"
+        if display_host == "<host>"
+        else ""
+    )
+    logger.info(f"Settings UI available at: {url}{note}")
+
+
 def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """Common runner for HTTP-based transports.
 
@@ -837,6 +855,7 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     host, port, path = _get_http_runtime(default_port)
     register_browser_landing(_get_mcp(), path)
     register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
+    _log_settings_url(host, port, path)
 
     _run_entrypoint(
         _run_http_with_graceful_shutdown(transport, host, port, path),
@@ -984,6 +1003,7 @@ async def _run_oauth_server(
     from ha_mcp.settings_ui import register_settings_routes
 
     register_settings_routes(mcp, _server, secret_path=path)
+    _log_settings_url(host, port, path)
 
     tools = await mcp.list_tools()
     logger.info(
