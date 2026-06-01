@@ -524,7 +524,11 @@ def _dashboard_frontend_path(url_path: str | None) -> str:
 
 
 async def _maybe_attach_screenshot(
-    result: dict[str, Any], url_path: str | None, requested: bool
+    result: dict[str, Any],
+    url_path: str | None,
+    requested: bool,
+    *,
+    full_page: bool = False,
 ) -> "dict[str, Any] | ToolResult":
     """Optionally render the dashboard and attach it as an image content block.
 
@@ -534,6 +538,8 @@ async def _maybe_attach_screenshot(
     PNG as an image content block — so structured_content is present on both
     the screenshot and no-screenshot paths (a bare ``[dict, Image]`` list
     would drop structured_content because the Image isn't JSON-serializable).
+    ``full_page`` captures the whole scrollable dashboard rather than the
+    viewport.
 
     Never raises: if dashboard screenshot mode is disabled or the capture
     fails, a ``warnings`` entry is appended to ``result`` and the plain dict is
@@ -556,7 +562,9 @@ async def _maybe_attach_screenshot(
 
         from ..dashboard_screenshot.capture import capture_dashboard_png
 
-        png = await capture_dashboard_png(_dashboard_frontend_path(url_path))
+        png = await capture_dashboard_png(
+            _dashboard_frontend_path(url_path), full_page=full_page
+        )
         return ToolResult(
             content=[Image(data=png, format="png").to_image_content()],
             structured_content=result,
@@ -650,6 +658,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "screenshot' beta feature + engine add-on/sidecar; if "
                 "unavailable, the config is returned with a warning instead "
                 "of failing."
+            ),
+        ] = False,
+        full_page: Annotated[
+            bool,
+            Field(
+                description="With include_screenshot: capture the whole "
+                "scrollable dashboard instead of just the viewport (use when "
+                "content runs below the fold)."
             ),
         ] = False,
     ) -> "dict[str, Any] | ToolResult":
@@ -898,7 +914,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 )
 
             return await _maybe_attach_screenshot(
-                get_result, url_path, include_screenshot
+                get_result, url_path, include_screenshot, full_page=full_page
             )
         except ToolError:
             raise
@@ -1013,6 +1029,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "(the dashboard creation/iteration loop). Requires the "
                 "'dashboard screenshot' beta feature + engine add-on/sidecar; "
                 "if unavailable, the write result is returned with a warning."
+            ),
+        ] = False,
+        full_page: Annotated[
+            bool,
+            Field(
+                description="With return_screenshot: capture the whole "
+                "scrollable dashboard instead of just the viewport (use when "
+                "content runs below the fold)."
             ),
         ] = False,
     ) -> "dict[str, Any] | ToolResult":
@@ -1603,7 +1627,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
 
             _attach_dashboard_skill(result_dict, MandatoryBPS)
             return await _maybe_attach_screenshot(
-                result_dict, url_path, return_screenshot
+                result_dict, url_path, return_screenshot, full_page=full_page
             )
 
         except ToolError as te:

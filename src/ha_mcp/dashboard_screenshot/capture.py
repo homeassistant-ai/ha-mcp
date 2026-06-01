@@ -28,6 +28,14 @@ DEFAULT_HEIGHT = 800
 DEFAULT_WAIT_MS = 2500
 _REQUEST_TIMEOUT_S = 60.0
 
+# full_page render height. The Puppet engine clips to the requested viewport
+# height (it has no native full-page mode), so capturing a whole scrollable
+# dashboard means asking for a tall viewport. This is the engine's max useful
+# height; dashboards taller than this still clip, and shorter ones get trailing
+# whitespace. Once the engine gains a native fullPage param (upstream), prefer
+# that instead — it auto-sizes to content with no cap and no whitespace.
+FULL_PAGE_HEIGHT = 4096
+
 # Characters/sequences that would let an LLM-supplied path escape the
 # dashboard route and reshape the engine request (scheme, authority,
 # query/fragment, traversal, backslash). The engine renders whatever path it
@@ -80,15 +88,22 @@ async def capture_dashboard_png(
     zoom: float = 1.0,
     wait_ms: int = DEFAULT_WAIT_MS,
     theme: str | None = None,
+    full_page: bool = False,
 ) -> bytes:
     """Render ``dashboard_path`` to PNG bytes via the screenshot engine.
+
+    With ``full_page=True`` the whole scrollable dashboard is captured rather
+    than just the viewport: the engine clips to the requested height, so we ask
+    for a tall viewport (``FULL_PAGE_HEIGHT``). ``height`` is ignored in that
+    case. See ``FULL_PAGE_HEIGHT`` for the interim caveats (cap + whitespace).
 
     Raises :class:`ToolError` if the engine is unreachable or returns an error.
     """
     path = _validate_dashboard_path(dashboard_path)
     engine = await resolve_engine_url()
+    effective_height = FULL_PAGE_HEIGHT if full_page else int(height)
     params: dict[str, str] = {
-        "viewport": f"{int(width)}x{int(height)}",
+        "viewport": f"{int(width)}x{effective_height}",
         "zoom": str(zoom),
         "wait": str(int(wait_ms)),
         "format": "png",

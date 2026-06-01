@@ -247,6 +247,30 @@ async def test_get_dashboard_screenshot_returns_png(
     assert last["params"].get("format") == "png", last["params"]
 
 
+async def test_full_page_requests_tall_viewport(
+    screenshot_mcp_client: Client, fake_engine: _FakeEngine
+) -> None:
+    """full_page=True asks the engine for a tall viewport so below-the-fold
+    content is captured. The fake engine sizes the PNG to the viewport, so the
+    returned image height equals FULL_PAGE_HEIGHT regardless of the height arg."""
+    from ha_mcp.dashboard_screenshot.capture import FULL_PAGE_HEIGHT
+
+    result = await screenshot_mcp_client.call_tool(
+        "ha_get_dashboard_screenshot",
+        {
+            "dashboard_path": "lovelace/0",
+            "width": 1024,
+            "height": 200,
+            "full_page": True,
+        },
+    )
+    png = _extract_png_bytes(result)
+    assert png is not None, "full_page render returned no image"
+    assert _png_dimensions(png) == (1024, FULL_PAGE_HEIGHT)
+    last = fake_engine.requests[-1]
+    assert last["params"].get("viewport") == f"1024x{FULL_PAGE_HEIGHT}", last["params"]
+
+
 async def test_get_dashboard_include_screenshot(
     screenshot_mcp_client: Client,
 ) -> None:

@@ -202,6 +202,24 @@ class TestCapture:
         assert got["params"]["wait"] == "2000"
         assert got["params"]["format"] == "png"
 
+    async def test_full_page_overrides_height(self, monkeypatch: Any) -> None:
+        """full_page=True asks the engine for a tall viewport (FULL_PAGE_HEIGHT),
+        ignoring the requested height, so content below the fold is captured."""
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = _FakeResponse(200, b"\x89PNG\r\n\x1a\nfake")
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        await capture.capture_dashboard_png(
+            "lovelace/0", width=1024, height=480, full_page=True
+        )
+        got = _FakeAsyncClient.last_get
+        assert got["params"]["viewport"] == f"1024x{capture.FULL_PAGE_HEIGHT}"
+
     async def test_http_error_raises_toolerror(self, monkeypatch: Any) -> None:
         from ha_mcp.dashboard_screenshot import capture
 
@@ -276,6 +294,31 @@ class TestMaybeAttachScreenshot:
         out = await _maybe_attach_screenshot(result, "my-dash", requested=True)
         assert out is result
         assert any("unavailable" in w.lower() for w in result.get("warnings", []))
+
+    async def test_full_page_passed_through(self, monkeypatch: Any) -> None:
+        """_maybe_attach_screenshot forwards full_page to the capture call."""
+        import ha_mcp.config as config
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+
+        seen: dict[str, Any] = {}
+
+        async def record(_path: str, **kw: Any) -> bytes:
+            seen["full_page"] = kw.get("full_page")
+            return b"\x89PNG\r\n\x1a\nfake"
+
+        monkeypatch.setattr(capture, "capture_dashboard_png", record)
+
+        await _maybe_attach_screenshot(
+            {"success": True}, "my-dash", requested=True, full_page=True
+        )
+        assert seen["full_page"] is True
 
     async def test_success_returns_toolresult_with_image(
         self, monkeypatch: Any

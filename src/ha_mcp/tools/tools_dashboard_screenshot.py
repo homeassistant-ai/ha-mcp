@@ -72,16 +72,31 @@ class DashboardScreenshotTools:
                 le=30000,
             ),
         ] = DEFAULT_WAIT_MS,
+        full_page: Annotated[
+            bool,
+            Field(
+                description="Capture the whole scrollable dashboard instead of "
+                "just the viewport (use when content runs below the fold). "
+                "Overrides 'height' with a tall render; raise 'wait_ms' for long "
+                "dashboards so lazy cards finish painting."
+            ),
+        ] = False,
     ) -> Image:
         """Render a Home Assistant Lovelace dashboard view to a PNG image.
 
         Use it to visually verify a dashboard you just created or edited
         (pair with ha_config_set_dashboard, or use its return_screenshot
         param for a one-call create-and-see). Charts render best-effort —
-        raise wait_ms if a chart card is blank.
+        raise wait_ms if a chart card is blank. Set full_page=True to capture
+        content below the fold.
         """
         png = await capture_dashboard_png(
-            dashboard_path, width=width, height=height, zoom=zoom, wait_ms=wait_ms
+            dashboard_path,
+            width=width,
+            height=height,
+            zoom=zoom,
+            wait_ms=wait_ms,
+            full_page=full_page,
         )
         return Image(data=png, format="png")
 

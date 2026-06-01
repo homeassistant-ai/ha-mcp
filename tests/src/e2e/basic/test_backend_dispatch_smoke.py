@@ -72,14 +72,14 @@ _SKIP_CEILING_PER_LANE = {
     # screenshot engine), and SKIP on both the container lane (haos_only) and
     # the external-haos lane (inaddon_only). So both those ceilings gain 5;
     # haos_inaddon is unchanged because the tests run there.
-    # The 4 dashboard-screenshot SIDECAR E2E tests
+    # The 5 dashboard-screenshot SIDECAR E2E tests
     # (tests/src/e2e/tools/test_dashboard_screenshot_sidecar.py) are marked
     # container_only: they RUN only on the container lane (in-process server +
     # fake engine) and SKIP on both HAOS lanes. So haos and haos_inaddon each
-    # gain 4; container is unchanged because the tests run there.
+    # gain 5; container is unchanged because the tests run there.
     "container": 62,  # was 55 (observed 57 with the 5 addon tests added)
-    "haos": 29,  # 25 + 4 container_only sidecar skips
-    "haos_inaddon": 49,  # 45 + 4 container_only sidecar skips
+    "haos": 29,  # ~20 + 5 container_only sidecar skips (margin for growth)
+    "haos_inaddon": 49,  # ~39 + 5 container_only sidecar skips (margin for growth)
 }
 
 
