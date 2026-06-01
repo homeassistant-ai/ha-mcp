@@ -246,6 +246,15 @@ class TestCapture:
         with pytest.raises(ToolError):
             await capture.capture_dashboard_png("lovelace/0")
 
+    @pytest.mark.parametrize("path", ["/", "/.", "", "  ", "//"])
+    async def test_root_or_empty_path_rejected(self, path: str) -> None:
+        """A root/empty path would make the engine serve its config/UI HTML
+        instead of a dashboard PNG — reject it rather than fail silently."""
+        from ha_mcp.dashboard_screenshot import capture
+
+        with pytest.raises(ToolError):
+            capture._validate_dashboard_path(path)
+
 
 # ---------------------------------------------------------------------------
 # Graceful get/set screenshot helper

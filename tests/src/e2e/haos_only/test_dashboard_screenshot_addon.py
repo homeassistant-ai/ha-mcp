@@ -72,11 +72,12 @@ _STATE_POLL_INTERVAL = 1.0
 # engine generous time to begin serving valid screenshots after start.
 _ENGINE_READY_TIMEOUT = 180.0
 # Transient + during-boot signals that should be retried (not treated as a
-# hard failure) while polling the engine. AssertionError is included because
-# _png_dimensions/_screenshot raise it on a not-yet-PNG body during cold
-# start; any OTHER exception (ToolError, TypeError, ...) is a real wiring
-# failure and must surface immediately rather than burn the timeout (#1266).
-_ENGINE_POLL_RETRY_ERRORS = (*_POLLING_TRANSIENT_ERRORS, AssertionError)
+# hard failure) while polling the engine. ValueError is included because
+# _png_dimensions raises it on a not-yet-PNG body during cold start — a
+# retryable domain condition, not a bug. Genuine bugs (AssertionError,
+# TypeError, KeyError) and ToolError still surface immediately rather than burn
+# the timeout (#1266), per the repo style guide on test polling loops.
+_ENGINE_POLL_RETRY_ERRORS = (*_POLLING_TRANSIENT_ERRORS, ValueError)
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -107,9 +108,14 @@ def _extract_png_bytes(result: Any) -> bytes | None:
 
 
 def _png_dimensions(data: bytes) -> tuple[int, int]:
-    """Return (width, height) from a PNG's IHDR chunk. Raises on non-PNG."""
+    """Return (width, height) from a PNG's IHDR chunk.
+
+    Raises :class:`ValueError` (a retryable domain condition, not a bug) on a
+    non-PNG body, so the engine-polling loop can retry during Chromium cold
+    start without swallowing genuine bugs.
+    """
     if data[:8] != _PNG_MAGIC:
-        raise AssertionError(
+        raise ValueError(
             f"Not a PNG (magic bytes: {data[:8]!r}). The engine may have "
             "returned an error page or a non-PNG body."
         )
@@ -124,10 +130,13 @@ async def _screenshot(mcp_client: Any, path: str, **kw: Any) -> bytes:
     args.update(kw)
     result = await mcp_client.call_tool("ha_get_dashboard_screenshot", args)
     png = _extract_png_bytes(result)
-    assert png is not None, (
-        f"ha_get_dashboard_screenshot({path!r}) returned no image content: "
-        f"{getattr(result, 'content', result)!r}"
-    )
+    if png is None:
+        # No image block yet — a retryable cold-start condition (ValueError, in
+        # _ENGINE_POLL_RETRY_ERRORS), not a bug to swallow as AssertionError.
+        raise ValueError(
+            f"ha_get_dashboard_screenshot({path!r}) returned no image content: "
+            f"{getattr(result, 'content', result)!r}"
+        )
     return png
 
 

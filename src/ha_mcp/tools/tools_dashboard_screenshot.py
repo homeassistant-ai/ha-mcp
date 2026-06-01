@@ -82,7 +82,7 @@ class DashboardScreenshotTools:
             ),
         ] = False,
     ) -> Image:
-        """Render a Home Assistant Lovelace dashboard view to a PNG image.
+        """Get a rendered PNG image of a Home Assistant Lovelace dashboard view.
 
         Use it to visually verify a dashboard you just created or edited
         (pair with ha_config_set_dashboard, or use its return_screenshot

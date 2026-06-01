@@ -77,6 +77,19 @@ def _validate_dashboard_path(dashboard_path: str) -> str:
     # (set in capture_dashboard_png) ever reach the engine — defense in depth
     # on top of the rejection above.
     segments = [seg for seg in raw.strip("/").split("/") if seg not in ("", ".")]
+    if not segments:
+        # e.g. "/" or "/." — the engine would serve its config/UI HTML for the
+        # root path, not a dashboard PNG, which would be a confusing silent
+        # failure. Require a concrete view path.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid dashboard_path {dashboard_path!r}: cannot be empty or "
+                "the root path.",
+                details="Pass a specific Lovelace view, e.g. 'lovelace/0'.",
+                context={"dashboard_path": dashboard_path},
+            )
+        )
     return "/".join(quote(seg, safe="") for seg in segments)
 
 
