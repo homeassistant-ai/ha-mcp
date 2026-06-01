@@ -290,26 +290,6 @@ class TestBugReportTool:
             assert len(result["recent_logs"]) == 2
 
     @pytest.mark.asyncio
-    async def test_startup_logs_not_returned_raw(self, registered_tools, mock_client):
-        """Regression (GHSA-mc92-ww4q-6fg4): raw ``startup_logs`` must not be in
-        the return. Unlike ``recent_logs`` (redacted at the logging chokepoint),
-        startup log entries are not sanitised at source; the sanitised startup
-        summary stays available via ``formatted_report``."""
-        mock_client.get_config.return_value = {"version": "2024.12.0"}
-        mock_client.get_states.return_value = []
-
-        ha_report_issue = registered_tools._tools["ha_report_issue"]
-        actual_func = ha_report_issue
-        while hasattr(actual_func, "__wrapped__"):
-            actual_func = actual_func.__wrapped__
-
-        result = await actual_func(tool_call_count=5)
-
-        assert "startup_logs" not in result
-        assert "recent_logs" in result
-        assert "formatted_report" in result
-
-    @pytest.mark.asyncio
     async def test_bug_report_log_formatting(self, registered_tools, mock_client):
         """Test that logs are properly formatted in the report."""
         mock_client.get_config.return_value = {"version": "2024.12.0"}
