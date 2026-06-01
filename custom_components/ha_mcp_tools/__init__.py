@@ -10,7 +10,6 @@ import errno
 import fnmatch
 import logging
 import os
-import re
 import secrets
 import shutil
 from datetime import datetime
@@ -284,32 +283,35 @@ def _is_path_allowed_for_read(config_dir: Path, rel_path: str) -> bool:
 
 
 def _mask_secrets_content(content: str) -> str:
-    """Mask secret values in secrets.yaml content.
+    """Return secrets.yaml content with every secret value masked.
 
-    Replaces actual values with [MASKED] to prevent leaking sensitive data.
+    Parses the document structurally (ruamel — the same YAML stack used
+    elsewhere in this component) and emits ``key: [MASKED]`` for each top-level
+    key. This closes the gap in the previous line-by-line regex, which masked
+    only single-line ``key: value`` pairs and leaked multi-line block scalars
+    (``|``, ``>``) whose continuation lines have no colon — SSH keys, TLS
+    material, and service-account JSON are commonly stored that way.
+
+    Fails closed: any content that cannot be parsed and masked as a key-value
+    mapping is withheld rather than returned raw, so a failure on this path never
+    leaks secrets. The catch is deliberately broad — masking is a security
+    boundary, so every failure mode (parse error, a pathological tag constructor,
+    a YAML init/threading error) must withhold, not propagate to the caller with
+    the raw content still in scope.
     """
-    # Pattern to match YAML key-value pairs
-    # Handles: key: value, key: "value", key: 'value'
-    lines = content.split("\n")
-    masked_lines = []
-
-    for line in lines:
-        # Skip comments and empty lines
-        stripped = line.strip()
-        if stripped.startswith("#") or not stripped:
-            masked_lines.append(line)
-            continue
-
-        # Match key: value pattern
-        match = re.match(r"^(\s*)([^:\s]+)(\s*:\s*)(.+)$", line)
-        if match:
-            indent, key, separator, value = match.groups()
-            # Mask the value
-            masked_lines.append(f"{indent}{key}{separator}[MASKED]")
-        else:
-            masked_lines.append(line)
-
-    return "\n".join(masked_lines)
+    try:
+        parsed = make_yaml().load(content)
+        if not isinstance(parsed, dict):
+            # Empty file (None) or a top-level list/scalar: no top-level keys to
+            # mask, so withhold rather than risk returning unmasked content.
+            return (
+                "# secrets.yaml is empty or not a key-value mapping — content withheld"
+            )
+        return "\n".join(f"{key}: [MASKED]" for key in parsed)
+    except YAMLError:
+        return "# secrets.yaml could not be parsed — content withheld to avoid leaking secrets"
+    except Exception:
+        return "# secrets.yaml could not be masked — content withheld to avoid leaking secrets"
 
 
 def _validate_dashboard_filename(filename: str) -> str | None:

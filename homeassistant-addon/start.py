@@ -165,11 +165,12 @@ def maybe_persist_secret_path(
         )
         log_error(
             f"Failed to persist secret_path to addon options ({detail}). "
-            f"This addon will still run with secret_path={secret_path!r}, "
-            "but other addons (e.g. the webhook proxy) cannot auto-discover "
-            "it via Supervisor. Workaround: open this addon's Configuration "
-            "tab and paste the secret_path above into the 'Secret path override' "
-            "field, then save."
+            "This addon will still run, but other addons (e.g. the webhook "
+            "proxy) cannot auto-discover the secret path via Supervisor. "
+            "The secret path is not logged (it is the addon's only auth); "
+            "find it in /data/secret_path.txt. Workaround: open this addon's "
+            "Configuration tab, set the 'Secret path override' field to that "
+            "value, then save."
         )
 
 
@@ -610,12 +611,12 @@ def main() -> int:
 
     log_info("")
     log_info("=" * 80)
-    log_info(f"🔐 MCP Server URL: http://<home-assistant-ip>:9583{secret_path}")
+    log_info("🔐 MCP Server URL: http://<home-assistant-ip>:9583<secret-path>")
     log_info("")
-    log_info(f"   Secret Path: {secret_path}")
-    log_info("")
-    log_info("   ⚠️  IMPORTANT: Copy this exact URL - the secret path is required!")
-    log_info("   💡 This path is auto-generated and persisted to /data/secret_path.txt")
+    log_info("   <secret-path> is this addon's only authentication, so it is")
+    log_info("   NOT logged here. Retrieve it from this addon's Configuration")
+    log_info("   tab ('Secret path override' field) or from /data/secret_path.txt,")
+    log_info("   then append it to the URL above.")
     log_info("=" * 80)
     log_info("")
 

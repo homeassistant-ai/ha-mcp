@@ -8,9 +8,12 @@ from pathlib import Path
 import pytest
 
 from ha_mcp.utils.usage_logger import (
+    _MAX_REDACT_DEPTH,
+    _REDACTED_VALUE,
     AVG_LOG_ENTRIES_PER_TOOL,
     DEFAULT_RING_BUFFER_SIZE,
     UsageLogger,
+    _redact_parameters,
     get_recent_logs,
     log_tool_call,
     shutdown_usage_logger,
@@ -184,7 +187,9 @@ class TestUsageLoggerDefaults:
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
         logger = UsageLogger()
-        assert logger.log_file_path == Path.home() / ".ha-mcp" / "logs" / "mcp_usage.jsonl"
+        assert (
+            logger.log_file_path == Path.home() / ".ha-mcp" / "logs" / "mcp_usage.jsonl"
+        )
         logger.shutdown()
 
     def test_honors_ha_mcp_config_dir(self, monkeypatch, tmp_path):
@@ -244,3 +249,118 @@ class TestUsageLoggerGlobalFunctions:
         )
         assert our_entry is not None
         assert our_entry["success"] is True
+
+
+class TestParameterRedaction:
+    """Tests for secret masking at the logging chokepoint (GHSA-mc92-ww4q-6fg4)."""
+
+    @pytest.fixture(autouse=True)
+    def reset_global_logger(self):
+        shutdown_usage_logger()
+        yield
+        shutdown_usage_logger()
+
+    def test_nested_code_redacted_sibling_preserved(self):
+        """ha_call_service(data={'code': ...}) leaks the code via the log; the
+        recursive key match must mask it while keeping debug-useful siblings."""
+        result = _redact_parameters(
+            {"data": {"code": "4321", "entity_id": "lock.front", "brightness": 255}}
+        )
+        assert result["data"]["code"] == _REDACTED_VALUE
+        assert result["data"]["entity_id"] == "lock.front"
+        assert result["data"]["brightness"] == 255
+
+    def test_top_level_sensitive_keys_redacted(self):
+        result = _redact_parameters(
+            {"token": "abc", "password": "hunter2", "secret": "s", "api_key": "k"}
+        )
+        assert all(result[k] == _REDACTED_VALUE for k in result)
+
+    def test_suffix_match_redacts_token_family(self):
+        result = _redact_parameters({"auth_token": "x", "device_secret": "y"})
+        assert result["auth_token"] == _REDACTED_VALUE
+        assert result["device_secret"] == _REDACTED_VALUE
+
+    def test_non_secret_code_key_suffixes_preserved(self):
+        """status_code / cache_key are NOT secrets — _code/_key are deliberately
+        excluded from suffix matching so debug value survives."""
+        result = _redact_parameters({"status_code": 500, "cache_key": "abc"})
+        assert result["status_code"] == 500
+        assert result["cache_key"] == "abc"
+
+    def test_case_insensitive(self):
+        result = _redact_parameters({"CODE": "1234", "Token": "t"})
+        assert result["CODE"] == _REDACTED_VALUE
+        assert result["Token"] == _REDACTED_VALUE
+
+    def test_benign_params_unchanged(self):
+        params = {"entity_id": "light.test", "key": "value", "nested": {"a": 1}}
+        assert _redact_parameters(params) == params
+
+    def test_list_of_dicts_recursed(self):
+        result = _redact_parameters({"items": [{"code": "1"}, {"entity_id": "x"}]})
+        assert result["items"][0]["code"] == _REDACTED_VALUE
+        assert result["items"][1]["entity_id"] == "x"
+
+    def test_fail_closed_past_max_depth(self):
+        """A subtree nested past the recursion guard is masked wholesale, never
+        returned verbatim."""
+        deep = current = {}
+        for _ in range(_MAX_REDACT_DEPTH + 3):
+            current["next"] = {}
+            current = current["next"]
+        current["code"] = "leak"
+        result = _redact_parameters(deep)
+        # Walk down until we hit the masked cutoff; the deep 'code' must not survive.
+        flat = repr(result)
+        assert "leak" not in flat
+        assert _REDACTED_VALUE in flat
+
+    def test_does_not_mutate_input(self):
+        """log_tool_usage receives the live kwargs dict — redaction must copy."""
+        original = {"data": {"code": "4321"}}
+        _redact_parameters(original)
+        assert original["data"]["code"] == "4321"
+
+    def test_end_to_end_buffer_redacted(self):
+        """The ring buffer (read by ha_report_issue) must hold redacted params."""
+        log_tool_call(
+            tool_name="ha_call_service",
+            parameters={"data": {"code": "4321", "entity_id": "lock.front"}},
+            execution_time_ms=10.0,
+            success=False,
+        )
+        entry = next(
+            e for e in get_recent_logs(5) if e["tool_name"] == "ha_call_service"
+        )
+        assert entry["parameters"]["data"]["code"] == _REDACTED_VALUE
+        assert entry["parameters"]["data"]["entity_id"] == "lock.front"
+
+    def test_secrets_not_persisted_to_jsonl(self, tmp_path):
+        """The on-disk mcp_usage.jsonl must not contain raw secrets either — the
+        redacted entry is what gets queued for the background disk write."""
+        import json
+
+        log_path = tmp_path / "usage.jsonl"
+        logger = UsageLogger(str(log_path), ring_buffer_size=5)
+        try:
+            logger.log_tool_usage(
+                tool_name="ha_call_service",
+                parameters={"data": {"code": "4321", "entity_id": "lock.front"}},
+                execution_time_ms=10.0,
+                success=True,
+            )
+            # The disk write happens on a background thread; wait for it to flush.
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                if log_path.exists() and log_path.read_text().strip():
+                    break
+                time.sleep(0.05)
+        finally:
+            logger.shutdown()
+
+        content = log_path.read_text()
+        assert "4321" not in content
+        assert "lock.front" in content
+        entry = json.loads(content.splitlines()[0])
+        assert entry["parameters"]["data"]["code"] == _REDACTED_VALUE

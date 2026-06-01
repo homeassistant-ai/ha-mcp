@@ -268,34 +268,19 @@ password: 'mypassword'
         assert "mypassword" not in result
         assert "[MASKED]" in result
 
-    def test_preserves_comments(self):
-        """Should preserve comment lines."""
-        content = """
-# This is a comment about the API key
-api_key: secret123
-
-# Another comment
-password: pass456
-"""
+    def test_drops_comments_and_blank_lines(self):
+        """The structural mask emits only ``key: [MASKED]`` lines. Comments and
+        blank lines are intentionally not reproduced — they are not needed to
+        show which keys exist, and dropping them avoids leaking a secret that a
+        user pasted into a comment."""
+        content = (
+            "\n# comment about the API key\napi_key: secret123\n\npassword: pass456\n"
+        )
         result = _mask_secrets_content(content)
 
-        assert "# This is a comment about the API key" in result
-        assert "# Another comment" in result
         assert "secret123" not in result
         assert "pass456" not in result
-
-    def test_preserves_empty_lines(self):
-        """Should preserve empty lines."""
-        content = """
-key1: value1
-
-key2: value2
-"""
-        result = _mask_secrets_content(content)
-
-        lines = result.split("\n")
-        # Check that empty line is preserved
-        assert "" in lines
+        assert result == "api_key: [MASKED]\npassword: [MASKED]"
 
     def test_preserves_key_names(self):
         """Should preserve key names but mask values."""
@@ -313,18 +298,56 @@ token: tok789
         assert "pass456" not in result
         assert "tok789" not in result
 
-    def test_handles_indented_content(self):
-        """Should handle indented content correctly."""
-        content = """
-  indented_key: indented_value
-    more_indented: more_value
-"""
+    def test_nested_mapping_fully_masked(self):
+        """A nested mapping is masked at its top-level key, hiding the whole
+        subtree rather than exposing nested values."""
+        result = _mask_secrets_content("outer:\n  inner_secret: value\n")
+
+        assert "value" not in result
+        assert result == "outer: [MASKED]"
+
+    def test_block_scalar_leaves_no_secret_bytes(self):
+        """Core advisory PoC (GHSA-mc92-ww4q-6fg4): a block scalar's continuation
+        lines have no colon and leaked verbatim under the old line-by-line regex."""
+        content = (
+            "backup_ssh_key: |\n"
+            "  -----BEGIN OPENSSH PRIVATE KEY-----\n"
+            "  b3BlbnNzaC1rZXktdjEAAAAA\n"
+            "  -----END OPENSSH PRIVATE KEY-----\n"
+            "api_password: hunter2\n"
+        )
         result = _mask_secrets_content(content)
 
-        assert "indented_key:" in result
-        assert "more_indented:" in result
-        assert "indented_value" not in result
-        assert "more_value" not in result
+        assert "BEGIN OPENSSH" not in result
+        assert "b3BlbnNzaC1rZXktdjEAAAAA" not in result
+        assert "hunter2" not in result
+        assert result == "backup_ssh_key: [MASKED]\napi_password: [MASKED]"
+
+    def test_empty_or_non_mapping_withheld(self):
+        """Empty file (None) or a top-level list/scalar: nothing to mask
+        key-wise, so the content is withheld rather than returned raw."""
+        assert "[MASKED]" not in _mask_secrets_content("")
+        assert "withheld" in _mask_secrets_content("").lower()
+        assert "withheld" in _mask_secrets_content("- a\n- b\n").lower()
+
+    def test_duplicate_keys_withheld(self):
+        """ruamel raises DuplicateKeyError (a YAMLError subclass); the fix fails
+        closed rather than leaking the raw text."""
+        assert "withheld" in _mask_secrets_content("dup: 1\ndup: 2\n").lower()
+
+    def test_custom_tag_does_not_crash(self):
+        """The round-trip loader resolves HA-style custom tags instead of
+        raising, so masking still produces a redacted key line."""
+        assert _mask_secrets_content("foo: !secret bar\n") == "foo: [MASKED]"
+
+    def test_yaml_anchors_do_not_leak_dereferenced_secrets(self):
+        """A secret defined once via an anchor and reused via aliases is
+        dereferenced into every key by the loader; each must still be masked and
+        the secret must not survive anywhere in the output."""
+        content = "base_token: &tok 'secret123'\nprod: *tok\ndev: *tok\n"
+        result = _mask_secrets_content(content)
+        assert "secret123" not in result
+        assert result == "base_token: [MASKED]\nprod: [MASKED]\ndev: [MASKED]"
 
 
 class TestFileOperationsIntegration:

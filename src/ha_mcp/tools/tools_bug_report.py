@@ -508,7 +508,8 @@ class BugReportTools:
         **OUTPUT:**
         Returns both templates plus diagnostic data. Key fields:
         - `runtime_bug_template`, `agent_behavior_template` — pick based on context
-        - `recent_logs`, `startup_logs` — captured ha-mcp tool/server log entries
+        - `recent_logs` — recent ha-mcp tool calls (secret parameters redacted);
+          startup log entries are summarised in `formatted_report`, not returned raw
         - `addon_logs` — addon container stdout/stderr (HA add-on installs only;
           empty string otherwise)
         - `suggested_title`, `duplicate_check_urls`, `anonymization_guide`
@@ -622,8 +623,13 @@ class BugReportTools:
         return {
             "success": True,
             "diagnostic_info": diagnostic_info,
+            # ``recent_logs`` entries are redacted at the logging chokepoint
+            # (UsageLogger.log_tool_usage), so the tool parameters here carry no
+            # secrets. ``startup_logs`` come from a separate StartupLogCollector
+            # that is NOT redacted at source, so the raw entries are
+            # intentionally omitted — the sanitized view lives in
+            # ``formatted_report`` (via ``_format_startup_logs``).
             "recent_logs": recent_logs,
-            "startup_logs": startup_logs,
             "addon_logs": addon_logs,
             "log_count": len(recent_logs),
             "startup_log_count": len(startup_logs),
