@@ -196,18 +196,17 @@ class Settings(BaseSettings):
     # Dashboard screenshot mode — the ``ha_get_dashboard_screenshot`` tool
     # plus the ``include_screenshot`` / ``return_screenshot`` params on the
     # dashboard get/set tools. Renders a Lovelace view to a PNG via a
-    # separate, opt-in headless-Chromium screenshot add-on (the vendored
-    # ``ha_mcp_screenshot`` engine, or a docker-compose sidecar). Off by
-    # default; nothing heavy is pulled unless the user enables it AND
-    # installs the engine.
+    # separate, opt-in headless-Chromium screenshot add-on (balloob's Puppet
+    # add-on, or a docker-compose sidecar). Off by default; nothing heavy is
+    # pulled unless the user enables it AND installs the engine.
     enable_dashboard_screenshot: bool = Field(
         False, alias="HAMCP_ENABLE_DASHBOARD_SCREENSHOT"
     )
 
-    # Base URL of the screenshot engine (e.g. ``http://ha-mcp-screenshot:10000``
-    # or a docker-compose sidecar). A connection string, NOT a beta toggle, so
+    # Base URL of the screenshot engine (e.g. ``http://puppet:10000`` or a
+    # docker-compose sidecar). A connection string, NOT a beta toggle, so
     # it is intentionally absent from FEATURE_FLAG_FIELDS. Left blank, the
-    # provisioner auto-discovers the engine add-on via the Supervisor in
+    # provisioner auto-discovers the Puppet add-on via the Supervisor in
     # HA OS / Supervised mode; Container / Core users set it explicitly.
     dashboard_screenshot_engine_url: str = Field(
         "", alias="HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL"

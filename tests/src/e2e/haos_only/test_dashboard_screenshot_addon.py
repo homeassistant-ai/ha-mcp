@@ -1,11 +1,11 @@
 """Dashboard screenshot-engine addon runtime E2E for the HAOS test tier.
 
-The screenshot engine addon (``homeassistant-addon-screenshot/``, vendored
-ha-puppet) is baked into the qcow2 with ``boot: manual`` and an empty
+The screenshot engine is balloob's **Puppet** add-on, installed from its
+add-on repository into the qcow2 with ``boot: manual`` and an empty
 ``access_token`` (see
-``tests/haos_image_build/build_image.py::install_screenshot_addon``). The
-bake validates that the addon installs cleanly and pre-builds its Chromium
-Docker image.
+``tests/haos_image_build/build_image.py::install_puppet_addon``). The bake
+validates that the addon installs cleanly and pre-builds its Chromium Docker
+image.
 
 The engine authenticates the headless browser with a Home Assistant
 long-lived/user access token — the add-on's Supervisor token is NOT a valid
@@ -57,7 +57,11 @@ LOG = logging.getLogger(__name__)
 # constraint the port= proxy test documents in test_manage_addon_modes.py.
 pytestmark = [pytest.mark.haos_only, pytest.mark.inaddon_only]
 
-SCREENSHOT_ADDON_SLUG = "local_ha_mcp_screenshot"
+# balloob's Puppet add-on (installed from its repo by the bake — see
+# build_image.py install_puppet_addon). The Supervisor slug prefix is a stable
+# hash of the repository URL (https://github.com/balloob/home-assistant-addons
+# → 0f1cc410), deterministic across HAOS installs that register that exact repo.
+SCREENSHOT_ADDON_SLUG = "0f1cc410_puppet"
 DEFAULT_DASHBOARD_PATH = "lovelace/0"
 
 STOPPED_STATES: frozenset[str] = frozenset({"stopped", "boot_fail", "unknown", "error"})

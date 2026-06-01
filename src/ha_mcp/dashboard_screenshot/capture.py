@@ -1,6 +1,6 @@
 """Thin async HTTP client to the dashboard screenshot engine.
 
-The engine (the ``ha_mcp_screenshot`` add-on or a docker-compose sidecar)
+The engine (balloob's Puppet add-on, or a docker-compose sidecar)
 authenticates to Home Assistant with its OWN configured long-lived token, so
 this client passes only the dashboard path + render parameters — no HA token
 ever flows through ha-mcp or the LLM for screenshots.
@@ -123,8 +123,13 @@ async def capture_dashboard_png(
                 details=str(e),
                 context={"engine_url": engine},
                 suggestions=[
-                    "Ensure the screenshot add-on (or sidecar) is installed "
-                    "and running",
+                    "Ensure the Puppet screenshot add-on (or sidecar) is "
+                    "installed and running",
+                    # Puppet restarts itself when navigation fails, so a "
+                    # missing/invalid token shows up as a dropped connection.
+                    "If it is running, its long-lived access token is likely "
+                    "missing or invalid — set the add-on's 'access_token' "
+                    "option (Profile > Security) and restart it",
                     "Check HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL on "
                     "Docker/Container deployments",
                 ],
@@ -141,6 +146,9 @@ async def capture_dashboard_png(
                 context={"status_code": resp.status_code, "path": path},
                 suggestions=[
                     "Verify the dashboard path exists",
+                    "If the engine landed on the login page, its long-lived "
+                    "access token is missing/invalid — set the add-on's "
+                    "'access_token' option and restart it",
                     "Increase wait_ms for heavy chart cards",
                 ],
             )

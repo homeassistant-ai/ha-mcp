@@ -14,7 +14,7 @@ Some ha-mcp tools are gated behind feature flags and disabled by default. They c
 | `ha_install_mcp_tools` | `enable_custom_component_integration` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` env vars | Installs the `ha_mcp_tools` custom component via HACS. |
 | `ha_manage_custom_tool` | `enable_code_mode` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_CODE_MODE=true` env vars | Sandboxed Python "escape hatch" that lets AI assistants write, run, save, and delete custom tools when no built-in tool covers the request. Code runs in pydantic-monty (no filesystem, no network); sandbox can call the HA REST API (`api_get`/`api_post`), send WebSocket commands (`ws_send`), call registered MCP tools (`call_tool`), or delete a saved tool (`delete_saved_tool`). Saved tools persist to disk via `CODE_MODE_SAVED_TOOLS_PATH` (defaults to `/data/saved_tools.json` in the dev add-on). |
 | _(behaviour flag, no new tool)_ | `enable_lite_docstrings` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_LITE_DOCSTRINGS=true` env vars | Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, `ha_call_service`, `ha_config_set_yaml`) with shorter variants that defer schema and example detail to `ha_get_skill_guide` (or its `skill://` resource). Reduces idle catalog token usage; relies on the LLM actually calling the skill tool/resource when it needs detail. See "Known limitations" below. |
-| `ha_get_dashboard_screenshot` (+ `include_screenshot` on `ha_config_get_dashboard`, `return_screenshot` on `ha_config_set_dashboard`) | `enable_dashboard_screenshot` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true` env vars | Render a Lovelace dashboard to a PNG so the AI can see what it reads or creates. Rendering runs in a separate, opt-in **HA MCP Dashboard Screenshot Engine** add-on (headless Chromium, vendored from balloob's Puppet, Apache-2.0) — nothing heavy is installed unless you enable this AND install the engine. |
+| `ha_get_dashboard_screenshot` (+ `include_screenshot` on `ha_config_get_dashboard`, `return_screenshot` on `ha_config_set_dashboard`) | `enable_dashboard_screenshot` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true` env vars | Render a Lovelace dashboard to a PNG so the AI can see what it reads or creates. Rendering runs in a separate, opt-in engine — balloob's **Puppet** add-on (headless Chromium, Apache-2.0), which you install yourself — nothing heavy is installed unless you enable this AND install the engine. |
 
 ## How to enable
 
@@ -146,39 +146,53 @@ Pair this toggle with one of the following to mitigate:
 
 ### Dashboard screenshot (`ha_get_dashboard_screenshot` / `include_screenshot` / `return_screenshot`)
 
-Rendering does not run inside ha-mcp; it runs in a separate **HA MCP Dashboard
-Screenshot Engine** add-on (headless Chromium). Operators should know:
+Rendering does not run inside ha-mcp; it runs in a separate engine — balloob's
+**Puppet** add-on (headless Chromium, https://github.com/balloob/home-assistant-addons).
+ha-mcp does not vendor it; you install it yourself. Operators should know:
 
 **Setup by deployment.**
-- *HA OS / Supervised:* install the engine add-on from this repository's
-  add-on store, set its `access_token` option to a Home Assistant long-lived
-  access token, and start it. ha-mcp discovers the running engine through the
-  Supervisor. (The assistant can install + start it for you via
-  `ha_manage_addon(action="install"/"start")`, but you must supply the token.)
-- *Docker / Container:* run the engine image as a sidecar (with `access_token`
-  set) and point ha-mcp at it with
-  `HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL=http://<engine-host>:10000`.
+- *HA OS / Supervised:* add balloob's add-on repository
+  (`https://github.com/balloob/home-assistant-addons`) under Settings >
+  Add-ons > Add-on Store > Repositories, install the **Puppet** add-on, set its
+  `access_token` option to a Home Assistant long-lived access token, and start
+  it. ha-mcp discovers the running add-on through the Supervisor (it matches
+  the `*_puppet` slug). (The assistant can do this for you end-to-end via
+  `ha_manage_addon(action="add_repository", repository=...)` then
+  `action="install"` / `action="start"`, but you must supply the token.)
+- *Docker / Container:* run Puppet's image as a sidecar (build it from
+  balloob's `puppet/` directory, with `access_token` set) and point ha-mcp at
+  it with `HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL=http://<engine-host>:10000`.
 - *stdio / standalone:* not supported (no place to host the engine); the tool
   returns a clear error.
 
-**A long-lived access token is required.** The engine authenticates by
-injecting a Home Assistant long-lived access token (the `access_token` option)
-into the browser. There is no token-less mode: the add-on's Supervisor token is
-not a valid HA frontend credential (HA Core rejects it), and a token cannot be
-minted programmatically. Create the token under Profile > Security — ideally
-for a dedicated, low-privilege user, since the engine holds whatever access
-that token grants.
+**A long-lived access token is required.** Puppet authenticates by injecting a
+Home Assistant long-lived access token (the `access_token` option) into the
+browser. There is no token-less mode: the add-on's Supervisor token is not a
+valid HA frontend credential (HA Core rejects it), and a token cannot be minted
+programmatically. Create the token under Profile > Security — ideally for a
+dedicated, low-privilege user, since the engine holds whatever access that
+token grants. If the token is missing or invalid, Puppet lands on the login
+page and (by its design) restarts; ha-mcp surfaces this as a clear "set the
+engine's access token" error rather than a silent failure.
 
-**The engine's HTTP listener has no inbound auth.** The add-on publishes no
-host port; ha-mcp reaches it only over the internal Docker/Supervisor network,
-and the optional preview UI is fronted by HA's authenticated ingress. Do NOT
-expose the engine's port to an untrusted LAN or the internet — anyone who
-could reach it could pull fully-authenticated dashboard renders.
+**Puppet's HTTP listener has no inbound auth, and it publishes host port
+10000.** Anyone who can reach `http://<ha-host>:10000` can pull
+fully-authenticated dashboard renders. Keep it on a trusted network only — do
+NOT expose port 10000 to an untrusted LAN or the internet. (This is balloob's
+upstream packaging; the add-on's own info page calls it a prototype with "no
+security.")
 
 **Charts are best-effort.** Canvas cards (ApexCharts, mini-graph-card,
 history-graph) paint after the dashboard reports "loaded". The default
 render-settle is generous, but a heavy chart card may still come back blank;
 raise the `wait_ms` parameter on `ha_get_dashboard_screenshot` for those.
+
+**Capturing below the fold.** By default the render is clipped to the viewport.
+Pass `full_page=true` (on `ha_get_dashboard_screenshot`, or alongside
+`include_screenshot` / `return_screenshot`) to capture a dashboard that scrolls
+past the viewport. With stock Puppet this renders a tall viewport, so short
+dashboards may have trailing whitespace and a dashboard taller than ~4096px is
+still clipped — limitations removed once Puppet gains a native full-page mode.
 
 **Graceful by design.** If the feature is off or the engine is unreachable,
 `include_screenshot` / `return_screenshot` still return the dashboard config /
