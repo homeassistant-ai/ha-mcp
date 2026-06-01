@@ -1866,16 +1866,53 @@ class AddOnTools:
             endpoint = f"/store/repositories/{repository}"
             method = "DELETE"
             data = None
-        result = await _supervisor_api_call(
-            self._client, endpoint, method=method, data=data, timeout=timeout
-        )
+        # Make the actions idempotent: adding a repo Supervisor already has
+        # ("already in the store") or removing one it doesn't have are both the
+        # desired end state, so report success instead of a confusing error (the
+        # "add repo then install" flow re-adds freely). _supervisor_api_call
+        # raises a ToolError on failure; the returned-failure branch is a
+        # defensive fallback.
+        try:
+            result = await _supervisor_api_call(
+                self._client, endpoint, method=method, data=data, timeout=timeout
+            )
+        except ToolError as e:
+            noop = self._repo_noop_verb(key, str(e))
+            if noop:
+                return self._repo_noop_result(key, repository, noop)
+            raise
         if not result.get("success"):
+            noop = self._repo_noop_verb(key, str(result))
+            if noop:
+                return self._repo_noop_result(key, repository, noop)
             raise_tool_error(result)
         return {
             "success": True,
             "action": key,
             "repository": repository,
             "message": f"Repository {repository} {key} completed.",
+        }
+
+    @staticmethod
+    def _repo_noop_verb(key: str, error_text: str) -> str | None:
+        """Return a status word if a repo-action failure means the desired end
+        state already holds (an idempotent no-op), else None."""
+        text = error_text.lower()
+        if key == "add_repository" and "already in the store" in text:
+            return "already registered"
+        if key == "remove_repository" and (
+            "not found" in text or "does not exist" in text
+        ):
+            return "not registered"
+        return None
+
+    @staticmethod
+    def _repo_noop_result(key: str, repository: str, verb: str) -> dict[str, Any]:
+        return {
+            "success": True,
+            "action": key,
+            "repository": repository,
+            "message": f"Repository {repository} is {verb}; no change needed.",
         }
 
     async def _execute_config_mode(

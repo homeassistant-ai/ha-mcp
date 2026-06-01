@@ -3937,6 +3937,93 @@ class TestManageAddonRepositoryAction:
         assert mock_call.call_args.kwargs["data"] == {"repository": url}
 
     @pytest.mark.asyncio
+    async def test_add_repository_idempotent_when_already_present(self):
+        """Re-adding a repo Supervisor already has returns success, not a
+        confusing error — the desired end state (repo registered) already holds,
+        so the 'add repo then install' flow can re-add freely."""
+        tools = self._tools()
+        url = "https://github.com/balloob/home-assistant-addons"
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": f"Command failed: Can't add {url}, "
+                        "already in the store",
+                    },
+                }
+            )
+        )
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=err,
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="add_repository", repository=url)
+            )
+        assert result["success"] is True
+        assert result["action"] == "add_repository"
+
+    @pytest.mark.asyncio
+    async def test_remove_repository_idempotent_when_not_present(self):
+        """Removing a repo Supervisor doesn't have returns success."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": "Command failed: repository not found",
+                    },
+                }
+            )
+        )
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=err,
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="remove_repository", repository="deadbeef"
+                )
+            )
+        assert result["success"] is True
+        assert result["action"] == "remove_repository"
+
+    @pytest.mark.asyncio
+    async def test_add_repository_other_error_still_raises(self):
+        """A non-duplicate failure (e.g. invalid URL) still surfaces as an error."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": "Command failed: invalid repository",
+                    },
+                }
+            )
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            pytest.raises(ToolError),
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/bad"
+                )
+            )
+
+    @pytest.mark.asyncio
     async def test_add_repository_uses_generous_timeout(self):
         tools = self._tools()
         with patch(
