@@ -3717,6 +3717,63 @@ class TestSupervisorApiCall:
         assert payload["error"]["code"] == "VALIDATION_FAILED"
 
 
+class TestSupervisorApiCallTimeout:
+    """The client's local await must outlast the Supervisor-side timeout.
+
+    ``send_command`` defaults to a 30s local wait. A long Supervisor
+    operation (add-on install/update/rebuild gets ``timeout=1800``) needs
+    the local await raised in lockstep, or the client abandons a
+    still-running install after 30s even though the server keeps working.
+    """
+
+    @pytest.mark.asyncio
+    async def test_long_timeout_extends_local_wait(self):
+        """timeout=1800 forwards to Supervisor AND extends the local await."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        mock_ws = MagicMock()
+        mock_ws.disconnect = AsyncMock()
+        mock_ws.send_command = AsyncMock(return_value={"success": True, "result": {}})
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_connected_ws_client",
+            return_value=(mock_ws, None),
+        ):
+            await _supervisor_api_call(
+                _make_mock_client(),
+                "/store/addons/local_ha_mcp_screenshot/install",
+                method="POST",
+                timeout=1800,
+            )
+
+        kwargs = mock_ws.send_command.call_args.kwargs
+        # Supervisor-side proxy timeout is forwarded as the command field...
+        assert kwargs["timeout"] == 1800
+        # ...and the client's own await outlasts it by a margin (the old
+        # hard-coded 30s default would have fired ~1770s too early).
+        assert kwargs["wait_timeout"] == 1815.0
+
+    @pytest.mark.asyncio
+    async def test_no_timeout_keeps_default_local_wait(self):
+        """Without a timeout override, the local wait stays at the 30s default
+        and no ``timeout`` field is forwarded to Supervisor."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        mock_ws = MagicMock()
+        mock_ws.disconnect = AsyncMock()
+        mock_ws.send_command = AsyncMock(return_value={"success": True, "result": {}})
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_connected_ws_client",
+            return_value=(mock_ws, None),
+        ):
+            await _supervisor_api_call(_make_mock_client(), "/addons", method="GET")
+
+        kwargs = mock_ws.send_command.call_args.kwargs
+        assert kwargs["wait_timeout"] == 30.0
+        assert "timeout" not in kwargs
+
+
 class TestManageAddonActionMode:
     """Lifecycle (action) mode: install/start/stop/etc. via Supervisor."""
 

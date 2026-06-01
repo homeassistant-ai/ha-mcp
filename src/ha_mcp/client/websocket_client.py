@@ -531,12 +531,21 @@ class HomeAssistantWebSocketClient:
         """Cancel and drop a stored event future."""
         self._state.cancel_event_response(message_id)
 
-    async def send_command(self, command_type: str, **kwargs: Any) -> dict[str, Any]:
+    async def send_command(
+        self,
+        command_type: str,
+        wait_timeout: float = 30.0,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         """Send command and wait for response.
 
         Args:
             command_type: Type of command to send
-            **kwargs: Command parameters
+            wait_timeout: Seconds to wait for the response. The default suits
+                fast commands; long-running ones (e.g. a ``supervisor/api``
+                add-on install) must raise this so the client doesn't give up
+                before Home Assistant replies.
+            **kwargs: Command parameters (merged into the outgoing message)
 
         Returns:
             Response from Home Assistant
@@ -556,9 +565,9 @@ class HomeAssistantWebSocketClient:
             self.cancel_pending_response(message_id)
             raise
 
-        # Wait for response outside the lock (30 second timeout)
+        # Wait for response outside the lock.
         try:
-            response = await asyncio.wait_for(future, timeout=30.0)
+            response = await asyncio.wait_for(future, timeout=wait_timeout)
             logger.debug(f"WebSocket response for id {message_id}: {response}")
 
             # Process standard Home Assistant WebSocket response

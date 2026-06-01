@@ -16,6 +16,11 @@ Modes covered (one test class each):
   the writable form Supervisor accepts (Matter Server's ``5580/tcp: null``
   rejects the value-with-port shape); the contract is exercised by the
   unit tests.
+* **Action (lifecycle) mode** — ``stop`` / ``start`` / ``restart`` against a
+  real running addon, asserting the Supervisor state after each. The
+  long-timeout ``install`` / ``update`` / ``rebuild`` path is pinned by the
+  unit tests rather than run live (a real install rebuilds an addon image and
+  would add minutes to every CI run).
 * **Proxy HTTP** — ``GET`` / ``POST`` against Node-RED endpoints. The
   Ingress proxy accepts the tool's auth headers, so requests reach the
   addon's nginx; assertions cover both successful 2xx responses (Node-RED
@@ -150,6 +155,46 @@ async def _wait_addon_running(
         await asyncio.sleep(_ADDON_RUNNING_POLL_S)
 
 
+# Supervisor reports a stopped addon as ``stopped``; the others are
+# terminal-but-unhealthy states a lifecycle action could land in.
+_STOPPED_STATES: frozenset[str] = frozenset(
+    {"stopped", "boot_fail", "unknown", "error"}
+)
+
+
+async def _wait_addon_state(
+    mcp_client: Any,
+    slug: str,
+    expected: frozenset[str],
+    timeout: float = _ADDON_RUNNING_TIMEOUT_S,
+) -> str:
+    """Block until ``ha_get_addon(slug=...)`` reports a state in ``expected``.
+
+    The state-set generalization of ``_wait_addon_running`` for lifecycle
+    actions that drive an addon to ``stopped`` as well as ``started``. Same
+    transient-error discipline (``_POLLING_TRANSIENT_ERRORS`` retried, bugs
+    propagate, the deadline still fires).
+    """
+    deadline = time.monotonic() + timeout
+    last_state: str | None = None
+    while True:
+        try:
+            detail_raw = await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+            detail = parse_mcp_result(detail_raw).get("addon") or {}
+            last_state = detail.get("state")
+        except _POLLING_TRANSIENT_ERRORS as e:
+            logger.debug(f"⚠️ Transient error polling addon {slug!r}: {e}")
+            last_state = f"<transient: {str(e)[:60]}>"
+        if last_state in expected:
+            return str(last_state)
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                f"Addon {slug!r} did not reach a state in {sorted(expected)!r} "
+                f"within {timeout:.0f}s (last state: {last_state!r})"
+            )
+        await asyncio.sleep(_ADDON_RUNNING_POLL_S)
+
+
 # ---------------------------------------------------------------------------
 # Config mode — options / boot / auto_update / watchdog round-trips
 # ---------------------------------------------------------------------------
@@ -251,6 +296,81 @@ async def test_config_watchdog_roundtrip(mcp_client: Any) -> None:
         await mcp_client.call_tool(
             "ha_manage_addon", {"slug": slug, "watchdog": original}
         )
+
+
+# ---------------------------------------------------------------------------
+# Action (lifecycle) mode — stop / start / restart
+# ---------------------------------------------------------------------------
+
+
+async def test_action_stop_start_restart_roundtrip(mcp_client: Any) -> None:
+    """`ha_manage_addon(action=...)` drives a real addon through its lifecycle.
+
+    Exercises ``_execute_action_mode`` → ``_supervisor_api_call`` →
+    ``send_command`` end-to-end against the real Supervisor: stop the addon,
+    start it, restart it, asserting the observed Supervisor state after each.
+    This also covers the per-action timeout plumbing (stop=60s, start/restart
+    =120s map to a local await of timeout+15s); the prior 30s hard cap would
+    have spuriously failed a start that takes longer than 30s to settle.
+
+    AppDaemon is the target — it's installed and running in the bake and is
+    not proxied by any other test in this module, so cycling its run state in
+    a single test (restored at the end) doesn't perturb the proxy/WS suites.
+
+    The long-timeout install/update/rebuild path (1800s) is pinned
+    deterministically by the unit tests (``TestSupervisorApiCallTimeout``); a
+    live install here would rebuild an addon image and add minutes to every
+    CI run, so it is intentionally not exercised end-to-end.
+    """
+    slug = await _resolve_slug(mcp_client, APPDAEMON_NAME)
+    original = (
+        parse_mcp_result(
+            await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+        ).get("addon")
+        or {}
+    ).get("state")
+
+    async def _action(action: str) -> dict[str, Any]:
+        payload = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_manage_addon", {"slug": slug, "action": action}
+            )
+        )
+        assert payload.get("success"), (
+            f"ha_manage_addon(action={action!r}) failed: {payload}"
+        )
+        assert payload.get("action") == action, (
+            f"action echo mismatch: expected {action!r}, got {payload!r}"
+        )
+        return payload
+
+    try:
+        await _action("stop")
+        await _wait_addon_state(mcp_client, slug, _STOPPED_STATES)
+
+        await _action("start")
+        await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
+
+        await _action("restart")
+        await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
+    finally:
+        # Restore the addon's original run state so sibling tests (and reruns)
+        # see the baked baseline regardless of how this test exited.
+        if original == "started":
+            try:
+                detail = (
+                    parse_mcp_result(
+                        await mcp_client.call_tool("ha_get_addon", {"slug": slug})
+                    ).get("addon")
+                    or {}
+                )
+                if detail.get("state") != "started":
+                    await mcp_client.call_tool(
+                        "ha_manage_addon", {"slug": slug, "action": "start"}
+                    )
+                    await _wait_addon_state(mcp_client, slug, frozenset({"started"}))
+            except Exception:  # pragma: no cover - cleanup best-effort
+                logger.exception("Failed to restore AppDaemon to started")
 
 
 # ---------------------------------------------------------------------------

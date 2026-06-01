@@ -246,10 +246,19 @@ async def _supervisor_api_call(
         kwargs: dict[str, Any] = {"endpoint": endpoint, "method": method}
         if data is not None:
             kwargs["data"] = data
+        # ``timeout`` is the Supervisor-side proxy timeout (how long Supervisor
+        # waits on the underlying REST op). The client's own wait must outlast
+        # it by a margin, otherwise the local await fires first and we abandon a
+        # still-running operation (e.g. a multi-minute add-on install) — the
+        # send_command default is only 30s. Keep them coupled.
+        wait_timeout = 30.0
         if timeout is not None:
             kwargs["timeout"] = timeout
+            wait_timeout = float(timeout) + 15.0
 
-        result = await ws_client.send_command("supervisor/api", **kwargs)
+        result = await ws_client.send_command(
+            "supervisor/api", wait_timeout=wait_timeout, **kwargs
+        )
 
         if not result.get("success"):
             error_msg = str(result.get("error", ""))
@@ -1481,7 +1490,9 @@ def _add_http_error_hints(
                 "host_network": addon.get("host_network"),
                 "ingress_port": addon.get("ingress_port"),
             }
-            slug_val = addon.get("slug") or "<slug>"
+            # Prefer the caller-resolved slug (authoritative); fall back to the
+            # addon dict, then a placeholder only if neither is populated.
+            slug_val = slug or addon.get("slug") or "<slug>"
             example_proto = unmapped[0] if unmapped else ""
             example_port = example_proto.split("/", 1)[0] if example_proto else ""
             if unmapped and example_port.isdigit():
