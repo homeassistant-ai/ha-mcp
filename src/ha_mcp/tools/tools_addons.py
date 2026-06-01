@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Coroutine
 from typing import Annotated, Any, ClassVar, Literal
 from urllib.parse import unquote, urlsplit
 
@@ -1802,6 +1803,14 @@ class AddOnTools:
         "uninstall": ("/addons/{slug}/uninstall", 120),
     }
 
+    # Store-repository actions operate on the store, not an installed add-on,
+    # so they take a repository URL/slug via the `repository` param instead of
+    # `slug`. add can clone a remote git repo (network-bound), so it gets a
+    # generous timeout.
+    _REPOSITORY_ACTIONS: ClassVar[frozenset[str]] = frozenset(
+        {"add_repository", "remove_repository"}
+    )
+
     async def _execute_action_mode(self, slug: str, action: str) -> dict[str, Any]:
         """Run a Supervisor add-on lifecycle action (install/start/stop/etc.).
 
@@ -1830,6 +1839,43 @@ class AddOnTools:
             "action": key,
             "slug": slug,
             "message": f"Add-on {slug} {key} completed.",
+        }
+
+    async def _execute_repository_action(
+        self, action: str, repository: str
+    ) -> dict[str, Any]:
+        """Add or remove a Supervisor add-on store repository.
+
+        ``add_repository`` registers a custom add-on repository by URL
+        (``POST /store/repositories`` with body ``{"repository": "<url>"}``);
+        ``remove_repository`` unregisters one by its repository slug
+        (``DELETE /store/repositories/{slug}``). Registering a repository is
+        what makes its add-ons show up in ``ha_get_addon(source="available")``
+        so they can then be installed via lifecycle ``action="install"``.
+        """
+        key = action.lower().strip()
+        # add clones a remote git repo (network-bound); both operations can take
+        # a little time, so give them a reasonable timeout. _supervisor_api_call
+        # couples the local await to timeout+15.
+        timeout = 120
+        if key == "add_repository":
+            endpoint = "/store/repositories"
+            method = "POST"
+            data: dict[str, Any] | None = {"repository": repository}
+        else:  # remove_repository
+            endpoint = f"/store/repositories/{repository}"
+            method = "DELETE"
+            data = None
+        result = await _supervisor_api_call(
+            self._client, endpoint, method=method, data=data, timeout=timeout
+        )
+        if not result.get("success"):
+            raise_tool_error(result)
+        return {
+            "success": True,
+            "action": key,
+            "repository": repository,
+            "message": f"Repository {repository} {key} completed.",
         }
 
     async def _execute_config_mode(
@@ -2099,6 +2145,53 @@ class AddOnTools:
             result.append(("request_headers", "request_headers"))
         return result
 
+    def _dispatch_repository_action(
+        self,
+        action: str,
+        repository: str | None,
+        *,
+        slug: str,
+        path: str | None,
+        config_data: dict[str, Any],
+        array_patch: dict[str, Any] | None,
+    ) -> Coroutine[Any, Any, dict[str, Any]]:
+        """Validate and run a store-repository action (add/remove).
+
+        Repository actions don't target an installed add-on, so a `slug` is
+        not required; `repository` (URL for add, slug for remove) is. Reject
+        the other operating modes' params so the call has one unambiguous
+        intent. Returns the coroutine from ``_execute_repository_action`` so
+        the async caller can await it.
+        """
+        conflicts = []
+        if slug:
+            conflicts.append("slug")
+        if path is not None:
+            conflicts.append("path")
+        if config_data:
+            conflicts.append("config parameters")
+        if array_patch is not None:
+            conflicts.append("array_patch")
+        if conflicts:
+            raise_tool_error(
+                create_validation_error(
+                    f"action='{action}' (store-repository mode) operates on the "
+                    f"store, not an add-on, and cannot be combined with "
+                    f"{', '.join(conflicts)}. Pass only 'repository'.",
+                    parameter="action",
+                )
+            )
+        if not repository or not repository.strip():
+            raise_tool_error(
+                create_validation_error(
+                    f"action='{action}' requires the 'repository' parameter "
+                    "(the repository URL for add_repository, or the repository "
+                    "slug for remove_repository).",
+                    parameter="repository",
+                )
+            )
+        return self._execute_repository_action(action, repository.strip())
+
     async def manage_addon(
         self,
         slug: str,
@@ -2123,7 +2216,23 @@ class AddOnTools:
         array_patch: dict[str, Any] | None,
         request_headers: dict[str, str] | None,
         action: str | None = None,
+        repository: str | None = None,
     ) -> dict[str, Any]:
+        # Store-repository actions operate on the store, not an add-on, so they
+        # take `repository` instead of `slug`. Handle them before the slug
+        # requirement applies.
+        if action is not None and action.lower().strip() in self._REPOSITORY_ACTIONS:
+            return await self._dispatch_repository_action(
+                action,
+                repository,
+                slug=slug,
+                path=path,
+                config_data=self._build_config_payload(
+                    options, network, boot, auto_update, watchdog
+                ),
+                array_patch=array_patch,
+            )
+
         validate_identifier_not_empty(
             slug,
             "slug",
@@ -2378,9 +2487,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             Field(
                 description="Add-on slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). "
                 "Slug prefixes vary by add-on repository — call ha_get_addon() "
-                "to discover the actual installed slug.",
+                "to discover the actual installed slug. Required for every mode "
+                "except the store-repository actions "
+                "(action='add_repository'/'remove_repository'), which use "
+                "'repository' instead and take no slug.",
+                default="",
             ),
-        ],
+        ] = "",
         path: Annotated[
             str | None,
             Field(
@@ -2557,23 +2670,48 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "'install', 'uninstall', 'start', 'stop', 'restart', 'rebuild', "
                 "'update'. 'install'/'update' require the add-on's repository to be "
                 "registered (it appears in ha_get_addon(source='available')). "
+                "Store-repository mode: 'add_repository' / 'remove_repository' "
+                "register or unregister a custom add-on store repository — these "
+                "use the 'repository' param instead of 'slug'. "
                 "Mutually exclusive with path / config parameters / array_patch. "
                 "HA OS / Supervised only.",
+                default=None,
+            ),
+        ] = None,
+        repository: Annotated[
+            str | None,
+            Field(
+                description="Store-repository mode only (action='add_repository' or "
+                "'remove_repository'). For add_repository: the repository URL "
+                "(e.g., 'https://github.com/balloob/home-assistant-addons'). For "
+                "remove_repository: the repository slug (e.g., '0f1cc410', as shown "
+                "in ha_get_addon(source='available')). Required for those actions; "
+                "ignored otherwise.",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
         """Manage a Home Assistant add-on — update its configuration or call its internal API.
 
-        Four mutually exclusive operating modes:
+        Five mutually exclusive operating modes:
 
-        **Lifecycle mode** (when ``action`` is provided):
-        Runs a Supervisor add-on action: install, uninstall, start, stop,
-        restart, rebuild, or update. ``install`` / ``update`` go through the
-        store (the add-on's repository must be registered — it shows up in
-        ``ha_get_addon(source="available")``); the rest act on an installed
+        **Lifecycle mode** (when ``action`` is one of install/uninstall/start/
+        stop/restart/rebuild/update):
+        Runs a Supervisor add-on action on ``slug``. ``install`` / ``update`` go
+        through the store (the add-on's repository must be registered — it shows
+        up in ``ha_get_addon(source="available")``); the rest act on an installed
         add-on. This is how an assistant brings an add-on online for the user
         (e.g. installing + starting the dashboard screenshot engine).
+
+        **Store-repository mode** (when ``action`` is ``add_repository`` or
+        ``remove_repository``):
+        Registers or unregisters a custom add-on store repository. These actions
+        operate on the store rather than an installed add-on, so they take the
+        ``repository`` param and no ``slug``: ``add_repository`` POSTs the
+        repository URL to ``/store/repositories``; ``remove_repository`` DELETEs
+        ``/store/repositories/{slug}`` by the repository's slug. Adding a
+        repository (e.g. balloob's add-ons) is the missing step that lets an
+        assistant then install an add-on from it via ``action="install"``.
 
         **Config mode** (when any of options/network/boot/auto_update/watchdog is provided):
         Updates the add-on's Supervisor configuration via POST /addons/{slug}/options.
@@ -2620,6 +2758,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **Examples:**
         - Install an add-on: ha_manage_addon(slug="...", action="install")
         - Start an add-on: ha_manage_addon(slug="...", action="start")
+        - Add a store repository: ha_manage_addon(action="add_repository", repository="https://github.com/balloob/home-assistant-addons")
+        - Remove a store repository: ha_manage_addon(action="remove_repository", repository="0f1cc410")
         - Set add-on option: ha_manage_addon(slug="...", options={"log_level": "debug"})
           Note: only the fields you provide are updated — current values are fetched first
           and merged automatically. Fields not in the add-on's schema are ignored with a warning.
@@ -2676,4 +2816,5 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             array_patch=array_patch,
             request_headers=request_headers,
             action=action,
+            repository=repository,
         )

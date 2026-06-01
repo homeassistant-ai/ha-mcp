@@ -3870,3 +3870,215 @@ class TestManageAddonActionMode:
             )
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+
+def _manage_addon_kwargs(**overrides):
+    """Build the full ha_manage_addon kwargs with defaults, applying overrides.
+
+    manage_addon takes every operating-mode param positionally-by-keyword; a
+    helper keeps the store-repository tests focused on the few params that
+    matter instead of restating the whole signature each time.
+    """
+    base = {
+        "slug": "",
+        "path": None,
+        "method": "GET",
+        "body": None,
+        "debug": False,
+        "port": None,
+        "offset": 0,
+        "limit": None,
+        "websocket": False,
+        "wait_for_close": True,
+        "message_limit": None,
+        "message_offset": 0,
+        "summarize": True,
+        "python_transform": None,
+        "options": None,
+        "network": None,
+        "boot": None,
+        "auto_update": None,
+        "watchdog": None,
+        "array_patch": None,
+        "request_headers": None,
+        "action": None,
+        "repository": None,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestManageAddonRepositoryAction:
+    """Store-repository mode: add_repository / remove_repository via Supervisor."""
+
+    def _tools(self):
+        from ha_mcp.tools.tools_addons import AddOnTools
+
+        return AddOnTools(_make_mock_client())
+
+    @pytest.mark.asyncio
+    async def test_add_repository_posts_to_store_repositories(self):
+        tools = self._tools()
+        url = "https://github.com/balloob/home-assistant-addons"
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="add_repository", repository=url)
+            )
+
+        assert result["success"] is True
+        assert result["action"] == "add_repository"
+        assert result["repository"] == url
+        assert mock_call.call_args.args[1] == "/store/repositories"
+        assert mock_call.call_args.kwargs["method"] == "POST"
+        assert mock_call.call_args.kwargs["data"] == {"repository": url}
+
+    @pytest.mark.asyncio
+    async def test_add_repository_uses_generous_timeout(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/repo"
+                )
+            )
+
+        assert mock_call.call_args.kwargs["timeout"] == 120
+
+    @pytest.mark.asyncio
+    async def test_remove_repository_deletes_by_slug(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="remove_repository", repository="0f1cc410"
+                )
+            )
+
+        assert result["success"] is True
+        assert result["action"] == "remove_repository"
+        assert result["repository"] == "0f1cc410"
+        assert mock_call.call_args.args[1] == "/store/repositories/0f1cc410"
+        assert mock_call.call_args.kwargs["method"] == "DELETE"
+        # DELETE carries no body
+        assert mock_call.call_args.kwargs["data"] is None
+
+    @pytest.mark.asyncio
+    async def test_repository_action_does_not_require_slug(self):
+        """Repo actions reach Supervisor with no slug supplied (slug defaults to '')."""
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/repo"
+                )
+            )
+
+        assert result["success"] is True
+        # Endpoint is the store collection, never an /addons/{slug}/... path.
+        assert mock_call.call_args.args[1] == "/store/repositories"
+
+    @pytest.mark.asyncio
+    async def test_add_repository_missing_repository_raises_validation(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(action="add_repository", repository=None)
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_remove_repository_blank_repository_raises_validation(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(action="remove_repository", repository="   ")
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_repository_action_rejects_slug(self):
+        """A slug alongside a repo action is an ambiguous-mode error."""
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    slug="core_ssh",
+                    action="add_repository",
+                    repository="https://example.com/repo",
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_repository_action_rejects_path(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository",
+                    repository="https://example.com/repo",
+                    path="/info",
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_add_repository_strips_whitespace(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository",
+                    repository="  https://example.com/repo  ",
+                )
+            )
+
+        assert mock_call.call_args.kwargs["data"] == {
+            "repository": "https://example.com/repo"
+        }
+
+    @pytest.mark.asyncio
+    async def test_repository_action_supervisor_failure_propagates(self):
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": False,
+                    "error": {"code": "SERVICE_CALL_FAILED", "message": "boom"},
+                },
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/repo"
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["success"] is False
