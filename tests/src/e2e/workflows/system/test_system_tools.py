@@ -666,7 +666,9 @@ class TestSystemToolsIntegration:
 
         # Get system health + config status. Config validation is folded into
         # ha_get_system_health as the "config_check" include section, so one
-        # call covers both. (May not be available in minimal test containers.)
+        # call covers both. config_check is REST-based, so this call succeeds
+        # (degrading gracefully) even if the system_health WebSocket baseline is
+        # unavailable.
         health_result = await mcp_client.call_tool(
             "ha_get_system_health", {"include": "config_check"}
         )
@@ -674,10 +676,15 @@ class TestSystemToolsIntegration:
 
         # Verify essential tools returned successfully
         assert info_data.get("success") is True, "System overview should succeed"
-        # Health data (and the folded config_check) might not be available in
-        # test containers - don't require it
-        health_available = health_data.get("success") is True
-        config_check = health_data.get("config_check", {}) if health_available else {}
+        assert health_data.get("success") is True, (
+            "ha_get_system_health(include='config_check') should always succeed "
+            "(REST config_check degrades gracefully if the WS baseline is down)"
+        )
+        config_check = health_data.get("config_check", {})
+        assert "is_valid" in config_check, "config_check section should be present"
+        # The WS health baseline may still be unavailable in minimal containers;
+        # config_check does not depend on it.
+        baseline_available = health_data.get("baseline_available", True)
 
         # Extract system_info from overview
         system_info = info_data.get("system_info", {})
@@ -690,11 +697,11 @@ class TestSystemToolsIntegration:
         logger.info(f"Location: {system_info.get('location_name')}")
         logger.info(f"Timezone: {system_info.get('time_zone')}")
         logger.info(f"Components: {system_info.get('components_loaded')}")
-        logger.info(f"Config Status: {config_check.get('result', 'not available')}")
-        if health_available:
+        logger.info(f"Config Status: {config_check.get('result', 'unknown')}")
+        if baseline_available:
             logger.info(f"Health Components: {health_data.get('component_count')}")
         else:
-            logger.info("Health: Not available in this environment")
+            logger.info("Health baseline: not available in this environment")
         logger.info("=" * 60)
 
         logger.info("System overview test completed successfully")

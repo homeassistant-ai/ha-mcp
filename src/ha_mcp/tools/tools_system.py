@@ -399,18 +399,29 @@ class SystemTools:
             try:
                 ws_client, result = await self._fetch_health_info()
             except ToolError as health_err:
-                # The system_health/info baseline (WebSocket) is unavailable —
-                # degrade gracefully instead of sinking the whole tool, so the
-                # REST-based sections still return. WS-backed sections can't run
-                # without the connection and are reported as unavailable below.
-                # config_check is the pure-REST replacement for the removed
-                # ha_check_config tool, so it must not depend on the health
-                # WebSocket succeeding (the system_health/info command carries
-                # its own 10s timeout and can hang/be absent on some installs).
+                # The system_health/info baseline (WebSocket) is unavailable.
+                # Only ``await self._fetch_health_info()`` runs in this inner
+                # try, and it raises ToolError solely for baseline-unavailable
+                # conditions (connect failure / timeout / WS error), so this
+                # catch cannot swallow an unrelated ToolError.
+                #
+                # Degrade gracefully ONLY when the caller asked for a REST-based
+                # section (config_check / diagnostics) that can still be served
+                # without the WebSocket. config_check is the pure-REST
+                # replacement for the removed ha_check_config tool, so it must
+                # not depend on the health WebSocket (the system_health/info
+                # command carries its own 10s timeout and can hang/be absent on
+                # some installs). If the caller asked for nothing (the health
+                # baseline itself) or only WS-backed sections, the baseline WAS
+                # the deliverable: re-raise so the failure surfaces as
+                # isError=true, exactly as before this change.
+                if not (includes & {"config_check", "diagnostics"}):
+                    raise
                 logger.warning("system_health baseline unavailable: %s", health_err)
                 ws_client = None
                 result = {
                     "success": True,
+                    "baseline_available": False,
                     "health_info": {},
                     "component_count": 0,
                     "message": "System health baseline unavailable.",
@@ -452,8 +463,17 @@ class SystemTools:
 
             if ws_client is None:
                 # Health WebSocket unavailable: WS-backed sections can't run.
-                # Surface which requested sections were dropped, then skip them
-                # so the REST-based sections below still return.
+                # Give each requested WS-backed section a machine-readable error
+                # sub-dict under its own key (same shape the section carries when
+                # the baseline is up but the fetch fails), plus a summary
+                # warning, then skip them so the REST sections below still run.
+                ws_error = "requires the system_health WebSocket, which is unavailable"
+                if want_repairs:
+                    result["repairs"] = {"error": ws_error}
+                if want_zha:
+                    result["zha_network"] = {"error": ws_error}
+                if want_zwave:
+                    result["zwave_network"] = {"error": ws_error}
                 unavailable = sorted(includes & ws_backed)
                 if unavailable:
                     result.setdefault("warnings", []).append(
@@ -612,11 +632,7 @@ class SystemTools:
                 ],
             )
         finally:
-            if ws_client:
-                try:
-                    await ws_client.disconnect()
-                except Exception:
-                    pass
+            await self._safe_disconnect(ws_client)
 
     @staticmethod
     def _parse_includes(include: str | None) -> set[str]:
@@ -624,6 +640,16 @@ class SystemTools:
         if not include:
             return set()
         return {s.strip().lower() for s in include.split(",") if s.strip()}
+
+    @staticmethod
+    async def _safe_disconnect(ws_client: Any) -> None:
+        """Best-effort WebSocket disconnect; never raises."""
+        if ws_client is None:
+            return
+        try:
+            await ws_client.disconnect()
+        except Exception:
+            pass
 
     async def _fetch_health_info(self) -> tuple[Any, dict[str, Any]]:
         """Connect to WebSocket and retrieve system health info.
@@ -651,6 +677,9 @@ class SystemTools:
                 "system_health/info", wait_timeout=10.0
             )
         except TimeoutError:
+            # The connection opened but the command stalled — disconnect it
+            # before raising so we don't leak the socket.
+            await self._safe_disconnect(ws_client)
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -658,6 +687,7 @@ class SystemTools:
                 )
             )
         except Exception as e:
+            await self._safe_disconnect(ws_client)
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -832,7 +862,8 @@ class SystemTools:
         an ``error`` field on backend failure. Never raises, so a config-check
         failure surfaces as ``result["config_check"]["error"]`` without sinking
         the rest of ha_get_system_health. Instance method (not @staticmethod)
-        because it calls the REST client, mirroring the diagnostics path.
+        because it calls the REST client (``self._client``), like the
+        diagnostics path.
         """
         config_check: dict[str, Any] = {
             "result": "unknown",

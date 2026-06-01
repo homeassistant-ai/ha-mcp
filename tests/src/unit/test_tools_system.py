@@ -843,9 +843,10 @@ class TestGetSystemHealthConfigCheck:
 
     @pytest.mark.asyncio
     async def test_ws_backed_section_reported_unavailable_when_health_fails(self):
-        """When the health WS baseline fails, a requested WS-backed section
-        (repairs) is dropped with a warning rather than crashing the tool, while
-        the REST config_check still returns."""
+        """When the health WS baseline fails but a REST section is also
+        requested, a requested WS-backed section (repairs) is reported with a
+        machine-readable error sub-dict (and a summary warning) rather than
+        crashing the tool, while the REST config_check still returns."""
         client = MagicMock()
         client.check_config = AsyncMock(return_value={"result": "valid"})
         tools = SystemTools(client)
@@ -856,9 +857,72 @@ class TestGetSystemHealthConfigCheck:
         ):
             result = await tools.ha_get_system_health(include="repairs,config_check")
         assert result["success"] is True
+        assert result["baseline_available"] is False
         assert result["config_check"]["is_valid"] is True
-        assert "repairs" not in result
+        # Dropped WS section carries the same {error} shape it would if the
+        # baseline were up and the fetch itself failed — not a vanished key.
+        assert "error" in result["repairs"]
         assert any("repairs" in w for w in result.get("warnings", []))
+
+    @pytest.mark.asyncio
+    async def test_bare_call_raises_when_health_ws_unavailable(self):
+        """A bare ha_get_system_health() (the health baseline IS the deliverable)
+        must still RAISE on a WS-baseline failure — degradation only applies when
+        a REST-only section was requested. Guards against regressing the tool's
+        primary mode into a misleading success."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with (
+            patch.object(
+                SystemTools,
+                "_fetch_health_info",
+                new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
+            ),
+            pytest.raises(ToolError),
+        ):
+            await tools.ha_get_system_health()
+
+    @pytest.mark.asyncio
+    async def test_ws_only_request_raises_when_health_ws_unavailable(self):
+        """include='repairs' (WS-only, no REST section) must RAISE on a
+        WS-baseline failure rather than degrade to success — the requested data
+        genuinely cannot be served without the WebSocket."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with (
+            patch.object(
+                SystemTools,
+                "_fetch_health_info",
+                new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
+            ),
+            pytest.raises(ToolError),
+        ):
+            await tools.ha_get_system_health(include="repairs")
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_returns_when_health_ws_unavailable(self):
+        """diagnostics is REST-based, so it too survives a WS-baseline failure —
+        the degradation guarantee is not specific to config_check."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with (
+            patch.object(
+                SystemTools,
+                "_fetch_health_info",
+                new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
+            ),
+            patch(
+                "ha_mcp.tools.tools_system.fetch_integration_diagnostics",
+                new=AsyncMock(return_value={"data": {"ok": True}}),
+            ) as mock_diag,
+        ):
+            result = await tools.ha_get_system_health(
+                include="diagnostics", config_entry_id="entry_abc"
+            )
+        assert result["success"] is True
+        assert result["baseline_available"] is False
+        assert result["diagnostics"] == {"data": {"ok": True}}
+        mock_diag.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_config_check_combined_with_repairs(self):

@@ -157,6 +157,20 @@ class TestToolAnnotations:
             + "\n\nAdd tags={'Category Name'} to each @mcp.tool() decorator."
         )
 
+    def test_ha_check_config_removed_and_folded(self):
+        """ha_check_config was removed and folded into ha_get_system_health
+        (include='config_check'). Lock the removal at the source registration so
+        a bad merge that re-adds the @tool block fails CI. (Checks the source
+        string directly rather than get_all_tools(), whose regex can't parse
+        ha_get_system_health's paren-containing title.)"""
+        system_src = (get_tools_dir() / "tools_system.py").read_text(encoding="utf-8")
+        assert 'name="ha_check_config"' not in system_src, (
+            "ha_check_config was removed in favor of "
+            "ha_get_system_health(include='config_check'); it must not be "
+            "re-registered."
+        )
+        assert 'name="ha_get_system_health"' in system_src
+
     def test_tool_count_sanity_check(self):
         """Sanity check that we're finding a reasonable number of tools."""
         tools = get_all_tools()
