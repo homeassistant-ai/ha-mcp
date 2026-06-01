@@ -293,7 +293,8 @@ def _sanitize_log_text(text: str) -> str:
     review (see ``_generate_anonymization_guide``). Rules cover the most common
     leak shapes seen in HA add-on logs:
     JWTs, bearer tokens, long hex tokens, ``key=value`` style credentials,
-    URL userinfo, and IPv4 addresses with network context.
+    URL userinfo, IPv4 addresses with network context, and the MCP connect-URL
+    secret path (the add-on's LAN auth).
     """
     # JWT tokens (header.payload.signature)
     text = re.sub(
@@ -338,6 +339,14 @@ def _sanitize_log_text(text: str) -> str:
     text = _IPV4_WITH_PORT_OR_CIDR_RE.sub("[IP]", text)
     text = _IPV4_IN_URL_RE.sub(r"\1[IP]", text)
     text = _IPV4_AFTER_KEYWORD_RE.sub(r"\1[IP]", text)
+    # MCP connect-URL secret path — the add-on's LAN auth. Redact by the
+    # configured value (catches custom paths) and the generated
+    # ``/private_<token>`` convention. Only bug-report output is scrubbed here;
+    # the raw logs this text is copied from are left intact.
+    configured = os.getenv("MCP_SECRET_PATH", "").rstrip("/")
+    if configured and configured != "/mcp":
+        text = text.replace(configured, "[REDACTED_SECRET_PATH]")
+    text = re.sub(r"/private_[A-Za-z0-9_-]+", "[REDACTED_SECRET_PATH]", text)
     return text
 
 
@@ -623,7 +632,15 @@ class BugReportTools:
             "success": True,
             "diagnostic_info": diagnostic_info,
             "recent_logs": recent_logs,
-            "startup_logs": startup_logs,
+            # startup_logs is the only returned surface not already routed
+            # through _sanitize_log_text (the formatted_report summary and
+            # addon_logs are). Sanitize each message here so the connect-URL
+            # secret path and other secrets never reach a pasted report. This
+            # copies entries — the underlying log records stay raw.
+            "startup_logs": [
+                {**entry, "message": _sanitize_log_text(entry.get("message", ""))}
+                for entry in startup_logs
+            ],
             "addon_logs": addon_logs,
             "log_count": len(recent_logs),
             "startup_log_count": len(startup_logs),
