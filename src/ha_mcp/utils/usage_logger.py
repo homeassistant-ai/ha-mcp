@@ -13,6 +13,10 @@ from pathlib import Path
 from queue import Queue
 from typing import Any
 
+from .data_paths import get_data_dir
+
+logger = logging.getLogger(__name__)
+
 # Default ring buffer size - keeps last N entries in memory
 DEFAULT_RING_BUFFER_SIZE = 200
 
@@ -46,13 +50,15 @@ class StartupLogCollector(logging.Handler):
             return
 
         with self._lock:
-            self._logs.append({
-                "timestamp": datetime.now(UTC).isoformat(),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-                "elapsed_seconds": round(elapsed, 2),
-            })
+            self._logs.append(
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "level": record.levelname,
+                    "logger": record.name,
+                    "message": record.getMessage(),
+                    "elapsed_seconds": round(elapsed, 2),
+                }
+            )
 
     def get_logs(self) -> list[dict[str, Any]]:
         """Get collected startup logs."""
@@ -88,6 +94,72 @@ def get_startup_logs() -> list[dict[str, Any]]:
     return _startup_collector.get_logs()
 
 
+# Parameter keys whose values are masked before a tool call is recorded to the
+# in-memory ring buffer or persisted to disk. Tool kwargs can carry secrets
+# (alarm/lock ``code``, tokens, passwords); these must never reach the usage
+# log, which ``ha_report_issue`` surfaces and which is written verbatim to
+# plaintext ``mcp_usage.jsonl``. Matching is by key name (case-insensitive) and
+# recursive, so a secret nested under a non-sensitive key — e.g.
+# ``ha_call_service(data={"code": ...})`` — is caught while ``data`` siblings
+# like ``entity_id``/``brightness`` survive for debugging.
+_SENSITIVE_PARAM_KEYS = frozenset(
+    {
+        "code",
+        "pin",
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "access_token",
+        "refresh_token",
+        "api_key",
+        "apikey",
+        "client_secret",
+        "authorization",
+    }
+)
+# Suffix match only for families with a low false-positive rate. Deliberately
+# excludes ``_code``/``_key`` so ``status_code``/``cache_key`` stay readable;
+# the exact ``code``/``pin``/``api_key`` entries above already cover the real
+# Home Assistant service-call surface.
+_SENSITIVE_KEY_SUFFIXES = ("_token", "_secret", "_password", "_passwd")
+_REDACTED_VALUE = "[REDACTED]"
+_MAX_REDACT_DEPTH = 6
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    """Return True if a parameter key's value should be masked."""
+    if not isinstance(key, str):
+        return False
+    lowered = key.lower()
+    return lowered in _SENSITIVE_PARAM_KEYS or lowered.endswith(_SENSITIVE_KEY_SUFFIXES)
+
+
+def _redact_parameters(value: Any, _depth: int = 0) -> Any:
+    """Return a copy of ``value`` with sensitive values masked by key name.
+
+    Never mutates the input: it is the live tool ``kwargs`` dict, still
+    referenced by the caller after this returns. Recurses through nested
+    dicts/lists/tuples so secrets nested under non-sensitive keys are caught
+    (a tuple is returned as a list). Fails closed past ``_MAX_REDACT_DEPTH`` —
+    a subtree too deep to walk is masked wholesale rather than returned verbatim.
+    """
+    if _depth > _MAX_REDACT_DEPTH:
+        return _REDACTED_VALUE
+    if isinstance(value, dict):
+        return {
+            key: (
+                _REDACTED_VALUE
+                if _is_sensitive_key(key)
+                else _redact_parameters(item, _depth + 1)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_parameters(item, _depth + 1) for item in value]
+    return value
+
+
 @dataclass
 class ToolUsageLog:
     """Single tool usage log entry."""
@@ -115,15 +187,26 @@ class UsageLogger:
         if log_file_path:
             self.log_file_path = Path(log_file_path)
         else:
-            # Use user's home directory by default to avoid read-only filesystem errors
-            # when running via uvx/npx which might have read-only CWD
-            self.log_file_path = Path.home() / ".ha-mcp" / "logs" / "mcp_usage.jsonl"
+            # Defer to the shared resolver so logs follow the same precedence
+            # as the settings-UI tool config (HA_MCP_CONFIG_DIR > /data >
+            # ~/.ha-mcp > tempdir). Avoids polluting the filesystem root when
+            # HOME is unset and avoids surprising users who bind-mount a
+            # writable volume via HA_MCP_CONFIG_DIR but find logs missing.
+            self.log_file_path = get_data_dir() / "logs" / "mcp_usage.jsonl"
 
         try:
             self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            # Directory creation failed (e.g., read-only filesystem)
-            # Disable logging silently to avoid disrupting the MCP server
+        except OSError as e:
+            # Directory creation failed (e.g., read-only filesystem). Surface
+            # the reason instead of silently dropping every log — operators
+            # otherwise see an empty mcp_usage.jsonl with no clue why.
+            logger.warning(
+                "Usage logging disabled — could not create %s (%s: %s). "
+                "Set HA_MCP_CONFIG_DIR to a writable path to enable persistence.",
+                self.log_file_path.parent,
+                type(e).__name__,
+                e,
+            )
             self._enabled = False
 
         # In-memory ring buffer for fast access to recent logs
@@ -184,10 +267,14 @@ class UsageLogger:
         if not self._enabled:
             return
         try:
+            # Mask secrets (alarm/lock codes, tokens, passwords) before the entry
+            # reaches the ring buffer or disk. Returns a copy — never mutates the
+            # caller's live kwargs dict.
+            redacted_parameters = _redact_parameters(parameters)
             log_entry = ToolUsageLog(
                 timestamp=datetime.now(UTC).isoformat(),
                 tool_name=tool_name,
-                parameters=parameters,
+                parameters=redacted_parameters,
                 execution_time_ms=execution_time_ms,
                 success=success,
                 error_message=error_message,

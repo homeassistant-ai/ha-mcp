@@ -48,6 +48,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          # Pull the skills-vendor submodule so PyInstaller's
+          # `collect_all('ha_mcp')` packages the bundled skill files into
+          # the test binary. Without this, PR CI binaries ship with an
+          # empty skills directory — same root cause as #1280, just on
+          # the PR-test path instead of the stable-release path.
+          submodules: true
 
       - name: Set up Python
         uses: actions/setup-python@v6

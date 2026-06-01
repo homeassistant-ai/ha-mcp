@@ -16,11 +16,13 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -207,6 +209,12 @@ class TodoTools:
         tags={"Todo Lists"},
         annotations={"destructiveHint": True, "title": "Set Todo Item"},
     )
+    @with_auto_backup(
+        domain="todo_item",
+        id_fn=lambda kw: (
+            f"{kw.get('entity_id', '')}::{kw.get('item', '') or kw.get('uid', '') or ''}"
+        ),
+    )
     @log_tool_usage
     async def ha_set_todo_item(
         self,
@@ -300,6 +308,24 @@ class TodoTools:
                         "Use ha_get_todo() to find valid todo list entity IDs"
                     ],
                 )
+            )
+
+        # ``item`` is the implicit create/update discriminator: ``None`` routes
+        # to create, anything else routes to update. Empty/whitespace ``item``
+        # is the destructive-routing class — it is non-None so passes the
+        # ``is None`` check below and reaches ``_update_item``, which calls
+        # ``todo.update_item`` with an empty ``item`` and surfaces as a
+        # misleading "item not found" from HA. Same shape as the helper
+        # implicit-discriminator gate this PR closes for ``ha_config_set_helper``.
+        if item is not None:
+            validate_identifier_not_empty(
+                item,
+                "item",
+                suggestions=[
+                    "Use ha_get_todo() to list items and obtain a valid UID or summary",
+                    "Omit the item parameter entirely to create a new todo item",
+                ],
+                context={"entity_id": entity_id, "action": "update"},
             )
 
         # Route: create mode (no item) vs update mode (item provided)
@@ -410,7 +436,9 @@ class TodoTools:
             service_data = self._build_update_service_data(
                 entity_id, item, rename, status, description, due_date, due_datetime
             )
-            result = await self._client.call_service("todo", "update_item", service_data)
+            result = await self._client.call_service(
+                "todo", "update_item", service_data
+            )
             update_msg = self._build_update_message(
                 rename, status, description, due_date, due_datetime
             )
@@ -499,6 +527,14 @@ class TodoTools:
             "title": "Remove Todo Item",
         },
     )
+    @with_auto_backup(
+        domain="todo_item",
+        id_fn=lambda kw: (
+            f"{kw['entity_id']}::{kw['item']}"
+            if kw.get("entity_id") and kw.get("item")
+            else ""
+        ),
+    )
     @log_tool_usage
     async def ha_remove_todo_item(
         self,
@@ -547,6 +583,18 @@ class TodoTools:
                 )
             )
 
+        # entity_id format-check above does not cover the ``item`` parameter.
+        # Empty/whitespace item would flow through to ``todo.remove_item`` and
+        # HA returns a misleading "item not found".
+        validate_identifier_not_empty(
+            item,
+            "item",
+            suggestions=[
+                "Use ha_get_todo() to list items and obtain a valid UID or summary",
+            ],
+            context={"entity_id": entity_id},
+        )
+
         try:
             # Build service data
             service_data: dict[str, Any] = {
@@ -555,7 +603,9 @@ class TodoTools:
             }
 
             # Call the service
-            result = await self._client.call_service("todo", "remove_item", service_data)
+            result = await self._client.call_service(
+                "todo", "remove_item", service_data
+            )
 
             return {
                 "success": True,

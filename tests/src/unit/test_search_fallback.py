@@ -1,24 +1,36 @@
 """Unit tests for search fallback functionality (issue #214).
 
-Tests the graceful degradation search methods:
+Tests the graceful degradation search method:
 - _exact_match_search: Fallback exact substring matching
-- _partial_results_search: Last resort entity listing
+
+The legacy ``_partial_results_search`` was removed in #1170 (finding 6).
+Its behavior was a useless score-0 entity dump that masked errors;
+exceptions now propagate to callers instead.
 """
 
 
 import pytest
 
-from ha_mcp.tools.tools_search import _exact_match_search, _partial_results_search
+from ha_mcp.tools.tools_search import _exact_match_search
 
 
 class MockClient:
-    """Mock Home Assistant client for testing."""
+    """Mock Home Assistant client for testing.
+
+    ``_exact_match_search`` now also calls ``send_websocket_message``
+    to fetch the entity registry for the hidden_by filter (#1170 finding
+    9). The mock returns an empty success response, which is treated as
+    "no entities are hidden" by the fallback.
+    """
 
     def __init__(self, entities: list[dict]):
         self.entities = entities
 
     async def get_states(self) -> list[dict]:
         return self.entities
+
+    async def send_websocket_message(self, payload: dict) -> dict:
+        return {"success": True, "result": []}
 
 
 class TestExactMatchSearch:
@@ -125,82 +137,67 @@ class TestExactMatchSearch:
         scores = [r["score"] for r in result["results"]]
         assert scores == sorted(scores, reverse=True)
 
+    @pytest.mark.asyncio
+    async def test_exact_match_includes_hidden_with_penalty_by_default(
+        self, sample_entities
+    ):
+        """Hidden entities surface in default results with a score
+        penalty (option c from issue #1170 finding 9). The penalty
+        ensures visible matches sort above hidden ones without
+        excluding the hidden entries entirely.
+        """
 
-class TestPartialResultsSearch:
-    """Test _partial_results_search fallback function."""
+        class HidingClient(MockClient):
+            async def send_websocket_message(self, payload):
+                return {
+                    "success": True,
+                    "result": [
+                        {"entity_id": "light.bedroom", "hidden_by": "user"},
+                    ],
+                }
 
-    @pytest.fixture
-    def sample_entities(self):
-        """Sample entities for testing."""
-        return [
-            {
-                "entity_id": "light.living_room",
-                "attributes": {"friendly_name": "Living Room Light"},
-                "state": "on",
-            },
-            {
-                "entity_id": "switch.kitchen",
-                "attributes": {"friendly_name": "Kitchen Switch"},
-                "state": "on",
-            },
-            {
-                "entity_id": "sensor.temperature",
-                "attributes": {"friendly_name": "Temperature Sensor"},
-                "state": "22.5",
-            },
-        ]
+        client = HidingClient(sample_entities)
+        result = await _exact_match_search(client, "bedroom", None, 10)
+        by_id = {r["entity_id"]: r for r in result["results"]}
+        assert "light.bedroom" in by_id, (
+            "hidden entity should be in default results (option c)"
+        )
+        assert by_id["light.bedroom"]["score"] < 100, (
+            f"hidden entity should carry penalty: {by_id['light.bedroom']}"
+        )
+        # If a visible "bedroom" match exists at score 100, it must outrank
+        # the penalised hidden entry.
+        visible_bedroom = next(
+            (
+                r for eid, r in by_id.items()
+                if eid != "light.bedroom" and "bedroom" in eid.lower()
+            ),
+            None,
+        )
+        if visible_bedroom is not None:
+            assert visible_bedroom["score"] >= by_id["light.bedroom"]["score"], (
+                f"visible match must rank ≥ hidden: {by_id}"
+            )
 
     @pytest.mark.asyncio
-    async def test_partial_results_returns_all_entities(self, sample_entities):
-        """Partial results returns all entities without filtering."""
-        client = MockClient(sample_entities)
-        result = await _partial_results_search(client, "anything", None, 100)
+    async def test_exact_match_include_hidden_false_filters(self, sample_entities):
+        """``include_hidden=False`` filters hidden entities out entirely."""
 
-        assert result["success"] is True
-        assert result["partial"] is True
-        assert result["search_type"] == "partial_listing"
-        assert len(result["results"]) == 3
+        class HidingClient(MockClient):
+            async def send_websocket_message(self, payload):
+                return {
+                    "success": True,
+                    "result": [
+                        {"entity_id": "light.bedroom", "hidden_by": "user"},
+                    ],
+                }
 
-    @pytest.mark.asyncio
-    async def test_partial_results_with_domain_filter(self, sample_entities):
-        """Partial results respects domain_filter."""
-        client = MockClient(sample_entities)
-        result = await _partial_results_search(client, "anything", "light", 100)
-
-        assert result["success"] is True
-        assert result["partial"] is True
-        assert len(result["results"]) == 1
-        assert result["results"][0]["entity_id"] == "light.living_room"
-
-    @pytest.mark.asyncio
-    async def test_partial_results_respects_limit(self, sample_entities):
-        """Partial results respects the limit parameter."""
-        client = MockClient(sample_entities)
-        result = await _partial_results_search(client, "anything", None, 2)
-
-        assert result["success"] is True
-        assert len(result["results"]) == 2
-
-    @pytest.mark.asyncio
-    async def test_partial_results_has_zero_score(self, sample_entities):
-        """Partial results have zero score to indicate no match."""
-        client = MockClient(sample_entities)
-        result = await _partial_results_search(client, "anything", None, 10)
-
-        assert result["success"] is True
-        for entity in result["results"]:
-            assert entity["score"] == 0
-            assert entity["match_type"] == "partial_listing"
-
-    @pytest.mark.asyncio
-    async def test_partial_results_empty_domain(self, sample_entities):
-        """Partial results returns empty for non-existent domain."""
-        client = MockClient(sample_entities)
-        result = await _partial_results_search(client, "anything", "nonexistent", 10)
-
-        assert result["success"] is True
-        assert result["partial"] is True
-        assert len(result["results"]) == 0
+        client = HidingClient(sample_entities)
+        result = await _exact_match_search(
+            client, "bedroom", None, 10, include_hidden=False
+        )
+        entity_ids = [r["entity_id"] for r in result["results"]]
+        assert "light.bedroom" not in entity_ids
 
 
 class TestSearchFallbackResponse:
@@ -224,20 +221,24 @@ class TestSearchFallbackResponse:
         assert "results" in result
         assert result["success"] is True
 
-    @pytest.mark.asyncio
-    async def test_partial_results_response_format(self):
-        """Verify partial results response format matches issue #214."""
-        entities = [
-            {
-                "entity_id": "light.test",
-                "attributes": {"friendly_name": "Test Light"},
-                "state": "on",
-            }
-        ]
-        client = MockClient(entities)
-        result = await _partial_results_search(client, "test", None, 10)
 
-        # Verify expected fields from issue #214
-        assert result["success"] is True
-        assert result["partial"] is True
-        assert "results" in result
+class TestExactMatchSearchCancelledPropagation:
+    """Lock down the CancelledError re-raise added to _exact_match_search
+    after asyncio.gather(return_exceptions=True). Pre-fix the captured
+    cancellation hit the `hidden_filter_unavailable:` log path and the
+    function continued — the canceller waited forever.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancelled_on_registry_task_propagates(self):
+        import asyncio
+
+        class CancellingClient:
+            async def get_states(self):
+                return []
+
+            async def send_websocket_message(self, payload):
+                raise asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await _exact_match_search(CancellingClient(), "x", None, 10)

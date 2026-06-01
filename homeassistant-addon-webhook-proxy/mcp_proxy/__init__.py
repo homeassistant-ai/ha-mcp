@@ -1,9 +1,16 @@
 """MCP Webhook Proxy - routes MCP requests to the ha-mcp addon via webhook.
 
 This integration is auto-installed by the webhook proxy addon when started.
-It registers an unauthenticated webhook endpoint that proxies MCP requests
-to the ha-mcp addon, allowing remote access via any reverse proxy (Nabu Casa,
-Cloudflare, DuckDNS, nginx, etc.).
+By default it registers an UNAUTHENTICATED webhook endpoint that proxies
+MCP requests to the ha-mcp addon, allowing remote access via any reverse
+proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.). The webhook URL itself
+is the shared secret in this default mode.
+
+Authentication: when the addon's "Enable OAuth" toggle is on, the addon
+writes OAuth client credentials into the config file and this integration
+lazy-imports `oauth.py` to register the OAuth 2.1 endpoints + bearer-token
+gate. When the toggle is off, no OAuth code is loaded and the proxy behaves
+exactly like the original unauthenticated webhook.
 
 Configuration is read from /config/.mcp_proxy_config.json, which is written
 by the proxy addon's startup script. No manual configuration is needed — the
@@ -68,6 +75,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     If the user has an old `mcp_proxy:` entry in configuration.yaml,
     auto-migrate to a config entry so the YAML line can be removed.
+
+    Also runs the boot-time repair-issue check: if the addon left a
+    "needs HA restart for OAuth" marker file behind, surface it as a
+    Repair card with a click-to-restart fix flow. See repairs.py for
+    the full lifecycle.
     """
     if DOMAIN in config:
         _LOGGER.info(
@@ -79,7 +91,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 DOMAIN, context={"source": "import"}
             )
         )
+    if await hass.async_add_executor_job(_marker_present):
+        from .repairs import maybe_create_issue
+        maybe_create_issue(hass, DOMAIN)
     return True
+
+
+def _marker_present() -> bool:
+    # Imported lazily so async_setup doesn't pull in repairs.py module-load
+    # cost on the no-marker happy path.
+    from .repairs import marker_present
+    return marker_present()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -159,11 +181,83 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Failed to register webhook endpoint: {err}"
         ) from err
 
-    hass.data[DOMAIN] = {
+    hass_data: dict = {
         "target_url": target_url,
         "webhook_id": webhook_id,
         "session": session,
     }
+
+    # OAuth is opt-in. When the addon writes an `oauth` section into the
+    # config file (only when enable_oauth is on AND both creds are non-empty,
+    # validated by start.py), we lazy-import the provider and register its
+    # views. When the section is absent, this entire branch is skipped —
+    # nothing about hass.data, imports, or registered HTTP views changes
+    # from the no-auth baseline. That is the load-bearing guarantee for
+    # users who don't opt into OAuth.
+    #
+    # If the OAuth section IS present but malformed — blank creds, or view
+    # registration fails — we fail loudly via ConfigEntryError. The user
+    # explicitly opted into auth; silently falling back to no-auth would
+    # leave them with an open endpoint they think is locked.
+    oauth_section = proxy_config.get("oauth")
+    if isinstance(oauth_section, dict):
+        client_id = str(oauth_section.get("client_id", ""))
+        client_secret = str(oauth_section.get("client_secret", ""))
+        if not client_id or not client_secret:
+            await session.close()
+            raise ConfigEntryError(
+                "OAuth was enabled in the addon but client_id and/or "
+                "client_secret is blank in /config/.mcp_proxy_config.json. "
+                "Restart the Webhook Proxy addon to regenerate the config "
+                "file, or turn off Enable OAuth in the addon configuration."
+            )
+        public_base_url = proxy_config.get("public_base_url")
+        if not isinstance(public_base_url, str) or not public_base_url:
+            public_base_url = None
+        from .oauth import OAuthProvider, load_or_create_secret
+        try:
+            # Filesystem I/O — must run off the event loop.
+            signing_key = await hass.async_add_executor_job(
+                load_or_create_secret
+            )
+            oauth_provider = OAuthProvider(
+                hass=hass,
+                client_id=client_id,
+                client_secret=client_secret,
+                webhook_id=webhook_id,
+                signing_key=signing_key,
+                public_base_url=public_base_url,
+            )
+            oauth_provider.register_views()
+        except Exception as err:
+            _LOGGER.exception(
+                "MCP Proxy: failed to initialise OAuth provider (%s)",
+                type(err).__name__,
+            )
+            await session.close()
+            raise ConfigEntryError(
+                f"Failed to enable OAuth on the MCP webhook: {err}. "
+                "Auth is not being enforced — refusing to start the "
+                "integration so the webhook URL is not silently exposed "
+                "without the protection the user requested."
+            ) from err
+        _LOGGER.info(
+            "MCP Proxy: OAuth ENABLED (client_id=%s)",
+            oauth_provider.client_id_masked(),
+        )
+        hass_data["oauth"] = oauth_provider
+
+    hass.data[DOMAIN] = hass_data
+
+    # If we got here, the integration is set up and (if OAuth is configured)
+    # the OAuth provider's views are registered. Either way, any prior
+    # "needs HA restart for OAuth" marker is now stale — clear it so the
+    # Repair card disappears. Marker cleanup is filesystem I/O so it runs
+    # in the executor; the issue-registry call is synchronous and safe on
+    # the event loop.
+    from .repairs import _clear_marker, _delete_issue_only
+    await hass.async_add_executor_job(_clear_marker)
+    _delete_issue_only(hass, DOMAIN)
 
     return True
 
@@ -186,6 +280,14 @@ async def _handle_webhook(
     """Forward the MCP request to the addon and stream the response back."""
     data = hass.data[DOMAIN]
     target_url = data["target_url"]
+
+    # OAuth gate. When OAuth isn't configured, `oauth_provider` is None and
+    # this branch is a single attribute lookup with zero behavior change vs
+    # the original handler.
+    oauth_provider = data.get("oauth")
+    if oauth_provider is not None and not oauth_provider.validate_bearer(request):
+        from .oauth import build_unauthorized_response
+        return build_unauthorized_response(request, oauth_provider)
 
     body = await request.read()
 

@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server"
 description: "AI assistant integration for Home Assistant via Model Context Protocol (MCP)"
-version: "7.4.1"
+version: "7.6.0"
 slug: "ha_mcp"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 arch:
@@ -11,9 +11,23 @@ arch:
 init: false
 startup: application
 boot: manual
+# Expose the web Settings UI via Supervisor ingress (the "Open Web UI" button).
+# start.py mounts the settings routes for the ingress proxy and binds 0.0.0.0;
+# this declaration is what makes Supervisor render the button and proxy to it.
+# ingress_stream keeps the proxy streaming responses (required for the
+# streamable-HTTP MCP transport / settings UI flush behaviour).
+# Must be set here too — the release pipeline syncs only version/changelog, not
+# functional config, so ingress is NOT auto-mirrored from
+# homeassistant-addon-dev/config.yaml.
+ingress: true
+ingress_port: 9583
+ingress_stream: true
 # Enable access to Supervisor API for auto-discovery
 hassio_api: true
-hassio_role: default
+# `manager` (not `default`) is required so the Supervisor token grants access
+# to /addons/<slug>/logs and /<service>/logs (system service logs). Verified
+# via live test — `default` returns 403 for both. See #1116.
+hassio_role: manager
 # Enable access to Home Assistant API
 homeassistant_api: true
 # Enable host network mode for local network access
@@ -21,23 +35,37 @@ host_network: true
 # Use pre-built Docker images
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-{arch}"
 # Options for user configuration
-# NOTE: enable_yaml_config_editing, enable_filesystem_tools, and
-# enable_custom_component_integration are intentionally NOT exposed here.
-# They are dev-channel-only beta features — see docs/beta.md. Do not re-mirror
-# from homeassistant-addon-dev/config.yaml without reading that doc first.
+# NOTE: enable_yaml_config_editing, enable_filesystem_tools,
+# enable_custom_component_integration, and enable_code_mode are
+# intentionally NOT exposed here. They are dev-channel-only beta
+# features — see docs/beta.md. Do not re-mirror from
+# homeassistant-addon-dev/config.yaml without reading that doc first.
 options:
   backup_hint: "normal"
-  enable_skills: true
-  enable_skills_as_tools: true
   enable_tool_search: false
+  tool_search_max_results: 5
+  enable_tool_security_policies: false
+  enable_mandatory_bps: true
+  disabled_tools: ""
+  pinned_tools: ""
+  enable_auto_backup: true
+  auto_backup_throttle_minutes: 0
+  auto_backup_retain_per_entity: 100
   verify_ssl: true
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
-  enable_skills: bool?
-  enable_skills_as_tools: bool?
   enable_tool_search: bool?
+  tool_search_max_results: int(2,10)?
+  enable_tool_security_policies: bool?
+  enable_mandatory_bps: bool?
+  disabled_tools: str?
+  pinned_tools: str?
+  enable_auto_backup: bool?
+  auto_backup_throttle_minutes: int(0,1440)?
+  auto_backup_retain_per_entity: int(1,10000)?
   verify_ssl: bool?
+  advanced_debug_logging: bool?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583

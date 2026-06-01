@@ -15,3 +15,55 @@ configuration:
     description: |
       Port the MCP addon listens on. Only used during auto-discovery.
       Default: 9583.
+  enable_oauth:
+    name: Enable OAuth (Beta)
+    description: |
+      Adds OAuth 2.1 authentication to the webhook URL. The same URL keeps
+      working but now requires a successful OAuth flow before serving MCP
+      requests.
+
+      Easiest setup: turn this on, leave Client ID and Client Secret blank,
+      and restart the addon. The addon will generate strong values on first
+      start, persist them across restarts, and print them in the addon log
+      so you can copy them into your MCP client.
+
+      In Claude.ai: open the connector's Advanced settings and paste the
+      Client ID and Client Secret from the addon log into the OAuth fields
+      there. Claude.ai will then complete the OAuth handshake automatically
+      when adding the connector.
+
+      BETA: this is a beta feature. Restart the addon after changing this
+      option. When this is off the webhook URL works exactly as before with
+      no auth check.
+  oauth_client_id:
+    name: OAuth Client ID (auto-generated if blank)
+    description: |
+      Client ID that the MCP client (e.g. Claude.ai) must present at the
+      OAuth token endpoint. Leave blank to let the addon generate a value
+      on first start (recommended); the generated value is persisted in
+      /data/oauth_creds.json so it stays the same across restarts. If you
+      set a value here it must be at least 16 characters long.
+  oauth_client_secret:
+    name: OAuth Client Secret (auto-generated if blank)
+    description: |
+      Client Secret that the MCP client (e.g. Claude.ai) must present at
+      the OAuth token endpoint. Leave blank to let the addon generate a
+      strong random value on first start (recommended). Treat the value
+      like a password — anyone with it can complete the OAuth flow against
+      your MCP server.
+  regenerate_oauth_creds:
+    name: Regenerate OAuth Credentials on Next Start
+    description: |
+      One-shot action: when you turn this on and restart the addon, the
+      stored OAuth Client ID and Client Secret are wiped and fresh random
+      values are generated. The new values are printed in the addon log
+      and persisted across restarts.
+
+      The addon attempts to flip this toggle back to off automatically
+      after regenerating, so subsequent restarts don't keep regenerating.
+      If that fails (older Supervisor versions), the addon log will tell
+      you to manually flip this off.
+
+      Use this when you suspect your OAuth credentials have leaked or
+      simply want fresh ones. Remember to update your MCP client (e.g.
+      Claude.ai) with the new values afterwards.

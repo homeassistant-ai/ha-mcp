@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "minor_version": 7,
+  "key": "backup",
+  "data": {
+    "backups": [],
+    "config": {
+      "agents": {},
+      "automatic_backups_configured": false,
+      "create_backup": {
+        "agent_ids": [],
+        "include_addons": null,
+        "include_all_addons": false,
+        "include_database": true,
+        "include_folders": null,
+        "name": null,
+        "password": "e2e-test-backup-password"
+      },
+      "last_attempted_automatic_backup": null,
+      "last_completed_automatic_backup": null,
+      "retention": {
+        "copies": null,
+        "days": null
+      },
+      "schedule": {
+        "days": [],
+        "recurrence": "never",
+        "time": null
+      }
+    }
+  }
+}

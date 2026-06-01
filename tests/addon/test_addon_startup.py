@@ -3,6 +3,7 @@
 import functools
 import importlib.util
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -76,9 +77,11 @@ class TestSecretPathValidation:
 
     def test_is_valid_secret_path(self):
         assert self.addon._is_valid_secret_path("/private_abc") is True
-        assert self.addon._is_valid_secret_path("/mysecrt") is True   # exactly 8 chars
-        assert self.addon._is_valid_secret_path("/custom") is False   # 7 chars — too short
-        assert self.addon._is_valid_secret_path("/short") is False    # too short
+        assert self.addon._is_valid_secret_path("/mysecrt") is True  # exactly 8 chars
+        assert (
+            self.addon._is_valid_secret_path("/custom") is False
+        )  # 7 chars — too short
+        assert self.addon._is_valid_secret_path("/short") is False  # too short
         assert self.addon._is_valid_secret_path("https://example.com/x") is False
         assert self.addon._is_valid_secret_path("/https://evil.com") is False
         assert self.addon._is_valid_secret_path("no-leading-slash") is False
@@ -117,7 +120,6 @@ class TestPersistAddonOptions:
 
         options = {
             "backup_hint": "normal",
-            "enable_skills": True,
             "secret_path": "/private_abc12345",
         }
         # Returns None on success — helper communicates failure via exceptions.
@@ -149,7 +151,9 @@ class TestPersistAddonOptions:
 
         monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
         with pytest.raises(urllib.error.HTTPError):
-            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
+            self.addon.persist_addon_options(
+                {"secret_path": "/private_x"}, "test-token"
+            )
 
     def test_connection_error_propagates(self, monkeypatch):
         """Network failures propagate to the caller — no silent swallowing."""
@@ -160,7 +164,9 @@ class TestPersistAddonOptions:
 
         monkeypatch.setattr(self.addon.urllib.request, "urlopen", fake_urlopen)
         with pytest.raises(urllib.error.URLError):
-            self.addon.persist_addon_options({"secret_path": "/private_x"}, "test-token")
+            self.addon.persist_addon_options(
+                {"secret_path": "/private_x"}, "test-token"
+            )
 
 
 class TestMaybePersistSecretPath:
@@ -209,7 +215,6 @@ class TestMaybePersistSecretPath:
         monkeypatch.setattr(self.addon, "persist_addon_options", fake_persist)
         config = {
             "backup_hint": "normal",
-            "enable_skills": True,
             "secret_path": "/private_old",
         }
         self.addon.maybe_persist_secret_path(config, "/private_new", "test-token")
@@ -217,7 +222,6 @@ class TestMaybePersistSecretPath:
             (
                 {
                     "backup_hint": "normal",
-                    "enable_skills": True,
                     "secret_path": "/private_new",
                 },
                 "test-token",
@@ -269,206 +273,6 @@ class TestMaybePersistSecretPath:
         assert "/private_new" in err
 
 
-class TestSkillsAsToolsMigration:
-    """Unit tests for one-time enable_skills_as_tools default migration.
-
-    Background: the Pydantic default for enable_skills_as_tools was flipped
-    to True in #806, but the add-on's config.yaml was never updated at the
-    same time, so add-on users silently stayed on False. This migration
-    flips the stored value to True once for existing installs, then
-    respects the user's choice on subsequent boots.
-    """
-
-    MARKER_NAME = ".skills_as_tools_default_migration_v1"
-
-    @pytest.fixture(autouse=True)
-    def addon(self):
-        self.addon = _load_addon_start()
-
-    def _make_options(self, tmp_path, value):
-        """Write an options.json with enable_skills_as_tools=value."""
-        config_file = tmp_path / "options.json"
-        with open(config_file, "w") as f:
-            json.dump({"enable_skills_as_tools": value}, f)
-        return config_file
-
-    def test_migration_flips_stored_false_and_persists(self, tmp_path):
-        """First boot after update: stored False gets forced to True and
-        persisted to options.json so the UI reflects the new value."""
-        config_file = self._make_options(tmp_path, False)
-
-        result = self.addon.migrate_skills_as_tools_default(
-            data_dir=tmp_path,
-            config_file=config_file,
-            stored_value=False,
-            config_read_ok=True,
-        )
-
-        assert result is True
-        assert (tmp_path / self.MARKER_NAME).exists()
-        with open(config_file) as f:
-            assert json.load(f)["enable_skills_as_tools"] is True
-
-    def test_migration_respects_marker_when_exists(self, tmp_path):
-        """After migration has run, respect the user's stored value even if
-        it is False (user deliberately toggled it off)."""
-        config_file = self._make_options(tmp_path, False)
-        (tmp_path / self.MARKER_NAME).touch()
-
-        result = self.addon.migrate_skills_as_tools_default(
-            data_dir=tmp_path,
-            config_file=config_file,
-            stored_value=False,
-            config_read_ok=True,
-        )
-
-        assert result is False
-        # Marker should still exist; options.json untouched.
-        assert (tmp_path / self.MARKER_NAME).exists()
-        with open(config_file) as f:
-            assert json.load(f)["enable_skills_as_tools"] is False
-
-    def test_migration_creates_marker_when_stored_true(self, tmp_path):
-        """First boot, stored already True: no persistence needed, but the
-        marker must still be created so a future user-initiated False is
-        respected."""
-        config_file = self._make_options(tmp_path, True)
-
-        result = self.addon.migrate_skills_as_tools_default(
-            data_dir=tmp_path,
-            config_file=config_file,
-            stored_value=True,
-            config_read_ok=True,
-        )
-
-        assert result is True
-        assert (tmp_path / self.MARKER_NAME).exists()
-
-    def test_migration_survives_missing_options_json(self, tmp_path):
-        """If options.json does not exist, the migration still applies the
-        runtime override and creates the marker — no crash."""
-        config_file = tmp_path / "options.json"  # Does not exist
-
-        result = self.addon.migrate_skills_as_tools_default(
-            data_dir=tmp_path,
-            config_file=config_file,
-            stored_value=False,
-            config_read_ok=True,
-        )
-
-        assert result is True
-        assert (tmp_path / self.MARKER_NAME).exists()
-
-    def test_migration_survives_options_json_write_failure(self, tmp_path):
-        """If persisting to options.json fails (read-only filesystem), the
-        runtime override is still applied, the marker is still created so
-        the migration does not loop, and the on-disk options.json is left
-        unmodified."""
-        config_file = self._make_options(tmp_path, False)
-        # Make the file read-only so the migration's write fails at the OS
-        # layer rather than via a mock coupled to the current open() call
-        # sites. chmod on the file alone is sufficient on POSIX because
-        # open(..., "w") rechecks file permissions.
-        config_file.chmod(0o444)
-
-        try:
-            result = self.addon.migrate_skills_as_tools_default(
-                data_dir=tmp_path,
-                config_file=config_file,
-                stored_value=False,
-                config_read_ok=True,
-            )
-        finally:
-            # Restore write permission so tmp_path cleanup works on all
-            # runners.
-            config_file.chmod(0o644)
-
-        assert result is True
-        assert (tmp_path / self.MARKER_NAME).exists()
-        # options.json must remain unmodified — verifies the write failed
-        # before touching disk, not merely that the function didn't crash.
-        with open(config_file) as f:
-            assert json.load(f)["enable_skills_as_tools"] is False
-
-    def test_migration_respects_marker_with_stored_true(self, tmp_path):
-        """Marker exists, stored True: respect stored, no rewrite."""
-        config_file = self._make_options(tmp_path, True)
-        (tmp_path / self.MARKER_NAME).touch()
-
-        result = self.addon.migrate_skills_as_tools_default(
-            data_dir=tmp_path,
-            config_file=config_file,
-            stored_value=True,
-            config_read_ok=True,
-        )
-
-        assert result is True
-
-    def test_migration_survives_malformed_options_json(self, tmp_path):
-        """Corrupt options.json (JSONDecodeError) is logged, runtime override
-        still applied, marker still created — migration does not loop."""
-        config_file = tmp_path / "options.json"
-        with open(config_file, "w", encoding="utf-8") as f:
-            f.write("{not valid json")
-
-        result = self.addon.migrate_skills_as_tools_default(
-            data_dir=tmp_path,
-            config_file=config_file,
-            stored_value=False,
-            config_read_ok=True,
-        )
-
-        assert result is True
-        assert (tmp_path / self.MARKER_NAME).exists()
-
-    @pytest.mark.parametrize("payload", ["[]", '"just a string"', "null", "42"])
-    def test_migration_logs_non_dict_top_level(self, tmp_path, payload, capsys):
-        """Parsed-but-non-dict options.json (list, string, null, number) is
-        observable in logs rather than silently skipped, and options.json
-        stays in its original state."""
-        config_file = tmp_path / "options.json"
-        config_file.write_text(payload, encoding="utf-8")
-
-        result = self.addon.migrate_skills_as_tools_default(
-            data_dir=tmp_path,
-            config_file=config_file,
-            stored_value=False,
-            config_read_ok=True,
-        )
-
-        # Runtime override still applied, marker still created.
-        assert result is True
-        assert (tmp_path / self.MARKER_NAME).exists()
-        # options.json untouched.
-        assert config_file.read_text(encoding="utf-8") == payload
-        # The non-dict branch must log something observable.
-        captured = capsys.readouterr()
-        assert "options.json" in (captured.out + captured.err)
-        assert "expected dict" in (captured.out + captured.err)
-
-    def test_migration_skips_marker_when_config_unreadable(self, tmp_path):
-        """If main() could not read options.json (malformed JSON or I/O
-        error), the migration must not create the marker. Otherwise, once
-        options.json recovers with the user's real stored False, the
-        migration would never run and the intended force-to-true would be
-        silently lost."""
-        config_file = tmp_path / "options.json"
-        # Does not exist — simulates an unreadable file. The important
-        # signal is config_read_ok=False, which is the flag main() would
-        # set after a json.JSONDecodeError.
-        result = self.addon.migrate_skills_as_tools_default(
-            data_dir=tmp_path,
-            config_file=config_file,
-            stored_value=True,  # fallback default used by main()
-            config_read_ok=False,
-        )
-
-        # Runtime default still applied, but marker must NOT be created so
-        # the migration can run again on a later boot.
-        assert result is True
-        assert not (tmp_path / self.MARKER_NAME).exists()
-
-
 IMAGE_TAG = "ha-mcp-addon-test"
 DOCKERFILE = "homeassistant-addon/Dockerfile"
 
@@ -477,11 +281,16 @@ def _build_addon_image():
     """Build the addon test image via docker CLI (supports BuildKit)."""
     result = subprocess.run(
         [
-            "docker", "build",
-            "-t", IMAGE_TAG,
-            "-f", DOCKERFILE,
-            "--build-arg", "BUILD_VERSION=1.0.0-test",
-            "--build-arg", "BUILD_ARCH=amd64",
+            "docker",
+            "build",
+            "-t",
+            IMAGE_TAG,
+            "-f",
+            DOCKERFILE,
+            "--build-arg",
+            "BUILD_VERSION=1.0.0-test",
+            "--build-arg",
+            "BUILD_ARCH=amd64",
             ".",
         ],
         capture_output=True,
@@ -534,6 +343,53 @@ class TestResolveBoolOption:
             self.addon.resolve_bool_option({"verify_ssl": None}, "verify_ssl", True)
             is True
         )
+
+
+class TestCleanupStaleMigrationMarker:
+    """Unit tests for cleanup_stale_migration_marker.
+
+    Best-effort cleanup of the one-time enable_skills_as_tools migration
+    marker (removed in #1133). Runs on every boot, so silent failure on
+    permission-restricted /data mounts is the production-only failure
+    mode worth locking down.
+    """
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_removes_marker_when_present(self, tmp_path):
+        marker = tmp_path / ".skills_as_tools_default_migration_v1"
+        marker.write_text("")
+        assert marker.exists()
+
+        self.addon.cleanup_stale_migration_marker(tmp_path)
+
+        assert not marker.exists()
+
+    def test_noop_when_marker_absent(self, tmp_path):
+        # No marker present — must not raise (missing_ok=True).
+        self.addon.cleanup_stale_migration_marker(tmp_path)
+
+    def test_swallows_oserror_and_logs(self, tmp_path, monkeypatch, capsys):
+        """Permission-restricted /data mounts must not crash boot.
+
+        Simulates the real-world failure mode where unlink raises despite
+        ``missing_ok=True`` (e.g. EACCES on a read-only bind mount).
+        """
+        marker = tmp_path / ".skills_as_tools_default_migration_v1"
+        marker.write_text("")
+
+        def boom(self, missing_ok=False):
+            raise PermissionError("read-only filesystem")
+
+        monkeypatch.setattr(Path, "unlink", boom)
+
+        self.addon.cleanup_stale_migration_marker(tmp_path)
+
+        captured = capsys.readouterr()
+        assert "Failed to remove stale migration marker" in captured.err
+        assert "Safe to ignore" in captured.err
 
 
 @pytest.mark.slow
@@ -590,7 +446,10 @@ class TestAddonStartup:
             assert "[INFO] Home Assistant URL: http://supervisor/core" in logs
             assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/private_" in logs
             assert "Secret Path: /private_" in logs
-            assert "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!" in logs
+            assert (
+                "⚠️  IMPORTANT: Copy this exact URL - the secret path is required!"
+                in logs
+            )
 
             # Verify debug messages
             assert "[INFO] Importing ha_mcp module..." in logs
@@ -639,7 +498,10 @@ class TestAddonStartup:
             # Verify custom config is used
             assert "[INFO] Backup hint mode: strong" in logs
             assert "[INFO] Using custom secret path from configuration" in logs
-            assert "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret" in logs
+            assert (
+                "🔐 MCP Server URL: http://<home-assistant-ip>:9583/my_custom_secret"
+                in logs
+            )
             assert "Secret Path: /my_custom_secret" in logs
 
         finally:
@@ -668,3 +530,190 @@ class TestAddonStartup:
 
         finally:
             container.stop()
+
+
+class TestBetaMasterAutoEnableInDevAddon:
+    """Dev addon keeps the beta sub-flag keys in its Supervisor options
+    schema (unlike stable). start.py auto-writes
+    ``ENABLE_BETA_FEATURES=true`` whenever any of those sub-flag keys
+    are present in ``/data/options.json``, so the runtime master gate
+    in ``_apply_feature_flag_overrides`` becomes a no-op for dev addon
+    users — Supervisor options remain authoritative for the beta sub-flags."""
+
+    _DEV_BETA_KEYS = (
+        "enable_yaml_config_editing",
+        "enable_yaml_packages_automation",
+        "enable_yaml_packages_script",
+        "enable_yaml_packages_scene",
+        "enable_filesystem_tools",
+        "enable_custom_component_integration",
+        "enable_code_mode",
+        "enable_lite_docstrings",
+    )
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def test_auto_enable_writes_true_when_any_beta_key_truthy(self, monkeypatch):
+        """Dev-addon options with ANY beta sub-flag set to True →
+        ENABLE_BETA_FEATURES=true written to env."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master(
+            {"backup_hint": "normal", "enable_yaml_config_editing": True}
+        )
+        assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
+
+    def test_auto_enable_skips_when_all_beta_keys_false(self, monkeypatch):
+        """HA Supervisor persists every schema-declared option to
+        options.json with its default value on first start, so all 5
+        beta keys land there with ``false`` immediately on a fresh
+        dev-addon install. The auto-enable must NOT fire in that case
+        — the master should follow the user's actual sub-flag choices,
+        not the bare presence of the schema keys. Previously this test
+        asserted the opposite (presence alone fires) and the user hit
+        the resulting "locked-on master, no sub-flags enabled" bug
+        """
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master(
+            dict.fromkeys(self._DEV_BETA_KEYS, False)
+        )
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_fires_when_one_of_many_truthy(self, monkeypatch):
+        """4 sub-flags False, 1 sub-flag True → still fires. Locks the
+        ``any(...)`` semantic so a future change to ``all(...)`` would
+        regress the single-feature-enabled case."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        cfg: dict[str, object] = dict.fromkeys(self._DEV_BETA_KEYS, False)
+        cfg["enable_code_mode"] = True
+        self.addon.maybe_auto_enable_beta_master(cfg)
+        assert os.environ.get("ENABLE_BETA_FEATURES") == "true"
+
+    def test_auto_enable_skips_non_bool_truthy_values(self, monkeypatch):
+        """Defensive: only Python ``True`` triggers, not a truthy
+        non-bool. Supervisor's JSON parsing returns proper bools, but
+        if a future malformed options.json or test fixture passes a
+        truthy string, we want the gate to stay shut rather than
+        silently flip the master on."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master({"enable_yaml_config_editing": "true"})
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_does_not_set_var_when_no_beta_key(self, monkeypatch):
+        """Stable-addon options never carry any beta key → no auto-
+        enable. Master stays at the pydantic default (False) so the
+        UI master toggle remains the gate."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master(
+            {"backup_hint": "normal", "enable_tool_search": True}
+        )
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_does_not_set_var_for_empty_config(self, monkeypatch):
+        """Missing/corrupt options.json yields an empty config → no
+        auto-enable. Defensive: silent feature regression is the
+        worst possible outcome of a bad options.json."""
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        self.addon.maybe_auto_enable_beta_master({})
+        assert "ENABLE_BETA_FEATURES" not in os.environ
+
+    def test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry(self):
+        """The keys checked by start.py must exactly match the
+        runtime registry — drift would silently break the auto-enable
+        signal for dev-addon users."""
+        # Import lazily because ha_mcp isn't importable until the
+        # repo's package is on the path. Acceptable here because
+        # this test only asserts a structural invariant.
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(
+            0,
+            str(Path(__file__).parents[2] / "src"),
+        )
+        from ha_mcp.config import BETA_FEATURE_FIELDS
+
+        assert set(self.addon._DEV_ADDON_BETA_KEYS) == set(BETA_FEATURE_FIELDS), (
+            "start.py's _DEV_ADDON_BETA_KEYS drifted from config.BETA_FEATURE_FIELDS"
+        )
+
+    def test_stable_addon_still_does_not_carry_beta_keys(self):
+        """Stable addon's ``config.yaml`` must NOT list any of the
+        beta sub-flag keys (their Supervisor-options absence is what
+        makes the master gate the sole gate for stable users)."""
+        import yaml
+
+        stable_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon" / "config.yaml"
+            ).read_text()
+        )
+        for key in self._DEV_BETA_KEYS:
+            assert key not in stable_yaml.get("options", {}), (
+                f"{key} must not be in stable addon options"
+            )
+            assert key not in stable_yaml.get("schema", {}), (
+                f"{key} must not be in stable addon schema"
+            )
+
+    def test_stable_addon_does_not_declare_enable_beta_features(self):
+        """Stable's ``config.yaml`` must NOT declare the master toggle
+        either — the master is web-UI-only on stable.
+        Schema-declaring it on stable would auto-fill options.json with
+        the default on first start, locking the master to env-mode and
+        the standalone web UI master path would no longer be the gate.
+        """
+        import yaml
+
+        stable_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon" / "config.yaml"
+            ).read_text()
+        )
+        assert "enable_beta_features" not in stable_yaml.get("options", {}), (
+            "enable_beta_features must not be in stable addon options"
+        )
+        assert "enable_beta_features" not in stable_yaml.get("schema", {}), (
+            "enable_beta_features must not be in stable addon schema"
+        )
+
+    def test_dev_addon_declares_enable_beta_features_master_in_schema(self):
+        """Dev addon's ``config.yaml`` must declare ``enable_beta_features``
+        in both ``options:`` (default true) and ``schema:`` (bool?), so
+        start.py reads it and writes the env var on every boot. The web
+        UI then surfaces the master row as origin='addon' (editable)
+        and saves route through Supervisor.
+        """
+        import yaml
+
+        dev_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon-dev" / "config.yaml"
+            ).read_text()
+        )
+        assert dev_yaml.get("options", {}).get("enable_beta_features") is True, (
+            "dev addon options must default enable_beta_features=true"
+        )
+        assert "enable_beta_features" in dev_yaml.get("schema", {}), (
+            "dev addon schema must declare enable_beta_features"
+        )
+
+    def test_dev_addon_defaults_every_beta_subflag_to_false(self):
+        """Beta sub-tools default OFF on a fresh dev install — only the
+        master defaults on. Shipping them on would risk damaging fresh
+        installs out of the box.
+        """
+        import yaml
+
+        dev_yaml = yaml.safe_load(
+            (
+                Path(__file__).parents[2] / "homeassistant-addon-dev" / "config.yaml"
+            ).read_text()
+        )
+        opts = dev_yaml.get("options", {})
+        for key in self._DEV_BETA_KEYS:
+            assert key in opts, f"dev addon must declare {key} in options"
+            assert opts[key] is False, (
+                f"dev addon must default {key} to False (got {opts[key]!r})"
+            )

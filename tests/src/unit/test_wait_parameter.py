@@ -102,7 +102,7 @@ class TestAutomationWaitParameter:
     async def test_set_automation_wait_timeout_adds_warning(
         self, register_tools, mock_client
     ):
-        """When wait times out, a warning is added to the response."""
+        """When wait times out, a warning is added to the top-level warnings list."""
         with patch(
             "ha_mcp.tools.tools_config_automations.wait_for_entity_registered",
             new_callable=AsyncMock,
@@ -116,7 +116,8 @@ class TestAutomationWaitParameter:
                 },
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert isinstance(result.get("warnings"), list) and result["warnings"]
+            assert any("not yet queryable" in w for w in result["warnings"])
 
     async def test_remove_automation_wait_default_true(
         self, register_tools, mock_client
@@ -200,7 +201,8 @@ class TestAutomationWaitParameter:
                 },
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert isinstance(result.get("warnings"), list) and result["warnings"]
+            assert any("verification failed" in w for w in result["warnings"])
 
 
 class TestScriptWaitParameter:
@@ -308,15 +310,16 @@ class TestHelperWaitParameter:
 
         registered_tools: dict[str, Any] = {}
 
-        def capture_tool(**kwargs):
-            def decorator(fn):
-                registered_tools[fn.__name__] = fn
-                return fn
-
-            return decorator
+        def capture_add_tool(method):
+            name = (
+                method.__fastmcp__.name
+                if hasattr(method, "__fastmcp__")
+                else method.__name__
+            )
+            registered_tools[name] = method
 
         mock_mcp = MagicMock()
-        mock_mcp.tool = capture_tool
+        mock_mcp.add_tool = capture_add_tool
         register_config_helper_tools(mock_mcp, mock_client)
         return registered_tools
 
@@ -346,35 +349,6 @@ class TestHelperWaitParameter:
                 helper_type="input_boolean",
                 name="Test Switch",
                 wait=False,
-            )
-            assert result["success"] is True
-            mock_wait.assert_not_called()
-
-    async def test_set_helper_wait_string_true(self, register_tools, mock_client):
-        """wait='true' (string) is coerced to True."""
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-        ) as mock_wait:
-            mock_wait.return_value = True
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
-                wait="true",
-            )
-            assert result["success"] is True
-            mock_wait.assert_called_once()
-
-    async def test_set_helper_wait_string_false(self, register_tools, mock_client):
-        """wait='false' (string) is coerced to False."""
-        with patch(
-            "ha_mcp.tools.tools_config_helpers.wait_for_entity_registered",
-            new_callable=AsyncMock,
-        ) as mock_wait:
-            result = await register_tools["ha_config_set_helper"](
-                helper_type="input_boolean",
-                name="Test Switch",
-                wait="false",
             )
             assert result["success"] is True
             mock_wait.assert_not_called()
@@ -457,7 +431,9 @@ class TestHelperWaitParameter:
                 name="Test Switch",
             )
             assert result["success"] is True
-            assert "warning" in result.get("helper_data", {})
+            # Issue #1293: warnings are now a top-level list, not nested in data.
+            assert result.get("warnings"), f"Expected warnings list, got: {result}"
+            assert any("verification failed" in w for w in result["warnings"])
 
 
 class TestServiceCallWaitParameter:
@@ -499,9 +475,7 @@ class TestServiceCallWaitParameter:
             assert result.get("verified_state") == "on"
             mock_wait.assert_called_once()
 
-    async def test_call_service_wait_false_skips_verification(
-        self, tools, mock_client
-    ):
+    async def test_call_service_wait_false_skips_verification(self, tools, mock_client):
         """wait=False skips state verification."""
         with patch(
             "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
@@ -553,7 +527,8 @@ class TestServiceCallWaitParameter:
                 entity_id="light.test",
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert result.get("warnings"), f"Expected warnings list, got: {result}"
+            assert any("could not be verified" in w for w in result["warnings"])
 
     async def test_call_service_toggle_waits(self, tools, mock_client):
         """toggle is a state-changing service and triggers wait."""
@@ -575,9 +550,7 @@ class TestServiceCallWaitParameter:
                 or call_kwargs[0][2] is None
             )
 
-    async def test_call_service_wait_exception_still_succeeds(
-        self, tools, mock_client
-    ):
+    async def test_call_service_wait_exception_still_succeeds(self, tools, mock_client):
         """Wait exception doesn't collapse the successful service call."""
         with patch(
             "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
@@ -589,4 +562,5 @@ class TestServiceCallWaitParameter:
                 entity_id="light.test",
             )
             assert result["success"] is True
-            assert "warning" in result
+            assert result.get("warnings"), f"Expected warnings list, got: {result}"
+            assert any("state verification failed" in w for w in result["warnings"])

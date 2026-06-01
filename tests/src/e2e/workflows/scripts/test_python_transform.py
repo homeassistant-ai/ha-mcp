@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import MCPAssertions
+from ...utilities.assertions import MCPAssertions, extract_error_message
 
 
 @pytest.mark.asyncio
@@ -65,7 +65,9 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
         {
             "script_id": "test_py_hash_req",
             "config": {
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -77,7 +79,7 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
             "python_transform": "config['sequence'] = []",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "config_hash" in error_msg.lower()
 
 
@@ -94,7 +96,7 @@ async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
             "python_transform": "config['sequence'] = []",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "cannot use both" in error_msg.lower()
 
 
@@ -109,7 +111,9 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
             "script_id": "test_py_conflict",
             "config": {
                 "alias": "Test Conflict",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -125,7 +129,9 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
             "script_id": "test_py_conflict",
             "config": {
                 "alias": "Test Conflict Modified",
-                "sequence": [{"action": "light.turn_off", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_off", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -138,7 +144,7 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
             "python_transform": "config['sequence'][0]['data'] = {'brightness': 100}",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()
 
 
@@ -152,7 +158,9 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
         {
             "script_id": "test_py_security",
             "config": {
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -170,7 +178,7 @@ async def test_python_transform_blocked_import(mcp_client, ha_client):
             "python_transform": "import os; os.system('echo pwned')",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "import" in error_msg.lower() or "forbidden" in error_msg.lower()
 
 
@@ -205,6 +213,7 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
         "ha_config_get_script", {"script_id": "test_hash_stability"}
     )
 
+    assert isinstance(read1["config_hash"], str) and len(read1["config_hash"]) == 16
     assert read1["config_hash"] == read2["config_hash"]
 
 
@@ -220,7 +229,11 @@ async def test_chained_transforms(mcp_client, ha_client):
             "config": {
                 "alias": "Chain Test",
                 "sequence": [
-                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}, "data": {"brightness": 50}},
+                    {
+                        "action": "light.turn_on",
+                        "target": {"entity_id": "light.test"},
+                        "data": {"brightness": 50},
+                    },
                 ],
             },
         },
@@ -264,7 +277,9 @@ async def test_returned_hash_matches_next_get(mcp_client, ha_client):
             "script_id": "test_hash_match",
             "config": {
                 "alias": "Hash Match Test",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -300,7 +315,9 @@ async def test_transform_invalid_config_rejected(mcp_client, ha_client):
             "script_id": "test_invalid_transform",
             "config": {
                 "alias": "Invalid Transform Test",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -318,7 +335,7 @@ async def test_transform_invalid_config_rejected(mcp_client, ha_client):
             "python_transform": "del config['sequence']",
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "sequence" in error_msg.lower() or "use_blueprint" in error_msg.lower()
 
 
@@ -333,7 +350,9 @@ async def test_full_config_update_with_config_hash(mcp_client, ha_client):
             "script_id": "test_full_hash",
             "config": {
                 "alias": "Full Hash Test",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -350,7 +369,9 @@ async def test_full_config_update_with_config_hash(mcp_client, ha_client):
             "config_hash": get_result["config_hash"],
             "config": {
                 "alias": "Full Hash Updated",
-                "sequence": [{"action": "light.turn_off", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_off", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -367,7 +388,9 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
             "script_id": "test_full_stale",
             "config": {
                 "alias": "Full Stale Test",
-                "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.test"}}],
+                "sequence": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.test"}}
+                ],
             },
         },
     )
@@ -401,5 +424,5 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
             },
         },
     )
-    error_msg = result["error"].get("message", str(result["error"])) if isinstance(result["error"], dict) else result["error"]
+    error_msg = extract_error_message(result)
     assert "conflict" in error_msg.lower() or "modified" in error_msg.lower()

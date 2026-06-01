@@ -1,0 +1,43 @@
+"""Atomic load/save for tool_policy.json (mirrors tool_config.json pattern in settings_ui.py)."""
+
+import json
+import os
+import tempfile
+from pathlib import Path
+
+from pydantic import ValidationError
+
+from .model import Policy
+
+POLICY_FILENAME = "tool_policy.json"
+
+
+def load_policy(data_dir: Path) -> Policy:
+    path = data_dir / POLICY_FILENAME
+    if not path.exists():
+        return Policy()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"tool_policy.json is not valid JSON: {e}") from e
+    try:
+        return Policy.model_validate(raw)
+    except ValidationError as e:
+        raise ValueError(f"tool_policy.json failed schema validation: {e}") from e
+
+
+def save_policy(data_dir: Path, policy: Policy) -> None:
+    # Bump version on every save so optimistic-concurrency callers can
+    # detect mid-flight edits (PUT /api/policy/config 409s when the
+    # caller's payload version != on-disk version).
+    bumped = policy.model_copy(update={"version": policy.version + 1})
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / POLICY_FILENAME
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{POLICY_FILENAME}.", dir=data_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(bumped.model_dump(mode="json"), f, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise

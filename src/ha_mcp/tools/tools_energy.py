@@ -41,6 +41,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,7 @@ def _compute_per_key_hashes(prefs: dict[str, Any]) -> dict[_PrefsKey, str]:
 
 
 def _is_no_prefs_error(error_msg: str) -> bool:
-    """True if an error string from send_websocket_message indicates
+    """Return True if an error string from send_websocket_message indicates
     ``ERR_NOT_FOUND "No prefs"`` from HA Core's energy/get_prefs handler.
 
     HA Core wraps the error as ``f"Command failed: {message}"``; the
@@ -143,13 +144,30 @@ def _flatten_validation_errors(raw: Any) -> list[dict[str, str]]:
     return errors
 
 
-def _shape_check(config: dict[str, Any]) -> list[dict[str, str]]:
-    """Cheap local shape check before sending to the server.
+def _shape_check(
+    config: dict[str, Any],
+    validate_only: dict[str, set[int]] | None = None,
+) -> list[dict[str, str]]:
+    """Validate config shape locally before sending to the server.
 
     Validates that top-level keys have the expected list-of-dicts shape and
     that required identifying fields are present. Does NOT validate semantic
     correctness (stat IDs existing, units matching, etc.) — that's surfaced
     by the post-save server-side ``energy/validate`` call.
+
+    ``validate_only`` scopes the per-entry check. ``None`` (default) validates
+    every entry under every present top-level key — the original contract.
+    A dict scopes the check to the listed keys and, within each, only the
+    listed indices: top-level keys absent from the dict are skipped entirely,
+    indices outside each key's set are skipped per-entry. The "must be a
+    list" structural check still fires for any present-and-listed key with a
+    non-list value, so ``validate_only`` cannot be used to bypass structural
+    sanity. A dict with an empty set for a key (``{key: set()}``) skips the
+    per-entry pass for that key while preserving the structural check —
+    this is what convenience-mode write paths pass for remove operations
+    (no new entries to validate, but the list shape is still checked). An
+    empty dict (``{}``) skips all keys entirely. See issue #1086 for the
+    asymmetric over-validation problem this addresses.
     """
     errors: list[dict[str, str]] = []
 
@@ -159,11 +177,18 @@ def _shape_check(config: dict[str, Any]) -> list[dict[str, str]]:
     for key in _PREFS_TOP_LEVEL_KEYS:
         if key not in config:
             continue
+        if validate_only is not None and key not in validate_only:
+            continue
         value = config[key]
         if not isinstance(value, list):
             errors.append({"path": key, "message": "must be a list"})
             continue
+        allowed_indices: set[int] | None = (
+            validate_only[key] if validate_only is not None else None
+        )
         for idx, entry in enumerate(value):
+            if allowed_indices is not None and idx not in allowed_indices:
+                continue
             if not isinstance(entry, dict):
                 errors.append(
                     {
@@ -215,6 +240,47 @@ def _shape_check(config: dict[str, Any]) -> list[dict[str, str]]:
                 )
 
     return errors
+
+
+def _appended_tail_indices(existing: list[Any], new: list[Any]) -> set[int]:
+    """Return the indices in ``new`` that lie past the end of ``existing``.
+
+    Per issue #1086, this builds the ``validate_only`` index set scoped to the
+    appended tail of an append-only / shrink-only mutation, so pre-existing
+    HA-validated siblings are not re-checked on every add/remove:
+
+    - Append-only mutators (``_add_*``): returns indices of the new entries.
+    - Shrink-only mutators (``_remove_*``): returns an empty set — nothing
+      new to validate, and the surviving entries already passed HA validation.
+
+    Refuses in-place mutators where ``len(new) == len(existing)`` but the
+    contents differ — the appended-tail formula would yield an empty index
+    set on a list whose entries actually changed, silently bypassing
+    per-entry validation. Add explicit handling (e.g. an
+    ``_indices_of_modified_entries`` helper) before introducing such a
+    mutator; do not extend this one.
+    """
+    if len(new) == len(existing) and new != existing:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.INTERNAL_ERROR,
+                "_appended_tail_indices: in-place mutation detected "
+                "(same length, different content) — the appended-tail "
+                "validation heuristic only covers append-only / shrink-only "
+                "mutators. Add explicit per-entry validation handling for "
+                "in-place mutators before reusing this helper.",
+                context={
+                    "existing_len": len(existing),
+                    "new_len": len(new),
+                },
+                suggestions=[
+                    "If introducing a _replace_* / _update_* mutator, "
+                    "compute the indices of modified entries explicitly "
+                    "and pass those to _shape_check via validate_only.",
+                ],
+            )
+        )
+    return set(range(len(existing), len(new)))
 
 
 class EnergyTools:
@@ -607,7 +673,7 @@ class EnergyTools:
             }
             if validate_warning is not None:
                 response["partial"] = True
-                response["warning"] = validate_warning
+                response.setdefault("warnings", []).append(validate_warning)
             return response
 
         except ToolError:
@@ -629,6 +695,7 @@ class EnergyTools:
         config_hash: str | dict[_PrefsKey, str],
         *,
         current_prefs: dict[str, Any] | None = None,
+        validate_only: dict[str, set[int]] | None = None,
     ) -> dict[str, Any]:
         """Shape-check → hash-check → save → post-save validate.
 
@@ -650,11 +717,18 @@ class EnergyTools:
         path uses this to avoid a second ``energy/get_prefs`` round trip
         per attempt (the snapshot was already fetched by ``_mutate_atomic``).
         Convenience modes always pass a ``str`` hash; the dict form is
-        only reachable via direct mode='set' callers.
+        only reachable via direct mode='set' callers. The hash check still
+        runs against the provided snapshot as a defensive guard.
+
+        ``validate_only`` is forwarded to ``_shape_check`` and lets a caller
+        scope the per-entry check to specific top-level keys / indices.
+        Convenience-mode writes pass the appended tail indices so
+        pre-existing (HA-validated) entries are not re-validated against the
+        local schema — see issue #1086.
         """
         try:
             # 1. Shape check (fast local, fail closed)
-            shape_errors = _shape_check(config)
+            shape_errors = _shape_check(config, validate_only=validate_only)
             if shape_errors:
                 raise_tool_error(
                     create_error_response(
@@ -879,14 +953,14 @@ class EnergyTools:
             }
             if post_save_errors:
                 response["post_save_validation_errors"] = post_save_errors
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     f"Save succeeded, but the persisted config has "
                     f"{len(post_save_errors)} validation error(s). Review "
                     "and re-write if any relate to this change."
                 )
             elif post_save_validate_error is not None:
                 response["partial"] = True
-                response["warning"] = (
+                response.setdefault("warnings", []).append(
                     f"Save succeeded, but post-save energy/validate "
                     f"failed: {post_save_validate_error}. The persisted "
                     "config has not been re-validated."
@@ -938,6 +1012,18 @@ class EnergyTools:
                     ],
                 )
             )
+        # Empty/whitespace stat_consumption would write a ``{"stat_consumption": ""}``
+        # entry to energy prefs storage — a phantom row keyed on an empty
+        # sensor reference. Same multi-modal-destructive class as
+        # ``ha_manage_addon`` slug guard.
+        validate_identifier_not_empty(
+            stat_consumption,
+            "stat_consumption",
+            suggestions=[
+                "Pass stat_consumption='sensor.<your_device_energy>'",
+            ],
+            context={"mode": "add_device"},
+        )
 
         target_key = "device_consumption_water" if water else "device_consumption"
 
@@ -976,6 +1062,17 @@ class EnergyTools:
                     ],
                 )
             )
+        # Empty/whitespace stat_consumption would search the prefs storage for
+        # an empty match (always missing) and surface as a misleading
+        # "Device with stat_consumption='' not found".
+        validate_identifier_not_empty(
+            stat_consumption,
+            "stat_consumption",
+            suggestions=[
+                "Pass stat_consumption='sensor.<existing_device_energy>'",
+            ],
+            context={"mode": "remove_device"},
+        )
 
         target_key = "device_consumption_water" if water else "device_consumption"
 
@@ -1176,7 +1273,7 @@ class EnergyTools:
         dry_run: bool,
         preview_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        """Read-modify-write loop for convenience modes.
+        """Run convenience-mode read-modify-write with dry-run backstop and hash-conflict retry.
 
         Atomicity is with respect to the *entire* prefs snapshot, not just
         ``target_key``: ``_set_prefs`` validates the full ``config_hash``, so
@@ -1205,9 +1302,14 @@ class EnergyTools:
                 new_list = mutator(existing_list)
 
                 # Backstop shape-check, mirroring the real-run path through
-                # ``_set_prefs`` — keeps dry_run/real-run shape-equivalent
-                # if the entry-construction logic ever changes.
-                shape_errors = _shape_check({target_key: new_list})
+                # ``_set_prefs`` — keeps dry_run/real-run shape-equivalent if
+                # the entry-construction logic ever changes. See
+                # ``_appended_tail_indices`` for the validate_only contract.
+                appended_indices = _appended_tail_indices(existing_list, new_list)
+                shape_errors = _shape_check(
+                    {target_key: new_list},
+                    validate_only={target_key: appended_indices},
+                )
                 if shape_errors:
                     raise_tool_error(
                         create_error_response(
@@ -1241,11 +1343,17 @@ class EnergyTools:
                 new_list = mutator(existing_list)
 
                 partial_config = {target_key: new_list}
+                # Per issue #1086: validate only the appended tail so a
+                # pre-existing HA-validated entry cannot block an unrelated
+                # add/remove. See ``_appended_tail_indices`` for the
+                # validate_only contract.
+                appended_indices = _appended_tail_indices(existing_list, new_list)
                 try:
                     set_result = await self._set_prefs(
                         partial_config,
                         current_hash,
                         current_prefs=current_config,
+                        validate_only={target_key: appended_indices},
                     )
                 except ToolError as exc:
                     # _set_prefs raises ToolError(RESOURCE_LOCKED) on hash mismatch.
@@ -1289,10 +1397,21 @@ class EnergyTools:
             # Unreachable as long as every iteration either returns or raises:
             # the only ``continue`` is gated on ``attempt + 1 < max_attempts``,
             # which is False on the final iteration — so the bare ``raise``
-            # in the except block always fires there.
-            raise AssertionError(
-                f"_mutate_atomic({mode}, {target_key}): "
-                "retry loop exited without a return or raise"
+            # in the except block always fires there. Surface as an actionable
+            # structured error rather than a bare AssertionError that would
+            # otherwise fall through to ``except Exception`` and lose context.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    f"_mutate_atomic({mode}, {target_key}): retry loop exited "
+                    "without a return or raise",
+                    context={"mode": mode, "target_key": target_key},
+                    suggestions=[
+                        "This indicates a bug in the optimistic-concurrency "
+                        "loop logic — please file an issue with the mode and "
+                        "target_key from the context.",
+                    ],
+                )
             )
 
         except ToolError:

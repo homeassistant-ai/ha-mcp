@@ -7,7 +7,7 @@ integrations (config entries) via the REST and WebSocket APIs.
 
 import asyncio
 import logging
-from typing import Annotated, Any, Literal, cast, get_args
+from typing import Annotated, Any, Literal, get_args
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -19,11 +19,13 @@ from ..client.rest_client import (
     HomeAssistantConnectionError,
 )
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .tools_config_entry_flow import FLOW_HELPER_TYPES
 from .tools_config_helpers import (
@@ -32,10 +34,11 @@ from .tools_config_helpers import (
 )
 from .util_helpers import (
     build_pagination_metadata,
-    coerce_bool_param,
-    coerce_int_param,
+    fetch_integration_diagnostics,
     get_logger_levels,
+    parse_diagnostics_fields,
     wait_for_entity_removed,
+    websocket_error_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,26 +54,141 @@ FlowLookupReason = Literal[
 ]
 
 
-# Tool parameter type for ha_delete_helpers_integrations.helper_type.
-# Must match SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES exactly — the drift
-# assertion below catches accidental divergence at import time.
+# Tool parameter type for ha_remove_helpers_integrations.helper_type.
+# Must match SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES plus config_subentry —
+# the drift assertion below catches accidental divergence at import time.
 HelperTypeLiteral = Literal[
     # 12 SIMPLE
-    "input_button", "input_boolean", "input_select", "input_number",
-    "input_text", "input_datetime", "counter", "timer", "schedule",
-    "zone", "person", "tag",
+    "input_button",
+    "input_boolean",
+    "input_select",
+    "input_number",
+    "input_text",
+    "input_datetime",
+    "counter",
+    "timer",
+    "schedule",
+    "zone",
+    "person",
+    "tag",
+    # config-entry subentries
+    "config_subentry",
     # 15 FLOW
-    "template", "group", "utility_meter", "derivative", "min_max",
-    "threshold", "integration", "statistics", "trend", "random",
-    "filter", "tod", "generic_thermostat", "switch_as_x",
+    "template",
+    "group",
+    "utility_meter",
+    "derivative",
+    "min_max",
+    "threshold",
+    "integration",
+    "statistics",
+    "trend",
+    "random",
+    "filter",
+    "tod",
+    "generic_thermostat",
+    "switch_as_x",
     "generic_hygrostat",
 ]
 assert set(get_args(HelperTypeLiteral)) == (
-    SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES
+    SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES | {"config_subentry"}
 ), (
-    "HelperTypeLiteral drifted from SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES — "
+    "HelperTypeLiteral drifted from SIMPLE_HELPER_TYPES | FLOW_HELPER_TYPES "
+    "| {'config_subentry'} — "
     "update the inline list to match."
 )
+
+
+def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
+    """Extract ``{field_name: current_value}`` from a form-type OptionsFlow.
+
+    Reads each ``data_schema`` entry's ``default`` key, falling back to
+    ``value`` (constant-type fields ship ``value`` instead of ``default``)
+    and then ``description.suggested_value`` (UI-created template, group,
+    utility_meter, and other flow-based helpers stash the current value
+    there — voluptuous renders ``suggested_value=...`` into the
+    ``description`` sub-object, not as a top-level field key). Fields with
+    a missing or ``None`` value are skipped.
+    """
+    out: dict[str, Any] = {}
+    # Defensive: HA should always return a list of dict fields, but guard
+    # against malformed shapes so a bad response degrades to {} instead of
+    # raising AttributeError (e.g. a string data_schema would iterate chars).
+    data_schema = flow.get("data_schema")
+    if not isinstance(data_schema, list):
+        return out
+    for field in data_schema:
+        if not isinstance(field, dict):
+            continue
+        name = field.get("name")
+        if name is None:
+            continue
+        value = field.get("default", field.get("value"))
+        if value is None:
+            description = field.get("description")
+            if isinstance(description, dict):
+                value = description.get("suggested_value")
+        if value is not None:
+            out[name] = value
+    return out
+
+
+async def fetch_entry_options(
+    client: Any, entry_id: str, *, quiet: bool = False
+) -> dict[str, Any]:
+    """Read the current ``options`` for a config entry via its OptionsFlow.
+
+    Home Assistant does not expose ``ConfigEntry.options`` through any
+    read-only REST or WebSocket endpoint — ``/api/config/config_entries/entry``
+    deliberately omits the field. The closest approximation that the HA UI
+    itself uses is the ``default`` values populated into the OptionsFlow's
+    first-step ``data_schema``: integrations build that schema from the
+    existing options dict, so the defaults match the persisted state.
+
+    Starts the flow, harvests ``{name: default}`` from the first step, and
+    aborts the flow in ``finally`` so it doesn't sit half-open.
+
+    Returns ``{}`` on any failure (unsupported entry, non-form first step
+    such as a menu, init/abort errors) so callers can treat the return as
+    the canonical "options" field without further checks.
+
+    Probe failures log at ``warning`` (so breakage of a deliberate
+    single-entry probe is discoverable) unless ``quiet=True``, which demotes
+    them to ``debug`` for bulk fan-out callers (e.g. ``smart_search`` probes
+    one entry per flow-helper on every ``ha_deep_search``; a per-entry
+    warning there would spam the log on routine searches).
+
+    Exposed at module level (not as a method) so non-class callers such as
+    ``smart_search._search_flow_helpers`` can probe flow-helper config
+    without instantiating ``IntegrationTools``.
+    """
+    log_probe_failure = logger.debug if quiet else logger.warning
+    flow_id: str | None = None
+    try:
+        flow = await client.start_options_flow(entry_id)
+        flow_id = flow.get("flow_id")
+        flow_type = flow.get("type")
+        if flow_type != "form":
+            log_probe_failure(
+                f"OptionsFlow for {entry_id} returned type={flow_type!r}, "
+                f"not a form — cannot extract option defaults"
+            )
+            return {}
+        return options_from_form_flow(flow)
+    except Exception as exc:
+        log_probe_failure(
+            f"Failed to fetch options for {entry_id}: {type(exc).__name__}: {exc}"
+        )
+        return {}
+    finally:
+        if flow_id:
+            try:
+                await client.abort_options_flow(flow_id)
+            except Exception as abort_err:
+                log_probe_failure(
+                    f"Failed to abort options flow {flow_id}: "
+                    f"{type(abort_err).__name__}: {abort_err}"
+                )
 
 
 async def _get_entry_id_for_flow_helper(
@@ -81,7 +199,7 @@ async def _get_entry_id_for_flow_helper(
 ) -> tuple[str | None, FlowLookupReason]:
     """Resolve a flow-helper target to its config_entry_id via entity_registry.
 
-    Used by ha_delete_helpers_integrations when target is an entity_id
+    Used by ha_remove_helpers_integrations when target is an entity_id
     (contains a '.') and helper_type is a known flow-helper type.
 
     Args:
@@ -113,12 +231,16 @@ async def _get_entry_id_for_flow_helper(
     except (HomeAssistantConnectionError, HomeAssistantAuthError):
         # Typed errors must reach the outer handler — do not swallow.
         raise
-    except Exception as e:
+    except (OSError, TimeoutError) as e:
+        # Network / transport errors from the WS layer (ConnectionError,
+        # BrokenPipeError, TimeoutError, …). Programmer-bug-shape
+        # exceptions (KeyError, AttributeError, TypeError) intentionally
+        # propagate — the response is shape-checked at the dict guard
+        # below, and a raise here would otherwise mask the bug as a
+        # transient WEBSOCKET_DISCONNECTED.
         logger.debug(f"entity_registry/get failed for {entity_id}: {e}")
         if warnings is not None:
-            warnings.append(
-                f"entity_registry/get failed for {entity_id}: {e}"
-            )
+            warnings.append(f"entity_registry/get failed for {entity_id}: {e}")
         return None, "lookup_failed"
 
     if not isinstance(result, dict) or not result.get("success"):
@@ -177,16 +299,22 @@ class IntegrationTools:
             ),
         ] = None,
         include_options: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="Include the options object for each entry. "
                 "Automatically enabled when domain filter is set. "
-                "Useful for auditing template definitions and helper configurations.",
+                "For UI-created flow-based helpers (template, group, "
+                "utility_meter, derivative, ...), the current config — "
+                "template body, group members, source entity, etc. — is "
+                "surfaced here by probing the options flow. Prefer this over "
+                "include_schema when you only need to read the current values; "
+                "use include_schema when you also need the field types or "
+                "selector metadata.",
                 default=False,
             ),
         ] = False,
         include_schema: Annotated[
-            bool | str,
+            bool,
             Field(
                 description="When entry_id is set, also return the options flow schema "
                 "(available fields and their types). Use before ha_config_set_helper "
@@ -194,8 +322,62 @@ class IntegrationTools:
                 default=False,
             ),
         ] = False,
+        include_subentries: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When entry_id is set, include config subentries for the "
+                    "integration entry. Useful for integrations that expose "
+                    "conversation agents, devices, or other extension points "
+                    "as subentries."
+                ),
+                default=False,
+            ),
+        ] = False,
+        include_subentry_schema: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When entry_id is set, return introspection-only config "
+                    "subentry schema information; no subentry is created. "
+                    "Pair with subentry_type, and optionally subentry_id for "
+                    "reconfigure schema."
+                ),
+                default=False,
+            ),
+        ] = False,
+        subentry_type: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Integration-defined subentry type used with "
+                    "include_subentry_schema=True."
+                ),
+                default=None,
+            ),
+        ] = None,
+        subentry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Existing subentry ID used with include_subentry_schema=True "
+                    "to inspect a reconfigure flow."
+                ),
+                default=None,
+            ),
+        ] = None,
+        show_advanced_options: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When include_subentry_schema=True, ask Home Assistant to "
+                    "expose advanced flow options."
+                ),
+                default=False,
+            ),
+        ] = False,
         exact_match: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "Use exact substring matching for query filter (default: True). "
@@ -205,19 +387,133 @@ class IntegrationTools:
             ),
         ] = True,
         limit: Annotated[
-            int | str,
+            int,
             Field(
                 default=50,
+                ge=1,
+                le=200,
                 description="Max entries to return per page in list mode (default: 50)",
             ),
         ] = 50,
         offset: Annotated[
-            int | str,
+            int,
             Field(
                 default=0,
+                ge=0,
                 description="Number of entries to skip for pagination (default: 0)",
             ),
         ] = 0,
+        include_diagnostics: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When entry_id is set, also fetch the integration's diagnostics "
+                    "dump — integration-defined JSON (commonly includes redacted "
+                    "config, device list, state snapshots; exact top-level keys "
+                    "vary by integration). The canonical artifact users grab via "
+                    "Settings → Devices & Services → [integration] → ⋯ → Download "
+                    "diagnostics. Use when triaging integration bugs or filing "
+                    "ha_report_issue for a specific integration. Payloads can be "
+                    "large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with "
+                    "diagnostics_fields or diagnostics_truncate_at_bytes to fit "
+                    "the LLM context budget."
+                ),
+                default=False,
+            ),
+        ] = False,
+        device_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional. When set with include_diagnostics=True, returns the "
+                    "device-scoped diagnostics dump for that specific device under "
+                    "the integration (rather than the full integration dump). Some "
+                    "integrations only expose config-entry-level dumps; others "
+                    "expose both."
+                ),
+                default=None,
+            ),
+        ] = None,
+        diagnostics_fields: Annotated[
+            list[str] | str | None,
+            Field(
+                description=(
+                    "Optional list of top-level keys to keep from the diagnostics "
+                    "data payload (e.g. ['home_assistant', 'issues']). Trims the "
+                    "payload before it hits the LLM context budget. Accepts a JSON "
+                    "list or comma-separated string. Only applies when "
+                    "include_diagnostics=True and the data payload is a dict. "
+                    "Unknown keys are silently dropped and surfaced via the "
+                    "omitted_fields sub-key."
+                ),
+                default=None,
+            ),
+        ] = None,
+        diagnostics_truncate_at_bytes: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "Optional byte cap on the serialized diagnostics payload "
+                    "(after diagnostics_fields and diagnostics_data_path have "
+                    "been applied). On hit, drops data and emits truncated=true, "
+                    "bytes_total, byte_cap, plus available_fields (when the "
+                    "capped value is a dict). Recommended starting point: "
+                    "20000 bytes. Only applies when include_diagnostics=True."
+                ),
+                default=None,
+                ge=1,
+            ),
+        ] = None,
+        diagnostics_data_path: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional dotted path into the diagnostics data sub-tree "
+                    "(e.g. '<list-valued path>' for per-device records, "
+                    "'home_assistant.version' for HA core version; the exact "
+                    "key path varies by integration version). Walks into the "
+                    "post-fields payload. Resolution failures replace data "
+                    "with null and surface data_path_error. Use this when the "
+                    "interesting payload lives several levels deep — top-level "
+                    "diagnostics_fields can't address sub-trees on integrations "
+                    "where the bulk lives under one key (ZHA, MQTT, ESPHome). "
+                    "Only applies when include_diagnostics=True."
+                ),
+                default=None,
+            ),
+        ] = None,
+        diagnostics_data_offset: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "Pagination start index (default 0) for list-valued "
+                    "diagnostics_data_path results. Ignored when "
+                    "diagnostics_data_path is unset, diagnostics_data_limit is "
+                    "unset, or the resolved value is not a list. Only applies "
+                    "when include_diagnostics=True."
+                ),
+                default=0,
+                ge=0,
+            ),
+        ] = 0,
+        diagnostics_data_limit: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "Pagination window size for list-valued "
+                    "diagnostics_data_path results. When set with a "
+                    "list-resolved path, swaps data for a pagination envelope "
+                    "{path, items, offset, limit, total, has_more}. Default "
+                    "None returns the full resolved value. Workflow: probe "
+                    "with a list-valued diagnostics_data_path and "
+                    "diagnostics_data_limit=10 to walk a large list one page "
+                    "at a time (the exact path varies by integration version). "
+                    "Only applies when include_diagnostics=True."
+                ),
+                default=None,
+                ge=1,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Get integration (config entry) information with pagination.
 
@@ -230,6 +526,13 @@ class IntegrationTools:
         - Search: ha_get_integration(query="zigbee")
         - Get specific entry: ha_get_integration(entry_id="abc123")
         - Get entry with editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
+        - Get entry with diagnostics dump: ha_get_integration(entry_id="abc123", include_diagnostics=True)
+        - Get device-scoped diagnostics: ha_get_integration(entry_id="abc123", include_diagnostics=True, device_id="dev123")
+        - Walk a sub-tree: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<dotted-path>")
+        - Paginate a large list: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
+        - List config subentries: ha_get_integration(entry_id="abc123", include_subentries=True)
+        - Inspect subentry create schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation")
+        - Inspect subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
         - List template entries: ha_get_integration(domain="template")
 
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
@@ -249,31 +552,105 @@ class IntegrationTools:
         Supervisor's lowercase ``"default"`` literal — do not cross-compare.
         """
         try:
-            include_opts = coerce_bool_param(
-                include_options, "include_options", default=False
+            include_opts = include_options
+            include_schema_bool = include_schema
+            include_diagnostics_bool = include_diagnostics
+            include_subentries_bool = include_subentries
+            include_subentry_schema_bool = include_subentry_schema
+            show_advanced_options_bool = show_advanced_options
+            exact_match_bool = exact_match
+            limit_int = limit
+            offset_int = offset
+            fields_list = parse_diagnostics_fields(diagnostics_fields)
+            truncate_bytes = diagnostics_truncate_at_bytes
+            data_offset_int = (
+                diagnostics_data_offset if diagnostics_data_offset is not None else 0
             )
-            include_schema_bool = coerce_bool_param(
-                include_schema, "include_schema", default=False
-            )
-            exact_match_bool = coerce_bool_param(
-                exact_match, "exact_match", default=True
-            )
-            limit_int = coerce_int_param(
-                limit, "limit", default=50, min_value=1, max_value=200
-            )
-            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
+            data_limit_int = diagnostics_data_limit
+            # Type-guard ``diagnostics_data_path`` here so a bad caller (dict /
+            # list) surfaces as ``VALIDATION_INVALID_PARAMETER`` instead of
+            # leaking as ``INTERNAL_ERROR`` from the resolver's ``.strip()``
+            # downstream.
+            if diagnostics_data_path is not None and not isinstance(
+                diagnostics_data_path, str
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "diagnostics_data_path must be a string, got "
+                        f"{type(diagnostics_data_path).__name__}",
+                        context={"parameter": "diagnostics_data_path"},
+                    )
+                )
             # Auto-enable options when domain filter is set
             if domain is not None:
                 include_opts = True
 
             # If entry_id provided, get specific config entry
             if entry_id is not None:
-                return await self._get_single_entry(entry_id, include_schema_bool)
+                resp = await self._get_single_entry(
+                    entry_id,
+                    include_schema_bool,
+                    include_subentries=include_subentries_bool
+                    or include_subentry_schema_bool,
+                    include_subentry_schema=include_subentry_schema_bool,
+                    subentry_type=subentry_type,
+                    subentry_id=subentry_id,
+                    show_advanced_options=show_advanced_options_bool,
+                )
+                if include_diagnostics_bool:
+                    resp["diagnostics"] = await fetch_integration_diagnostics(
+                        self._client,
+                        entry_id,
+                        device_id,
+                        fields=fields_list,
+                        truncate_at_bytes=truncate_bytes,
+                        data_path=diagnostics_data_path,
+                        data_offset=data_offset_int,
+                        data_limit=data_limit_int,
+                    )
+                elif device_id is not None:
+                    resp.setdefault("warnings", []).append(
+                        "device_id was provided but ignored because "
+                        "include_diagnostics=False"
+                    )
+                return resp
 
             # List mode - get all config entries
-            return await self._list_entries(
+            result = await self._list_entries(
                 domain, query, include_opts, exact_match_bool, limit_int, offset_int
             )
+            ignored_detail_params = []
+            if include_diagnostics_bool:
+                ignored_detail_params.append("include_diagnostics")
+            if device_id is not None:
+                ignored_detail_params.append("device_id")
+            if fields_list is not None:
+                ignored_detail_params.append("diagnostics_fields")
+            if truncate_bytes is not None:
+                ignored_detail_params.append("diagnostics_truncate_at_bytes")
+            if diagnostics_data_path is not None:
+                ignored_detail_params.append("diagnostics_data_path")
+            if data_offset_int > 0:
+                ignored_detail_params.append("diagnostics_data_offset")
+            if data_limit_int is not None:
+                ignored_detail_params.append("diagnostics_data_limit")
+            if include_subentries_bool:
+                ignored_detail_params.append("include_subentries")
+            if include_subentry_schema_bool:
+                ignored_detail_params.append("include_subentry_schema")
+            if subentry_type is not None:
+                ignored_detail_params.append("subentry_type")
+            if subentry_id is not None:
+                ignored_detail_params.append("subentry_id")
+            if show_advanced_options_bool:
+                ignored_detail_params.append("show_advanced_options")
+            if ignored_detail_params:
+                result.setdefault("warnings", []).append(
+                    f"{', '.join(ignored_detail_params)} "
+                    "ignored because entry_id was not set (list mode)"
+                )
+            return result
 
         except ToolError:
             raise
@@ -289,12 +666,31 @@ class IntegrationTools:
             )
 
     async def _get_single_entry(
-        self, entry_id: str, include_schema: bool | None
+        self,
+        entry_id: str,
+        include_schema: bool | None,
+        *,
+        include_subentries: bool,
+        include_subentry_schema: bool,
+        subentry_type: str | None,
+        subentry_id: str | None,
+        show_advanced_options: bool,
     ) -> dict[str, Any]:
         """Fetch a single config entry by ID, optionally including its options schema."""
         try:
             result = await self._client.get_config_entry(entry_id)
             entry_domain = result.get("domain") if isinstance(result, dict) else None
+
+            # Surface `options` on every per-entry response (HA's REST endpoint
+            # omits the field). For entries with supports_options=True we probe
+            # via OptionsFlow — see `fetch_entry_options`. When include_schema
+            # is also requested, `_fetch_options_schema` below populates options
+            # from the same flow init so we don't pay for two round-trips.
+            if isinstance(result, dict):
+                result.setdefault("options", {})
+                if result.get("supports_options") and not include_schema:
+                    result["options"] = await self._fetch_entry_options(entry_id)
+
             resp: dict[str, Any] = {
                 "success": True,
                 "entry_id": entry_id,
@@ -313,6 +709,20 @@ class IntegrationTools:
             if include_schema and result.get("supports_options"):
                 await self._fetch_options_schema(entry_id, resp)
 
+            if include_subentries:
+                subentries = await self._fetch_config_subentries(entry_id)
+                resp["subentry_count"] = len(subentries)
+                resp["subentries"] = subentries
+
+            if include_subentry_schema:
+                await self._fetch_config_subentry_schema(
+                    entry_id,
+                    resp,
+                    subentry_type=subentry_type,
+                    subentry_id=subentry_id,
+                    show_advanced_options=show_advanced_options,
+                )
+
             return resp
         except ToolError:
             raise
@@ -326,21 +736,130 @@ class IntegrationTools:
                 ],
             )
 
-    async def _fetch_options_schema(
-        self, entry_id: str, resp: dict[str, Any]
+    async def _fetch_config_subentries(self, entry_id: str) -> list[dict[str, Any]]:
+        """Fetch config subentries for a detailed entry response."""
+        result = await self._client.list_config_subentries(entry_id)
+        if not isinstance(result, dict) or not result.get("success"):
+            error_msg = websocket_error_message(result.get("error", "Operation failed"))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to list config subentries: {error_msg}",
+                    context={"entry_id": entry_id},
+                )
+            )
+
+        subentries = result.get("result")
+        if not isinstance(subentries, list):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected config subentry list response",
+                    context={"entry_id": entry_id, "details": result},
+                )
+            )
+
+        return [subentry for subentry in subentries if isinstance(subentry, dict)]
+
+    async def _fetch_config_subentry_schema(
+        self,
+        entry_id: str,
+        resp: dict[str, Any],
+        *,
+        subentry_type: str | None,
+        subentry_id: str | None,
+        show_advanced_options: bool,
     ) -> None:
-        """Start an options flow to read the schema, then abort it."""
+        """Start a config subentry flow to read its schema, then abort it."""
+        if not subentry_type:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "subentry_type is required when include_subentry_schema=True",
+                    suggestions=[
+                        "Call ha_get_integration(entry_id=..., "
+                        "include_subentries=True) to inspect existing subentry "
+                        "types, then retry with subentry_type.",
+                    ],
+                    context={"entry_id": entry_id},
+                )
+            )
+
+        flow_id = None
+        try:
+            flow_result = await self._client.start_config_subentry_flow(
+                entry_id,
+                subentry_type,
+                subentry_id=subentry_id,
+                show_advanced_options=show_advanced_options,
+            )
+            flow_id = flow_result.get("flow_id")
+            flow_type = flow_result.get("type")
+            schema: dict[str, Any] = {
+                "subentry_type": subentry_type,
+                "subentry_id": subentry_id,
+                "flow_type": flow_type,
+                "step_id": flow_result.get("step_id"),
+                "description_placeholders": flow_result.get(
+                    "description_placeholders", {}
+                ),
+            }
+            if flow_type == "form":
+                schema["data_schema"] = flow_result.get("data_schema", [])
+            elif flow_type == "menu":
+                schema["menu_options"] = flow_result.get("menu_options", [])
+            else:
+                schema["details"] = flow_result
+            resp["subentry_schema"] = schema
+        finally:
+            if flow_id:
+                try:
+                    await asyncio.wait_for(
+                        self._client.abort_config_subentry_flow(flow_id),
+                        timeout=5.0,
+                    )
+                except Exception as abort_err:
+                    logger.warning(
+                        "Failed to abort config subentry introspection flow %s: %s",
+                        flow_id,
+                        abort_err,
+                    )
+
+    @staticmethod
+    def _options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
+        """Class-method alias for :func:`options_from_form_flow`."""
+        return options_from_form_flow(flow)
+
+    async def _fetch_entry_options(self, entry_id: str) -> dict[str, Any]:
+        """Instance wrapper around :func:`fetch_entry_options`.
+
+        Kept so existing call sites (and the ``include_schema`` path) read
+        naturally as ``self._fetch_entry_options(...)``; the probe logic and
+        full rationale live on the module-level function.
+        """
+        return await fetch_entry_options(self._client, entry_id)
+
+    async def _fetch_options_schema(self, entry_id: str, resp: dict[str, Any]) -> None:
+        """Start an options flow to read the schema, then abort it.
+
+        Also populates ``resp["entry"]["options"]`` for form-type flows from
+        the same flow result so callers requesting both schema and options
+        don't pay for two round-trips.
+        """
         flow_id = None
         try:
             flow_result = await self._client.start_options_flow(entry_id)
             flow_id = flow_result.get("flow_id")
             flow_type = flow_result.get("type")
+            entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else None
             if flow_type == "form":
                 resp["options_schema"] = {
                     "flow_type": "form",
                     "step_id": flow_result.get("step_id"),
                     "data_schema": flow_result.get("data_schema", []),
                 }
+                if entry is not None:
+                    entry["options"] = self._options_from_form_flow(flow_result)
             elif flow_type == "menu":
                 resp["options_schema"] = {
                     "flow_type": "menu",
@@ -348,16 +867,18 @@ class IntegrationTools:
                     "menu_options": flow_result.get("menu_options", []),
                 }
         except Exception as schema_err:
-            logger.debug(
-                f"Failed to fetch options schema for {entry_id}: {schema_err}"
+            logger.warning(
+                f"Failed to fetch options schema for {entry_id}: "
+                f"{type(schema_err).__name__}: {schema_err}"
             )
         finally:
             if flow_id:
                 try:
                     await self._client.abort_options_flow(flow_id)
                 except Exception as abort_err:
-                    logger.debug(
-                        f"Failed to abort options flow {flow_id}: {abort_err}"
+                    logger.warning(
+                        f"Failed to abort options flow {flow_id}: "
+                        f"{type(abort_err).__name__}: {abort_err}"
                     )
 
     async def _list_entries(
@@ -394,10 +915,27 @@ class IntegrationTools:
         # Fetch current logger levels once; enrich each entry with its effective level.
         logger_levels = await get_logger_levels(self._client)
 
-        # Format entries for response
+        # `_format_entry` is sync and cannot probe the OptionsFlow; options
+        # are filled in by a second async pass below for entries that
+        # advertise supports_options=True. See `fetch_entry_options`.
         formatted_entries = [
             self._format_entry(entry, include_opts, logger_levels) for entry in entries
         ]
+
+        if include_opts:
+            options_targets = [
+                e for e in formatted_entries if e.get("supports_options")
+            ]
+            if options_targets:
+                fetched = await asyncio.gather(
+                    *(
+                        self._fetch_entry_options(e["entry_id"])
+                        for e in options_targets
+                    ),
+                    return_exceptions=False,
+                )
+                for entry, opts in zip(options_targets, fetched, strict=True):
+                    entry["options"] = opts
 
         # Apply search filter if query provided
         if query and query.strip():
@@ -453,7 +991,9 @@ class IntegrationTools:
         if logger_levels is not None:
             domain = entry.get("domain") or ""
             level_info = logger_levels.get(domain)
-            formatted_entry["log_level"] = level_info["name"] if level_info else "DEFAULT"
+            formatted_entry["log_level"] = (
+                level_info["name"] if level_info else "DEFAULT"
+            )
             formatted_entry["log_level_raw"] = level_info["raw"] if level_info else None
 
         # Include options when requested (for auditing template definitions, etc.)
@@ -466,9 +1006,7 @@ class IntegrationTools:
                 "pref_disable_new_entities"
             ]
         if "pref_disable_polling" in entry:
-            formatted_entry["pref_disable_polling"] = entry[
-                "pref_disable_polling"
-            ]
+            formatted_entry["pref_disable_polling"] = entry["pref_disable_polling"]
 
         return formatted_entry
 
@@ -507,25 +1045,32 @@ class IntegrationTools:
         tags={"Integrations"},
         annotations={"destructiveHint": True, "title": "Set Integration Enabled"},
     )
+    @with_auto_backup(domain="integration", id_param="entry_id")
     @log_tool_usage
     async def ha_set_integration_enabled(
         self,
         entry_id: Annotated[str, Field(description="Config entry ID")],
-        enabled: Annotated[
-            bool | str, Field(description="True to enable, False to disable")
-        ],
+        enabled: Annotated[bool, Field(description="True to enable, False to disable")],
     ) -> dict[str, Any]:
         """Enable/disable integration (config entry).
 
         Use ha_get_integration() to find entry IDs.
         """
         try:
-            enabled_bool = coerce_bool_param(enabled, "enabled")
+            # Empty/whitespace entry_id would surface as a misleading HA
+            # "config entry not found" from ``config_entries/disable``.
+            validate_identifier_not_empty(
+                entry_id,
+                "entry_id",
+                suggestions=[
+                    "Use ha_get_integration() to find valid config entry IDs",
+                ],
+            )
 
             message = {
                 "type": "config_entries/disable",
                 "entry_id": entry_id,
-                "disabled_by": None if enabled_bool else "user",
+                "disabled_by": None if enabled else "user",
             }
 
             result = await self._client.send_websocket_message(message)
@@ -537,7 +1082,7 @@ class IntegrationTools:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to {'enable' if enabled_bool else 'disable'} integration: {error_msg}",
+                        f"Failed to {'enable' if enabled else 'disable'} integration: {error_msg}",
                         context={"entry_id": entry_id},
                     )
                 )
@@ -550,13 +1095,13 @@ class IntegrationTools:
             else:
                 note = (
                     "Integration has been loaded."
-                    if enabled_bool
+                    if enabled
                     else "Integration has been unloaded."
                 )
 
             return {
                 "success": True,
-                "message": f"Integration {'enabled' if enabled_bool else 'disabled'} successfully",
+                "message": f"Integration {'enabled' if enabled else 'disabled'} successfully",
                 "entry_id": entry_id,
                 "require_restart": require_restart,
                 "note": note,
@@ -569,27 +1114,44 @@ class IntegrationTools:
             exception_to_structured_error(e, context={"entry_id": entry_id})
 
     @tool(
-        name="ha_delete_helpers_integrations",
+        name="ha_remove_helpers_integrations",
         tags={"Helper Entities", "Integrations"},
         annotations={
             "destructiveHint": True,
-            "title": "Delete Helper or Integration",
+            "idempotentHint": True,
+            "title": "Remove Helper or Integration",
         },
     )
+    @with_auto_backup(
+        # ``target`` is one of three shapes: a flow-helper entity_id like
+        # ``sensor.my_meter`` (routes through the matching ``helper_<type>``
+        # domain when ``helper_type`` is also passed), a bare config-entry
+        # id, or a parent.subentry pair. Dispatch to ``helper_<type>``
+        # when the kw is supplied so storage-backed helpers (input_*,
+        # counter, timer, ...) get a snapshot via the same handler the
+        # ``ha_config_set_helper`` decorator uses; otherwise fall back to
+        # the integration domain.
+        domain_fn=lambda kw: (
+            f"helper_{kw['helper_type']}" if kw.get("helper_type") else "integration"
+        ),
+        id_param="target",
+    )
     @log_tool_usage
-    async def ha_delete_helpers_integrations(
+    async def ha_remove_helpers_integrations(
         self,
         target: Annotated[
             str,
             Field(
                 description=(
-                    "What to delete. One of: "
+                    "What to remove. One of: "
                     "(a) bare helper_id for SIMPLE helpers (requires helper_type), "
                     "e.g. 'my_button'; "
                     "(b) full entity_id (requires helper_type), "
                     "e.g. 'input_button.my_button' or 'sensor.my_meter'; "
                     "(c) config entry_id for any integration (helper_type=None), "
-                    "e.g. value from ha_get_integration()."
+                    "e.g. value from ha_get_integration(); "
+                    "(d) parent config entry_id for config_subentry "
+                    "(requires helper_type='config_subentry' and subentry_id)."
                 )
             ),
         ],
@@ -599,40 +1161,46 @@ class IntegrationTools:
                 description=(
                     "Helper type. Required when target is a helper_id (bare) "
                     "or entity_id. Set to None when target is a config entry_id "
-                    "to delete any integration."
+                    "to remove any integration. Use 'config_subentry' to remove "
+                    "a config subentry under target."
+                ),
+                default=None,
+            ),
+        ] = None,
+        subentry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Config subentry ID to remove when helper_type='config_subentry'."
                 ),
                 default=None,
             ),
         ] = None,
         confirm: Annotated[
-            bool | str,
+            bool,
             Field(
-                description=(
-                    "Must be True to confirm deletion. Accepts bool or "
-                    "string ('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', "
-                    "case-insensitive) for transport ergonomics."
-                ),
+                description="Must be True to confirm removal.",
                 default=False,
             ),
         ] = False,
         wait: Annotated[
-            bool | str,
+            bool,
             Field(
                 description=(
                     "Wait for entity removal. Default: True. "
-                    "Ignored when helper_type=None (no entity poll, "
-                    "require_restart returned). Accepts bool or string "
-                    "('true'/'false'/'1'/'0'/'yes'/'no'/'on'/'off', "
-                    "case-insensitive)."
+                    "Ignored when helper_type=None or "
+                    "helper_type='config_subentry' (no entity poll, "
+                    "require_restart returned)."
                 ),
                 default=True,
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """Delete a Home Assistant helper or integration config entry.
+        """Remove a Home Assistant helper or integration config entry.
 
-        Combines simple-helper websocket deletion and config-entry deletion
-        under one entry point with three routing paths driven by helper_type.
+        Unifies three backend removal mechanisms — simple-helper websocket
+        delete, config-entry delete, and config-subentry delete — behind one
+        entry point with four routing paths driven by helper_type.
 
         WHEN NOT TO USE:
         - Removing only an entity (without deleting its underlying helper or
@@ -656,31 +1224,62 @@ class IntegrationTools:
           (e.g. utility_meter tariffs) are removed together.
         - helper_type=None + entry_id → direct config entry delete (any
           integration).
+        - helper_type="config_subentry" + parent entry_id + subentry_id →
+          delete one config subentry.
+
+        MISSING-TARGET CONTRACT:
+        A target that is *confirmed absent* raises a structured error
+        rather than returning silent success, so a typo'd or stale
+        identifier surfaces immediately at the caller layer (the
+        ``success`` boolean is what agent wrappers branch on). The
+        error code per-path follows the target shape:
+        - SIMPLE (bare helper_id or entity_id): state-machine empty AND
+          entity registry empty → raises ``ENTITY_NOT_FOUND``.
+        - FLOW (entity_id): not in entity registry → raises
+          ``ENTITY_NOT_FOUND``. YAML-configured helpers (no config entry
+          backing) raise ``RESOURCE_NOT_FOUND``. A bare helper_id (no
+          ``.``) on a FLOW target raises ``ENTITY_NOT_FOUND`` — FLOW
+          resolution needs a full entity_id. TOCTOU 404 on the
+          resolved entry_id raises ``RESOURCE_NOT_FOUND``.
+        - Direct config entry (helper_type=None): backend returns HTTP
+          404 → raises ``RESOURCE_NOT_FOUND``.
+        - Config subentry: backend returns a "not_found" error → raises
+          ``RESOURCE_NOT_FOUND``.
+
+        Idempotency at the contract level still holds (call N times =
+        same response). Transient connectivity failures (WebSocket
+        disconnected, network timeouts) raise their own codes
+        (``WEBSOCKET_DISCONNECTED``, ``CONNECTION_FAILED``) so retry
+        logic can branch separately.
 
         EXAMPLES:
-        - Delete SIMPLE button:
-          ha_delete_helpers_integrations(
+        - Remove SIMPLE button:
+          ha_remove_helpers_integrations(
               target="my_button", helper_type="input_button", confirm=True
           )
-        - Delete FLOW utility_meter (any sub-entity works):
-          ha_delete_helpers_integrations(
+        - Remove FLOW utility_meter (any sub-entity works):
+          ha_remove_helpers_integrations(
               target="sensor.energy_peak",
               helper_type="utility_meter",
               confirm=True,
           )
-        - Delete any integration by entry_id:
-          ha_delete_helpers_integrations(
+        - Remove any integration by entry_id:
+          ha_remove_helpers_integrations(
               target="01HXYZ...", confirm=True
           )
+        - Remove a config subentry:
+          ha_remove_helpers_integrations(
+              target="01HXYZ...", helper_type="config_subentry",
+              subentry_id="subentry-123", confirm=True
+          )
 
-        **WARNING:** Deleting a helper or integration that is referenced by
+        **WARNING:** Removing a helper or integration that is referenced by
         automations, scripts, or other integrations may cause those to fail.
         Use ha_search_entities() / ha_get_integration() to verify before
-        deletion. Cannot be undone.
+        removal. Cannot be undone.
         """
-        # === Confirm gate (uniform for all three paths) ===
-        confirm_bool = coerce_bool_param(confirm, "confirm", default=False)
-        if not confirm_bool:
+        # === Confirm gate (uniform for all four paths) ===
+        if not confirm:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -696,8 +1295,27 @@ class IntegrationTools:
                 )
             )
 
-        # default=True guarantees a non-None return; cast for mypy.
-        wait_bool = cast(bool, coerce_bool_param(wait, "wait", default=True))
+        # === Empty/whitespace target gate (uniform for all four paths) ===
+        # Empty/whitespace ``target`` would reach the destructive backend call
+        # on every path: Path 1 (simple-helper websocket delete), Path 2
+        # (flow-helper entity-resolution → entry_id delete), Path 3
+        # (_delete_direct_entry → client.delete_config_entry("")), Path 4
+        # (_delete_config_subentry → ws delete on empty parent entry_id).
+        # Each path surfaces a different misleading error from HA. Reject
+        # up-front so the caller learns the identifier was unusable before
+        # any backend call.
+        validate_identifier_not_empty(
+            target,
+            "target",
+            suggestions=[
+                "Use ha_get_integration() to find valid entry_ids",
+                "For simple helpers, use ha_search_entities() to find the helper_id",
+                "For flow helpers, use ha_search_entities() to find an entity_id",
+            ],
+            context={"helper_type": helper_type},
+        )
+
+        wait_bool = wait
         warnings: list[str] = []
 
         # === Routing dispatch ===
@@ -705,11 +1323,22 @@ class IntegrationTools:
             # Path 3: Direct config entry delete (any integration)
             return await self._delete_direct_entry(target)
 
+        if helper_type == "config_subentry":
+            # Path 4: Delete one subentry under a parent config entry
+            subentry_id = validate_identifier_not_empty(
+                subentry_id,
+                "subentry_id",
+                suggestions=[
+                    "Use ha_get_integration(entry_id=..., include_subentries=True) "
+                    "to find subentry IDs",
+                ],
+                context={"target": target, "helper_type": helper_type},
+            )
+            return await self._delete_config_subentry(target, subentry_id)
+
         if helper_type in SIMPLE_HELPER_TYPES:
             # Path 1: SIMPLE helper via websocket delete
-            return await self._delete_simple_helper(
-                helper_type, target, wait_bool
-            )
+            return await self._delete_simple_helper(helper_type, target, wait_bool)
 
         if helper_type in FLOW_HELPER_TYPES:
             # Path 2: FLOW helper via entity_id → config_entry_id lookup
@@ -726,9 +1355,15 @@ class IntegrationTools:
             )
         )
 
+    # Private helpers keep the ``_delete_*`` prefix because they wrap HA's
+    # own backend verb — the WebSocket API is ``<type>/delete`` and the
+    # REST API is HTTP DELETE. The public tool surface uses ``remove`` to
+    # join the ``ha_remove_*`` behavioural family; the prefix asymmetry is
+    # intentional and prevents future renames pulled by either side.
+
     # === Path 3: Direct config entry delete (any integration) ===
     async def _delete_direct_entry(self, entry_id: str) -> dict[str, Any]:
-        """Delete a config entry directly via the websocket delete API."""
+        """Delete a config entry directly via the REST delete API."""
         try:
             result = await self._client.delete_config_entry(entry_id)
             require_restart = result.get("require_restart", False)
@@ -749,8 +1384,43 @@ class IntegrationTools:
             }
         except ToolError:
             raise
+        except HomeAssistantAPIError as e:
+            # HA returns 404 for missing config entries (see
+            # RestClient.delete_config_entry — the REST DELETE on a
+            # nonexistent entry surfaces as HomeAssistantAPIError with
+            # status_code=404). Surface as RESOURCE_NOT_FOUND so callers
+            # can distinguish absent target from real failures; the typo
+            # case (agent passed the wrong entry_id) is the failure mode
+            # that "absent → success" would silently mask. Non-404 API
+            # errors are real failures and bubble through
+            # exception_to_structured_error below.
+            if e.status_code == 404:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        (
+                            f"Config entry {entry_id} not found. May "
+                            "indicate it was already removed, never "
+                            "existed, or the identifier is a typo. "
+                            "Verify with ha_get_integration() before "
+                            "retrying."
+                        ),
+                        context={"entry_id": entry_id},
+                        suggestions=[
+                            "Use ha_get_integration() without entry_id "
+                            "to see all config entries",
+                        ],
+                    )
+                )
+            exception_to_structured_error(
+                e,
+                context={"entry_id": entry_id},
+                suggestions=[
+                    "Use ha_get_integration() without entry_id to "
+                    "see all config entries",
+                ],
+            )
         except Exception as e:
-            logger.error(f"Failed to delete config entry: {e}")
             exception_to_structured_error(
                 e,
                 context={"entry_id": entry_id},
@@ -784,11 +1454,7 @@ class IntegrationTools:
                 # Reason discriminates the failure mode without a second
                 # WebSocket round-trip. The lookup helper already queried
                 # the registry; the response told us everything we need.
-                entity_id = (
-                    target
-                    if "." in target
-                    else f"{helper_type}.{target}"
-                )
+                entity_id = target if "." in target else f"{helper_type}.{target}"
                 if reason == "no_config_entry":
                     raise_tool_error(
                         create_error_response(
@@ -828,13 +1494,46 @@ class IntegrationTools:
                             },
                         )
                     )
-                # Remaining reasons (not_in_registry, bare_id_not_supported,
-                # wrong_helper_type) → entity not found from the caller's
-                # perspective. wrong_helper_type cannot occur here because
-                # the dispatcher already checked SIMPLE_HELPER_TYPES /
-                # FLOW_HELPER_TYPES; the assertion below enforces that
-                # contract at runtime.
+                # wrong_helper_type cannot occur here because the dispatcher
+                # already checked SIMPLE_HELPER_TYPES / FLOW_HELPER_TYPES; the
+                # assertion enforces that contract at runtime.
                 assert reason != "wrong_helper_type"
+                if reason == "not_in_registry":
+                    # Target is absent from the entity registry. Surface
+                    # as ENTITY_NOT_FOUND (entity-shaped target) so the
+                    # caller learns the identifier is unusable — the typo
+                    # case is the failure mode "absent → success" would
+                    # silently mask. Matches the bare_id_not_supported
+                    # branch below and sibling ha_remove_entity.
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.ENTITY_NOT_FOUND,
+                            (
+                                f"Helper {target} not found in entity "
+                                f"registry (looked up as {entity_id}). "
+                                "May indicate it was already removed, "
+                                "never existed, or the identifier is a "
+                                "typo. Verify with ha_search_entities() "
+                                "before retrying."
+                            ),
+                            context={
+                                "target": target,
+                                "helper_type": helper_type,
+                                "entity_id": entity_id,
+                            },
+                            suggestions=[
+                                "Use ha_search_entities() — flow helper "
+                                "types often expose entities under a "
+                                "different domain than the helper_type "
+                                "itself (e.g. utility_meter → sensor.*, "
+                                "switch_as_x → switch.* / light.*).",
+                            ],
+                        )
+                    )
+                # bare_id_not_supported → caller passed a bare ID where an
+                # entity_id was required. That's a call-shape error, not
+                # missing-target; surface as ENTITY_NOT_FOUND with the
+                # search suggestion so the caller can self-correct.
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.ENTITY_NOT_FOUND,
@@ -866,6 +1565,38 @@ class IntegrationTools:
             # Step 3: delete the config entry
             try:
                 delete_result = await client.delete_config_entry(entry_id)
+            except HomeAssistantAPIError as e:
+                # TOCTOU window: entry_id resolved at step 1 was deleted
+                # before step 3 reached HA. Surface as RESOURCE_NOT_FOUND
+                # so the caller knows the config entry is gone — silent
+                # success would hide the race from any wrapper that
+                # acted on the intermediate state. Non-404 still surfaces.
+                if e.status_code == 404:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            (
+                                f"Config entry {entry_id} for {target} "
+                                "not found at delete time (resolved by "
+                                "registry but absent when DELETE reached "
+                                "Home Assistant). May indicate a "
+                                "concurrent removal."
+                            ),
+                            context={
+                                "entry_id": entry_id,
+                                "target": target,
+                                "helper_type": helper_type,
+                            },
+                        )
+                    )
+                exception_to_structured_error(
+                    e,
+                    context={
+                        "entry_id": entry_id,
+                        "target": target,
+                        "helper_type": helper_type,
+                    },
+                )
             except Exception as e:
                 exception_to_structured_error(
                     e,
@@ -898,10 +1629,7 @@ class IntegrationTools:
             }
             if wait_bool and entity_ids:
                 results = await asyncio.gather(
-                    *[
-                        wait_for_entity_removed(client, eid)
-                        for eid in entity_ids
-                    ],
+                    *[wait_for_entity_removed(client, eid) for eid in entity_ids],
                     return_exceptions=True,
                 )
                 # Auth/connection errors during polling must surface as
@@ -919,13 +1647,13 @@ class IntegrationTools:
                     if res is not True
                 ]
                 if not_removed:
-                    response["warning"] = (
+                    response.setdefault("warnings", []).append(
                         f"Deletion confirmed but the following entities "
                         f"are still present after the wait window: "
                         f"{not_removed}"
                     )
             if warnings:
-                response["warnings"] = warnings
+                response.setdefault("warnings", []).extend(warnings)
             return response
 
         except ToolError:
@@ -944,6 +1672,65 @@ class IntegrationTools:
                 ],
             )
 
+    async def _delete_config_subentry(
+        self, entry_id: str, subentry_id: str
+    ) -> dict[str, Any]:
+        """Delete one config subentry under a parent config entry."""
+        result = await self._client.delete_config_subentry(entry_id, subentry_id)
+        if not isinstance(result, dict) or not result.get("success"):
+            error = result.get("error", "Operation failed")
+            error_msg = websocket_error_message(error)
+            # Detect "subentry already absent" by HA's structured
+            # ``code="not_found"`` only. A generic ``"not found" in
+            # error_msg`` substring match was rejected because it can
+            # collide with unrelated HA error messages (e.g.
+            # "repository not found", "integration not found") and
+            # mis-classify a real failure as a missing target.
+            # The HA ``config_entries/subentries/delete`` handler raises
+            # with ``code="not_found"`` when entry_id or subentry_id is
+            # missing; if a future HA version uses a different code, we
+            # raise SERVICE_CALL_FAILED instead — safer than mis-classifying.
+            error_code = error.get("code") if isinstance(error, dict) else None
+            if error_code == "not_found":
+                # Subentry absent under the parent config entry. Surface
+                # as RESOURCE_NOT_FOUND so the caller learns the target
+                # didn't exist — silent success would mask a typo'd
+                # subentry_id (or wrong parent entry_id) until the user
+                # noticed nothing was removed.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        (
+                            f"Subentry {subentry_id} not found under "
+                            f"config entry {entry_id}. May indicate it "
+                            "was already removed, never existed, or one "
+                            "of the identifiers is a typo. Verify with "
+                            "ha_get_integration(entry_id=..., "
+                            "include_subentries=True) before retrying."
+                        ),
+                        context={
+                            "entry_id": entry_id,
+                            "subentry_id": subentry_id,
+                        },
+                    )
+                )
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to delete config subentry: {error_msg}",
+                    context={"entry_id": entry_id, "subentry_id": subentry_id},
+                )
+            )
+        return {
+            "success": True,
+            "action": "delete",
+            "target": entry_id,
+            "helper_type": "config_subentry",
+            "subentry_id": subentry_id,
+            "method": "config_subentry_delete",
+            "message": f"Successfully deleted config subentry: {subentry_id}",
+        }
+
     # === Path 1: SIMPLE helper delete via websocket ===
     async def _delete_simple_helper(
         self,
@@ -954,24 +1741,24 @@ class IntegrationTools:
         """Delete a SIMPLE helper via the websocket {type}/delete API.
 
         Uses a 3-retry registry lookup with exponential backoff to find the
-        helper's unique_id, then falls back to direct-id-delete and an
-        already-deleted check if the registry has no record.
+        helper's unique_id, then falls back to direct-id-delete and a
+        confirmed-absent classification if the registry has no record.
         """
         client = self._client
         # Convert to entity_id form
         entity_id = (
-            target if target.startswith(f"{helper_type}.")
+            target
+            if target.startswith(f"{helper_type}.")
             else f"{helper_type}.{target}"
         )
         # Bare helper_id (without prefix) form for fallback strategies
         helper_id = (
-            target.split(".", 1)[1]
-            if target.startswith(f"{helper_type}.")
-            else target
+            target.split(".", 1)[1] if target.startswith(f"{helper_type}.") else target
         )
 
         try:
-            # Try to get unique_id with retry logic (race-condition guard)
+            # Resolve unique_id via the entity registry, with a retry loop
+            # for transient registry failures.
             unique_id = None
             registry_result: dict[str, Any] | None = None
             max_retries = 3
@@ -982,18 +1769,18 @@ class IntegrationTools:
                     f"(attempt {attempt + 1}/{max_retries})"
                 )
 
-                # Fast state check first
+                # State check is informational only — disabled entities are
+                # missing from the state machine but resolved via the registry
+                # below (issue #1057). Kept as a debug breadcrumb rather than
+                # removed; full removal is option 3.2 in #1057, deferred to a
+                # separate PR for minimal blast radius here.
                 try:
                     state_check = await client.get_entity_state(entity_id)
                     if not state_check:
-                        if attempt < max_retries - 1:
-                            wait_time = 0.5 * (2**attempt)
-                            logger.debug(
-                                f"Entity {entity_id} not in state, waiting "
-                                f"{wait_time}s before retry..."
-                            )
-                            await asyncio.sleep(wait_time)
-                            continue
+                        logger.debug(
+                            f"Entity {entity_id} not in state; "
+                            "proceeding to registry lookup"
+                        )
                 except HomeAssistantAPIError as e:
                     # State check is best-effort here; an APIError (e.g. 404)
                     # is informational. Auth/connection errors must propagate
@@ -1006,16 +1793,12 @@ class IntegrationTools:
                     "entity_id": entity_id,
                 }
                 try:
-                    registry_result = await client.send_websocket_message(
-                        registry_msg
-                    )
-                    if registry_result.get("success"):
-                        entity_entry = registry_result.get("result", {})
+                    registry_result = await client.send_websocket_message(registry_msg)
+                    if (registry_result or {}).get("success"):
+                        entity_entry = (registry_result or {}).get("result") or {}
                         unique_id = entity_entry.get("unique_id")
                         if unique_id:
-                            logger.info(
-                                f"Found unique_id: {unique_id} for {entity_id}"
-                            )
+                            logger.info(f"Found unique_id: {unique_id} for {entity_id}")
                             break
                     if attempt < max_retries - 1:
                         wait_time = 0.5 * (2**attempt)
@@ -1028,9 +1811,7 @@ class IntegrationTools:
                     # APIError (e.g. 404) is informational and worth a retry.
                     # Auth/connection errors must propagate so they're not
                     # re-reported as ENTITY_NOT_FOUND in the fallback below.
-                    logger.warning(
-                        f"Registry lookup attempt {attempt + 1} failed: {e}"
-                    )
+                    logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
                     if attempt < max_retries - 1:
                         wait_time = 0.5 * (2**attempt)
                         await asyncio.sleep(wait_time)
@@ -1065,46 +1846,120 @@ class IntegrationTools:
                         "fallback_used": "direct_id",
                     }
                     if wait_bool:
-                        removed = await wait_for_entity_removed(
-                            client, entity_id
-                        )
+                        removed = await wait_for_entity_removed(client, entity_id)
                         if not removed:
-                            response["warning"] = (
+                            response.setdefault("warnings", []).append(
                                 f"Deletion confirmed but {entity_id} "
                                 "is still present after the wait window."
                             )
                     return response
 
-                # Fallback strategy 2: already-deleted check
+                # Fallback strategy 2: confirmed-absent classification.
+                # Confirm via the registry too — a disabled entity is
+                # state-absent but still registry-resident, so
+                # state-absence alone is not enough to classify as
+                # confirmed-absent. The APIError-404 branch routes the
+                # never-existed-target case (HA returns 404 on
+                # get_entity_state for unknown entity_ids) into the same
+                # confirmed-absent path so the resulting ENTITY_NOT_FOUND
+                # raise carries the structured "typo or removed" hint
+                # message rather than a raw 404.
+                state_gone = False
                 try:
                     final_state_check = await client.get_entity_state(entity_id)
-                    if not final_state_check:
-                        logger.info(
-                            f"Entity {entity_id} no longer exists; "
-                            "treating as already deleted"
-                        )
-                        return {
-                            "success": True,
-                            "action": "delete",
-                            "target": target,
-                            "helper_type": helper_type,
-                            "method": "websocket_delete",
-                            "entry_id": None,
-                            "entity_ids": [entity_id],
-                            "require_restart": False,
-                            "message": (
-                                f"Helper {target} was already deleted or "
-                                "never properly registered."
-                            ),
-                            "fallback_used": "already_deleted",
-                        }
+                    state_gone = not final_state_check
                 except HomeAssistantAPIError as e:
-                    # 404 here means the state-check itself confirmed the
-                    # entity is gone — treat as a soft signal and continue
-                    # to the "all fallbacks exhausted" path. Auth/connection
-                    # errors must propagate (handled by outer except).
+                    # Only 404 confirms the entity is absent from the state
+                    # machine. Other API failures (500, 401, …) are transient
+                    # or auth issues and must propagate so they aren't
+                    # mis-classified as a missing target. Mirrors the
+                    # status_code == 404 narrow in _delete_direct_entry.
+                    if e.status_code != 404:
+                        raise
                     logger.debug(
-                        f"State check for {entity_id} raised APIError: {e}"
+                        f"State check for {entity_id} raised 404 "
+                        f"(treating as state-absent): {e}"
+                    )
+                    state_gone = True
+
+                if state_gone:
+                    registry_still_has_entry = False
+                    try:
+                        verify_result = await client.send_websocket_message(
+                            {
+                                "type": "config/entity_registry/get",
+                                "entity_id": entity_id,
+                            }
+                        )
+                        if (verify_result or {}).get("success"):
+                            verify_entry = (verify_result or {}).get("result") or {}
+                            if verify_entry.get("entity_id"):
+                                registry_still_has_entry = True
+                    except HomeAssistantAPIError as verify_err:
+                        # On verify failure, conservatively assume the
+                        # entry is still there rather than misclassify
+                        # a verify failure as confirmed-absent.
+                        logger.debug(
+                            f"Registry verify for {entity_id} failed: {verify_err}"
+                        )
+                        registry_still_has_entry = True
+
+                    if not registry_still_has_entry:
+                        logger.info(
+                            f"Entity {entity_id} absent from state and "
+                            "registry; surfacing as ENTITY_NOT_FOUND"
+                        )
+                        # Entity-shape target confirmed absent from both
+                        # the state machine and the entity registry.
+                        # Surface as ENTITY_NOT_FOUND — silent success
+                        # would mask the typo case (agent passed the
+                        # wrong helper_id / entity_id). Matches sibling
+                        # ha_remove_entity.
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.ENTITY_NOT_FOUND,
+                                (
+                                    f"Helper {target} not found (looked "
+                                    f"up as {entity_id}). May indicate "
+                                    "it was already removed, never "
+                                    "existed, or the identifier is a "
+                                    "typo. Verify with "
+                                    "ha_search_entities() before "
+                                    "retrying."
+                                ),
+                                context={
+                                    "target": target,
+                                    "helper_type": helper_type,
+                                    "entity_id": entity_id,
+                                },
+                            )
+                        )
+
+                    logger.warning(
+                        f"Entity {entity_id} absent from state but still "
+                        "in registry; treating as SERVICE_CALL_FAILED"
+                    )
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            (
+                                f"Helper {target} could not be deleted: "
+                                "registry entry exists but unique_id was "
+                                "absent and the direct-id fallback "
+                                "delete failed."
+                            ),
+                            suggestions=[
+                                "Re-enable the entity via "
+                                "ha_set_entity(enabled=True), then retry "
+                                "deletion.",
+                                "Or inspect the entity registry entry "
+                                "directly to confirm unique_id presence.",
+                            ],
+                            context={
+                                "target": target,
+                                "entity_id": entity_id,
+                            },
+                        )
                     )
 
                 # All fallbacks exhausted
@@ -1155,11 +2010,9 @@ class IntegrationTools:
                     ),
                 }
                 if wait_bool:
-                    removed = await wait_for_entity_removed(
-                        client, entity_id
-                    )
+                    removed = await wait_for_entity_removed(client, entity_id)
                     if not removed:
-                        response["warning"] = (
+                        response.setdefault("warnings", []).append(
                             f"Deletion confirmed but {entity_id} "
                             "is still present after the wait window."
                         )
@@ -1197,6 +2050,7 @@ class IntegrationTools:
                     "Ensure helper is not used by automations or scripts",
                 ],
             )
+
 
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register integration management tools with the MCP server."""

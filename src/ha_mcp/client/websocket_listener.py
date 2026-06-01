@@ -107,19 +107,48 @@ class WebSocketListenerService:
     async def _handle_state_change(self, event: dict[str, Any]) -> None:
         """Handle state change events from Home Assistant.
 
+        HA's WS ``state_changed`` event arrives shaped as::
+
+            {
+                "event_type": "state_changed",
+                "data": {
+                    "entity_id": "light.x",
+                    "new_state": {...},
+                    "old_state": {...}
+                },
+                "time_fired": "...",
+                "origin": "LOCAL",
+                "context": {...}
+            }
+
+        The handler receives the full event object (the WS dispatcher
+        in ``websocket_client._handle_event_message`` passes
+        ``message["event"]``). entity_id / new_state / old_state live
+        under ``event["data"]``, NOT at the top level. Previously this
+        function read from the top level and the guard fired silently
+        on every event — ``update_pending_operations`` was never
+        invoked and async device operations stayed PENDING until they
+        expired. Surfaced during PR #1375 HAOS log audit
+        (TIMEOUT_OPERATION x 3 per bulk-control test).
+
         Args:
-            event: State change event data
+            event: HA state_changed event payload
         """
+        # Initialised here so the narrow ``except`` log at the bottom can
+        # safely reference them even if extraction below hasn't run yet.
+        entity_id: str | None = None
+        new_state: dict[str, Any] | None = None
         try:
             events_processed = self.stats["events_processed"]
             if isinstance(events_processed, int):
                 self.stats["events_processed"] = events_processed + 1
             self.stats["last_event_time"] = datetime.now()
 
-            # Extract event data
-            entity_id = event.get("entity_id")
-            new_state = event.get("new_state")
-            old_state = event.get("old_state")
+            # Extract event data — fields are nested under ``event["data"]``.
+            event_data = event.get("data") or {}
+            entity_id = event_data.get("entity_id")
+            new_state = event_data.get("new_state")
+            old_state = event_data.get("old_state")
 
             if not entity_id or not new_state:
                 return
@@ -138,8 +167,23 @@ class WebSocketListenerService:
                     self.stats["operations_updated"] = operations_updated + len(updated_ops)
                 logger.info(f"Updated {len(updated_ops)} operations for {entity_id}")
 
-        except Exception as e:
-            logger.error(f"Error handling state change event: {e}")
+        except (RuntimeError, ConnectionError, OSError) as e:
+            # Narrow catch: keep the listener alive on transport-level
+            # transients so a single bad event doesn't kill the
+            # subscription, but let code bugs (KeyError, TypeError,
+            # AttributeError) propagate. That discipline is what would
+            # have caught the data-nesting silent failure this PR just
+            # fixed — broad ``except Exception`` is how that bug
+            # survived for months. Use ``logger.exception`` to capture
+            # the traceback and include event context so the next
+            # regression is debuggable.
+            logger.exception(
+                "Transient error handling state_changed event "
+                "(entity_id=%r, event_type=%r): %r",
+                entity_id,
+                event.get("event_type"),
+                e,
+            )
 
     async def _connection_monitor(self) -> None:
         """Monitor WebSocket connection health."""

@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 86+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 84+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -46,6 +46,8 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ## Client Configuration
 
+> **You already have the add-on — connect your client to it.** The steps below point a client at this add-on's HTTP endpoint (ha-mcp running *inside* Home Assistant). You do **not** also need `uvx ha-mcp`: that starts a *separate* local copy of the server on your own machine and does **not** talk to this add-on, so running both side by side gives you two independent instances. `uvx` is the alternative for people *not* running the add-on (e.g. no Home Assistant OS) — see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for that path.
+
 ### <details><summary><b>📱 Claude Desktop</b></summary>
 
 Claude Desktop requires a proxy to connect to HTTP MCP servers. Install **mcp-proxy** first:
@@ -55,13 +57,16 @@ Claude Desktop requires a proxy to connect to HTTP MCP servers. Install **mcp-pr
 uv tool install mcp-proxy
 # or
 pipx install mcp-proxy
+# or (macOS)
+brew install mcp-proxy
 ```
 
 Then add to your Claude Desktop configuration file:
 
 **Location:**
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Windows (traditional installer): `%APPDATA%\Claude\claude_desktop_config.json`
+- Windows (Microsoft Store): path varies by package — see the [Windows setup guide](https://homeassistant-ai.github.io/ha-mcp/guide-windows) for a detection snippet
 
 **Configuration:**
 ```json
@@ -97,6 +102,24 @@ claude mcp add-json home-assistant '{
 Replace the URL with the one from your add-on logs.
 
 **Restart Claude Code** after adding the configuration.
+
+</details>
+
+### <details><summary><b>📘 Codex</b></summary>
+
+Codex connects to HTTP MCP servers directly — use the URL from your add-on logs:
+
+```bash
+codex mcp add home-assistant --url http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw
+```
+
+**Heads-up:** as of early 2026, Codex's HTTP MCP support has a known initialization bug ([openai/codex#11284](https://github.com/openai/codex/issues/11284)) where the server connects but exposes **no tools**, even when the same endpoint works in other clients. If Codex shows no ha-mcp tools, run ha-mcp locally over stdio with `uvx` (see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/)) instead.
+
+</details>
+
+### <details><summary><b>🧩 Cursor / Windsurf / other HTTP-native clients</b></summary>
+
+These connect to HTTP MCP servers directly: add a new HTTP MCP server pointing at the **MCP Server URL** from the add-on logs — no proxy needed. See your client's own MCP configuration docs for the exact field name.
 
 </details>
 
@@ -144,6 +167,14 @@ Or with a custom domain (requires DNS setup in Cloudflare):
 additional_hosts:
   - hostname: ha-mcp.yourdomain.com
     service: http://localhost:9583
+```
+
+**If `localhost` doesn't reach the MCP add-on** (the Cloudflared add-on tunnels from inside its own container), point the tunnel at the MCP add-on's container hostname instead — find it on the MCP Server add-on's **Information** page (e.g. `b37de126-ha-mcp`):
+
+```yaml
+additional_hosts:
+  - hostname: ha-mcp.yourdomain.com
+    service: http://<your-prefix>-ha-mcp:9583
 ```
 
 ##### Authenticate and Get Your Public URL
@@ -245,7 +276,9 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~84 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+
+> ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
 
 **When to enable:**
 - Models **without native deferred tool support** — this includes OpenAI-compatible local models, and also **Claude Haiku** which does not use Claude's built-in deferred tool loading. Haiku users will see significant token savings with this enabled.
@@ -253,17 +286,72 @@ Replaces the full tool catalog (~86 tools, ~46K tokens) with search-based discov
 - MCP clients that **cap total tools** (e.g. at 100) — reduces visible tool count to ~4
 
 **When to leave disabled (default):**
-- Claude Sonnet/Opus or other clients with deferred tool support — tools are loaded on demand, so the full catalog has no idle context cost
-- When you need direct tool access without the search step
+- **Claude in Sonnet or Opus modes** — their built-in tool search conflicts with ha-mcp's. Disable one or the other.
+- Other clients with native deferred tool support — tools are loaded on demand, so the full catalog has no idle context cost.
+- When you need direct tool access without the search step.
 
 Requires add-on restart to take effect.
+
+### tool_search_max_results
+
+**Default:** `5` (range 2-10)
+
+Maximum number of tools returned by `ha_search_tools` when `enable_tool_search` is on. Lower values (2-3) save context tokens but may miss relevant tools. Has no effect unless tool search is enabled.
+
+Requires add-on restart to take effect.
+
+### enable_tool_security_policies
+
+**Default:** `false`
+
+Gates high-stakes tool calls (lock/alarm control, automation writes, etc.) behind explicit user approval. When a guarded tool is called, the agent is told to ask the user to open the Tool Security Policies tab in the web UI, and the call is held until the user clicks **Approve** there. Per-tool rules — with optional argument conditions — are configured from the same Tool Security Policies tab.
+
+**When to enable:**
+- Shared installations where you want a human in the loop for destructive or security-relevant operations
+- Locks, alarms, and other entities where an LLM mistake has real-world consequences
+- Whenever you want a per-call user-approval prompt before high-stakes operations run (locks, automations, etc.)
+
+**When to leave disabled (default):**
+- Single-user setups where you're comfortable with the LLM acting autonomously
+- You haven't configured any policy rules yet (with no rules, the toggle has no effect — but the runtime cost is small either way)
+
+Off by default. Requires add-on restart to take effect.
 
 **Example Configuration:**
 
 ```yaml
-backup_hint: normal
-secret_path: ""  # Leave empty for auto-generation
+enable_tool_security_policies: true
 ```
+
+Per-tool rules (including argument conditions like `args.domain in ['lock', 'alarm_control_panel']`) are configured from the **Tool Security Policies** tab in the web UI, not from `config.yaml`.
+
+*Inspired by [PolicyLayer](https://policylayer.com/)'s policy DSL shape, originally proposed in [#966](https://github.com/homeassistant-ai/ha-mcp/issues/966) by [@L1AD](https://github.com/L1AD).*
+
+---
+
+## Tool Settings Web UI
+
+The add-on exposes a web-based settings page for managing which tools are available to AI assistants. Click **"Open Web UI"** on the add-on info page to access it.
+
+Features:
+- **Enable/disable individual tools** — toggle each tool on or off
+- **Pin tools** — keep tools always visible when `enable_tool_search` is on
+- **Per-group master toggle** — enable/disable all tools in a group (HACS, System, etc.) with one click
+- **Search** — filter tools by name or title
+- **Mandatory tools** — `ha_search_entities`, `ha_get_overview`, `ha_get_state`, `ha_report_issue`, `ha_get_skill_guide`, and `ha_manage_backup` are always enabled and cannot be disabled (listing one in `disabled_tools` is a silent no-op — it keeps running)
+- **Tool Security Policies tab** — when `enable_tool_security_policies` is on, approve held tool calls and manage per-tool rules here
+- **Advanced settings** — an advanced panel with a beta master toggle (plus per-feature sub-toggles) for opting into beta tools such as raw YAML editing, filesystem tools, and code mode. See [Beta Features](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md)
+- **In-UI restart** — a "Restart Add-on" button appears after saving to apply changes with one click
+
+**Important:** Tool configuration changes require an add-on restart to take effect. The UI will prompt you to restart after saving.
+
+### Non-add-on installations
+
+In Docker (`ha-mcp-web`) and standalone HTTP installations, the settings UI is mounted under your MCP secret path. Open `http://<host>:<port>/<secret_path>/settings` (the same URL prefix that protects your MCP endpoint). This keeps the auth posture consistent — anyone who can reach your MCP endpoint can also use the settings UI; anyone who can't, can't.
+
+### Text-field fallback
+
+If you prefer not to use the web UI (or want to set these before first start), the `disabled_tools` and `pinned_tools` options accept comma-separated tool names as seed values. On first start, the add-on creates `/data/tool_config.json` from these values; after that, the web UI is the source of truth. Mandatory tools (listed above) cannot be disabled this way.
 
 ---
 
@@ -286,6 +374,15 @@ The add-on uses Home Assistant Supervisor's built-in authentication. No tokens o
 - **Local network only by default** - The add-on listens on port 9583
 - **Remote access** - Use the [Webhook Proxy add-on](../homeassistant-addon-webhook-proxy/DOCS.md) (easiest with Nabu Casa) or the Cloudflared add-on for secure HTTPS tunnels
 - **Never expose** port 9583 directly to the internet without proper security measures
+
+### Supervisor Permissions
+
+The add-on requests `hassio_role: manager` (declared in `config.yaml`).
+`manager` is required for the Supervisor REST endpoints used to fetch
+add-on and system-service logs (`/addons/<slug>/logs`, `/<service>/logs`,
+`/core/logs`) — `default` returns 403 (see #1116). The role also grants
+start/stop/install/update on other add-ons, but ha-mcp only uses the
+read-side capabilities.
 
 ---
 
@@ -343,7 +440,9 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 86+ MCP tools for controlling Home Assistant:
+The add-on provides 84+ MCP tools for controlling Home Assistant:
+
+> **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
 > Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.
 
@@ -352,18 +451,17 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_manage_addon` — Manage a Home Assistant add-on — update its configuration or call its internal API.
 
 ### Areas & Floors
-- `ha_config_list_areas` — List all Home Assistant areas (rooms).
-- `ha_config_list_floors` — List all Home Assistant floors.
-- `ha_config_remove_area` — Delete a Home Assistant area.
-- `ha_config_remove_floor` — Delete a Home Assistant floor.
-- `ha_config_set_area` — Create or update a Home Assistant area (room).
-- `ha_config_set_floor` — Create or update a Home Assistant floor.
 - `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
+- `ha_remove_area_or_floor` — Remove a Home Assistant area or floor.
+- `ha_set_area_or_floor` — Create or update a Home Assistant area or floor.
+
+### Assist
+- `ha_manage_pipeline` — Manage Home Assistant Assist pipelines.
 
 ### Automations
 - `ha_config_get_automation` — Retrieve Home Assistant automation configuration.
 - `ha_config_remove_automation` — Delete a Home Assistant automation.
-- `ha_config_set_automation` — Create or update a Home Assistant automation.
+- `ha_config_set_automation` — Create or update a Home Assistant automation. MUST call ha_get_skill_guide first.
 
 ### Blueprints
 - `ha_get_blueprint` — Get blueprint information - list all blueprints or get details for a specific one.
@@ -382,13 +480,13 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_config_delete_dashboard_resource` — Delete a dashboard resource.
 - `ha_config_get_dashboard` — Get dashboard info - list all dashboards, get config, or search for cards.
 - `ha_config_list_dashboard_resources` — List all Lovelace dashboard resources (custom cards, themes, CSS/JS).
-- `ha_config_set_dashboard` — Create or update a Home Assistant dashboard.
+- `ha_config_set_dashboard` — Create or update a Home Assistant dashboard. MUST call ha_get_skill_guide first.
 - `ha_config_set_dashboard_resource` — Create or update a dashboard resource (inline code or external URL).
 
 ### Device Registry
 - `ha_get_device` — Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.
 - `ha_remove_device` — Remove an orphaned device from the Home Assistant device registry.
-- `ha_update_device` — Update device properties such as name, area, disabled state, or labels.
+- `ha_set_device` — Update device properties such as name, area, disabled state, or labels.
 
 ### Energy
 - `ha_manage_energy_prefs` — Manage the Home Assistant Energy Dashboard preferences.
@@ -411,16 +509,13 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_config_set_group` — Create or update a service-based Home Assistant entity group via the group.set service.
 
 ### HACS
-- `ha_hacs_add_repository` — Add a custom GitHub repository to HACS.
-- `ha_hacs_download` — Download and install a HACS repository.
-- `ha_hacs_repository_info` — Get detailed repository information including README and documentation.
-- `ha_hacs_search` — Search HACS store for repositories, or list installed repositories.
+- `ha_get_hacs_info` — Get HACS (Home Assistant Community Store) data — search the store or fetch repository details.
+- `ha_manage_hacs` — Manage HACS (Home Assistant Community Store) — install/update or add custom repositories.
 
 ### Helper Entities
 - `ha_config_list_helpers` — List all Home Assistant helpers of a specific type with their configurations.
-- `ha_config_set_helper` — Create or update Home Assistant helper entities (27 types, unified interface).
-- `ha_delete_helpers_integrations` — Delete a Home Assistant helper or integration config entry.
-- `ha_get_helper_schema` — Get configuration schema for a helper type.
+- `ha_config_set_helper` — Create or update Home Assistant helper entities and config subentries
+- `ha_remove_helpers_integrations` — Remove a Home Assistant helper or integration config entry.
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
@@ -429,6 +524,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 ### Integrations
 - `ha_get_integration` — Get integration (config entry) information with pagination.
+- `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
 - `ha_set_integration_enabled` — Enable/disable integration (config entry).
 
 ### Labels & Categories
@@ -439,30 +535,35 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 - `ha_config_set_category` — Create or update a Home Assistant category.
 - `ha_config_set_label` — Create or update a Home Assistant label.
 
+### Scenes
+- `ha_config_get_scene` — Retrieve Home Assistant scene configuration.
+- `ha_config_remove_scene` — Delete a Home Assistant scene.
+- `ha_config_set_scene` — Create or update a Home Assistant scene. MUST call ha_get_skill_guide first.
+
 ### Scripts
 - `ha_config_get_script` — Retrieve Home Assistant script configuration.
 - `ha_config_remove_script` — Delete a Home Assistant script.
-- `ha_config_set_script` — Create or update a Home Assistant script.
+- `ha_config_set_script` — Create or update a Home Assistant script. MUST call ha_get_skill_guide first.
 
 ### Search & Discovery
-- `ha_deep_search` — Search inside automation, script, helper, and dashboard *configurations* — not for finding entity IDs.
+- `ha_deep_search` — Search inside automation, script, scene, helper, and dashboard *configurations* — not for finding entity IDs.
 - `ha_get_overview` — Get AI-friendly system overview with intelligent categorization.
 - `ha_get_state` — Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
-- `ha_search_entities` — Find or list entities (lights, sensors, switches, etc.) by name, domain, or area.
+- `ha_search_entities` — Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
 
 ### Service & Device Control
 - `ha_bulk_control` — Control multiple devices with bulk operation support and WebSocket tracking.
+- `ha_call_event` — Execute a custom event on the Home Assistant event bus.
 - `ha_call_service` — Execute Home Assistant services to control entities and trigger automations.
 - `ha_get_operation_status` — Check status of one or more device operations with real-time WebSocket verification.
 - `ha_list_services` — List available Home Assistant services with optional pagination and detail control.
 
 ### System
-- `ha_backup_create` — Create a fast Home Assistant backup (local only).
-- `ha_backup_restore` — Restore Home Assistant from a backup (LAST RESORT - use with extreme caution).
 - `ha_check_config` — Check Home Assistant configuration for errors.
-- `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT).
-- `ha_get_system_health` — Get Home Assistant system health, including Zigbee (ZHA) and Z-Wave JS network diagnostics.
+- `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT). MUST call ha_get_skill_guide first.
 - `ha_get_updates` — Get update information -- list all updates or get details for a specific one.
+- `ha_manage_backup` — Polymorphic backup tool. See the tool description for the routing matrix.
+- `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.
 - `ha_reload_core` — Reload Home Assistant configuration without full restart.
 - `ha_restart` — Restart Home Assistant.
 
@@ -483,7 +584,7 @@ The add-on provides 86+ MCP tools for controlling Home Assistant:
 
 <!-- ADDON_TOOLS_END -->
 
-For domain-specific Home Assistant documentation, use the `ha_get_skill_home_assistant_best_practices` resource.
+For domain-specific Home Assistant documentation, use the `ha_get_skill_guide` tool (or read the `skill://` resources directly if your MCP client supports resources).
 
 See the [main repository](https://github.com/homeassistant-ai/ha-mcp) for detailed tool documentation and examples.
 

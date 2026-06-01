@@ -10,11 +10,13 @@ import pytest
 
 # Mock Home Assistant imports so the package __init__ can be loaded.
 sys.modules["voluptuous"] = MagicMock()
-sys.modules["homeassistant"] = MagicMock()
-sys.modules["homeassistant.config_entries"] = MagicMock()
-sys.modules["homeassistant.core"] = MagicMock()
-sys.modules["homeassistant.helpers"] = MagicMock()
-sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
+homeassistant = MagicMock()
+sys.modules["homeassistant"] = homeassistant
+sys.modules["homeassistant.components"] = homeassistant.components
+sys.modules["homeassistant.config_entries"] = homeassistant.config_entries
+sys.modules["homeassistant.core"] = homeassistant.core
+sys.modules["homeassistant.helpers"] = homeassistant.helpers
+sys.modules["homeassistant.helpers.config_validation"] = homeassistant.helpers.config_validation
 
 from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
     _TaggedScalar,

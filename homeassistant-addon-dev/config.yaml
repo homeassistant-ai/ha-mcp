@@ -1,6 +1,6 @@
 name: "Home Assistant MCP Server (Dev)"
 description: "Development channel - AI assistant integration via MCP (unstable)"
-version: "7.4.1.dev252"
+version: "7.6.0.dev398"
 slug: "ha_mcp_dev"
 url: "https://github.com/homeassistant-ai/ha-mcp"
 stage: experimental
@@ -14,16 +14,42 @@ ingress: true
 ingress_port: 9583
 ingress_stream: true
 hassio_api: true
-hassio_role: default
+# `manager` (not `default`) is required so the Supervisor token grants access
+# to /addons/<slug>/logs and /<service>/logs (system service logs). Verified
+# via live test — `default` returns 403 for both. See #1116.
+hassio_role: manager
 homeassistant_api: true
 host_network: true
 image: "ghcr.io/homeassistant-ai/ha-mcp-addon-dev-{arch}"
 options:
   backup_hint: "normal"
-  enable_skills: true
-  enable_skills_as_tools: true
   enable_tool_search: false
+  enable_tool_security_policies: false
+  # Master beta gate — also dev-only (stable's schema does not declare
+  # this key; the stable web UI master remains the gate there). Default
+  # ON in dev so the master is pre-unlocked; the user only has to
+  # opt into individual sub-tools below to activate them.
+  enable_beta_features: true
+  # Beta sub-flags default OFF — each one is a separate opt-in that
+  # writes to the user's HA system, and shipping them on by default
+  # would risk damage on a fresh install. The master above being on
+  # just means "you can enable these from here," not "they are on."
   enable_yaml_config_editing: false
+  # Per-key sub-gates of enable_yaml_config_editing — independently allow
+  # the automation / script / scene keys inside packages/*.yaml. Default
+  # OFF (opt-in per key); only meaningful when the parent
+  # enable_yaml_config_editing is on.
+  enable_yaml_packages_automation: false
+  enable_yaml_packages_script: false
+  enable_yaml_packages_scene: false
+  enable_filesystem_tools: false
+  enable_custom_component_integration: false
+  enable_code_mode: false
+  enable_lite_docstrings: false
+  enable_mandatory_bps: true
+  enable_auto_backup: true
+  auto_backup_throttle_minutes: 0
+  auto_backup_retain_per_entity: 100
   tool_search_max_results: 5
   disabled_tools: ""
   pinned_tools: ""
@@ -31,15 +57,25 @@ options:
 schema:
   backup_hint: list(strong|normal|weak|auto)
   secret_path: str?
-  enable_skills: bool?
-  enable_skills_as_tools: bool?
   enable_tool_search: bool?
+  enable_tool_security_policies: bool?
+  enable_beta_features: bool?
   enable_yaml_config_editing: bool?
+  enable_yaml_packages_automation: bool?
+  enable_yaml_packages_script: bool?
+  enable_yaml_packages_scene: bool?
+  enable_code_mode: bool?
+  enable_lite_docstrings: bool?
+  enable_mandatory_bps: bool?
   enable_filesystem_tools: bool?
   enable_custom_component_integration: bool?
+  enable_auto_backup: bool?
+  auto_backup_throttle_minutes: int(0,1440)?
+  auto_backup_retain_per_entity: int(1,10000)?
   tool_search_max_results: int(2,10)?
   disabled_tools: str?
   pinned_tools: str?
   verify_ssl: bool?
+  advanced_debug_logging: bool?
 ports:
   9583/tcp: 9583

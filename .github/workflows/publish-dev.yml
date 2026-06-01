@@ -129,9 +129,13 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          # Do NOT push :latest from dev builds. :latest is reserved for stable
+          # releases (release-publish.yml pushes :latest + :stable together).
+          # Dev builds run on every push to master, so tagging :latest here
+          # clobbers the default tag with bleeding-edge dev between the biweekly
+          # stable releases. The dev channel is :dev (rolling) + :dev-<sha>. (#1475)
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository }}:dev
-            ${{ env.REGISTRY }}/${{ github.repository }}:latest
             ${{ env.REGISTRY }}/${{ github.repository }}:dev-${{ needs.prepare.outputs.short_sha }}
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha

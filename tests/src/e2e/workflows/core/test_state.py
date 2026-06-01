@@ -161,13 +161,21 @@ async def test_get_state_sensor_with_numeric_value(mcp_client):
 @pytest.mark.asyncio
 @pytest.mark.core
 async def test_get_state_automation_entity(mcp_client):
-    """Test retrieving state of an automation entity."""
+    """Test retrieving state of an automation entity.
+
+    Anchors on ``automation.e2e_seed_automation`` -- the entity_id HA
+    derives from the slugified ``alias`` of the disabled seed automation
+    defined in ``tests/initial_test_state/automations.yaml`` -- so a
+    regression that removes the seed automation fails this test loudly
+    instead of silently passing on whatever generic automation happened
+    to be present.
+    """
     logger.info("Testing ha_get_state with automation entity")
 
-    # Search for an automation
+    seed_entity = "automation.e2e_seed_automation"
     search_result = await mcp_client.call_tool(
         "ha_search_entities",
-        {"domain_filter": "automation", "limit": 5},
+        {"domain_filter": "automation", "limit": 25},
     )
 
     search_data = parse_mcp_result(search_result)
@@ -178,10 +186,14 @@ async def test_get_state_automation_entity(mcp_client):
     else:
         results = search_data.get("results", [])
 
-    if not results:
-        pytest.skip("No automation entities available for testing")
-
-    automation_entity = results[0].get("entity_id")
+    assert results, "No automation entities returned by ha_search_entities"
+    automation_entity_ids = [r.get("entity_id") for r in results]
+    assert seed_entity in automation_entity_ids, (
+        f"Expected seeded {seed_entity} in search results, got "
+        f"{automation_entity_ids!r} - see "
+        f"tests/initial_test_state/automations.yaml."
+    )
+    automation_entity = seed_entity
     logger.info(f"Testing with automation: {automation_entity}")
 
     result = await mcp_client.call_tool(

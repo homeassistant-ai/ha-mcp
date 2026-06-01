@@ -74,9 +74,9 @@ async def wait_for_item_in_list(
     This function handles timing issues where items are added but not
     immediately visible through the API.
     """
-    start_time = time.time()
+    start_time = time.monotonic()
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             result = await mcp_client.call_tool("ha_get_todo", {"entity_id": entity_id})
             data = enhanced_parse_mcp_result(result)

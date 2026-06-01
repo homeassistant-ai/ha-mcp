@@ -13,11 +13,13 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,11 +74,13 @@ class ZoneTools:
             result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    result.get("error", "Failed to get zones"),
-                    context={"zone_id": zone_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        result.get("error", "Failed to get zones"),
+                        context={"zone_id": zone_id},
+                    )
+                )
 
             zones = result.get("result", [])
 
@@ -92,12 +96,19 @@ class ZoneTools:
 
             if zone is None:
                 available_ids = [z.get("id") for z in zones[:10]]  # Show first 10
-                raise_tool_error(create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Zone not found: {zone_id}",
-                    context={"zone_id": zone_id, "available_zone_ids": available_ids},
-                    suggestions=["Use ha_get_zone() without zone_id to see all available zones"],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Zone not found: {zone_id}",
+                        context={
+                            "zone_id": zone_id,
+                            "available_zone_ids": available_ids,
+                        },
+                        suggestions=[
+                            "Use ha_get_zone() without zone_id to see all available zones"
+                        ],
+                    )
+                )
 
             return {
                 "success": True,
@@ -109,37 +120,53 @@ class ZoneTools:
             raise
         except Exception as e:
             logger.error(f"Error getting zone(s) (zone_id={zone_id}): {e}")
-            exception_to_structured_error(e, context={"zone_id": zone_id}, suggestions=[
-                "Check Home Assistant connection",
-                "Verify WebSocket connection is active",
-                "Use ha_search_entities(domain_filter='zone') as alternative",
-            ])
+            exception_to_structured_error(
+                e,
+                context={"zone_id": zone_id},
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Verify WebSocket connection is active",
+                    "Use ha_get_zone() without zone_id to see all available zones",
+                ],
+            )
 
     @staticmethod
     def _validate_coordinates(
-        latitude: float | None, longitude: float | None, radius: float | None,
+        latitude: float | None,
+        longitude: float | None,
+        radius: float | None,
     ) -> None:
         """Validate zone coordinate parameters, raising ToolError on invalid values."""
         if latitude is not None and not (-90 <= latitude <= 90):
-            raise_tool_error(create_validation_error(
-                f"Invalid latitude: {latitude}. Must be between -90 and 90.",
-                parameter="latitude",
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid latitude: {latitude}. Must be between -90 and 90.",
+                    parameter="latitude",
+                )
+            )
         if longitude is not None and not (-180 <= longitude <= 180):
-            raise_tool_error(create_validation_error(
-                f"Invalid longitude: {longitude}. Must be between -180 and 180.",
-                parameter="longitude",
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid longitude: {longitude}. Must be between -180 and 180.",
+                    parameter="longitude",
+                )
+            )
         if radius is not None and radius <= 0:
-            raise_tool_error(create_validation_error(
-                f"Invalid radius: {radius}. Must be greater than 0.",
-                parameter="radius",
-            ))
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid radius: {radius}. Must be greater than 0.",
+                    parameter="radius",
+                )
+            )
 
     @tool(
         name="ha_set_zone",
         tags={"Zones"},
         annotations={"destructiveHint": True, "title": "Set Zone"},
+    )
+    @with_auto_backup(
+        domain="zone",
+        id_fn=lambda kw: str(kw.get("zone_id") or kw.get("name") or ""),
     )
     @log_tool_usage
     async def ha_set_zone(
@@ -210,6 +237,20 @@ class ZoneTools:
         """
         operation = "create"
         try:
+            # ``None`` stays the documented "create-new" sentinel; explicit
+            # empty/whitespace ``zone_id`` would silently route to the
+            # create branch below and surface "name, latitude, longitude
+            # required" instead of the actual cause (unusable ``zone_id``).
+            if zone_id is not None:
+                validate_identifier_not_empty(
+                    zone_id,
+                    "zone_id",
+                    suggestions=[
+                        "Omit zone_id entirely to create a new zone",
+                        "Pass a valid zone_id to update an existing zone",
+                    ],
+                    context={"action": "set"},
+                )
             if zone_id:
                 # UPDATE operation
                 operation = "update"
@@ -221,13 +262,17 @@ class ZoneTools:
                     "icon": icon,
                     "passive": passive,
                 }
-                fields_to_update = {k: v for k, v in update_fields.items() if v is not None}
+                fields_to_update = {
+                    k: v for k, v in update_fields.items() if v is not None
+                }
 
                 if not fields_to_update:
-                    raise_tool_error(create_validation_error(
-                        "No fields to update. Provide at least one field to change.",
-                        context={"zone_id": zone_id},
-                    ))
+                    raise_tool_error(
+                        create_validation_error(
+                            "No fields to update. Provide at least one field to change.",
+                            context={"zone_id": zone_id},
+                        )
+                    )
 
                 self._validate_coordinates(latitude, longitude, radius)
 
@@ -239,9 +284,11 @@ class ZoneTools:
             else:
                 # CREATE operation
                 if name is None or latitude is None or longitude is None:
-                    raise_tool_error(create_validation_error(
-                        "name, latitude, and longitude are required when creating a zone.",
-                    ))
+                    raise_tool_error(
+                        create_validation_error(
+                            "name, latitude, and longitude are required when creating a zone.",
+                        )
+                    )
 
                 self._validate_coordinates(latitude, longitude, radius)
 
@@ -271,30 +318,53 @@ class ZoneTools:
                     response["updated_fields"] = list(fields_to_update.keys())
                 return response
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to {operation} zone: {result.get('error', 'Unknown error')}",
-                    context={"zone_id": zone_id, "operation": operation},
-                ))
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Zone not found: {zone_id}",
+                            context={"zone_id": zone_id, "operation": operation},
+                            suggestions=[
+                                "Use ha_get_zone() without zone_id to see all available zones",
+                            ],
+                        )
+                    )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to {operation} zone: {result.get('error', 'Unknown error')}",
+                        context={"zone_id": zone_id, "operation": operation},
+                    )
+                )
 
         except ToolError:
             raise
         except Exception as e:
-            logger.error(f"Error in ha_set_zone ({operation}, zone_id={zone_id}, name={name}): {e}")
+            logger.error(
+                f"Error in ha_set_zone ({operation}, zone_id={zone_id}, name={name}): {e}"
+            )
             exception_to_structured_error(
                 e,
                 context={"zone_id": zone_id, "operation": operation},
                 suggestions=[
                     "Check Home Assistant connection",
-                    "Verify coordinates are valid" if operation == "create" else "Verify zone_id exists using ha_get_zone()",
+                    "Verify coordinates are valid"
+                    if operation == "create"
+                    else "Verify zone_id exists using ha_get_zone()",
                 ],
             )
 
     @tool(
         name="ha_remove_zone",
         tags={"Zones"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Zone"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Zone",
+        },
     )
+    @with_auto_backup(domain="zone", id_param="zone_id")
     @log_tool_usage
     async def ha_remove_zone(
         self,
@@ -315,6 +385,13 @@ class ZoneTools:
         **NOTE:** The 'home' zone cannot be removed as it is typically defined in configuration.yaml.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                zone_id,
+                "zone_id",
+                suggestions=["Use ha_get_zone() to find existing zone_ids"],
+                context={"operation": "remove_zone"},
+            )
             message: dict[str, Any] = {
                 "type": "zone/delete",
                 "zone_id": zone_id,
@@ -329,11 +406,25 @@ class ZoneTools:
                     "message": f"Successfully removed zone: {zone_id}",
                 }
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to remove zone: {result.get('error', 'Unknown error')}",
-                    context={"zone_id": zone_id},
-                ))
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Zone not found: {zone_id}",
+                            context={"zone_id": zone_id},
+                            suggestions=[
+                                "Use ha_get_zone() without zone_id to see all available zones",
+                            ],
+                        )
+                    )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to remove zone: {result.get('error', 'Unknown error')}",
+                        context={"zone_id": zone_id},
+                    )
+                )
 
         except ToolError:
             raise

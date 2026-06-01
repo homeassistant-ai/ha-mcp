@@ -1,0 +1,11 @@
+{
+  "name": "ha-mcp-js-test-harness",
+  "version": "0.0.0",
+  "private": true,
+  "description": "JSDOM harness for behavioral testing of rendered <script> bodies (settings UI + Astro pages). Not shipped; only consumed by tests/src/unit/_js_harness.py.",
+  "type": "module",
+  "dependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^25.0.1"
+  }
+}

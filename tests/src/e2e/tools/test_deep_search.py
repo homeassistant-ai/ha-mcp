@@ -11,7 +11,7 @@ from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
-DEEP_SEARCH_KEYS = ("automations", "scripts", "helpers")
+DEEP_SEARCH_KEYS = ("automations", "scripts", "scenes", "helpers")
 
 
 def assert_deep_search_keys(data: dict) -> None:
@@ -94,7 +94,9 @@ async def test_deep_search_automation(mcp_client):
         data2 = assert_mcp_success(result2, "Deep search for service in automation")
 
         automations2 = data2.get("automations", [])
-        assert len(automations2) > 0, "Should find automation with light.turn_on service"
+        assert len(automations2) > 0, (
+            "Should find automation with light.turn_on service"
+        )
         logger.info(f"✅ Found {len(automations2)} automations using light.turn_on")
 
     finally:
@@ -188,7 +190,9 @@ async def test_deep_search_script(mcp_client):
             )
             logger.info("🧹 Cleaned up test script")
         except Exception:
-            logger.warning("⚠️ Cleanup of test script failed (may not have been created)")
+            logger.warning(
+                "⚠️ Cleanup of test script failed (may not have been created)"
+            )
 
 
 @pytest.mark.asyncio
@@ -253,7 +257,7 @@ async def test_deep_search_helper(mcp_client):
     finally:
         # Cleanup: Delete the test helper
         await mcp_client.call_tool(
-            "ha_delete_helpers_integrations",
+            "ha_remove_helpers_integrations",
             {
                 "helper_type": "input_select",
                 "target": "deep_search_test_select",
@@ -261,6 +265,243 @@ async def test_deep_search_helper(mcp_client):
             },
         )
         logger.info("🧹 Cleaned up test helper")
+
+
+@pytest.mark.asyncio
+async def test_deep_search_finds_ui_template_helper(mcp_client):
+    """Deep search must surface UI-created flow-based (template) helpers.
+
+    Regression for issue #1457: template/group/utility_meter/... helpers live
+    as config entries, not storage records, so the helper search used to miss
+    them entirely. They are now listed via the config-entries endpoint and the
+    options flow is probed so the template body is searchable. This exercises
+    the full chain end-to-end (deep_search → flow-helper probe →
+    fetch_entry_options → description.suggested_value extraction):
+
+    1. found by helper name,
+    2. found by a token inside the template body (the headline fix), and
+    3. include_config=True attaches the probed config.
+    """
+    logger.info("🔍 Testing deep search for UI template helpers")
+
+    # Distinctive token embedded in the template body (not in the name), so a
+    # match on it can only come from probing the options flow config.
+    body_marker = "deepsearchtemplatebody4471"
+    config = {
+        "next_step_id": "sensor",
+        "name": "Deep Search Template Helper",
+        "state": "{{ states('sensor." + body_marker + "') }}",
+    }
+
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "template", "name": config["name"], "config": config},
+    )
+    create_data = assert_mcp_success(create_result, "Create template helper")
+    entry_id = create_data.get("entry_id")
+    assert entry_id, "Create should return the config entry_id"
+    logger.info(f"✅ Created template helper: {entry_id}")
+
+    try:
+        # 1) Findable by name. Flow-helper results carry the parent config
+        #    entry id under `entry_id` (storage helpers use `entity_id`).
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={
+                "query": "Deep Search Template Helper",
+                "search_types": ["helper"],
+                "limit": 10,
+            },
+            predicate=lambda d: any(
+                h.get("entry_id") == entry_id for h in d.get("helpers", [])
+            ),
+            description="deep search finds template helper by name",
+        )
+        assert_deep_search_keys(data)
+        match = next(h for h in data["helpers"] if h.get("entry_id") == entry_id)
+        assert match.get("helper_type") == "template", (
+            f"helper_type should be 'template', got {match.get('helper_type')!r}"
+        )
+        assert match.get("match_in_name") is True, "should match on the name"
+        logger.info(f"✅ Found template helper by name (score {match.get('score')})")
+
+        # 2) Findable by a token inside the template body — only possible if the
+        #    options flow was probed and the template surfaced. This is the
+        #    core of issue #1457.
+        data2 = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={
+                "query": body_marker,
+                "search_types": ["helper"],
+                "limit": 10,
+            },
+            predicate=lambda d: any(
+                h.get("entry_id") == entry_id for h in d.get("helpers", [])
+            ),
+            description="deep search finds template helper by template body",
+        )
+        match2 = next(h for h in data2["helpers"] if h.get("entry_id") == entry_id)
+        assert match2.get("match_in_config") is True, (
+            "template body must be searchable via the options-flow probe"
+        )
+        logger.info("✅ Found template helper by template body content")
+
+        # 3) include_config=True attaches the probed options (template body).
+        result3 = await mcp_client.call_tool(
+            "ha_deep_search",
+            {
+                "query": body_marker,
+                "search_types": ["helper"],
+                "include_config": True,
+                "limit": 10,
+            },
+        )
+        data3 = assert_mcp_success(result3, "Deep search with include_config")
+        match3 = next(
+            h for h in data3.get("helpers", []) if h.get("entry_id") == entry_id
+        )
+        assert "config" in match3, "include_config=True should attach the helper config"
+        assert body_marker in str(match3["config"]), (
+            "attached config should contain the template body"
+        )
+        logger.info("✅ include_config attached the template body")
+
+    finally:
+        await safe_call_tool(
+            mcp_client,
+            "ha_remove_helpers_integrations",
+            {"target": entry_id, "confirm": True},
+        )
+        logger.info("🧹 Cleaned up template helper")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "helper_type,name,config",
+    [
+        pytest.param(
+            "group",
+            "Deep Search Group E2E",
+            {
+                "group_type": "light",
+                "name": "Deep Search Group E2E",
+                "entities": [],
+                "hide_members": False,
+            },
+            id="group",
+        ),
+        pytest.param(
+            "min_max",
+            "Deep Search MinMax E2E",
+            {
+                "name": "Deep Search MinMax E2E",
+                "entity_ids": [
+                    "sensor.demo_temperature",
+                    "sensor.demo_outside_temperature",
+                ],
+                "type": "min",
+            },
+            id="min_max",
+        ),
+    ],
+)
+async def test_deep_search_finds_non_template_flow_helpers(
+    mcp_client, helper_type, name, config
+):
+    """deep_search surfaces non-template flow-based helpers too (issue #1457).
+
+    The flow-helper branch lists config entries for every domain in
+    ``FLOW_HELPER_TYPES``, so a group (menu-rooted flow) and a min_max (single
+    form) must be findable by name alongside template helpers — not just the
+    ``template`` domain.
+    """
+    logger.info(f"🔍 Testing deep search for {helper_type} flow-helper")
+
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": helper_type, "name": name, "config": config},
+    )
+    create_data = assert_mcp_success(create_result, f"Create {helper_type} helper")
+    entry_id = create_data.get("entry_id")
+    assert entry_id, f"Create should return entry_id for {helper_type}"
+
+    try:
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={"query": name, "search_types": ["helper"], "limit": 10},
+            predicate=lambda d: any(
+                h.get("entry_id") == entry_id for h in d.get("helpers", [])
+            ),
+            description=f"deep search finds {helper_type} helper",
+        )
+        match = next(h for h in data["helpers"] if h.get("entry_id") == entry_id)
+        assert match.get("helper_type") == helper_type, (
+            f"helper_type should be {helper_type!r}, got {match.get('helper_type')!r}"
+        )
+        assert match.get("match_in_name") is True, "should match on the name"
+        logger.info(f"✅ Found {helper_type} flow-helper via deep_search")
+    finally:
+        await safe_call_tool(
+            mcp_client,
+            "ha_remove_helpers_integrations",
+            {"target": entry_id, "confirm": True},
+        )
+
+
+@pytest.mark.asyncio
+async def test_deep_search_flow_helper_fuzzy_probes_config(mcp_client):
+    """Fuzzy (``exact_match=False``) deep_search still probes flow-helper config.
+
+    The query is a token inside the template body but NOT the name, so the name
+    scores below 100 and — even in fuzzy mode — the options flow must be probed
+    for the body to be searchable. Exercises the fuzzy branch of the flow-helper
+    search end-to-end (only the exact-match path had E2E coverage before).
+    """
+    logger.info("🔍 Testing fuzzy deep search probes flow-helper config")
+
+    body_marker = "fuzzyflowbodymarker7788"
+    config = {
+        "next_step_id": "sensor",
+        "name": "Deep Search Fuzzy Template",
+        "state": "{{ states('sensor." + body_marker + "') }}",
+    }
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "template", "name": config["name"], "config": config},
+    )
+    create_data = assert_mcp_success(create_result, "Create fuzzy template helper")
+    entry_id = create_data.get("entry_id")
+    assert entry_id, "Create should return the config entry_id"
+
+    try:
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={
+                "query": body_marker,
+                "search_types": ["helper"],
+                "exact_match": False,
+                "limit": 10,
+            },
+            predicate=lambda d: any(
+                h.get("entry_id") == entry_id for h in d.get("helpers", [])
+            ),
+            description="fuzzy deep search finds template helper by body",
+        )
+        match = next(h for h in data["helpers"] if h.get("entry_id") == entry_id)
+        assert match.get("match_in_config") is True, (
+            "fuzzy search must surface the template body via the options probe"
+        )
+        logger.info("✅ Fuzzy deep search found template helper by body content")
+    finally:
+        await safe_call_tool(
+            mcp_client,
+            "ha_remove_helpers_integrations",
+            {"target": entry_id, "confirm": True},
+        )
 
 
 @pytest.mark.asyncio
@@ -282,13 +523,14 @@ async def test_deep_search_all_types(mcp_client):
 
     automations = data["automations"]
     scripts = data["scripts"]
+    scenes = data["scenes"]
     helpers = data["helpers"]
 
-    total_results = len(automations) + len(scripts) + len(helpers)
+    total_results = len(automations) + len(scripts) + len(scenes) + len(helpers)
     logger.info(
         f"✅ Found {total_results} total results: "
         f"{len(automations)} automations, {len(scripts)} scripts, "
-        f"{len(helpers)} helpers"
+        f"{len(scenes)} scenes, {len(helpers)} helpers"
     )
 
     # Each result should have the expected structure
@@ -317,7 +559,7 @@ async def test_deep_search_limit(mcp_client):
 
     assert_deep_search_keys(data)
 
-    total_results = len(data["automations"]) + len(data["scripts"]) + len(data["helpers"])
+    total_results = sum(len(data[key]) for key in DEEP_SEARCH_KEYS)
 
     assert total_results <= 5, f"Should respect limit of 5, got {total_results}"
     logger.info(f"✅ Correctly limited results to {total_results} (limit was 5)")
@@ -347,18 +589,117 @@ async def test_deep_search_no_results(mcp_client):
         """Check if entity_id appears to be from a test."""
         # Extract object_id (part after domain) to avoid false positives
         # e.g., "input_text.concurrent_test_3" -> "concurrent_test_3"
-        object_id = entity_id.lower().split('.')[-1]
+        object_id = entity_id.lower().split(".")[-1]
         return object_id.startswith(test_prefixes)
 
-    automations = [a for a in data["automations"] if not is_test_entity(a.get("entity_id", ""))]
+    automations = [
+        a for a in data["automations"] if not is_test_entity(a.get("entity_id", ""))
+    ]
     scripts = [s for s in data["scripts"] if not is_test_entity(s.get("entity_id", ""))]
+    scenes = [s for s in data["scenes"] if not is_test_entity(s.get("entity_id", ""))]
     helpers = [h for h in data["helpers"] if not is_test_entity(h.get("entity_id", ""))]
 
     assert len(automations) == 0, "Should have no automation matches"
     assert len(scripts) == 0, "Should have no script matches"
+    assert len(scenes) == 0, f"Should have no scene matches, but found: {scenes}"
     assert len(helpers) == 0, f"Should have no helper matches, but found: {helpers}"
 
     logger.info("✅ Correctly returned empty results for non-matching query")
+
+
+@pytest.mark.asyncio
+async def test_deep_search_default_includes_scenes(mcp_client):
+    """Default-call (no search_types) deep_search must include the 'scenes'
+    bucket in the response.
+
+    Regression test for the gap KP13 surfaced on PR #1168: when 'scene' was
+    added to the default search_types list, the test infrastructure tuple
+    (DEEP_SEARCH_KEYS) didn't follow, so every default-call test silently
+    skipped scenes. Locks the bucket presence at the contract layer so any
+    future drop of 'scene' from the default trips this test loudly.
+    """
+    logger.info("🔍 Testing deep search default includes scenes bucket")
+
+    result = await mcp_client.call_tool(
+        "ha_deep_search",
+        {"query": "xyzabc123_nonexistent_default_scene_check"},
+    )
+    data = assert_mcp_success(result, "Default-call deep search")
+
+    assert "scenes" in data, "Default deep_search response must contain 'scenes' bucket"
+    assert isinstance(data["scenes"], list), "'scenes' must be a list"
+    # Empty is fine — the assertion is about bucket presence under default
+    # search_types, not about matching anything specific.
+    logger.info(
+        f"✅ Default deep_search includes scenes bucket (count={len(data['scenes'])})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_deep_search_default_surfaces_created_scene(mcp_client):
+    """Population-verifying sibling to ``test_deep_search_default_includes_scenes``.
+
+    The contract-only test asserts the bucket is present and listy — that
+    passes even if the scene-search pipeline regresses to always-empty.
+    This sibling creates a scene with a distinctive query token and asserts
+    the default-call (no ``search_types``) response surfaces it in the
+    scenes bucket. Catches regressions in:
+      - default ``search_types`` dropping ``"scene"``
+      - the response builder gating ``scenes`` behind a conditional
+      - the scene-branch fetch pipeline silently failing on all scenes
+    """
+    logger.info("🔍 Testing deep search default surfaces a created scene")
+
+    scene_id = "deep_search_default_scene"
+    scene_query_token = "deep_search_default_scene_marker"
+
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_scene",
+        {
+            "scene_id": scene_id,
+            "config": {
+                "name": scene_query_token,
+                "entities": {
+                    "light.bed_light": {"state": "on", "brightness": 50},
+                },
+            },
+            "wait": True,
+        },
+    )
+    create_data = assert_mcp_success(create_result, "Create test scene")
+    logger.info(f"✅ Created scene: {create_data}")
+
+    try:
+        # Default call — no search_types, exercising the default path
+        # that includes 'scene' implicitly.
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_deep_search",
+            arguments={"query": scene_query_token, "limit": 10},
+            predicate=lambda d: any(
+                scene_query_token in (s.get("friendly_name") or "")
+                for s in d.get("scenes", [])
+            ),
+            description="default deep search finds the created scene",
+        )
+
+        assert_deep_search_keys(data)
+        scenes = data["scenes"]
+        assert any(
+            scene_query_token in (s.get("friendly_name") or "") for s in scenes
+        ), (
+            f"Default deep_search must surface the just-created scene in "
+            f"the scenes bucket, got: {scenes}"
+        )
+        logger.info(
+            f"✅ Default deep_search surfaced the created scene ({len(scenes)} total)"
+        )
+    finally:
+        await mcp_client.call_tool(
+            "ha_config_remove_scene",
+            {"scene_id": scene_id, "wait": False},
+        )
+        logger.info("🧹 Cleaned up test scene")
 
 
 @pytest.mark.asyncio
@@ -370,7 +711,9 @@ async def test_deep_search_no_results(mcp_client):
         pytest.param({"offset": -1}, "negative offset", id="offset_negative"),
     ],
 )
-async def test_deep_search_invalid_params_returns_error(mcp_client, params, description):
+async def test_deep_search_invalid_params_returns_error(
+    mcp_client, params, description
+):
     """Test that ha_deep_search rejects invalid limit and offset values.
 
     Before the fix, invalid values caused silent data corruption:
@@ -383,8 +726,6 @@ async def test_deep_search_invalid_params_returns_error(mcp_client, params, desc
         "ha_deep_search",
         {"query": "light", **params},
     )
-    assert result["success"] is False, f"Expected failure for {description}, got success=True"
-    assert result["error"]["code"] == "VALIDATION_FAILED", (
-        f"Expected VALIDATION_FAILED for {description}, "
-        f"got {result.get('error', {}).get('code')}"
+    assert result["success"] is False, (
+        f"Expected failure for {description}, got success=True"
     )

@@ -13,7 +13,6 @@ from ha_mcp.errors import (
     create_connection_error,
     create_entity_not_found_error,
     create_error_response,
-    create_resource_not_found_error,
     create_service_error,
     create_timeout_error,
     create_validation_error,
@@ -247,21 +246,6 @@ class TestCreateTimeoutError:
         assert "30" in response["error"]["message"]
         assert response["operation"] == "service_call"
         assert response["timeout_seconds"] == 30.0
-
-
-class TestCreateResourceNotFoundError:
-    """Tests for create_resource_not_found_error function."""
-
-    def test_resource_not_found_structure(self):
-        """Resource not found error should include resource_type and identifier."""
-        response = create_resource_not_found_error("Automation", "automation.test")
-
-        assert response["success"] is False
-        assert response["error"]["code"] == "RESOURCE_NOT_FOUND"
-        assert "Automation" in response["error"]["message"]
-        assert "automation.test" in response["error"]["message"]
-        assert response["resource_type"] == "Automation"
-        assert response["identifier"] == "automation.test"
 
 
 class TestIsErrorResponse:

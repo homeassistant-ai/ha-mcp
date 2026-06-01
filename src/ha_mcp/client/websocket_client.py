@@ -23,6 +23,7 @@ import websockets
 from ..config import get_global_settings
 from .rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
     _is_ssl_error,
 )
@@ -43,6 +44,13 @@ class WebSocketConnectionState:
         self._event_handlers: dict[
             str, set[Callable[[dict[str, Any]], Awaitable[None]]]
         ] = defaultdict(set)
+        # Continuous-subscription queues keyed by the subscribe command's
+        # message_id. Long-lived subscriptions (e.g. HACS' ``hacs/subscribe``)
+        # deliver many events sharing one id; the one-shot
+        # ``_event_responses`` future can't handle that. When a queue is
+        # registered for a given id, every event with that id is pushed
+        # into it instead of going to ``event_type``-keyed handlers.
+        self._subscription_queues: dict[int, asyncio.Queue[dict[str, Any]]] = {}
 
     def next_message_id(self) -> int:
         """Reserve the next available WebSocket message identifier."""
@@ -58,6 +66,7 @@ class WebSocketConnectionState:
         )
         self._pending_requests[message_id] = future
         return future
+
     def resolve_pending_request(
         self, message_id: int
     ) -> asyncio.Future[dict[str, Any]] | None:
@@ -116,6 +125,14 @@ class WebSocketConnectionState:
                 future.cancel()
         self._event_responses.clear()
 
+        # Drop any subscription queues — readers wake on the close signal
+        # we push, then a ``QueueShutDown`` (3.13) tells them the source
+        # is gone. Using ``shutdown`` rather than just clearing the dict
+        # so blocked ``queue.get()`` awaiters unblock instead of hanging.
+        for queue in self._subscription_queues.values():
+            queue.shutdown(immediate=True)
+        self._subscription_queues.clear()
+
         self._auth_messages.clear()
 
     def mark_connected(self) -> None:
@@ -159,6 +176,29 @@ class WebSocketConnectionState:
             return ()
         return tuple(self._event_handlers[event_type])
 
+    def register_subscription_queue(
+        self, message_id: int
+    ) -> asyncio.Queue[dict[str, Any]]:
+        """Register a queue for continuous-subscription event delivery."""
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._subscription_queues[message_id] = queue
+        return queue
+
+    def get_subscription_queue(
+        self, message_id: int
+    ) -> asyncio.Queue[dict[str, Any]] | None:
+        """Return the queue for a subscription id, or None."""
+        return self._subscription_queues.get(message_id)
+
+    def unregister_subscription_queue(self, message_id: int) -> None:
+        """Drop a subscription queue and wake any blocked readers."""
+        queue = self._subscription_queues.pop(message_id, None)
+        if queue is not None:
+            # ``shutdown(immediate=True)`` raises ``QueueShutDown`` in any
+            # pending ``get()`` so a waiter doesn't deadlock when the
+            # caller decides to stop listening.
+            queue.shutdown(immediate=True)
+
 
 class HomeAssistantWebSocketClient:
     """WebSocket client for Home Assistant real-time communication."""
@@ -195,6 +235,10 @@ class HomeAssistantWebSocketClient:
         self._send_lock: asyncio.Lock | None = None
         self._lock_loop: asyncio.AbstractEventLoop | None = None
         self._state = WebSocketConnectionState()
+        # Reason the most recent connect() attempt failed (exception text),
+        # or None. Surfaced by callers so the agent sees *why* a WebSocket
+        # connection failed instead of an opaque "Failed to connect" string.
+        self._last_connect_error: str | None = None
 
         # Parse URL to get WebSocket endpoint
         parsed = urlparse(self.base_url)
@@ -219,6 +263,7 @@ class HomeAssistantWebSocketClient:
         try:
             logger.info(f"Connecting to Home Assistant WebSocket: {self.ws_url}")
             self._state.reset_connection()
+            self._last_connect_error = None
 
             # Only configure an SSLContext for wss://; ws:// (Supervisor
             # proxy) doesn't use TLS and gets ssl=None.
@@ -262,7 +307,9 @@ class HomeAssistantWebSocketClient:
                 message_type="auth_required", timeout=5
             )
             if not auth_msg:
-                raise HomeAssistantConnectionError("Did not receive auth_required message")
+                raise HomeAssistantConnectionError(
+                    "Did not receive auth_required message"
+                )
 
             # Send authentication
             await self._send_auth()
@@ -284,6 +331,7 @@ class HomeAssistantWebSocketClient:
             return True
 
         except Exception as e:
+            self._last_connect_error = f"{type(e).__name__}: {e}"
             if _is_ssl_error(e) and self.verify_ssl:
                 logger.error(
                     "WebSocket TLS verification failed for %s: %s. "
@@ -384,6 +432,25 @@ class HomeAssistantWebSocketClient:
     ) -> None:
         """Handle an incoming event message."""
         if message_id is not None:
+            # Continuous subscriptions take priority: a single ``hacs/subscribe``
+            # can deliver many events sharing one id and the one-shot
+            # ``_event_responses`` future would only catch the first.
+            # Events delivered to a subscription queue do NOT also
+            # fan out to ``add_event_handler`` listeners below — the
+            # ``return`` here is intentional; subscribe-via-queue and
+            # the legacy event-type registry are mutually exclusive
+            # routes for a given message id.
+            queue = self._state.get_subscription_queue(message_id)
+            if queue is not None:
+                try:
+                    queue.put_nowait(data)
+                except asyncio.QueueShutDown:
+                    # Caller unsubscribed between dispatch and delivery —
+                    # drop the event quietly rather than logging an
+                    # error for an expected lifecycle race.
+                    pass
+                return
+
             render_future = self._state.resolve_event_response(message_id)
             if render_future:
                 if not render_future.cancelled():
@@ -396,7 +463,18 @@ class HomeAssistantWebSocketClient:
                 try:
                     await handler(data["event"])
                 except Exception as e:
-                    logger.error(f"Error in event handler: {e}")
+                    # ``exc_info=True`` so handler bugs (AttributeError /
+                    # KeyError / TypeError from schema-drift on the
+                    # incoming event payload) leave a traceback rather
+                    # than a one-line obscured error. Without this the
+                    # dispatch loop keeps a single buggy handler from
+                    # killing the WS, but the bug itself becomes
+                    # invisible — handlers wired to ``asyncio.Event``
+                    # nudges (see ``util_helpers._ws_wait_for_condition``)
+                    # silently stop nudging and the calling waiter times
+                    # out reporting "not found." #1395 silent-failure
+                    # audit.
+                    logger.error("Error in event handler: %s", e, exc_info=True)
 
     def _ensure_send_lock(self) -> None:
         """Ensure the send lock belongs to the current event loop."""
@@ -511,7 +589,7 @@ class HomeAssistantWebSocketClient:
 
         except TimeoutError as e:
             self.cancel_pending_response(message_id)
-            raise Exception("Command timeout") from e
+            raise HomeAssistantCommandTimeout("Command timeout") from e
         except Exception:
             self.cancel_pending_response(message_id)
             raise
@@ -572,9 +650,7 @@ class HomeAssistantWebSocketClient:
             raise HomeAssistantCommandError(f"Command failed: {error_msg}")
 
         try:
-            event_response = await asyncio.wait_for(
-                event_future, timeout=wait_timeout
-            )
+            event_response = await asyncio.wait_for(event_future, timeout=wait_timeout)
         except TimeoutError:
             self.cancel_event_response(message_id)
             raise
@@ -584,24 +660,203 @@ class HomeAssistantWebSocketClient:
     async def subscribe_events(self, event_type: str | None = None) -> int:
         """Subscribe to Home Assistant events.
 
+        HA's WebSocket API identifies a subscription by the ``id`` of the
+        original ``subscribe_events`` command — not by a field inside the
+        ``result`` payload. ``handle_subscribe_events`` in HA Core
+        (``websocket_api/commands.py``) ends with
+        ``connection.send_result(msg["id"])``, and ``send_result(msg_id)``
+        emits ``{"id": N, "type": "result", "success": true, "result": null}``.
+        Subsequent event deliveries arrive as
+        ``{"id": N, "type": "event", "event": {...}}`` with the same ``id``.
+
+        The previous implementation called ``send_command`` (which discards
+        the message_id it generated) and then looked for
+        ``response["result"]["subscription"]``, a field HA does not send.
+        That branch never matched, so this function always raised
+        ``"Failed to get subscription ID"`` — even though the underlying
+        subscription on HA's side WAS established. The ``WebSocketListenerService``
+        treated the raised exception as a startup failure and left
+        ``_listener_started = False``, so every device-control call
+        repeatedly retried (and re-failed) and ``OperationManager.process_state_change``
+        was never invoked, leaving every async operation in PENDING until
+        ``OperationManager.get_operation`` flipped it to TIMEOUT after
+        the 10s ``timeout_ms`` budget. Surfaced during PR #1375 HAOS log
+        audit (3x "Failed to get subscription ID" per bulk-control test).
+
         Args:
             event_type: Specific event type to subscribe to (None for all)
 
         Returns:
-            Subscription ID
+            Subscription ID (the message_id used when subscribing)
         """
-        kwargs = {}
+        if not self._state.is_ready:
+            raise HomeAssistantConnectionError("WebSocket not authenticated")
+
+        message_id = self.get_next_message_id()
+        message: dict[str, Any] = {"id": message_id, "type": "subscribe_events"}
         if event_type:
-            kwargs["event_type"] = event_type
+            message["event_type"] = event_type
 
-        response = await self.send_command("subscribe_events", **kwargs)
-        result = response.get("result")
-        if isinstance(result, dict):
-            subscription_id = result.get("subscription")
-            if isinstance(subscription_id, int):
-                return subscription_id
+        future = self.register_pending_response(message_id)
+        try:
+            await self.send_json_message(message)
+        except Exception:
+            self.cancel_pending_response(message_id)
+            raise
 
-        raise Exception("Failed to get subscription ID")
+        try:
+            response = await asyncio.wait_for(future, timeout=30.0)
+        except TimeoutError:
+            self.cancel_pending_response(message_id)
+            raise
+
+        if response.get("type") == "result" and response.get("success"):
+            return message_id
+
+        error = response.get("error", {})
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
+        raise HomeAssistantCommandError(f"subscribe_events failed: {error_msg}")
+
+    async def unsubscribe_events(self, subscription_id: int) -> None:
+        """Release a subscription previously returned by ``subscribe_events``.
+
+        Used by short-lived waiters (``util_helpers.wait_for_*``) that need
+        to drop the subscription as soon as their event arrives so the
+        shared socket doesn't accumulate stale ``state_changed`` listeners.
+
+        Exception policy (narrow, distinct log levels — Gemini #1382):
+
+        - Transport-level loss (``OSError``): subscription is implicitly
+          gone with the connection. Logged at ``debug`` so HA-mid-restart
+          cleanup doesn't spam warnings.
+        - HA-side rejection (``HomeAssistantCommandError``, e.g. "Subscription
+          not found" after a server-side reset): unexpected during normal
+          cleanup. Logged at ``warning`` so a real subscription leak is
+          discoverable.
+        - Everything else: propagates to the caller's ``finally`` so a
+          programming bug (TypeError, AttributeError) fails loudly instead
+          of being buried under a broad ``except``.
+        """
+        if not self._state.is_ready:
+            logger.debug(
+                "unsubscribe_events(%s) skipped: WebSocket not ready",
+                subscription_id,
+            )
+            return
+        try:
+            await self.send_command("unsubscribe_events", subscription=subscription_id)
+        except OSError as e:
+            logger.debug(
+                "unsubscribe_events(%s): transport lost during cleanup: %s",
+                subscription_id,
+                e,
+            )
+        except HomeAssistantCommandError as e:
+            logger.warning(
+                "unsubscribe_events(%s) rejected by HA: %s",
+                subscription_id,
+                e,
+            )
+
+    async def subscribe_command(
+        self,
+        command_type: str,
+        *,
+        timeout: float = 30.0,
+        **kwargs: Any,
+    ) -> tuple[int, asyncio.Queue[dict[str, Any]]]:
+        """Send a subscribe-style command and return (subscription_id, queue).
+
+        For commands that establish a long-lived stream sharing the
+        command's ``id`` for every event (HA's ``subscribe_events``,
+        HACS' ``hacs/subscribe`` with a ``signal`` field, etc.).
+        ``subscribe_events`` has its own dedicated entrypoint above
+        because it has additional callers wired to the legacy
+        event-type handler registry; use this method for everything
+        else.
+
+        Returns:
+            (subscription_id, queue) — ``await queue.get()`` yields each
+            incoming ``{"id": N, "type": "event", "event": ...}`` payload.
+            Cancel the subscription via :meth:`unsubscribe_command`.
+        """
+        if not self._state.is_ready:
+            raise HomeAssistantConnectionError("WebSocket not authenticated")
+
+        message_id = self.get_next_message_id()
+        message: dict[str, Any] = {"id": message_id, "type": command_type, **kwargs}
+
+        # Register the queue BEFORE sending so we never miss an event
+        # that arrives between the result and the first ``get()``.
+        queue = self._state.register_subscription_queue(message_id)
+        result_future = self.register_pending_response(message_id)
+
+        try:
+            await self.send_json_message(message)
+        except Exception:
+            self._state.unregister_subscription_queue(message_id)
+            self.cancel_pending_response(message_id)
+            raise
+
+        try:
+            response = await asyncio.wait_for(result_future, timeout=timeout)
+        except TimeoutError:
+            self._state.unregister_subscription_queue(message_id)
+            self.cancel_pending_response(message_id)
+            raise
+
+        if response.get("type") == "result" and response.get("success"):
+            return message_id, queue
+
+        self._state.unregister_subscription_queue(message_id)
+        error = response.get("error", {})
+        error_msg = (
+            error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        )
+        raise HomeAssistantCommandError(
+            f"subscribe_command({command_type!r}) failed: {error_msg}"
+        )
+
+    async def unsubscribe_command(
+        self,
+        subscription_id: int,
+        *,
+        unsubscribe_type: str = "unsubscribe_events",
+    ) -> None:
+        """Tear down a subscription opened via :meth:`subscribe_command`.
+
+        HACS' ``hacs/subscribe`` slots into HA's standard
+        ``connection.subscriptions`` map, so ``unsubscribe_events`` cancels
+        it the same way it cancels a native ``subscribe_events`` stream
+        — ``unsubscribe_type`` is exposed only for the rare case a
+        protocol introduces its own teardown command.
+        """
+        # Always drop the local queue first so any in-flight ``get()``
+        # call wakes immediately, even if the HA-side teardown errors.
+        self._state.unregister_subscription_queue(subscription_id)
+
+        if not self._state.is_ready:
+            logger.debug(
+                "unsubscribe_command(%s) skipped: WebSocket not ready",
+                subscription_id,
+            )
+            return
+        try:
+            await self.send_command(unsubscribe_type, subscription=subscription_id)
+        except OSError as e:
+            logger.debug(
+                "unsubscribe_command(%s): transport lost during cleanup: %s",
+                subscription_id,
+                e,
+            )
+        except HomeAssistantCommandError as e:
+            logger.warning(
+                "unsubscribe_command(%s) rejected by HA: %s",
+                subscription_id,
+                e,
+            )
 
     def add_event_handler(
         self,
@@ -676,6 +931,16 @@ class HomeAssistantWebSocketClient:
         """Check if WebSocket is connected and authenticated."""
         return self._state.is_ready
 
+    @property
+    def last_connect_error(self) -> str | None:
+        """Reason the most recent ``connect()`` attempt failed, or ``None``.
+
+        Captured from the underlying exception (e.g. an auth timeout, a
+        handshake HTTP/TLS error, or "Did not receive auth_required") so
+        callers can surface *why* the connection failed instead of an
+        opaque "Failed to connect to Home Assistant WebSocket".
+        """
+        return self._last_connect_error
 
 
 MAX_POOL_SIZE = 50
@@ -711,7 +976,8 @@ class WebSocketManager:
     def configure(
         self,
         *,
-        client_factory: Callable[[str, str], HomeAssistantWebSocketClient] | None = None,
+        client_factory: Callable[[str, str], HomeAssistantWebSocketClient]
+        | None = None,
     ) -> None:
         """Configure the manager with injectable dependencies."""
         if client_factory is not None:
@@ -810,7 +1076,14 @@ class WebSocketManager:
 
             connected = await client.connect()
             if not connected:
-                raise Exception("Failed to connect to Home Assistant WebSocket")
+                reason = client.last_connect_error
+                # Append only an actual string reason; the isinstance guard
+                # keeps a non-str (e.g. a MagicMock in tests) from polluting
+                # the message with a repr.
+                detail = f": {reason}" if isinstance(reason, str) else ""
+                raise Exception(
+                    "Failed to connect to Home Assistant WebSocket" + detail
+                )
 
             self._clients[key] = client
             self._last_used[key] = time.monotonic()

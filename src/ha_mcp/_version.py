@@ -56,3 +56,14 @@ def is_running_in_addon() -> bool:
     users, who already see the dev/stable distinction in the HAOS add-on UI.
     """
     return bool(os.environ.get("SUPERVISOR_TOKEN"))
+
+
+def get_supervisor_base_url() -> str:
+    """Return the base URL for direct Supervisor REST calls.
+
+    Defaults to ``http://supervisor`` (the in-addon Supervisor hostname). The
+    ``SUPERVISOR_BASE_URL`` env var override exists so E2E tests can point the
+    direct-Supervisor httpx call sites at a local mock without /etc/hosts or
+    DNS hacks. Production add-ons leave it unset.
+    """
+    return os.environ.get("SUPERVISOR_BASE_URL", "http://supervisor")

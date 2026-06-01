@@ -6,6 +6,7 @@ especially for blueprint-based scripts (issue #466).
 """
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -168,6 +169,78 @@ class TestScriptToolsValidation:
         assert error_data["success"] is False
         # The error message comes from parse_json_param which tries to parse as JSON first
         assert "Invalid" in error_data["error"]["message"]
+
+
+class TestGetScriptCanonicalId:
+    """Issue #1334: returned ``script_id`` is the canonical storage key,
+    falling back to the caller input when the rest_client envelope omits it."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        # send_websocket_message is invoked by fetch_entity_category; return
+        # a no-category response so the get path doesn't error.
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False}
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return ConfigScriptTools(mock_client)
+
+    async def test_returns_canonical_script_id_from_envelope(
+        self, tools, mock_client
+    ):
+        """When the rest_client resolves an alias to a storage key, the
+        tool's returned ``script_id`` reflects the canonical key."""
+        mock_client.get_script_config = AsyncMock(
+            return_value={
+                "success": True,
+                "script_id": "1234567890",
+                "config": {
+                    "alias": "Morning Routine",
+                    "sequence": [{"delay": {"seconds": 1}}],
+                },
+            }
+        )
+
+        result = await tools.ha_config_get_script(script_id="morning_routine")
+
+        assert result["success"] is True
+        assert result["action"] == "get"
+        assert result["script_id"] == "1234567890"
+        assert "config_hash" in result
+
+    async def test_falls_back_to_input_and_warns_when_envelope_missing_key(
+        self, tools, mock_client, caplog
+    ):
+        """If the rest_client envelope omits ``script_id`` (contract
+        violation), the tool surfaces the caller-supplied identifier and
+        logs a warning rather than masking the missing key silently."""
+        mock_client.get_script_config = AsyncMock(
+            return_value={
+                "success": True,
+                "config": {
+                    "alias": "Test",
+                    "sequence": [{"delay": {"seconds": 1}}],
+                },
+            }
+        )
+
+        with caplog.at_level(
+            logging.WARNING, logger="ha_mcp.tools.tools_config_scripts"
+        ):
+            result = await tools.ha_config_get_script(script_id="caller_input")
+
+        assert result["success"] is True
+        assert result["action"] == "get"
+        assert result["script_id"] == "caller_input"
+        assert any(
+            "rest_client contract violation" in r.message
+            and r.levelname == "WARNING"
+            for r in caplog.records
+        ), f"Expected contract-violation warning, got: {[r.message for r in caplog.records]}"
 
 
 class TestStripEmptyScriptFields:

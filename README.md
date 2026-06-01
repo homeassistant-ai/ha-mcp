@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-86-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-84-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -166,31 +166,33 @@ Spend less time configuring, more time enjoying your smart home.
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (86 tools)</b></summary>
+<summary><b>Complete Tool List (84 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
 | **Add-ons** | `ha_get_addon`, `ha_manage_addon` |
-| **Areas & Floors** | `ha_config_list_areas`, `ha_config_list_floors`, `ha_config_remove_area`, `ha_config_remove_floor`, `ha_config_set_area`, `ha_config_set_floor`, `ha_list_floors_areas` |
+| **Areas & Floors** | `ha_list_floors_areas`, `ha_remove_area_or_floor`, `ha_set_area_or_floor` |
+| **Assist** | `ha_manage_pipeline` |
 | **Automations** | `ha_config_get_automation`, `ha_config_remove_automation`, `ha_config_set_automation` |
 | **Blueprints** | `ha_get_blueprint`, `ha_import_blueprint` |
 | **Calendar** | `ha_config_get_calendar_events`, `ha_config_remove_calendar_event`, `ha_config_set_calendar_event` |
 | **Camera** | `ha_get_camera_image` |
 | **Dashboards** | `ha_config_delete_dashboard_resource`, `ha_config_delete_dashboard`, `ha_config_get_dashboard`, `ha_config_list_dashboard_resources`, `ha_config_set_dashboard_resource`, `ha_config_set_dashboard` |
-| **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_update_device` |
+| **Device Registry** | `ha_get_device`, `ha_remove_device`, `ha_set_device` |
 | **Energy** | `ha_manage_energy_prefs` |
 | **Entity Registry** | `ha_get_entity_exposure`, `ha_get_entity`, `ha_remove_entity`, `ha_set_entity` |
 | **Files** | `ha_delete_file` *(beta)*, `ha_list_files` *(beta)*, `ha_read_file` *(beta)*, `ha_write_file` *(beta)* |
 | **Groups** | `ha_config_list_groups`, `ha_config_remove_group`, `ha_config_set_group` |
-| **HACS** | `ha_hacs_add_repository`, `ha_hacs_download`, `ha_hacs_repository_info`, `ha_hacs_search` |
-| **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_delete_helpers_integrations`, `ha_get_helper_schema` |
+| **HACS** | `ha_get_hacs_info`, `ha_manage_hacs` |
+| **Helper Entities** | `ha_config_list_helpers`, `ha_config_set_helper`, `ha_remove_helpers_integrations` |
 | **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs` |
-| **Integrations** | `ha_get_integration`, `ha_set_integration_enabled` |
+| **Integrations** | `ha_get_integration`, `ha_get_system_health`, `ha_set_integration_enabled` |
 | **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
+| **Scenes** | `ha_config_get_scene`, `ha_config_remove_scene`, `ha_config_set_scene` |
 | **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
 | **Search & Discovery** | `ha_deep_search`, `ha_get_overview`, `ha_get_state`, `ha_search_entities` |
-| **Service & Device Control** | `ha_bulk_control`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
-| **System** | `ha_backup_create`, `ha_backup_restore`, `ha_check_config`, `ha_config_set_yaml` *(beta)*, `ha_get_system_health`, `ha_get_updates`, `ha_reload_core`, `ha_restart` |
+| **Service & Device Control** | `ha_bulk_control`, `ha_call_event`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
+| **System** | `ha_check_config`, `ha_config_set_yaml` *(beta)*, `ha_get_updates`, `ha_manage_backup`, `ha_manage_custom_tool` *(beta)*, `ha_reload_core`, `ha_restart` |
 | **Todo Lists** | `ha_get_todo`, `ha_remove_todo_item`, `ha_set_todo_item` |
 | **Utilities** | `ha_eval_template`, `ha_install_mcp_tools` *(beta)*, `ha_report_issue` |
 | **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |
@@ -240,14 +242,48 @@ An MCP server can create automations, helpers, and dashboards, but it has no opi
 
 ### Bundled Skills (built-in)
 
-Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed.
+Skills from `homeassistant-ai/skills` are bundled and served as [MCP resources](https://modelcontextprotocol.io/docs/concepts/resources) via `skill://` URIs. Any MCP client that supports resources can discover them automatically — no manual installation needed. For tool-only clients (claude.ai, etc.), the same skills are reachable through the polymorphic `ha_get_skill_guide` tool — call it with no args to list bundled skills, with a `skill` arg to list its files, or with `skill` + `file` to read content. Resources are not auto-injected into context — clients must explicitly request them, so idle context cost is just the metadata listing.
+
+`ha_get_skill_guide` is a mandatory tool: the catalog always exposes it (it can't be disabled) so tool-only clients never see a silently missing skill surface.
+
+Skills can still be installed manually for clients that prefer local skill files — see the [skills repo](https://github.com/homeassistant-ai/skills) for instructions.
+
+---
+
+## 🔍 Tool Discovery for AI Agents
+
+By default, the full tool catalog (~86 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (Claude Sonnet, Claude Opus,) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
+
+For models *without* deferred tool support — Claude Haiku, Gemini, ChatGPT OpenAI-compatible local models, smaller open-weights models — listing 86 tools eats ~46K tokens of idle context. To address that, the server ships with a **search-based discovery mode** built on top of FastMCP's BM25 search transform.
+
+### Enable search-based discovery
+
+Set ENABLE_TOOL_SEARCH=true (or toggle the option in the HA add-on). The full catalog is replaced in the tool list with four entry points plus a small set of always-visible "pinned" tools (ha_search_entities, ha_get_overview, ha_restart, etc.). All tools remain callable directly by name once discovered:
+
+| Tool | Purpose |
+|------|---------|
+| `ha_search_tools` | BM25 keyword search across all tools. Returns name, description, parameters, and annotations (`readOnlyHint` / `destructiveHint`) so the agent can pick the right one. |
+| `ha_call_read_tool` | Execute a `readOnlyHint` tool by name. Safe — clients can auto-approve. |
+| `ha_call_write_tool` | Execute a write tool that creates or updates data. |
+| `ha_call_delete_tool` | Execute a tool that removes / deletes data. |
+
+The proxy split lets MCP clients apply different permission policies per category (e.g. auto-approve reads, prompt for writes, confirm deletes) without parsing tool docstrings.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `ENABLE_SKILLS` | `true` | Serve skills as MCP resources. Resources are not auto-injected into context — clients must explicitly request them. |
-| `ENABLE_SKILLS_AS_TOOLS` | `true` | Expose skills and doc resources via `list_resources`/`read_resource` tools. Resource-capable clients can set to `false` to reduce tool count. |
+| `ENABLE_TOOL_SEARCH` | `false` | Replace full tool catalog with search-based discovery (~46K → ~5K idle tokens). |
+| `TOOL_SEARCH_MAX_RESULTS` | `5` | Max results returned by `ha_search_tools` (range 2–10). |
+| `PINNED_TOOLS` | empty | Comma-separated tool names to keep always visible. The web settings UI is the primary way to manage this. |
 
-Skills can still be installed manually for clients that prefer local skill files — see the [skills repo](https://github.com/homeassistant-ai/skills) for instructions.
+### When to enable
+
+- **Claude Haiku, OpenAI-compatible local models, Gemini, ChatGPT or any model without native deferred tool support** — large idle-context savings.
+- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 86.
+- **Cost-sensitive deployments** — fewer idle tokens per turn.
+
+Leave it off when using Claude Sonnet/Opus or any client with deferred tool loading; the full catalog has no idle cost there and direct calls skip the search step. If you choose to use our toolsearch then you should disable the native Claude Opus/Sonnet toolsearch, which is called deferred tools in the settings.
+
+For the HA add-on, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-add-on settings UI for fine-grained tool enable/disable/pin.
 
 ---
 
@@ -271,7 +307,7 @@ For comprehensive testing documentation, see **[tests/README.md](tests/README.md
 
 Ha-mcp runs **locally** on your machine. Your smart home data stays on your network.
 
-- **Configurable telemetry** — optional anonymous usage stats
+- **No telemetry today** — anonymous usage stats are a planned future feature (as of May 2026); users will be notified when it lands and it will be opt-in only
 - **No personal data collection** — we never collect entity names, configs, or device data
 - **User-controlled bug reports** — only sent with your explicit approval
 
@@ -291,6 +327,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[FastMCP](https://github.com/jlowin/fastmcp)**: Excellent MCP server framework
 - **[Model Context Protocol](https://modelcontextprotocol.io/)**: Standardized AI-application communication
 - **[Claude Code](https://github.com/anthropics/claude-code)**: AI-powered coding assistant
+- **[PolicyLayer](https://policylayer.com/)**: Argument-path predicate DSL shape (`args.domain in [...]` with `eq`/`in`/`regex`/`contains`/`exists`/...) inspired the per-tool approval rule schema (#966).
 
 ## 👥 Contributors
 
@@ -299,6 +336,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@julienld](https://github.com/julienld)** — Project creator.
 - **[@sergeykad](https://github.com/sergeykad)** — Core maintainer.
 - **[@kingpanther13](https://github.com/kingpanther13)** — Core maintainer.
+- **[@Patch76](https://github.com/Patch76)** — Core maintainer.
 
 ### Contributors
 
@@ -323,13 +361,22 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@restriction](https://github.com/restriction)** — Responsible disclosure: python_transform sandbox missing call target validation.
 - **[@lcrostarosa](https://github.com/lcrostarosa)** — Diagnostic and health monitoring tools concept (#675), inspiring system/error logs, repairs, and ZHA radio metrics integration.
 - **[@roysha1](https://github.com/roysha1)** — Copilot CLI support in the installation wizard; replaced placeholder logo SVGs with real brand icons on the documentation site.
-- **[@Patch76](https://github.com/Patch76)** — `ha_remove_entity` tool, history/statistics pagination and validation, docs sync automation, docstring guidelines, dashboard tool consolidation.
 - **[@teancom](https://github.com/teancom)** — Fix add-on stats endpoint (`/addons/{slug}/stats`).
 - **[@TomasDJo](https://github.com/TomasDJo)** — Category support for automations, scripts, and scenes.
 - **[@bzelch](https://github.com/bzelch)** — `python_transform` support for automations and scripts.
 - **[@gcormier](https://github.com/gcormier)** — Windows installer improvements: removed unused variable and fixed terminal closing after install.
 - **[@ekobres](https://github.com/ekobres)** — Feature flags for `HAMCP_ENABLE_FILESYSTEM_TOOLS` and `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION` in the add-on config, with beta tagging in source and docs.
 - **[@w3z315](https://github.com/w3z315)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
+- **[@griffinmartin](https://github.com/griffinmartin)** — Added OpenCode (by Anomaly) as a selectable AI client in the setup wizard, with both stdio and streamable HTTP support.
+- **[@hhopke](https://github.com/hhopke)** — Fixed addon API calls to route through HA Core ingress proxy instead of direct container connections, fixing `ha_manage_addon` proxy mode on addon installs.
+- **[@tomwilkie](https://github.com/tomwilkie)** — JMESPath middleware exploration (#1147) whose review-time token-measurement data informed the design of #1199 and #1225.
+- **[@SealKan](https://github.com/SealKan)** — `fields=`/`attribute_keys=` projection on six read-heavy tools (#1225), `ha_call_event` tool (#1239), and dashboards-list helper refactor (#1207).
+- **[@KarelTestSpecial](https://github.com/KarelTestSpecial)** — Cached YAML instance to prevent CPU spikes during bulk edits (#1371).
+- **[@corgan2222](https://github.com/corgan2222)** — HA brand assets for custom integration (#1317).
+- **[@drseanwing](https://github.com/drseanwing)** — Progress emission via FastMCP `Context` in long-running tools (#1124); tool-discovery / categorized-search docs (#1123).
+- **[@fnordpig](https://github.com/fnordpig)** — Config subentry support (#1393) and Assist pipeline management tool (#1392).
+- **[@paul43210](https://github.com/paul43210)** — `array_patch` mode in `ha_manage_addon` for atomic GET-modify-POST (#1063).
+- **[@L1AD](https://github.com/L1AD)** — Filed #966 proposing tool security policies; pointed to PolicyLayer's MCP-security work as prior art that inspired the predicate DSL shape.
 
 ---
 

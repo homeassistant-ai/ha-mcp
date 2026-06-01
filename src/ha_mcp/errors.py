@@ -81,6 +81,21 @@ class ErrorCode(StrEnum):
     # Component errors
     COMPONENT_NOT_INSTALLED = "COMPONENT_NOT_INSTALLED"
 
+    # Code-mode sandbox errors. The sandbox is a separate execution
+    # context; runtime failures inside it map cleanly to one of these
+    # three buckets so the LLM can self-recover instead of seeing every
+    # failure as INTERNAL_ERROR.
+    SANDBOX_LIMIT_EXCEEDED = "SANDBOX_LIMIT_EXCEEDED"
+    SANDBOX_SYNTAX_UNSUPPORTED = "SANDBOX_SYNTAX_UNSUPPORTED"
+    SANDBOX_RUNTIME_ERROR = "SANDBOX_RUNTIME_ERROR"
+
+    # Tool security policy gating (#966). The middleware gates a tool
+    # call awaiting user approval, the user denied it, or the policy
+    # file itself failed to load (treated as a fail-closed safety stop).
+    USER_APPROVAL_REQUIRED = "USER_APPROVAL_REQUIRED"
+    USER_DENIED = "USER_DENIED"
+    POLICY_LOAD_FAILED = "POLICY_LOAD_FAILED"
+
 
 # Default suggestions for common error codes
 DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
@@ -137,7 +152,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Entity domain must match the original domain",
     ],
     ErrorCode.SERVICE_NOT_FOUND: [
-        "Use ha_get_skill_home_assistant_best_practices for documentation",
+        "Use ha_get_skill_guide for documentation",
         "Check the service name spelling",
         "Verify the domain supports this service",
     ],
@@ -148,7 +163,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
     ErrorCode.SERVICE_INVALID_ACTION: [
         "Check available actions for this domain",
         "Common actions: turn_on, turn_off, toggle",
-        "Use ha_get_skill_home_assistant_best_practices for documentation",
+        "Use ha_get_skill_guide for documentation",
     ],
     ErrorCode.SERVICE_CALL_FAILED: [
         "Check the service parameters are correct",
@@ -161,7 +176,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
     ],
     ErrorCode.CONFIG_INVALID: [
         "Review the configuration format",
-        "Use ha_get_skill_home_assistant_best_practices for configuration help",
+        "Use ha_get_skill_guide for configuration help",
     ],
     ErrorCode.CONFIG_MISSING_REQUIRED_FIELDS: [
         "Check documentation for required fields",
@@ -232,7 +247,9 @@ def create_error_response(
         }
     """
     # Use provided suggestions or fall back to defaults
-    error_suggestions = suggestions if suggestions else DEFAULT_SUGGESTIONS.get(code, [])
+    error_suggestions = (
+        suggestions if suggestions else DEFAULT_SUGGESTIONS.get(code, [])
+    )
 
     error_dict: dict[str, Any] = {
         "code": code.value,
@@ -323,14 +340,20 @@ def create_validation_error(
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a validation error response."""
-    code = ErrorCode.VALIDATION_INVALID_JSON if invalid_json else ErrorCode.VALIDATION_FAILED
+    code = (
+        ErrorCode.VALIDATION_INVALID_JSON
+        if invalid_json
+        else ErrorCode.VALIDATION_FAILED
+    )
     # Build context, prioritizing explicit context but adding parameter if provided
     final_context: dict[str, Any] = {}
     if context:
         final_context.update(context)
     if parameter:
         final_context["parameter"] = parameter
-    return create_error_response(code, message, details, context=final_context if final_context else None)
+    return create_error_response(
+        code, message, details, context=final_context if final_context else None
+    )
 
 
 def create_config_error(
@@ -372,20 +395,6 @@ def create_timeout_error(
         f"Operation '{operation}' timed out after {timeout_seconds}s",
         details=details,
         context=final_context,
-    )
-
-
-def create_resource_not_found_error(
-    resource_type: str,
-    identifier: str,
-    details: str | None = None,
-) -> dict[str, Any]:
-    """Create a resource not found error response."""
-    return create_error_response(
-        ErrorCode.RESOURCE_NOT_FOUND,
-        f"{resource_type} '{identifier}' not found",
-        details=details,
-        context={"resource_type": resource_type, "identifier": identifier},
     )
 
 

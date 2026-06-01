@@ -39,6 +39,6 @@ echo "You can now work in this isolated environment."
 
 ## Notes
 
-- Worktree inherits `.claude/agents/` workflows
+- Worktree inherits `.claude/skills/` workflows
 - To remove when done: `cd ../.. && git worktree remove worktree/"$ARGUMENTS"`
 - List all worktrees: `git worktree list`

@@ -16,11 +16,13 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    validate_identifier_not_empty,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,11 @@ class CategoryTools:
     @tool(
         name="ha_config_get_category",
         tags={"Labels & Categories"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Category"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Category",
+        },
     )
     @log_tool_usage
     async def ha_config_get_category(
@@ -76,6 +82,18 @@ class CategoryTools:
         Use ha_set_entity(categories={"automation": "category_id"}) to assign categories to entities.
         """
         try:
+            # ``None`` stays the documented "list-all" sentinel; explicit
+            # empty/whitespace is rejected by ``validate_identifier_not_empty``.
+            if category_id is not None:
+                validate_identifier_not_empty(
+                    category_id,
+                    "category_id",
+                    suggestions=[
+                        "Omit category_id to list all categories for the scope",
+                        "Pass a valid non-empty category_id",
+                    ],
+                    context={"action": "get", "scope": scope},
+                )
             message: dict[str, Any] = {
                 "type": "config/category_registry/list",
                 "scope": scope,
@@ -120,7 +138,7 @@ class CategoryTools:
                 available_ids = [cat.get("category_id") for cat in categories[:10]]
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
+                        ErrorCode.RESOURCE_NOT_FOUND,
                         f"Category not found: {category_id}",
                         context={
                             "category_id": category_id,
@@ -151,6 +169,17 @@ class CategoryTools:
         name="ha_config_set_category",
         tags={"Labels & Categories"},
         annotations={"destructiveHint": True, "title": "Create or Update Category"},
+    )
+    @with_auto_backup(
+        domain="category",
+        # Skip on missing scope or category_id rather than producing the
+        # truthy-but-meaningless `":"` shape that would trigger a wasted
+        # lookup with no matching record.
+        id_fn=lambda kw: (
+            f"{kw['scope']}:{kw['category_id']}"
+            if kw.get("scope") and kw.get("category_id")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_config_set_category(
@@ -194,6 +223,19 @@ class CategoryTools:
         After creating a category, use ha_set_entity(categories={"automation": "category_id"}) to assign it.
         """
         try:
+            # ``None`` stays the documented "create-new" sentinel; explicit
+            # empty/whitespace is rejected so the create/update discriminator
+            # below cannot silently route an intended update to create.
+            if category_id is not None:
+                validate_identifier_not_empty(
+                    category_id,
+                    "category_id",
+                    suggestions=[
+                        "Omit category_id entirely to create a new category",
+                        "Pass a valid category_id to update an existing category",
+                    ],
+                    context={"action": "set", "scope": scope, "name": name},
+                )
             action = "update" if category_id else "create"
 
             message: dict[str, Any] = {
@@ -221,6 +263,22 @@ class CategoryTools:
                     "message": f"Successfully {action_past} category: {name}",
                 }
             else:
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Category not found: {category_id}",
+                            context={
+                                "name": name,
+                                "scope": scope,
+                                "category_id": category_id,
+                            },
+                            suggestions=[
+                                f"Use ha_config_get_category('{scope}') without category_id to see all categories",
+                            ],
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,
@@ -250,7 +308,22 @@ class CategoryTools:
     @tool(
         name="ha_config_remove_category",
         tags={"Labels & Categories"},
-        annotations={"destructiveHint": True, "idempotentHint": True, "title": "Remove Category"},
+        annotations={
+            "destructiveHint": True,
+            "idempotentHint": True,
+            "title": "Remove Category",
+        },
+    )
+    @with_auto_backup(
+        domain="category",
+        # Skip on missing scope or category_id rather than producing the
+        # truthy-but-meaningless `":"` shape that would trigger a wasted
+        # lookup with no matching record.
+        id_fn=lambda kw: (
+            f"{kw['scope']}:{kw['category_id']}"
+            if kw.get("scope") and kw.get("category_id")
+            else ""
+        ),
     )
     @log_tool_usage
     async def ha_config_remove_category(
@@ -282,6 +355,15 @@ class CategoryTools:
         This action cannot be undone.
         """
         try:
+            # Empty/whitespace would surface as a misleading HA delete-failure.
+            validate_identifier_not_empty(
+                category_id,
+                "category_id",
+                suggestions=[
+                    "Pass a valid category_id (use ha_config_get_category() to list)",
+                ],
+                context={"action": "remove", "scope": scope},
+            )
             message: dict[str, Any] = {
                 "type": "config/category_registry/delete",
                 "scope": scope,
@@ -298,6 +380,18 @@ class CategoryTools:
                     "message": f"Successfully deleted category: {category_id}",
                 }
             else:
+                error_str = str(result.get("error", "")).lower()
+                if "not found" in error_str or "doesn't exist" in error_str:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            f"Category not found: {category_id}",
+                            context={"category_id": category_id, "scope": scope},
+                            suggestions=[
+                                f"Use ha_config_get_category('{scope}') without category_id to see all categories",
+                            ],
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.SERVICE_CALL_FAILED,

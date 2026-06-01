@@ -7,8 +7,9 @@ to help debug automation and script issues.
 
 import json
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
@@ -21,6 +22,8 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    safe_info,
+    safe_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +63,7 @@ class TraceTools:
         limit: Annotated[
             int,
             Field(
-                description="Maximum number of traces to return when listing (default: 10, max: 50)",
+                description="Maximum number of traces to return when listing (default: 10, max: 50).",
                 default=10,
                 ge=1,
                 le=50,
@@ -91,6 +94,22 @@ class TraceTools:
                 default=None,
             ),
         ] = None,
+        offset: Annotated[
+            int,
+            Field(
+                description="Number of traces to skip from the start of the requested order. Use with `limit` to page through stored traces when `total_available > limit`.",
+                default=0,
+                ge=0,
+            ),
+        ] = 0,
+        order: Annotated[
+            Literal["newest", "oldest"],
+            Field(
+                description="Order traces are returned in. 'newest' (default) returns most-recent first; 'oldest' returns chronological-first.",
+                default="newest",
+            ),
+        ] = "newest",
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
         Retrieve execution traces for automations and scripts to debug issues.
@@ -107,6 +126,8 @@ class TraceTools:
         1. List recent traces (omit run_id):
            ha_get_automation_traces("automation.motion_light")
            Returns a summary of recent execution runs with timestamps, triggers, and status.
+           Use `offset` to page deeper when `has_more` is true, or `order="oldest"` to
+           start from the earliest stored trace instead of the most recent.
 
         2. Get detailed trace (provide run_id):
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
@@ -165,6 +186,18 @@ class TraceTools:
             # Extract the object_id (part after the domain) as fallback
             object_id = automation_id.split(".", 1)[1]
 
+            await safe_info(
+                ctx,
+                f"ha_get_automation_traces starting: id={automation_id} "
+                f"run_id={run_id or '<list>'}",
+            )
+            await safe_progress(
+                ctx,
+                progress=0,
+                total=3,
+                message="connecting to Home Assistant WebSocket",
+            )
+
             # Connect to WebSocket
             ws_client, error = await get_connected_ws_client(
                 self._client.base_url,
@@ -185,6 +218,13 @@ class TraceTools:
                     ws_client, automation_id, object_id
                 )
 
+                await safe_progress(
+                    ctx,
+                    progress=1,
+                    total=3,
+                    message=f"fetching trace {'detail' if run_id else 'list'}",
+                )
+
                 if run_id:
                     # Get specific trace details
                     result = await ws_client.send_command(
@@ -195,16 +235,19 @@ class TraceTools:
                     )
 
                     if not result.get("success"):
-                        ctx = {"automation_id": automation_id}
+                        err_ctx: dict[str, str] = {"automation_id": automation_id}
                         if run_id:
-                            ctx["run_id"] = run_id
+                            err_ctx["run_id"] = run_id
                         raise_tool_error(create_error_response(
                             ErrorCode.SERVICE_CALL_FAILED,
                             result.get("error", "Failed to retrieve trace"),
-                            context=ctx,
+                            context=err_ctx,
                         ))
 
                     trace_data = result.get("result", {})
+                    await safe_progress(
+                        ctx, progress=3, total=3, message="formatting trace"
+                    )
                     return _format_detailed_trace(
                         automation_id, run_id, trace_data,
                         deduplicate=deduplicate, detailed=detailed,
@@ -229,14 +272,40 @@ class TraceTools:
 
                     # If traces are empty, gather diagnostic information
                     if not traces_data:
+                        await safe_progress(
+                            ctx,
+                            progress=2,
+                            total=3,
+                            message="no traces; gathering diagnostics",
+                        )
                         diagnostics = await _gather_diagnostics(
                             ws_client, self._client, automation_id, domain
                         )
+                        await safe_progress(
+                            ctx, progress=3, total=3, message="diagnostics complete"
+                        )
                         return _format_trace_list(
-                            automation_id, traces_data, limit, diagnostics
+                            automation_id,
+                            traces_data,
+                            limit,
+                            diagnostics,
+                            offset=offset,
+                            order=order,
                         )
 
-                    return _format_trace_list(automation_id, traces_data, limit)
+                    await safe_progress(
+                        ctx,
+                        progress=3,
+                        total=3,
+                        message=f"listed {len(traces_data)} traces",
+                    )
+                    return _format_trace_list(
+                        automation_id,
+                        traces_data,
+                        limit,
+                        offset=offset,
+                        order=order,
+                    )
 
             finally:
                 await ws_client.disconnect()
@@ -422,18 +491,32 @@ def _format_trace_list(
     traces: list[dict[str, Any]],
     limit: int,
     diagnostics: dict[str, Any] | None = None,
+    *,
+    offset: int = 0,
+    order: Literal["newest", "oldest"] = "newest",
 ) -> dict[str, Any]:
     """Format trace list for AI consumption.
 
     Args:
         automation_id: The automation or script entity_id
-        traces: List of trace data from Home Assistant
+        traces: List of trace data from Home Assistant (oldest-first)
         limit: Maximum number of traces to include
         diagnostics: Optional diagnostic information when traces are empty
+        offset: Number of traces to skip from the start of the requested order
+        order: 'newest' (default) returns most-recent first; 'oldest' chronological
     """
-    formatted_traces = []
+    # HA's trace/list returns traces oldest-first. Pick a window from the end
+    # for newest-first, or from the start for oldest-first, with offset for
+    # pagination through stored traces beyond `limit`.
+    if order == "newest":
+        end = len(traces) - offset
+        start = max(end - limit, 0)
+        window = list(reversed(traces[start:end])) if end > 0 else []
+    else:
+        window = traces[offset:offset + limit]
 
-    for trace in traces[:limit]:
+    formatted_traces = []
+    for trace in window:
         # Extract key information from trace
         trace_info: dict[str, Any] = {
             "run_id": trace.get("run_id"),
@@ -462,6 +545,9 @@ def _format_trace_list(
         "automation_id": automation_id,
         "trace_count": len(formatted_traces),
         "total_available": len(traces),
+        "offset": offset,
+        "order": order,
+        "has_more": offset + len(formatted_traces) < len(traces),
         "traces": formatted_traces,
         "hint": "Use run_id with this tool to get detailed trace information",
     }

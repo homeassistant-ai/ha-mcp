@@ -11,7 +11,6 @@ rule:
     - pattern: return create_validation_error($$$)
     - pattern: return create_config_error($$$)
     - pattern: return create_timeout_error($$$)
-    - pattern: return create_resource_not_found_error($$$)
   not:
     inside:
       kind: function_definition

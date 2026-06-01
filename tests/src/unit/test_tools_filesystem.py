@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.config import _reset_global_settings
 from ha_mcp.tools.tools_filesystem import (
     FEATURE_FLAG,
     MCP_TOOLS_DOMAIN,
@@ -15,8 +16,42 @@ from ha_mcp.tools.tools_filesystem import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_settings_singleton():
+    """Reset the cached ``Settings`` between tests.
+
+    ``is_filesystem_tools_enabled()`` reads through
+    ``get_global_settings()``, which caches the parsed Settings on
+    first read. Tests that mutate ``HAMCP_ENABLE_FILESYSTEM_TOOLS``
+    via ``patch.dict(os.environ, ...)`` need the cache invalidated
+    or every test after the first sees a stale value frozen at
+    import time.
+    """
+    _reset_global_settings()
+    yield
+    _reset_global_settings()
+
+
+def test_filesystem_constants_include_dashboards():
+    """READABLE_PATTERNS and WRITABLE_DIRS must mirror the custom component allowlist."""
+    from ha_mcp.tools.tools_filesystem import READABLE_PATTERNS, WRITABLE_DIRS
+
+    assert "dashboards/**" in READABLE_PATTERNS, (
+        "dashboards/** must be readable to support YAML-mode dashboards"
+    )
+    assert "dashboards" in WRITABLE_DIRS, (
+        "dashboards must be writable to support YAML-mode dashboards"
+    )
+
+
 class TestFeatureFlag:
-    """Test feature flag functionality."""
+    """Test feature flag functionality.
+
+    ``HAMCP_ENABLE_FILESYSTEM_TOOLS`` is a beta sub-flag. The
+    master ``ENABLE_BETA_FEATURES`` gate force-sets it False at runtime
+    when the master is off, so every enabling test must set both env
+    vars to exercise the sub-flag's bool parsing in isolation.
+    """
 
     def test_disabled_by_default(self):
         """Feature should be disabled by default."""
@@ -27,22 +62,30 @@ class TestFeatureFlag:
 
     def test_enabled_with_true(self):
         """Feature should be enabled when set to 'true'."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "true", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
 
     def test_enabled_with_1(self):
         """Feature should be enabled when set to '1'."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "1"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "1", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
 
     def test_enabled_with_yes(self):
         """Feature should be enabled when set to 'yes'."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "yes"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "yes", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
 
     def test_enabled_with_on(self):
         """Feature should be enabled when set to 'on'."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "on"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "on", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
 
     def test_disabled_with_false(self):
@@ -57,10 +100,24 @@ class TestFeatureFlag:
 
     def test_case_insensitive(self):
         """Feature flag should be case insensitive."""
-        with patch.dict(os.environ, {FEATURE_FLAG: "TRUE"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "TRUE", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
-        with patch.dict(os.environ, {FEATURE_FLAG: "True"}):
+        with patch.dict(
+            os.environ, {FEATURE_FLAG: "True", "ENABLE_BETA_FEATURES": "true"}
+        ):
             assert is_filesystem_tools_enabled() is True
+
+    def test_master_off_forces_sub_flag_off(self):
+        """Master beta gate forces this sub-flag False even when
+        the sub-flag env var is true. Lock the behavior so a future
+        regression in ``_apply_feature_flag_overrides`` would surface
+        in the filesystem-tools tests, not just the config tests.
+        """
+        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
+            os.environ.pop("ENABLE_BETA_FEATURES", None)
+            assert is_filesystem_tools_enabled() is False
 
 
 class TestIsMcpToolsAvailable:
@@ -124,25 +181,52 @@ class TestRegisterFilesystemTools:
         mcp.tool.assert_not_called()
 
     def test_registers_tools_when_enabled(self):
-        """Tools should be registered when feature flag is enabled."""
+        """Tools should be registered via mcp.add_tool when feature flag is enabled.
+
+        ``register_tool_methods`` (in helpers.py) discovers @tool-decorated
+        methods on the FilesystemTools instance and calls ``mcp.add_tool(...)``
+        for each. Earlier versions of this test mocked ``mcp.tool`` (the
+        legacy decorator path) and never inspected the call list, so the
+        guarded ``if registered_func:`` branches in production code could
+        silently skip without anyone noticing. Now we assert mcp.add_tool
+        fired the expected number of times (one per @tool method).
+        """
         from ha_mcp.tools.tools_filesystem import register_filesystem_tools
 
         mcp = MagicMock()
         client = MagicMock()
 
-        # Mock the tool decorator to return the function unchanged
-        def mock_tool(**kwargs):
-            def decorator(func):
-                return func
-            return decorator
-
-        mcp.tool = mock_tool
-
-        with patch.dict(os.environ, {FEATURE_FLAG: "true"}):
+        # Master beta gate force-sets the filesystem-tools sub-flag
+        # False when ``ENABLE_BETA_FEATURES`` is unset, so set both
+        # together — otherwise ``register_filesystem_tools`` early-
+        # returns without registering anything.
+        with patch.dict(
+            os.environ,
+            {FEATURE_FLAG: "true", "ENABLE_BETA_FEATURES": "true"},
+        ):
             register_filesystem_tools(mcp, client)
 
-        # Since we're using a mock decorator, we just verify no exceptions occurred
-        # The actual registration happens via the @mcp.tool decorator
+        # FilesystemTools exposes 4 @tool methods: list_files, read_file,
+        # write_file, delete_file. Assert all four registered.
+        assert mcp.add_tool.call_count == 4, (
+            f"Expected 4 add_tool calls (one per @tool method on FilesystemTools), "
+            f"got {mcp.add_tool.call_count}"
+        )
+
+        # Tool functions are passed positionally — extract them and verify
+        # the names match the @tool(name=...) decorator values.
+        registered_names = {
+            call.args[0].__name__ for call in mcp.add_tool.call_args_list if call.args
+        }
+        expected_methods = {
+            "ha_list_files",
+            "ha_read_file",
+            "ha_write_file",
+            "ha_delete_file",
+        }
+        assert registered_names == expected_methods, (
+            f"Expected methods {expected_methods}, got {registered_names}"
+        )
 
 
 class TestHaListFilesTool:
@@ -167,6 +251,7 @@ class TestHaListFilesTool:
                 if "ha_list_files" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -177,7 +262,11 @@ class TestHaListFilesTool:
         # Call the captured function
         if registered_func:
             # Need to unwrap from log_tool_usage decorator
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             with pytest.raises(ToolError):
                 await inner_func(path="www/")
 
@@ -207,6 +296,7 @@ class TestHaListFilesTool:
                 if "ha_list_files" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -215,7 +305,11 @@ class TestHaListFilesTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             result = await inner_func(path="www/", pattern="*.css")
 
             client.call_service.assert_called_once_with(
@@ -248,6 +342,7 @@ class TestHaReadFileTool:
                 if "ha_read_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -256,7 +351,11 @@ class TestHaReadFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             with pytest.raises(ToolError):
                 await inner_func(path="configuration.yaml")
 
@@ -282,6 +381,7 @@ class TestHaWriteFileTool:
                 if "ha_write_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -290,7 +390,11 @@ class TestHaWriteFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             with pytest.raises(ToolError):
                 await inner_func(path="www/test.css", content=".test { color: red; }")
 
@@ -320,6 +424,7 @@ class TestHaWriteFileTool:
                 if "ha_write_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -328,7 +433,11 @@ class TestHaWriteFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             result = await inner_func(
                 path="www/test.css",
                 content=".test { color: red; }",
@@ -373,6 +482,7 @@ class TestHaDeleteFileTool:
                 if "ha_delete_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -381,7 +491,11 @@ class TestHaDeleteFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             with pytest.raises(ToolError) as exc_info:
                 await inner_func(path="www/test.css", confirm=False)
 
@@ -416,6 +530,7 @@ class TestHaDeleteFileTool:
                 if "ha_delete_file" in func.__name__:
                     registered_func = func
                 return func
+
             return decorator
 
         mcp.tool = capture_tool
@@ -424,7 +539,11 @@ class TestHaDeleteFileTool:
             register_filesystem_tools(mcp, client)
 
         if registered_func:
-            inner_func = registered_func.__wrapped__ if hasattr(registered_func, '__wrapped__') else registered_func
+            inner_func = (
+                registered_func.__wrapped__
+                if hasattr(registered_func, "__wrapped__")
+                else registered_func
+            )
             result = await inner_func(path="www/test.css", confirm=True)
 
             client.call_service.assert_called_once_with(

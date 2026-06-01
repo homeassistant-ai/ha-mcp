@@ -38,7 +38,9 @@ class TestLabelCRUD:
 
         logger.info(f"Found {data['count']} labels")
         for label in data["labels"][:5]:  # Log first 5
-            logger.info(f"  - {label.get('name', 'Unknown')} (id: {label.get('label_id')})")
+            logger.info(
+                f"  - {label.get('name', 'Unknown')} (id: {label.get('label_id')})"
+            )
 
     async def test_label_full_lifecycle(self, mcp_client, cleanup_tracker):
         """Test complete label lifecycle: create, get, update, delete."""
@@ -204,12 +206,13 @@ class TestLabelCRUD:
     async def test_get_nonexistent_label(self, mcp_client):
         """
         Test: ha_config_get_label with a nonexistent label_id returns a
-        structured error with code ENTITY_NOT_FOUND, not success=True.
+        structured error with code RESOURCE_NOT_FOUND, not success=True.
 
         Source path: tools_labels.py — after listing labels via WebSocket,
         the requested label_id is looked up in the result. When absent,
-        raise_tool_error is invoked with ErrorCode.ENTITY_NOT_FOUND and the
-        message "Label not found: ...".
+        raise_tool_error is invoked with ErrorCode.RESOURCE_NOT_FOUND and
+        the message "Label not found: ..." (labels are registry metadata,
+        not entities — RESOURCE_NOT_FOUND is the correct category per #1297).
 
         Hardened from success-only check to explicit error-code and
         message-substring assertions.
@@ -225,8 +228,8 @@ class TestLabelCRUD:
         assert data.get("success") is False, (
             f"Should fail for non-existent label: {data}"
         )
-        assert data["error"]["code"] == "ENTITY_NOT_FOUND", (
-            f"Expected error code ENTITY_NOT_FOUND, got: {data['error']}"
+        assert data["error"]["code"] == "RESOURCE_NOT_FOUND", (
+            f"Expected error code RESOURCE_NOT_FOUND, got: {data['error']}"
         )
         assert "suggestion" in data["error"], (
             "Error response should include a suggestion"
@@ -275,7 +278,6 @@ class TestLabelAssignment:
         cleanup_tracker.track("label", label_id)
         logger.info(f"Created label for assignment: {label_id}")
 
-
         # Assign label to entity
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
@@ -323,7 +325,6 @@ class TestLabelAssignment:
             cleanup_tracker.track("label", label_id)
         logger.info(f"Created labels: {label_ids}")
 
-
         # Assign both labels
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
@@ -366,7 +367,6 @@ class TestLabelAssignment:
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
 
-
         # Assign using string (JSON array) instead of list
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
@@ -408,7 +408,6 @@ class TestLabelAssignment:
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
 
-
         # Assign using JSON array string
         assign_result = await mcp_client.call_tool(
             "ha_set_entity",
@@ -435,7 +434,9 @@ class TestLabelAssignment:
             {"label_id": label_id},
         )
 
-    async def test_assign_label_to_nonexistent_entity(self, mcp_client, cleanup_tracker):
+    async def test_assign_label_to_nonexistent_entity(
+        self, mcp_client, cleanup_tracker
+    ):
         """Test assigning label to non-existent entity."""
         logger.info("Testing label assignment to non-existent entity")
 
@@ -447,7 +448,6 @@ class TestLabelAssignment:
         create_data = assert_mcp_success(create_result, "Create label")
         label_id = create_data.get("label_id")
         cleanup_tracker.track("label", label_id)
-
 
         # Try to assign to non-existent entity
         data = await safe_call_tool(
@@ -525,7 +525,5 @@ async def test_multiple_labels_lifecycle(mcp_client, cleanup_tracker):
 
     list_label_ids = [lbl.get("label_id") for lbl in list_data.get("labels", [])]
     for label_id in label_ids:
-        assert label_id not in list_label_ids, (
-            f"Label {label_id} should be deleted"
-        )
+        assert label_id not in list_label_ids, f"Label {label_id} should be deleted"
     logger.info("All label deletions verified")

@@ -50,3 +50,43 @@ class TestDockerBuild:
             text=True,
         )
         assert "Python 3.1" in result.stdout
+
+    def test_home_env_set_to_mcpuser(self):
+        """Verify ``ENV HOME=/home/mcpuser`` is honored at runtime.
+
+        Issue #1125 regression: without this, Docker leaves ``HOME=/`` under
+        a ``USER`` directive (moby/moby#2968), so ``Path.home()`` resolves
+        to ``/`` and ha-mcp tries to mkdir ``/.ha-mcp`` — fatal under
+        ``read_only: true``. This test catches a future PR that
+        accidentally removes the ``ENV HOME`` line.
+        """
+        result = subprocess.run(
+            ["docker", "run", "--rm", "ha-mcp-test", "sh", "-c", "echo $HOME"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.strip() == "/home/mcpuser"
+
+    def test_home_dir_is_world_traversable(self):
+        """Verify ``/home/mcpuser`` is mode 0755 (not the default 0700).
+
+        Hardened-Docker users frequently set ``--user UID:GID`` overrides;
+        if ``$HOME`` isn't world-traversable they get ``PermissionError``
+        when ha-mcp stats a path under it. The chmod is the second half of
+        the issue #1125 fix.
+        """
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "ha-mcp-test",
+                "stat",
+                "-c",
+                "%a",
+                "/home/mcpuser",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.strip() == "755"

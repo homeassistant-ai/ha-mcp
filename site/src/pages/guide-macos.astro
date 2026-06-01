@@ -87,6 +87,19 @@ const withBase = (path: string) => {
         </div>
       </section>
 
+      <!-- Optional: Quick Test -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number optional-badge">&#x2713;</span>
+          <h2 class="text-xl font-semibold text-white">Optional: Quick Test</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">Before setting up Claude Desktop, you can smoke-test that <code class="bg-slate-800 px-1 rounded">uvx</code> and <code class="bg-slate-800 px-1 rounded">ha-mcp</code> work from a bare terminal using the public demo server:</p>
+          <pre class="code-block"><code>HOMEASSISTANT_URL=https://ha-mcp-demo-server.qc-h.net HOMEASSISTANT_TOKEN=demo uvx ha-mcp@latest</code></pre>
+          <p class="text-slate-400 text-sm mt-3">If it starts without errors and waits for input, everything is working. Press <kbd class="bg-slate-700 border border-slate-600 px-1 rounded text-xs">Ctrl+C</kbd> to exit and continue with the steps below.</p>
+        </div>
+      </section>
+
       <!-- Step 3 -->
       <section class="guide-step">
         <div class="step-header">
@@ -213,6 +226,19 @@ uvx --refresh ha-mcp@latest</code></pre>
         </div>
       </section>
 
+      <!-- Tip -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">💡</span>
+          <h2 class="text-xl font-semibold text-white">Tip: The ha-mcp Settings Page</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-2">ha-mcp ships a local web settings page where you can enable, disable, and pin individual MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests (handy if you find Claude reaching for tools you'd rather it didn't, or want to surface a niche tool you use often).</p>
+          <p class="text-slate-300 mb-2">The easiest way to find the URL: ask Claude something like <em>"how do I open the ha-mcp settings page?"</em> — the URL is included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response. You can also read it directly from <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/ui.url</code>.</p>
+          <p class="text-slate-400 text-sm">The page is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path. See the <a href={withBase('/faq#tool-settings-page')} class="text-blue-400 hover:underline">FAQ</a> for every way to reach it (Docker, add-on, remote) and how to disable the settings server if you don't want it.</p>
+        </div>
+      </section>
+
       <!-- Step 7 -->
       <section class="guide-step">
         <div class="step-header">
@@ -247,6 +273,9 @@ uvx --refresh ha-mcp@latest</code></pre>
   }
   .step-number {
     @apply w-8 h-8 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0;
+  }
+  .optional-badge {
+    @apply w-8 h-8 rounded-full bg-slate-600 text-white font-semibold flex items-center justify-center flex-shrink-0;
   }
   .step-content {
     @apply pl-11;

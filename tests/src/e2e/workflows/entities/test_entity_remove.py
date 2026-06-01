@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from tests.src.e2e.utilities.assertions import assert_mcp_success, safe_call_tool
+from ...utilities.assertions import assert_mcp_success, safe_call_tool
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class TestEntityRemove:
             },
         )
         data = assert_mcp_success(create_result, "Create test helper")
-        entity_id = data.get("entity_id") or f"input_boolean.{data['helper_data']['id']}"
+        entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         logger.info(f"Created test entity: {entity_id}")
 
         # Remove the entity
@@ -35,7 +35,9 @@ class TestEntityRemove:
             {"entity_id": entity_id},
         )
         remove_data = assert_mcp_success(remove_result, "Remove entity")
-        assert remove_data.get("success") is True, f"Expected success, got: {remove_data}"
+        assert remove_data.get("success") is True, (
+            f"Expected success, got: {remove_data}"
+        )
         assert remove_data.get("entity_id") == entity_id
 
         logger.info(f"Entity removed successfully: {entity_id}")

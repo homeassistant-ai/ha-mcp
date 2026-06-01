@@ -84,6 +84,10 @@ const withBase = (path: string) => {
               <p class="text-slate-400 text-sm mt-3">4. Save and restart Claude: <strong>File &rarr; Exit</strong>, then reopen.</p>
             </div>
           </details>
+
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mt-4">
+            <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">Behind antivirus or a corporate proxy?</strong> If <code class="bg-slate-800 px-1 rounded">uvx</code> fails with <code class="bg-slate-800 px-1 rounded">invalid peer certificate: UnknownIssuer</code> when downloading ha-mcp, your security software's HTTPS scanning is breaking the PyPI download. Open your Claude Desktop config (<strong>Settings &rarr; Developer &rarr; Edit Config</strong>, or see Step 6) and add <code class="bg-slate-800 px-1 rounded">"UV_NATIVE_TLS": "1"</code> to the server's <code class="bg-slate-800 px-1 rounded">env</code> block &mdash; see the <a href={withBase('/faq#uv-tls-interception')} class="underline hover:text-white">FAQ</a>.</p>
+          </div>
         </div>
       </section>
 
@@ -142,6 +146,9 @@ const withBase = (path: string) => {
         </div>
         <div class="step-content">
           <p class="text-slate-300 mb-4">Ready to use your own Home Assistant? Edit the config file:</p>
+          <p class="text-slate-400 text-sm mb-2">If you installed Claude Desktop from the <strong>Microsoft Store</strong>, run this in PowerShell to find your config path:</p>
+          <pre class="code-block"><code>{`$pkg = Get-AppxPackage -Name Claude -ErrorAction SilentlyContinue | Select-Object -First 1; if ($pkg) { "$env:LOCALAPPDATA\\Packages\\$($pkg.PackageFamilyName)\\LocalCache\\Roaming\\Claude\\claude_desktop_config.json" } else { "$env:APPDATA\\Claude\\claude_desktop_config.json" }`}</code></pre>
+          <p class="text-slate-400 text-sm mb-2 mt-3">Or open it directly (works for the <strong>traditional installer</strong>):</p>
           <pre class="code-block"><code>notepad "$env:APPDATA\Claude\claude_desktop_config.json"</code></pre>
 
           <p class="text-slate-300 mt-4 mb-4">Replace the demo values:</p>
@@ -169,6 +176,19 @@ const withBase = (path: string) => {
           </div>
 
           <p class="text-slate-400 mt-4">Then restart Claude: <strong>File &rarr; Exit</strong>, then reopen.</p>
+        </div>
+      </section>
+
+      <!-- Tip -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">💡</span>
+          <h2 class="text-xl font-semibold text-white">Tip: The ha-mcp Settings Page</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-2">ha-mcp ships a local web settings page where you can enable, disable, and pin individual MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests (handy if you find Claude reaching for tools you'd rather it didn't, or want to surface a niche tool you use often).</p>
+          <p class="text-slate-300 mb-2">The easiest way to find the URL: ask Claude something like <em>"how do I open the ha-mcp settings page?"</em> — the URL is included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response. You can also read it directly from <code class="bg-slate-800 px-1 rounded">%USERPROFILE%\.ha-mcp\ui.url</code>.</p>
+          <p class="text-slate-400 text-sm">The page is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path. See the <a href={withBase('/faq#tool-settings-page')} class="text-blue-400 hover:underline">FAQ</a> for every way to reach it (Docker, add-on, remote) and how to disable the settings server if you don't want it.</p>
         </div>
       </section>
 

@@ -5,7 +5,7 @@
 # Base images pinned by digest - Renovate will create PRs for updates
 
 # --- Build stage: install dependencies with uv ---
-FROM ghcr.io/astral-sh/uv:0.11.0-python3.13-trixie-slim@sha256:5b216b72b3bc10f983f82b39b5386455bfa08d2139afb4cb3f6c9f060484ea5d AS builder
+FROM ghcr.io/astral-sh/uv:0.11.16-python3.13-trixie-slim@sha256:d57fc364ed714127c162a01b316bfb7b9a3fd09d97c665781a5607acaa35d254 AS builder
 
 WORKDIR /app
 
@@ -31,8 +31,13 @@ LABEL org.opencontainers.image.title="Home Assistant MCP Server" \
       org.opencontainers.image.licenses="MIT" \
       io.modelcontextprotocol.server.name="io.github.homeassistant-ai/ha-mcp"
 
-# Create non-root user for security
-RUN groupadd -r mcpuser && useradd -r -g mcpuser -m mcpuser
+# Create non-root user. /home/mcpuser is mode 0755 (not the default 0700) so
+# that callers running with `--user UID:GID` overrides — common in hardened
+# Docker setups, see issue #1125 — can stat HOME-relative paths. Write
+# access stays restricted to mcpuser via ownership.
+RUN groupadd -r mcpuser \
+    && useradd -r -g mcpuser -m mcpuser \
+    && chmod 0755 /home/mcpuser
 
 WORKDIR /app
 
@@ -42,6 +47,12 @@ COPY --chown=mcpuser:mcpuser --from=builder /app/src /app/src
 COPY --chown=mcpuser:mcpuser fastmcp.json fastmcp-http.json ./
 
 USER mcpuser
+
+# Set HOME explicitly. Docker doesn't auto-derive HOME from /etc/passwd when
+# a USER directive is set (moby/moby#2968), leaving HOME=/ at runtime. That
+# made Path.home() resolve to "/" and ha-mcp tried to mkdir "/.ha-mcp" on
+# every start — fatal under `read_only: true` (issue #1125).
+ENV HOME=/home/mcpuser
 
 # Activate virtual environment via PATH
 ENV PATH="/app/.venv/bin:$PATH"

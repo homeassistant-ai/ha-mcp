@@ -6,14 +6,33 @@ to complete, and other asynchronous conditions in Home Assistant.
 """
 
 import asyncio
+import json
 import logging
+import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
-from .assertions import parse_mcp_result
+import websockets
+from fastmcp.exceptions import ClientError, FastMCPError
+from mcp import McpError
+
+from .assertions import parse_mcp_result, safe_call_tool
 
 logger = logging.getLogger(__name__)
+
+# Transient errors expected during async polling of MCP tools or HTTP endpoints.
+# Bugs (TypeError, AttributeError, KeyError, AssertionError, ...) MUST propagate
+# out of polling loops so they fail tests with a clear stack trace instead of
+# being swallowed and retried until timeout. See issue #1266.
+_POLLING_TRANSIENT_ERRORS = (
+    McpError,
+    FastMCPError,
+    ClientError,
+    RuntimeError,
+    OSError,
+    TimeoutError,
+)
 
 
 async def wait_for_entity_state(
@@ -26,232 +45,92 @@ async def wait_for_entity_state(
     """
     Wait for entity to reach expected state.
 
+    Uses HA WebSocket ``state_changed`` events to resolve the moment the
+    entity reaches the expected state. Falls back to REST polling
+    (every ``poll_interval`` seconds) if the WebSocket is unavailable.
+    Same signature as before — see PR #1382 for the motivation (the same
+    event-driven pattern that the server-side wait helpers use).
+
     Args:
         mcp_client: FastMCP client instance
         entity_id: Entity to monitor
         expected_state: State to wait for
         timeout: Maximum wait time in seconds
-        poll_interval: Time between checks in seconds
+        poll_interval: REST poll interval used for the WS-unavailable fallback
 
     Returns:
         True if state reached, False if timeout
     """
-    start_time = time.time()
-
     logger.info(
         f"⏳ Waiting for {entity_id} to reach state '{expected_state}' (timeout: {timeout}s)"
     )
+    start_time = time.monotonic()
 
-    while time.time() - start_time < timeout:
-        try:
-            state_result = await mcp_client.call_tool(
-                "ha_get_state", {"entity_id": entity_id}
+    async def sample() -> bool | None:
+        state_result = await mcp_client.call_tool(
+            "ha_get_state", {"entity_id": entity_id}
+        )
+        state_data = parse_mcp_result(state_result)
+        if "data" in state_data and state_data["data"] is not None:
+            current_state = state_data.get("data", {}).get("state")
+            logger.debug(f"🔍 {entity_id} current state: {current_state}")
+            if current_state == expected_state:
+                return True
+        return None
+
+    try:
+        result = await _ws_wait_for_predicate(
+            sample,
+            entity_id,
+            event_types=("state_changed",),
+            timeout=float(timeout),
+        )
+        if result is True:
+            elapsed = time.monotonic() - start_time
+            logger.info(
+                f"✅ {entity_id} reached state '{expected_state}' after {elapsed:.1f}s (WS)"
             )
-            state_data = parse_mcp_result(state_result)
+            return True
+        logger.warning(
+            f"⚠️ {entity_id} did not reach state '{expected_state}' within {timeout}s (WS)"
+        )
+        return False
+    except _WsPathUnavailable as e:
+        # WS unavailable — fall through to REST poll for the REMAINING
+        # budget. ``e.elapsed`` is the wall-clock the WS path already
+        # consumed; subtract it so total wait is bounded by ``timeout``.
+        # Logs the original cause's type so the debug trail distinguishes
+        # OSError (connection refused) from WebSocketException (mid-wait
+        # drop). Silent-failure-hunter, pr-test-analyzer findings (#1382).
+        cause = e.__cause__
+        cause_repr = (
+            f"{type(cause).__name__}: {cause!r}" if cause is not None else repr(e)
+        )
+        logger.debug(
+            f"WS waiter unavailable for {entity_id} after {e.elapsed:.2f}s "
+            f"({cause_repr}); using REST polling"
+        )
+        rest_budget = max(0.0, float(timeout) - e.elapsed)
 
-            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-            if 'data' in state_data and state_data['data'] is not None:
-                current_state = state_data.get("data", {}).get("state")
-                logger.debug(f"🔍 {entity_id} current state: {current_state}")
-
-                if current_state == expected_state:
-                    elapsed = time.time() - start_time
-                    logger.info(
-                        f"✅ {entity_id} reached state '{expected_state}' after {elapsed:.1f}s"
-                    )
-                    return True
-
-        except Exception as e:
-            logger.debug(f"⚠️ Error checking state for {entity_id}: {e}")
-
-        await asyncio.sleep(poll_interval)
-
-    logger.warning(
-        f"⚠️ {entity_id} did not reach state '{expected_state}' within {timeout}s"
-    )
-    return False
-
-
-async def wait_for_entity_attribute(
-    mcp_client,
-    entity_id: str,
-    attribute_name: str,
-    expected_value: Any,
-    timeout: int = 10,
-    poll_interval: float = 0.5,
-) -> bool:
-    """
-    Wait for entity attribute to reach expected value.
-
-    Args:
-        mcp_client: FastMCP client instance
-        entity_id: Entity to monitor
-        attribute_name: Attribute to monitor
-        expected_value: Value to wait for
-        timeout: Maximum wait time in seconds
-        poll_interval: Time between checks in seconds
-
-    Returns:
-        True if value reached, False if timeout
-    """
-    start_time = time.time()
-
-    logger.info(
-        f"⏳ Waiting for {entity_id}.{attribute_name} = {expected_value} (timeout: {timeout}s)"
-    )
-
-    while time.time() - start_time < timeout:
+    rest_start = time.monotonic()
+    while time.monotonic() - rest_start < rest_budget:
         try:
-            state_result = await mcp_client.call_tool(
-                "ha_get_state", {"entity_id": entity_id}
-            )
-            state_data = parse_mcp_result(state_result)
-
-            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-            if 'data' in state_data and state_data['data'] is not None:
-                attributes = state_data.get("data", {}).get("attributes", {})
-                current_value = attributes.get(attribute_name)
-
-                logger.debug(
-                    f"🔍 {entity_id}.{attribute_name} current value: {current_value}"
-                )
-
-                if current_value == expected_value:
-                    elapsed = time.time() - start_time
-                    logger.info(
-                        f"✅ {entity_id}.{attribute_name} = {expected_value} after {elapsed:.1f}s"
-                    )
-                    return True
-
-        except Exception as e:
-            logger.debug(f"⚠️ Error checking attribute for {entity_id}: {e}")
-
-        await asyncio.sleep(poll_interval)
-
-    logger.warning(
-        f"⚠️ {entity_id}.{attribute_name} did not reach {expected_value} within {timeout}s"
-    )
-    return False
-
-
-async def wait_for_operation_completion(
-    mcp_client, operation_id: str, timeout: int = 15, poll_interval: float = 1.0
-) -> dict[str, Any]:
-    """
-    Wait for bulk operation to complete.
-
-    Args:
-        mcp_client: FastMCP client instance
-        operation_id: Operation to monitor
-        timeout: Maximum wait time in seconds
-        poll_interval: Time between status checks in seconds
-
-    Returns:
-        Operation status data
-    """
-    start_time = time.time()
-
-    logger.info(
-        f"⏳ Waiting for operation {operation_id} to complete (timeout: {timeout}s)"
-    )
-
-    while time.time() - start_time < timeout:
-        try:
-            status_result = await mcp_client.call_tool(
-                "ha_get_operation_status",
-                {
-                    "operation_id": operation_id,
-                    "timeout_seconds": min(5, timeout),  # Don't wait too long per check
-                },
-            )
-
-            status_data = parse_mcp_result(status_result)
-            operation_status = status_data.get("status", "unknown")
-
-            logger.debug(f"🔍 Operation {operation_id} status: {operation_status}")
-
-            # Check for completion states
-            if operation_status in ["completed", "failed", "timeout"]:
-                elapsed = time.time() - start_time
+            result = await sample()
+            if result is True:
+                elapsed = time.monotonic() - rest_start
                 logger.info(
-                    f"✅ Operation {operation_id} finished with status '{operation_status}' after {elapsed:.1f}s"
+                    f"✅ {entity_id} reached state '{expected_state}' "
+                    f"after {elapsed:.1f}s (REST)"
                 )
-                return status_data
-
-        except Exception as e:
-            logger.debug(f"⚠️ Error checking operation {operation_id}: {e}")
-
+                return True
+        except _POLLING_TRANSIENT_ERRORS as e:
+            logger.debug(f"⚠️ Error checking state for {entity_id}: {e}")
         await asyncio.sleep(poll_interval)
 
-    logger.warning(f"⚠️ Operation {operation_id} did not complete within {timeout}s")
-    return {
-        "status": "timeout",
-        "error": f"Operation monitoring timed out after {timeout}s",
-    }
-
-
-async def wait_for_bulk_operations(
-    mcp_client, operation_ids: list[str], timeout: int = 30, poll_interval: float = 1.0
-) -> dict[str, dict[str, Any]]:
-    """
-    Wait for multiple bulk operations to complete.
-
-    Args:
-        mcp_client: FastMCP client instance
-        operation_ids: List of operation IDs to monitor
-        timeout: Maximum wait time in seconds
-        poll_interval: Time between checks in seconds
-
-    Returns:
-        Dictionary mapping operation_id to status data
-    """
-    start_time = time.time()
-    results = {}
-    pending_operations = set(operation_ids)
-
-    logger.info(
-        f"⏳ Waiting for {len(operation_ids)} operations to complete (timeout: {timeout}s)"
+    logger.warning(
+        f"⚠️ {entity_id} did not reach state '{expected_state}' within {timeout}s (REST)"
     )
-
-    while pending_operations and time.time() - start_time < timeout:
-        for op_id in list(pending_operations):
-            try:
-                status_result = await mcp_client.call_tool(
-                    "ha_get_operation_status",
-                    {
-                        "operation_id": op_id,
-                        "timeout_seconds": 3,  # Quick check per operation
-                    },
-                )
-
-                status_data = parse_mcp_result(status_result)
-                operation_status = status_data.get("status", "unknown")
-
-                if operation_status in ["completed", "failed", "timeout"]:
-                    results[op_id] = status_data
-                    pending_operations.remove(op_id)
-                    logger.debug(f"✅ Operation {op_id} finished: {operation_status}")
-
-            except Exception as e:
-                logger.debug(f"⚠️ Error checking operation {op_id}: {e}")
-
-        if pending_operations:
-            await asyncio.sleep(poll_interval)
-
-    # Add timeout results for any remaining operations
-    for op_id in pending_operations:
-        results[op_id] = {
-            "status": "monitoring_timeout",
-            "error": f"Operation monitoring timed out after {timeout}s",
-        }
-
-    completed = len(results) - len(pending_operations)
-    elapsed = time.time() - start_time
-    logger.info(
-        f"📊 {completed}/{len(operation_ids)} operations completed after {elapsed:.1f}s"
-    )
-
-    return results
+    return False
 
 
 async def wait_for_logbook_entry(
@@ -274,13 +153,13 @@ async def wait_for_logbook_entry(
     Returns:
         True if entry found, False if timeout
     """
-    start_time = time.time()
+    start_time = time.monotonic()
 
     logger.info(
         f"⏳ Waiting for logbook entry containing '{search_text}' (timeout: {timeout}s)"
     )
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             logbook_result = await mcp_client.call_tool(
                 "ha_get_logs", {"hours_back": hours_back}
@@ -289,19 +168,19 @@ async def wait_for_logbook_entry(
             logbook_data = parse_mcp_result(logbook_result)
 
             # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-            if 'data' in logbook_data and logbook_data['data'] is not None:
-                entries = logbook_data.get("entries", [])
+            if "data" in logbook_data and logbook_data["data"] is not None:
+                entries = logbook_data["data"].get("entries", [])
 
                 for entry in entries:
                     entry_text = str(entry).lower()
                     if search_text.lower() in entry_text:
-                        elapsed = time.time() - start_time
+                        elapsed = time.monotonic() - start_time
                         logger.info(
                             f"✅ Found logbook entry with '{search_text}' after {elapsed:.1f}s"
                         )
                         return True
 
-        except Exception as e:
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Error checking logbook: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -330,21 +209,21 @@ async def wait_for_condition(
     Returns:
         True if condition met, False if timeout
     """
-    start_time = time.time()
+    start_time = time.monotonic()
 
     logger.info(f"⏳ Waiting for {condition_name} (timeout: {timeout}s)")
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         try:
             if (
                 await condition_func()
                 if asyncio.iscoroutinefunction(condition_func)
                 else condition_func()
             ):
-                elapsed = time.time() - start_time
+                elapsed = time.monotonic() - start_time
                 logger.info(f"✅ {condition_name} met after {elapsed:.1f}s")
                 return True
-        except Exception as e:
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Error checking {condition_name}: {e}")
 
         await asyncio.sleep(poll_interval)
@@ -359,63 +238,96 @@ async def wait_for_state_change(
     """
     Wait for entity state to change from current state.
 
+    Uses HA WebSocket ``state_changed`` events; falls back to REST polling
+    when the WebSocket is unavailable. See PR #1382 for the broader
+    event-driven-wait migration.
+
     Args:
         mcp_client: FastMCP client instance
         entity_id: Entity to monitor
         timeout: Maximum wait time in seconds
-        poll_interval: Time between checks in seconds
+        poll_interval: REST poll interval used for the WS-unavailable fallback
 
     Returns:
         New state if changed, None if timeout or error
     """
-    # Get initial state
+    # Capture initial state before subscribing so the WS waiter can compare
+    # event-driven re-samples against the right baseline.
     try:
         initial_result = await mcp_client.call_tool(
             "ha_get_state", {"entity_id": entity_id}
         )
         initial_data = parse_mcp_result(initial_result)
-
-        # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-        if 'data' not in initial_data or initial_data['data'] is None:
+        if "data" not in initial_data or initial_data["data"] is None:
             logger.warning(f"⚠️ Could not get initial state for {entity_id}")
             return None
-
         initial_state = initial_data.get("data", {}).get("state")
-        logger.info(
-            f"⏳ Waiting for {entity_id} to change from '{initial_state}' (timeout: {timeout}s)"
-        )
-
     except Exception as e:
         logger.warning(f"⚠️ Error getting initial state for {entity_id}: {e}")
         return None
 
-    start_time = time.time()
+    logger.info(
+        f"⏳ Waiting for {entity_id} to change from '{initial_state}' (timeout: {timeout}s)"
+    )
 
-    while time.time() - start_time < timeout:
-        try:
-            state_result = await mcp_client.call_tool(
-                "ha_get_state", {"entity_id": entity_id}
+    async def sample() -> str | None:
+        state_result = await mcp_client.call_tool(
+            "ha_get_state", {"entity_id": entity_id}
+        )
+        state_data = parse_mcp_result(state_result)
+        if "data" in state_data and state_data["data"] is not None:
+            current = state_data.get("data", {}).get("state")
+            if current != initial_state:
+                return current
+        return None
+
+    start_time = time.monotonic()
+    try:
+        result = await _ws_wait_for_predicate(
+            sample,
+            entity_id,
+            event_types=("state_changed",),
+            timeout=float(timeout),
+        )
+        if isinstance(result, str):
+            elapsed = time.monotonic() - start_time
+            logger.info(
+                f"✅ {entity_id} changed: '{initial_state}' → '{result}' "
+                f"after {elapsed:.1f}s (WS)"
             )
-            state_data = parse_mcp_result(state_result)
+            return result
+        logger.warning(
+            f"⚠️ {entity_id} did not change from '{initial_state}' within {timeout}s (WS)"
+        )
+        return None
+    except _WsPathUnavailable as e:
+        cause = e.__cause__
+        cause_repr = (
+            f"{type(cause).__name__}: {cause!r}" if cause is not None else repr(e)
+        )
+        logger.debug(
+            f"WS waiter unavailable for {entity_id} after {e.elapsed:.2f}s "
+            f"({cause_repr}); using REST polling"
+        )
+        rest_budget = max(0.0, float(timeout) - e.elapsed)
 
-            # Check if 'data' key exists (not 'success' key which doesn't exist in parse_mcp_result)
-            if 'data' in state_data and state_data['data'] is not None:
-                current_state = state_data.get("data", {}).get("state")
-
-                if current_state != initial_state:
-                    elapsed = time.time() - start_time
-                    logger.info(
-                        f"✅ {entity_id} changed: '{initial_state}' → '{current_state}' after {elapsed:.1f}s"
-                    )
-                    return current_state
-
-        except Exception as e:
+    rest_start = time.monotonic()
+    while time.monotonic() - rest_start < rest_budget:
+        try:
+            current = await sample()
+            if current is not None:
+                elapsed = time.monotonic() - rest_start
+                logger.info(
+                    f"✅ {entity_id} changed: '{initial_state}' → '{current}' "
+                    f"after {elapsed:.1f}s (REST)"
+                )
+                return current
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Error checking state change for {entity_id}: {e}")
-
         await asyncio.sleep(poll_interval)
 
     logger.warning(
-        f"⚠️ {entity_id} did not change from '{initial_state}' within {timeout}s"
+        f"⚠️ {entity_id} did not change from '{initial_state}' within {timeout}s (REST)"
     )
     return None
 
@@ -451,7 +363,7 @@ async def wait_for_tool_result(
     Raises:
         TimeoutError: If the predicate is not satisfied within the timeout.
     """
-    start_time = time.time()
+    start_time = time.monotonic()
     last_data: dict[str, Any] = {}
 
     logger.info(f"⏳ Waiting for {description} (timeout: {timeout}s)")
@@ -461,9 +373,9 @@ async def wait_for_tool_result(
         try:
             result = await mcp_client.call_tool(tool_name, arguments)
             last_data = parse_mcp_result(result)
-        except Exception as e:
+        except _POLLING_TRANSIENT_ERRORS as e:
             logger.debug(f"⚠️ Error calling {tool_name}: {e}")
-            if time.time() - start_time >= timeout:
+            if time.monotonic() - start_time >= timeout:
                 raise TimeoutError(
                     f"{description}: timed out after {timeout}s (last error: {e})"
                 ) from e
@@ -475,7 +387,7 @@ async def wait_for_tool_result(
             logger.debug(
                 f"⚠️ {tool_name} returned error: {last_data.get('error')}, retrying..."
             )
-            if time.time() - start_time >= timeout:
+            if time.monotonic() - start_time >= timeout:
                 raise TimeoutError(
                     f"{description}: timed out after {timeout}s "
                     f"(last MCP error: {last_data.get('error')})"
@@ -485,95 +397,571 @@ async def wait_for_tool_result(
 
         # Run predicate OUTSIDE try/except so bugs (TypeError, KeyError) propagate
         if predicate(last_data):
-            elapsed = time.time() - start_time
+            elapsed = time.monotonic() - start_time
             logger.info(f"✅ {description} satisfied after {elapsed:.1f}s")
             return last_data
 
-        if time.time() - start_time >= timeout:
+        if time.monotonic() - start_time >= timeout:
             raise TimeoutError(
                 f"{description}: timed out after {timeout}s (predicate not satisfied)"
             )
         await asyncio.sleep(poll_interval)
 
 
-class WaitHelper:
+async def wait_for_entity_registration(
+    mcp_client, entity_id: str, timeout: int = 20
+) -> bool:
     """
-    Helper class for common waiting patterns with a specific MCP client.
+    Wait for entity to be registered and queryable via API.
 
-    Usage:
-        waiter = WaitHelper(mcp_client)
-        await waiter.entity_state("light.bedroom", "on", timeout=15)
-        await waiter.operation_completion(operation_id)
+    Does not check for a specific state — only that the entity exists and is
+    visible to ``ha_get_state``. Useful after ``ha_config_set_helper`` or
+    ``ha_set_entity``, where the tool returns success before Home Assistant
+    finishes the async entity-registry update.
+
+    Subscribes to HA ``state_changed`` and ``entity_registry_updated`` events
+    so the wait resolves the moment HA hydrates the entity (typically
+    sub-second). Falls back to REST polling (``ha_get_state`` every ~0.5s)
+    when the WebSocket is unavailable. Same signature as before — see
+    PR #1382 for the broader event-driven-wait migration.
+
+    Args:
+        mcp_client: FastMCP client instance
+        entity_id: Entity to wait for
+        timeout: Maximum wait time in seconds
+
+    Returns:
+        True if entity becomes queryable within timeout, False otherwise.
+    """
+    start_time = time.monotonic()
+    attempt_box = {"n": 0}
+
+    async def entity_exists() -> bool | None:
+        attempt_box["n"] += 1
+        data = await safe_call_tool(
+            mcp_client, "ha_get_state", {"entity_id": entity_id}
+        )
+        success = "data" in data and data["data"] is not None
+
+        elapsed = time.monotonic() - start_time
+        logger.debug(
+            f"[Attempt {attempt_box['n']} @ {elapsed:.1f}s] Checking {entity_id}: "
+            f"success={success}, data keys={list(data.keys())}"
+        )
+
+        if success:
+            state = data.get("data", {}).get("state", "N/A")
+            logger.info(f"✅ Entity {entity_id} EXISTS with state='{state}'")
+            return True
+        error = data.get("error", "No error message")
+        logger.debug(f"❌ Entity {entity_id} check failed: {error}")
+        return None
+
+    try:
+        result = await _ws_wait_for_predicate(
+            entity_exists,
+            entity_id,
+            # entity_registry_updated fires when the registry row is added,
+            # state_changed when the state machine row hydrates. Both
+            # signals trigger a sample so we resolve on whichever lands
+            # first.
+            event_types=("state_changed", "entity_registry_updated"),
+            timeout=float(timeout),
+        )
+        if result is True:
+            return True
+        logger.warning(
+            f"⚠️ {entity_id} registration not observed within {timeout}s (WS)"
+        )
+        return False
+    except _WsPathUnavailable as e:
+        cause = e.__cause__
+        cause_repr = (
+            f"{type(cause).__name__}: {cause!r}" if cause is not None else repr(e)
+        )
+        logger.debug(
+            f"WS waiter unavailable for {entity_id} registration after "
+            f"{e.elapsed:.2f}s ({cause_repr}); using REST polling"
+        )
+        rest_budget = max(0, int(timeout - e.elapsed))
+
+    # Fall back to the existing condition-based REST poll. Reset attempt
+    # counter so the legacy log lines start from 1 again. ``rest_budget``
+    # is the REMAINING budget after the WS path's elapsed time, so total
+    # wall-clock stays bounded by the original ``timeout``.
+    attempt_box["n"] = 0
+    return await wait_for_condition(
+        entity_exists,
+        timeout=rest_budget,
+        condition_name=f"{entity_id} registration",
+    )
+
+
+async def _open_ha_ws(ha_url: str | None = None, token: str | None = None):
+    """Open + authenticate a fresh HA WebSocket connection.
+
+    Shared setup for the ``*_via_ws`` helpers below. Returns the connected
+    websocket; caller is responsible for closing it (use ``async with``).
+    """
+    if ha_url is None:
+        ha_url = os.environ.get("HOMEASSISTANT_URL")
+    if not ha_url:
+        raise RuntimeError("No ha_url and $HOMEASSISTANT_URL unset")
+    if token is None:
+        token = os.environ.get("HOMEASSISTANT_TOKEN")
+    if not token:
+        from test_constants import TEST_TOKEN as _DEFAULT_TOKEN
+
+        token = _DEFAULT_TOKEN
+
+    ws_url = ha_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1)
+    ws_url = ws_url.rstrip("/") + "/api/websocket"
+
+    ws = await websockets.connect(ws_url, open_timeout=10.0)
+    try:
+        hello = json.loads(await ws.recv())
+        if hello.get("type") != "auth_required":
+            await ws.close()
+            raise RuntimeError(f"Expected auth_required handshake, got {hello!r}")
+        await ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_result = json.loads(await ws.recv())
+        if auth_result.get("type") != "auth_ok":
+            await ws.close()
+            raise RuntimeError(f"WS auth failed: {auth_result!r}")
+    except Exception:
+        await ws.close()
+        raise
+    return ws
+
+
+class _WsPathUnavailable(Exception):
+    """Signal from ``_ws_wait_for_predicate`` that the WS path can't be set
+    up (handshake/subscribe failed) OR died mid-wait. Callers catch this
+    and fall back to REST polling. Pure timeouts return ``None`` instead —
+    those did consume the budget on the WS side, so the caller treats them
+    as terminal.
+
+    ``elapsed`` carries the seconds already spent on the WS path before
+    the failure, so the caller can deduct it from the REST timeout and
+    cap the total wall-clock at the original ``timeout``. Without this,
+    a mid-wait WS drop after N seconds would let the REST fallback run
+    for another full ``timeout`` — silent-failure-hunter / pr-test-analyzer
+    finding (#1382 final review).
     """
 
-    def __init__(self, mcp_client):
-        self.client = mcp_client
+    def __init__(self, message: str, *, elapsed: float = 0.0):
+        super().__init__(message)
+        self.elapsed = elapsed
 
-    async def entity_state(
-        self, entity_id: str, expected_state: str, timeout: int = 10
-    ) -> bool:
-        """Wait for entity state."""
-        return await wait_for_entity_state(
-            self.client, entity_id, expected_state, timeout
+
+# Narrower sample-callable catch tuple — same shape as
+# ``_POLLING_TRANSIENT_ERRORS`` minus ``RuntimeError``. ``RuntimeError`` is
+# the one Python exception codebases routinely overload for both transport
+# and logic failures; swallowing it in a polling loop hides legitimate
+# sample-callable bugs. Used INSIDE ``_ws_wait_for_predicate`` around
+# ``sample()`` invocations only; the broader tuple still applies to the
+# REST-fallback polling loops in the public helpers (pre-existing
+# behaviour preserved there).
+_SAMPLE_TRANSIENT_ERRORS = (
+    McpError,
+    FastMCPError,
+    ClientError,
+    OSError,
+    TimeoutError,
+)
+
+
+async def _ws_wait_for_predicate(
+    sample: Callable[[], Any],
+    entity_id: str,
+    *,
+    event_types: tuple[str, ...],
+    timeout: float,
+    backstop_interval: float = 2.0,
+    ha_url: str | None = None,
+    token: str | None = None,
+) -> Any:
+    """Subscribe → sample-after-subscribe → wait-for-event pattern, test-side.
+
+    Mirrors :func:`ha_mcp.tools.util_helpers._ws_wait_for_condition` (the
+    server-side waiter PR #1382 introduced) so the test-side wait helpers
+    stop racing against entity hydration on busy CI runners.
+
+    Args:
+        sample: async callable returning a truthy value when the wait should
+            resolve, ``None`` otherwise. Same shape as the server-side
+            helper. Test-side samples typically call ``mcp_client.call_tool``
+            and check the parsed result.
+        entity_id: entity to filter events on. Events for other entities
+            are ignored.
+        event_types: HA event types to subscribe to. Typically
+            ``("state_changed",)`` for state waits, plus
+            ``"entity_registry_updated"`` for registration/removal waits.
+        timeout: total seconds before giving up. The post-subscribe sample
+            and event-driven samples share this budget.
+        backstop_interval: seconds between independent REST samples while
+            we have a healthy WS subscription. Bounded slow-poll so a
+            silent-broken subscription still resolves within ``timeout``.
+        ha_url, token: forwarded to ``_open_ha_ws``; defaults to env vars.
+
+    Returns:
+        ``sample``'s truthy return on success, ``None`` on timeout.
+
+    Raises:
+        _WsPathUnavailable: WS handshake / subscribe failed, or transport
+            died mid-wait. Caller should fall back to REST polling, using
+            ``e.elapsed`` to deduct WS-side time spent.
+
+        Pre-existing ``RuntimeError`` from ``_open_ha_ws`` (missing URL /
+        token / bad auth / malformed handshake) PROPAGATES — those are
+        config-level failures the test rig should see as a loud
+        traceback, not a silent REST fallback against the same broken
+        creds (silent-failure-hunter finding, #1382 final review).
+    """
+    start = time.monotonic()
+    # ``_open_ha_ws`` raises ``RuntimeError`` on auth/config issues —
+    # intentionally NOT caught here so a misconfigured test rig fails
+    # loudly. Only transport-level exceptions degrade to REST.
+    try:
+        ws = await _open_ha_ws(ha_url=ha_url, token=token)
+    except (
+        websockets.exceptions.WebSocketException,
+        OSError,
+        json.JSONDecodeError,
+    ) as e:
+        logger.debug(
+            f"WS waiter handshake unavailable for {entity_id}: "
+            f"{type(e).__name__}: {e!r}"
+        )
+        raise _WsPathUnavailable(str(e), elapsed=0.0) from e
+
+    try:
+        # Subscribe to every requested event_type BEFORE sampling. This
+        # closes the "event fired before our subscribe landed" race.
+        for sub_id, et in enumerate(event_types, start=1):
+            await ws.send(
+                json.dumps({"id": sub_id, "type": "subscribe_events", "event_type": et})
+            )
+            sub_result = json.loads(await ws.recv())
+            if not (
+                sub_result.get("type") == "result"
+                and sub_result.get("success") is True
+                and sub_result.get("id") == sub_id
+            ):
+                logger.debug(
+                    f"subscribe_events({et!r}) failed for {entity_id}: {sub_result!r}"
+                )
+                raise _WsPathUnavailable(
+                    f"subscribe_events({et}) failed",
+                    elapsed=time.monotonic() - start,
+                )
+
+        # Sample-after-subscribe: most happy-path waits resolve here.
+        try:
+            result = await sample()
+            if result is not None:
+                return result
+        except _SAMPLE_TRANSIENT_ERRORS as e:
+            logger.debug(f"sample raised transient for {entity_id}: {e!r}")
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            wait_budget = min(remaining, backstop_interval)
+
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=wait_budget)
+            except TimeoutError:
+                # Backstop tick — sample anyway. A silent-broken
+                # subscription degrades to slow REST polling rather than
+                # a 10s hang.
+                try:
+                    result = await sample()
+                    if result is not None:
+                        return result
+                except _SAMPLE_TRANSIENT_ERRORS as e:
+                    logger.debug(
+                        f"backstop sample raised transient for {entity_id}: {e!r}"
+                    )
+                continue
+
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            if payload.get("type") != "event":
+                continue
+            event = payload.get("event") or {}
+            data = event.get("data") or {}
+            evt_entity = data.get("entity_id") or event.get("entity_id")
+            if evt_entity != entity_id:
+                continue
+
+            # Event matched our entity — re-sample. The sample is the
+            # source of truth; the event just nudges us to look.
+            try:
+                result = await sample()
+                if result is not None:
+                    return result
+            except _SAMPLE_TRANSIENT_ERRORS as e:
+                logger.debug(
+                    f"post-event sample raised transient for {entity_id}: {e!r}"
+                )
+
+        return None
+    except (websockets.exceptions.WebSocketException, OSError) as e:
+        # Transport died mid-wait. Signal unavailable so the caller can
+        # complete via REST. ``json.JSONDecodeError`` on a single frame
+        # is handled per-iteration above; we only reach here on connection
+        # failure. Include elapsed so the REST fallback gets a budget
+        # deduction (caps total wall-clock at the original ``timeout``).
+        elapsed = time.monotonic() - start
+        logger.debug(
+            f"WS waiter transport error mid-wait for {entity_id} "
+            f"after {elapsed:.2f}s: {type(e).__name__}: {e!r}"
+        )
+        raise _WsPathUnavailable(str(e), elapsed=elapsed) from e
+    finally:
+        try:
+            await ws.close()
+        except (websockets.exceptions.WebSocketException, OSError):
+            pass
+
+
+async def wait_for_ha_event(
+    event_type: str,
+    trigger: Callable[[], Any],
+    *,
+    predicate: Callable[[dict[str, Any]], bool] | None = None,
+    timeout: float = 5.0,
+    ha_url: str | None = None,
+    token: str | None = None,
+) -> dict[str, Any] | None:
+    """Subscribe to ``event_type``, invoke ``trigger``, return first matching event.
+
+    Subscribes BEFORE running the trigger so events fired during the
+    trigger's awaitable cannot be missed. Returns the matching event
+    dict (HA's full event payload — ``{"event_type", "data", "time_fired", ...}``)
+    or ``None`` on timeout. Predicate lets the caller filter by entity_id,
+    context, or any other field of the event.
+
+    Opens a **dedicated** WebSocket connection — independent of the
+    MCP client's listener subscriptions and not visible to other
+    callers. Each invocation pays one WS handshake + auth round-trip.
+
+    Useful for replacing 10s logbook polls with sub-second event waits —
+    e.g. ``automation_triggered`` after a manual ``automation.trigger``
+    service call (~10s saved per ``test_basic_automation_lifecycle``).
+    """
+    ws = await _open_ha_ws(ha_url=ha_url, token=token)
+    try:
+        sub_id = 1
+        await ws.send(
+            json.dumps(
+                {"id": sub_id, "type": "subscribe_events", "event_type": event_type}
+            )
+        )
+        sub_result = json.loads(await ws.recv())
+        if not (
+            sub_result.get("type") == "result"
+            and sub_result.get("success") is True
+            and sub_result.get("id") == sub_id
+        ):
+            logger.warning(f"subscribe_events({event_type!r}) failed: {sub_result!r}")
+            return None
+
+        # Subscription is live; now fire the trigger. Trigger errors are
+        # NOT caught — a test's setup crashing (TypeError, AssertionError,
+        # KeyError, etc.) is a bug, not a transient, and should surface
+        # immediately with a clear traceback rather than being indistinguishable
+        # from "no matching event arrived". Matches the
+        # _POLLING_TRANSIENT_ERRORS discipline AGENTS.md mandates.
+        trigger_result = trigger()
+        if asyncio.iscoroutine(trigger_result):
+            await trigger_result
+
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            except TimeoutError:
+                return None
+            payload = json.loads(raw)
+            if payload.get("type") != "event":
+                continue
+            event = payload.get("event") or {}
+            if event.get("event_type") != event_type:
+                continue
+            if predicate is None or predicate(event):
+                return event
+    except (
+        websockets.exceptions.WebSocketException,
+        ConnectionError,
+        OSError,
+        json.JSONDecodeError,
+    ) as e:
+        # Narrow catch: WS transport / handshake / malformed frame are
+        # transients we want to gracefully degrade to timeout. Caller
+        # bugs (TypeError, AttributeError, KeyError from a buggy
+        # predicate) propagate.
+        logger.warning(f"wait_for_ha_event({event_type!r}) transient error: {e!r}")
+        return None
+    finally:
+        try:
+            await ws.close()
+        except (websockets.exceptions.WebSocketException, OSError):
+            # Close errors on an already-broken socket — don't mask the
+            # caller's outcome with them.
+            pass
+
+
+async def wait_for_entities_registered_via_ws(
+    expected_entity_ids: Iterable[str],
+    *,
+    timeout: float = 30.0,
+    ha_url: str | None = None,
+    token: str | None = None,
+) -> set[str]:
+    """Block until ``state_changed`` arrives for every expected entity_id, via HA WS.
+
+    Opens a fresh WebSocket connection to HA, authenticates with the
+    test token, subscribes to ``state_changed``, and resolves as soon as
+    each entity_id in ``expected_entity_ids`` has produced at least one
+    state_changed event. Avoids the chronic 10s ``ha_list_states`` polling
+    burn observed in the HAOS bulk-fixture wait (#1349 audit).
+
+    Pairs with a subsequent ``ha_list_states`` call (or per-entity
+    ``ha_get_state``) for a final correctness check — this helper only
+    confirms HA has published the entity to the state machine; the
+    caller does the authoritative read.
+
+    Args:
+        expected_entity_ids: The set of entity_ids whose registration we
+            need to observe. Returns as soon as all have fired.
+        timeout: Hard ceiling in seconds. Returns the set of entity_ids
+            actually seen (may be a strict subset of ``expected_entity_ids``)
+            when the timeout fires.
+        ha_url: HA base URL. Defaults to ``$HOMEASSISTANT_URL``.
+        token: Long-lived access token. Defaults to ``$HOMEASSISTANT_TOKEN``,
+            falling back to ``tests.test_constants.TEST_TOKEN``.
+
+    Returns:
+        Set of entity_ids that fired ``state_changed`` (and so are
+        confirmed registered) before the timeout. Also returns the
+        partial seen set on transient WS/parsing failure (caller's
+        fallback path picks up the missing ids via REST polling);
+        config/auth failures (RuntimeError) propagate so a permanently
+        broken WS path fails loudly rather than silently masking
+        every CI run.
+    """
+    expected = set(expected_entity_ids)
+    if not expected:
+        return set()
+
+    if ha_url is None:
+        ha_url = os.environ.get("HOMEASSISTANT_URL")
+    if not ha_url:
+        raise RuntimeError(
+            "wait_for_entities_registered_via_ws: no ha_url and "
+            "$HOMEASSISTANT_URL is unset"
+        )
+    if token is None:
+        token = os.environ.get("HOMEASSISTANT_TOKEN")
+    if not token:
+        # Fall back to the test constant for tiers where the env var
+        # isn't set by the fixture (kept centralized in test_constants).
+        from test_constants import TEST_TOKEN as _DEFAULT_TOKEN
+
+        token = _DEFAULT_TOKEN
+
+    ws_url = ha_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1)
+    ws_url = ws_url.rstrip("/") + "/api/websocket"
+
+    seen: set[str] = set()
+    deadline = time.monotonic() + timeout
+
+    logger.info(
+        f"⏳ Waiting for {len(expected)} entity registrations via WS "
+        f"(timeout={timeout}s): {sorted(expected)[:5]}"
+        f"{'…' if len(expected) > 5 else ''}"
+    )
+
+    try:
+        async with websockets.connect(ws_url, open_timeout=10.0) as ws:
+            # HA WS handshake: server sends auth_required, client sends
+            # auth with access_token, server replies auth_ok (or auth_invalid).
+            hello = json.loads(await ws.recv())
+            if hello.get("type") != "auth_required":
+                raise RuntimeError(f"Expected auth_required handshake, got {hello!r}")
+            await ws.send(json.dumps({"type": "auth", "access_token": token}))
+            auth_result = json.loads(await ws.recv())
+            if auth_result.get("type") != "auth_ok":
+                raise RuntimeError(f"WS auth failed: {auth_result!r}")
+
+            # Subscribe to state_changed. HA's response carries the
+            # subscription id as the request id (not in result).
+            sub_msg_id = 1
+            await ws.send(
+                json.dumps(
+                    {
+                        "id": sub_msg_id,
+                        "type": "subscribe_events",
+                        "event_type": "state_changed",
+                    }
+                )
+            )
+            sub_result = json.loads(await ws.recv())
+            if not (
+                sub_result.get("type") == "result"
+                and sub_result.get("success") is True
+                and sub_result.get("id") == sub_msg_id
+            ):
+                raise RuntimeError(f"subscribe_events failed: {sub_result!r}")
+
+            while seen != expected:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+                except TimeoutError:
+                    break
+                payload = json.loads(raw)
+                if payload.get("type") != "event":
+                    continue
+                event = payload.get("event") or {}
+                data = event.get("data") or {}
+                entity_id = data.get("entity_id")
+                if entity_id in expected:
+                    seen.add(entity_id)
+    except (
+        websockets.exceptions.WebSocketException,
+        ConnectionError,
+        OSError,
+        json.JSONDecodeError,
+    ) as e:
+        # Narrow catch: same discipline as ``wait_for_ha_event`` above —
+        # transient WS / parsing errors degrade gracefully to "missing
+        # entities" (caller's fallback path handles it), but
+        # ``RuntimeError`` (auth failure, missing url/token, malformed
+        # handshake) and ``TypeError``/``AttributeError``/``KeyError``
+        # (caller bug) propagate so a permanently broken WS path
+        # surfaces loud rather than silently masking every CI run.
+        logger.warning(
+            f"WS-based entity-registration wait transient error: {e!r}. "
+            f"Seen {len(seen)}/{len(expected)} before failure."
         )
 
-    async def entity_attribute(
-        self,
-        entity_id: str,
-        attribute_name: str,
-        expected_value: Any,
-        timeout: int = 10,
-    ) -> bool:
-        """Wait for entity attribute."""
-        return await wait_for_entity_attribute(
-            self.client, entity_id, attribute_name, expected_value, timeout
+    if seen == expected:
+        logger.info(f"✅ All {len(expected)} entity registrations observed via WS")
+    else:
+        logger.warning(
+            f"⚠️ WS wait incomplete after {timeout}s — "
+            f"saw {len(seen)}/{len(expected)}; missing: "
+            f"{sorted(expected - seen)[:10]}"
         )
-
-    async def operation_completion(
-        self, operation_id: str, timeout: int = 15
-    ) -> dict[str, Any]:
-        """Wait for operation completion."""
-        return await wait_for_operation_completion(self.client, operation_id, timeout)
-
-    async def bulk_operations(
-        self, operation_ids: list[str], timeout: int = 30
-    ) -> dict[str, dict[str, Any]]:
-        """Wait for bulk operations."""
-        return await wait_for_bulk_operations(self.client, operation_ids, timeout)
-
-    async def logbook_entry(self, search_text: str, timeout: int = 30) -> bool:
-        """Wait for logbook entry."""
-        return await wait_for_logbook_entry(self.client, search_text, timeout)
-
-    async def state_change(self, entity_id: str, timeout: int = 10) -> str | None:
-        """Wait for any state change."""
-        return await wait_for_state_change(self.client, entity_id, timeout)
-
-    async def condition(
-        self,
-        condition_func: Callable[[], Any],
-        timeout: int = 10,
-        name: str = "condition",
-    ) -> bool:
-        """Wait for custom condition."""
-        return await wait_for_condition(condition_func, timeout, condition_name=name)
-
-    async def tool_result(
-        self,
-        tool_name: str,
-        arguments: dict[str, Any],
-        predicate: Callable[[dict[str, Any]], bool],
-        timeout: int = 15,
-        poll_interval: float = 0.5,
-        description: str = "tool result",
-    ) -> dict[str, Any]:
-        """Wait for tool result to satisfy predicate."""
-        return await wait_for_tool_result(
-            self.client,
-            tool_name,
-            arguments,
-            predicate,
-            timeout=timeout,
-            poll_interval=poll_interval,
-            description=description,
-        )
+    return seen

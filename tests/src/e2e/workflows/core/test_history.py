@@ -638,40 +638,78 @@ class TestGetHistoryNegativeInputs:
         assert result["error"]["code"] == "VALIDATION_MISSING_PARAMETER"
 
     async def test_offset_pagination_single_entity(self, mcp_client: Any) -> None:
-        """Offset pagination works for a single entity and returns correct metadata."""
+        """Offset pagination works for a single entity and returns correct metadata.
+
+        Queries ``input_number.e2e_pagination_seed`` — the entity that the seed
+        recorder DB in ``tests/initial_test_state/home-assistant_v2.db`` ships
+        with 11 pre-baked state-change rows for. The conftest fixture shifts
+        those rows' timestamps forward each session so they fall inside any
+        reasonable history window. Previous reliance on
+        ``sensor.home_temperature`` (which never existed in the seed) was the
+        original cause of the silent skip flagged by #366.
+
+        Previously HAOS-skipped (#1349 hypothesis: states_meta orphan). The
+        real cause was diagnosed in PR #1361 from the inaddon diagnostics
+        artifact: ``refresh_recorder_in_qcow2`` left the workdir DB in WAL
+        mode with unsynced WAL frames, so the .db copy-in landed in the
+        qcow2 missing pages. HA Core's ``basic_sanity_check`` raised
+        ``sqlite3.DatabaseError: database disk image is malformed`` on
+        first boot and renamed the seed to ``.corrupt.<ts>`` before
+        starting with an empty DB — making the live state the only row
+        ha_get_history could surface. Fixed by checkpointing WAL and
+        switching to DELETE journal mode pre-UPDATE in
+        ``haos_runtime.refresh_recorder_in_qcow2``.
+        """
+        target = "input_number.e2e_pagination_seed"
         # First page: offset=0, limit=5
         result_p1 = await safe_call_tool(
             mcp_client,
             "ha_get_history",
-            {"entity_ids": "sensor.home_temperature", "start_time": "24h", "limit": 5, "offset": 0},
+            {"entity_ids": target, "start_time": "24h", "limit": 5, "offset": 0},
         )
-        if not result_p1.get("success"):
-            pytest.skip("No history data available for pagination test")
-
-        entities_p1 = result_p1.get("entities", [])
-        if not entities_p1:
-            pytest.skip("No entities returned")
+        # safe_call_tool returns the parsed envelope; the history payload is
+        # nested under "data" — matches the unwrap pattern used by
+        # test_get_history_single_entity earlier in this file. Without this
+        # unwrap the assertions below read the wrong dict level and
+        # `success` is always None — a latent bug uncovered by the same
+        # #366 audit.
+        inner_p1 = result_p1.get("data", result_p1)
+        # The seed ships ≥10 rows for ``input_number.e2e_pagination_seed`` and
+        # the conftest fixture shifts their timestamps into the 24h window.
+        # Pagination preconditions are therefore guaranteed; assert rather
+        # than pytest.skip so a regression (empty seed, broken refresh)
+        # fails loudly instead of silently passing.
+        assert inner_p1.get("success"), (
+            f"ha_get_history failed for {target}: {inner_p1!r}"
+        )
+        entities_p1 = inner_p1.get("entities", [])
+        assert entities_p1, f"No entities returned for {target}: {inner_p1!r}"
 
         entity_p1 = entities_p1[0]
         assert entity_p1["offset"] == 0
         assert entity_p1["limit"] == 5
-        assert "total_count" in entity_p1
-        assert "has_more" in entity_p1
-        assert "next_offset" in entity_p1
-
-        if not entity_p1["has_more"]:
-            pytest.skip("Not enough history rows to test offset pagination")
+        assert entity_p1["total_count"] >= 10, (
+            f"Expected >=10 seeded rows for {target}, got "
+            f"{entity_p1['total_count']} - recorder seed or timestamp refresh "
+            f"may be broken; see conftest._refresh_recorder_timestamps."
+        )
+        assert entity_p1["has_more"] is True
+        assert entity_p1["next_offset"] == 5
 
         # Second page: offset=5
         result_p2 = await safe_call_tool(
             mcp_client,
             "ha_get_history",
-            {"entity_ids": "sensor.home_temperature", "start_time": "24h", "limit": 5, "offset": 5},
+            {"entity_ids": target, "start_time": "24h", "limit": 5, "offset": 5},
         )
-        assert result_p2.get("success")
-        entity_p2 = result_p2["entities"][0]
+        inner_p2 = result_p2.get("data", result_p2)
+        assert inner_p2.get("success")
+        entity_p2 = inner_p2["entities"][0]
         assert entity_p2["offset"] == 5
         assert entity_p2["total_count"] == entity_p1["total_count"]
+        assert len(entity_p2.get("states", [])) >= 1, (
+            f"Second page returned no rows: {entity_p2!r}"
+        )
 
     async def test_multi_entity_offset_rejected(self, mcp_client: Any) -> None:
         """offset > 0 with multiple entity_ids is rejected before any network call."""

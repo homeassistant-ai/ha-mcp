@@ -14,10 +14,15 @@ from fastmcp.exceptions import ToolError
 logger = logging.getLogger(__name__)
 
 
-def _extract_error_message(data: dict[str, Any]) -> str:
-    """Extract error message string from a failure result dict.
+def extract_error_message(data: dict[str, Any]) -> str:
+    """Extract an error-message string from a parsed MCP failure result.
 
-    Handles both string errors and dict errors with a 'message' key.
+    Handles both string errors and the modern structured-error dict-form
+    (`{"error": {"code": ..., "message": ...}}`) returned by
+    `create_error_response` in `src/ha_mcp/errors.py`. Returns an empty
+    string when the result has no error key, so callers can chain
+    `.lower()` / `in` membership checks without needing a `isinstance`
+    guard at the call site (refs #366).
     """
     error_obj = data.get("error", "")
     if isinstance(error_obj, dict):
@@ -131,8 +136,7 @@ def assert_mcp_success(result, operation_name: str = "operation"):
     ]
 
     if not any(success_indicators):
-        error_msg = data.get("error", "Unknown error"
-        )
+        error_msg = data.get("error", "Unknown error")
         suggestions = data.get("suggestions", [])
 
         failure_msg = f"{operation_name} failed: {error_msg}"
@@ -164,7 +168,7 @@ def assert_mcp_failure(
 
     # If expected error specified, check for it
     if expected_error:
-        error_msg = _extract_error_message(data)
+        error_msg = extract_error_message(data)
         if expected_error.lower() not in error_msg.lower():
             raise AssertionError(
                 f"{operation_name} failed but error message doesn't contain '{expected_error}'. "
@@ -199,81 +203,6 @@ def assert_entity_state(
         )
 
     logger.debug(f"✅ Entity {entity_id} has expected state: {expected_state}")
-
-
-def assert_entity_attribute(
-    state_data: dict[str, Any], attribute_name: str, expected_value: Any, entity_id: str
-):
-    """
-    Assert that entity has expected attribute value.
-
-    Args:
-        state_data: Parsed MCP get_state result
-        attribute_name: Name of attribute to check
-        expected_value: Expected attribute value
-        entity_id: Entity ID for error message
-    """
-    if not state_data.get("success", True):
-        raise AssertionError(
-            f"Failed to get state for {entity_id}: {state_data.get('error')}"
-        )
-
-    attributes = state_data.get("data", {}).get("attributes", {})
-
-    if attribute_name not in attributes:
-        raise AssertionError(f"Entity {entity_id} missing attribute '{attribute_name}'")
-
-    actual_value = attributes[attribute_name]
-
-    if actual_value != expected_value:
-        raise AssertionError(
-            f"Entity {entity_id} attribute '{attribute_name}' is {actual_value}, expected {expected_value}"
-        )
-
-    logger.debug(f"✅ Entity {entity_id} attribute {attribute_name} = {expected_value}")
-
-
-def assert_automation_config(
-    config_data: dict[str, Any], expected_fields: dict[str, Any], automation_id: str
-):
-    """
-    Assert that automation configuration contains expected fields.
-
-    Args:
-        config_data: Parsed automation config from get action
-        expected_fields: Dictionary of field name -> expected value
-        automation_id: Automation ID for error message
-    """
-    if not config_data.get("success", True):
-        raise AssertionError(
-            f"Failed to get config for {automation_id}: {config_data.get('error')}"
-        )
-
-    config = config_data.get("config", {})
-
-    for field_name, expected_value in expected_fields.items():
-        if field_name not in config:
-            raise AssertionError(
-                f"Automation {automation_id} missing field '{field_name}'"
-            )
-
-        actual_value = config[field_name]
-
-        # Handle list/dict comparisons
-        if isinstance(expected_value, list | dict):
-            if len(actual_value) != len(expected_value):
-                raise AssertionError(
-                    f"Automation {automation_id} field '{field_name}' has {len(actual_value)} items, "
-                    f"expected {len(expected_value)}"
-                )
-        else:
-            if actual_value != expected_value:
-                raise AssertionError(
-                    f"Automation {automation_id} field '{field_name}' is {actual_value}, "
-                    f"expected {expected_value}"
-                )
-
-    logger.debug(f"✅ Automation {automation_id} config matches expected fields")
 
 
 def assert_search_results(
@@ -364,65 +293,6 @@ def assert_template_evaluation(
     )
 
 
-def assert_bulk_operation_success(
-    bulk_data: dict[str, Any],
-    expected_operations: int,
-    allow_partial_failure: bool = False,
-):
-    """
-    Assert bulk operation completed successfully.
-
-    Args:
-        bulk_data: Parsed bulk operation result
-        expected_operations: Number of operations that should have been submitted
-        allow_partial_failure: Whether individual operation failures are acceptable
-    """
-    if not bulk_data.get("success", False):
-        raise AssertionError(f"Bulk operation failed: {bulk_data.get('error')}")
-
-    operation_ids = bulk_data.get("operation_ids", [])
-
-    if len(operation_ids) != expected_operations:
-        raise AssertionError(
-            f"Bulk operation created {len(operation_ids)} operations, expected {expected_operations}"
-        )
-
-    logger.debug(f"✅ Bulk operation started {len(operation_ids)} operations")
-
-
-def assert_logbook_contains(
-    logbook_data: dict[str, Any], search_text: str, case_sensitive: bool = False
-):
-    """
-    Assert that logbook contains entries with specified text.
-
-    Args:
-        logbook_data: Parsed logbook result
-        search_text: Text to search for in logbook entries
-        case_sensitive: Whether search should be case sensitive
-    """
-    if not logbook_data.get("success", False):
-        raise AssertionError(f"Logbook query failed: {logbook_data.get('error')}")
-
-    entries = logbook_data.get("entries", [])
-
-    if not entries:
-        raise AssertionError("Logbook contains no entries")
-
-    search_func = str if case_sensitive else lambda x: str(x).lower()
-    target = search_func(search_text)
-
-    for entry in entries:
-        entry_text = search_func(entry)
-        if target in entry_text:
-            logger.debug(f"✅ Found '{search_text}' in logbook")
-            return
-
-    raise AssertionError(
-        f"Logbook doesn't contain '{search_text}' in {len(entries)} entries"
-    )
-
-
 class MCPAssertions:
     """
     Context manager for MCP-specific assertions with better error reporting.
@@ -480,7 +350,7 @@ class MCPAssertions:
                 ) from exc
             # Check expected error if specified
             if expected_error:
-                error_msg = _extract_error_message(data)
+                error_msg = extract_error_message(data)
                 if expected_error.lower() not in error_msg.lower():
                     raise AssertionError(
                         f"{operation_name} failed but error message doesn't contain "
@@ -540,9 +410,9 @@ async def wait_for_automation(
     import asyncio
     import time
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
-    while time.time() - start_time < timeout:
+    while time.monotonic() - start_time < timeout:
         # Use safe_call_tool to handle ToolError exceptions
         parsed = await safe_call_tool(
             mcp_client,
@@ -552,13 +422,11 @@ async def wait_for_automation(
 
         if parsed.get("success"):
             logger.debug(
-                f"Automation {automation_id} found after {time.time() - start_time:.2f}s"
+                f"Automation {automation_id} found after {time.monotonic() - start_time:.2f}s"
             )
             return parsed.get("config")
 
         await asyncio.sleep(poll_interval)
 
-    logger.warning(
-        f"Automation {automation_id} not found after {timeout}s timeout"
-    )
+    logger.warning(f"Automation {automation_id} not found after {timeout}s timeout")
     return None

@@ -12,6 +12,7 @@ import sys
 import time
 from typing import Any, Literal, NoReturn, overload
 
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
@@ -77,6 +78,90 @@ def extract_tool_error_message(te: ToolError) -> str:
         return str(te)
 
 
+def validate_identifier_not_empty(
+    value: str | None,
+    param_name: str,
+    *,
+    message: str | None = None,
+    suggestions: list[str] | None = None,
+    context: dict[str, Any] | None = None,
+) -> str:
+    """Reject ``None``, empty, or whitespace-only identifier values.
+
+    Surfaces a structured ``VALIDATION_INVALID_PARAMETER`` response so
+    CRUD-style tools fail loudly on missing identifiers instead of silently
+    routing on Python falsy semantics or relying on Home Assistant to
+    translate a missing identifier into a generic ``RESOURCE_NOT_FOUND``.
+
+    The destructive class this protects against:
+    ``action = "update" if label_id else "create"`` — passing ``""`` as
+    ``label_id`` silently routes to ``create`` when the caller intended
+    ``update``. The whitespace class this protects against: ``" "`` is truthy
+    in Python so ``if not value:`` lets it through, but Home Assistant has
+    no entry with id ``" "``.
+
+    The value is checked but not normalised: ``" abc "`` (a real id wrapped
+    in spaces) is accepted as-is and returned untouched. Only purely empty or
+    purely whitespace strings are rejected.
+
+    ``None`` is also rejected by this helper. Callers for whom ``None`` is a
+    documented sentinel (e.g. ``label_id=None`` meaning "list all" or
+    "create new") must gate the call themselves with
+    ``if value is not None: validate_identifier_not_empty(value, ...)``.
+
+    Returning ``str`` (rather than ``None``) lets call sites use the helper
+    in narrowing position — ``name = validate_identifier_not_empty(name, …)``
+    re-binds ``name`` from ``str | None`` to ``str`` so mypy can prove later
+    uses are safe without a duplicate inline check.
+
+    Args:
+        value: Identifier string supplied by the caller. ``None`` is
+            rejected — see the ``None``-sentinel note above for the caller
+            pattern that permits the sentinel.
+        param_name: Name of the parameter, used in the structured error
+            response's ``context`` and the human-readable message.
+        message: Optional override for the human-readable error message.
+            Defaults to ``"{param_name} must be a non-empty, non-whitespace
+            string"`` when omitted.
+        suggestions: Optional list of guidance strings for the response's
+            ``suggestions`` field. Defaults to a generic
+            "provide a non-empty value" hint.
+        context: Optional additional context fields merged into the error
+            response (e.g. ``{"action": "update"}``). The keys ``parameter``
+            and ``value`` are always set and take precedence.
+
+    Returns:
+        The validated ``value`` unchanged (typed as ``str``).
+
+    Raises:
+        ToolError: When ``value`` is ``None``, empty, or whitespace-only —
+            carrying a structured ``VALIDATION_INVALID_PARAMETER`` response
+            with the parameter name, the offending value (for diagnostics),
+            and the suggestions.
+
+    Example:
+        >>> validate_identifier_not_empty(label_id, "label_id",
+        ...     suggestions=["Omit label_id to create a new label"])
+    """
+    if value is not None and value.strip():
+        return value
+
+    final_context: dict[str, Any] = {}
+    if context:
+        final_context.update(context)
+    final_context["parameter"] = param_name
+    final_context["value"] = value
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            message or f"{param_name} must be a non-empty, non-whitespace string",
+            suggestions=suggestions
+            or [f"Provide a valid non-empty value for {param_name}"],
+            context=final_context,
+        )
+    )
+
+
 async def get_connected_ws_client(
     base_url: str, token: str, verify_ssl: bool | None = None
 ) -> tuple[HomeAssistantWebSocketClient | None, dict[str, Any] | None]:
@@ -97,12 +182,17 @@ async def get_connected_ws_client(
     ws_client = HomeAssistantWebSocketClient(base_url, token, verify_ssl=verify_ssl)
     connected = await ws_client.connect()
     if not connected:
+        reason = ws_client.last_connect_error
+        details = (
+            reason
+            if isinstance(reason, str)
+            else "WebSocket connection could not be established"
+        )
         return None, create_connection_error(
             "Failed to connect to Home Assistant WebSocket",
-            details="WebSocket connection could not be established",
+            details=details,
         )
     return ws_client, None
-
 
 
 def _classify_api_status(
@@ -117,13 +207,17 @@ def _classify_api_status(
             if entity_id:
                 result = create_entity_not_found_error(entity_id, details=error_msg)
             else:
-                result = create_error_response(ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context)
+                result = create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context
+                )
         case 401 | 403:
             result = create_auth_error(error_msg, context=context)
         case 400:
             result = create_validation_error(error_msg, context=context)
         case _:
-            result = create_error_response(ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context)
+            result = create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context
+            )
     return result
 
 
@@ -159,7 +253,9 @@ def _classify_exception(
         case TimeoutError():
             operation = context.get("operation", "request") if context else "request"
             timeout_seconds = context.get("timeout_seconds", 30) if context else 30
-            result = create_timeout_error(operation, timeout_seconds, details=error_msg, context=context)
+            result = create_timeout_error(
+                operation, timeout_seconds, details=error_msg, context=context
+            )
         case ValueError():
             result = create_validation_error(error_msg, context=context)
 
@@ -191,7 +287,9 @@ def _classify_by_message(
                 "unknown type",
             )
         )
-        or re.search(r"expected (?:a |str|int|bool|dict|list|float|type|one of)", error_str)
+        or re.search(
+            r"expected (?:a |str|int|bool|dict|list|float|type|one of)", error_str
+        )
     ):
         # Supervisor schema validation: vol.Invalid message arriving as a
         # HomeAssistantCommandError via HA Core's hassio WS bridge. The
@@ -199,25 +297,41 @@ def _classify_by_message(
         # heterogeneous vol.Invalid vocabulary without relying on an
         # error code (always unknown_error from the bridge).
         result = create_validation_error(error_msg, context=context)
-    elif "not found" in error_str or "404" in error_str:
+    elif (
+        "not found" in error_str
+        or "404" in error_str
+        or "unknown config specified" in error_str
+    ):
+        # ``unknown config specified`` is HA Core's WS-bridge phrasing for
+        # missing-dashboard 404s (lovelace/config with an unknown url_path).
+        # The string contains neither ``not found`` nor ``404``, so it would
+        # otherwise fall through to the ``command failed:`` SERVICE_CALL_FAILED
+        # fallback below and the agent would lose the not-found signal.
         entity_id = context.get("entity_id") if context else None
         if entity_id:
             result = create_entity_not_found_error(entity_id, details=error_msg)
         else:
-            result = create_error_response(ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context)
+            result = create_error_response(
+                ErrorCode.RESOURCE_NOT_FOUND, error_msg, context=context
+            )
     elif "timeout" in error_str:
-        result = create_timeout_error("operation", 30, details=error_msg, context=context)
+        result = create_timeout_error(
+            "operation", 30, details=error_msg, context=context
+        )
     elif "connection" in error_str or "connect" in error_str:
         result = create_connection_error(error_msg, context=context)
-    elif any(
-        phrase in error_str
-        for phrase in (
-            "unauthorized",
-            "authentication",
-            "invalid token",
-            "access denied",
+    elif (
+        any(
+            phrase in error_str
+            for phrase in (
+                "unauthorized",
+                "authentication",
+                "invalid token",
+                "access denied",
+            )
         )
-    ) or "401" in error_str:
+        or "401" in error_str
+    ):
         result = create_auth_error(error_msg, context=context)
     elif error_str.startswith("command failed:"):
         # HomeAssistantCommandError fallback: WS ``success=False`` with a
@@ -225,10 +339,15 @@ def _classify_by_message(
         # known failure mode (the WS command itself failed), not an
         # unexpected internal error — route to SERVICE_CALL_FAILED,
         # mirroring the 4xx fallback in _classify_api_status.
-        result = create_error_response(ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context)
+        result = create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED, error_msg, context=context
+        )
     else:
         result = create_error_response(
-            ErrorCode.INTERNAL_ERROR, "An unexpected error occurred", details=error_msg, context=context
+            ErrorCode.INTERNAL_ERROR,
+            "An unexpected error occurred",
+            details=error_msg,
+            context=context,
         )
     return result
 
@@ -311,7 +430,24 @@ def exception_to_structured_error(
 
     error_response = _classify_exception(error, error_str, error_msg, context)
 
-    if suggestions and "error" in error_response and isinstance(error_response["error"], dict):
+    # Tracebacks are operationally valuable only for genuinely unclassified
+    # exceptions (programmer errors, library bugs) — every other branch in
+    # _classify_exception produces a structured signal that's sufficient on
+    # its own. Logging at exception level here gives operators line numbers
+    # for the bug class where ``str(error)`` is least informative, without
+    # re-introducing the duplicate ERROR-log noise that classified failures
+    # produced.
+    if (
+        isinstance(error_response.get("error"), dict)
+        and error_response["error"].get("code") == ErrorCode.INTERNAL_ERROR
+    ):
+        logger.exception("Unclassified exception: %s", error_msg)
+
+    if (
+        suggestions
+        and "error" in error_response
+        and isinstance(error_response["error"], dict)
+    ):
         # Set both `suggestion` (singular, first item) and `suggestions`
         # (plural, full list). create_error_response (errors.py) sets the
         # singular key; existing tests for exception_to_structured_error
@@ -371,6 +507,49 @@ def log_tool_usage(func: Any) -> Any:
     return wrapper
 
 
+async def safe_progress(
+    ctx: Context | None,
+    *,
+    progress: float,
+    total: float | None = None,
+    message: str | None = None,
+) -> None:
+    """Report progress via ``ctx.report_progress`` with best-effort error handling.
+
+    A transport hiccup on a progress notification must never convert a
+    successful tool result into a ``ToolError``. Transport errors are logged
+    at debug; ``TypeError``/``AttributeError`` are escalated to ``warning``
+    because they signal a signature/interface mismatch (call-site bug or
+    Context object missing the expected method), not a flaky client.
+    ``ctx is None`` short-circuits without I/O.
+    """
+    if ctx is None:
+        return
+    try:
+        await ctx.report_progress(progress=progress, total=total, message=message)
+    except (TypeError, AttributeError) as e:
+        logger.warning(
+            "ctx.report_progress signature error (%s): %s", type(e).__name__, e
+        )
+    except Exception as e:
+        logger.debug("ctx.report_progress failed (%s): %s", type(e).__name__, e)
+
+
+async def safe_info(ctx: Context | None, message: str) -> None:
+    """Emit an info message via ``ctx.info`` with best-effort error handling.
+
+    Shares the rationale and exception-handling contract of ``safe_progress``.
+    """
+    if ctx is None:
+        return
+    try:
+        await ctx.info(message)
+    except (TypeError, AttributeError) as e:
+        logger.warning("ctx.info signature error (%s): %s", type(e).__name__, e)
+    except Exception as e:
+        logger.debug("ctx.info failed (%s): %s", type(e).__name__, e)
+
+
 def register_tool_methods(mcp: Any, instance: Any) -> None:
     """Register all @tool-decorated methods from a class instance with the MCP server.
 
@@ -385,6 +564,4 @@ def register_tool_methods(mcp: Any, instance: Any) -> None:
             mcp.add_tool(method)
             count += 1
     if count == 0:
-        logger.warning(
-            f"No @tool-decorated methods found on {type(instance).__name__}"
-        )
+        logger.warning(f"No @tool-decorated methods found on {type(instance).__name__}")

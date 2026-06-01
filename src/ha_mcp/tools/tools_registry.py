@@ -18,10 +18,10 @@ from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
+    validate_identifier_not_empty,
 )
 from .util_helpers import (
     build_pagination_metadata,
-    coerce_int_param,
     parse_string_list_param,
 )
 
@@ -174,16 +174,19 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = None,
         limit: Annotated[
-            int | str,
+            int,
             Field(
                 default=50,
+                ge=1,
+                le=200,
                 description="Max devices to return per page in list mode (default: 50)",
             ),
         ] = 50,
         offset: Annotated[
-            int | str,
+            int,
             Field(
                 default=0,
+                ge=0,
                 description="Number of devices to skip for pagination (default: 0)",
             ),
         ] = 0,
@@ -219,10 +222,8 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Z-Wave:** integration="zwave_js". Returns node_id, node_status.
         """
         try:
-            limit_int = coerce_int_param(
-                limit, "limit", default=50, min_value=1, max_value=200
-            )
-            offset_int = coerce_int_param(offset, "offset", default=0, min_value=0)
+            limit_int = limit
+            offset_int = offset
             effective_detail = detail_level
 
             # Get device registry
@@ -373,14 +374,20 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     (d for d in all_devices if d.get("id") == device_id), None
                 )
                 if not device:
+                    available_device_ids = [
+                        d.get("id") for d in all_devices[:10] if d.get("id")
+                    ]
                     raise_tool_error(
                         create_error_response(
-                            ErrorCode.ENTITY_NOT_FOUND,
+                            ErrorCode.RESOURCE_NOT_FOUND,
                             f"Device not found: {device_id}",
                             suggestions=[
                                 "Use ha_get_device() to find valid device IDs",
                             ],
-                            context={"device_id": device_id},
+                            context={
+                                "device_id": device_id,
+                                "available_device_ids": available_device_ids,
+                            },
                         )
                     )
 
@@ -586,10 +593,10 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
     @mcp.tool(
         tags={"Device Registry"},
-        annotations={"destructiveHint": True, "title": "Update Device"},
+        annotations={"destructiveHint": True, "title": "Set Device"},
     )
     @log_tool_usage
-    async def ha_update_device(
+    async def ha_set_device(
         device_id: Annotated[
             str,
             Field(description="Device ID to update"),
@@ -630,7 +637,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Device and entity names are independent. To rename entities, use ha_set_entity(new_entity_id=...).
 
         Common workflow for full rename:
-        1. ha_update_device(device_id="abc", name="Living Room Sensor")  # Rename device
+        1. ha_set_device(device_id="abc", name="Living Room Sensor")  # Rename device
         2. ha_set_entity("sensor.old", new_entity_id="sensor.living_room")  # Rename entities separately
 
         PARAMETERS:
@@ -640,11 +647,11 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - labels: List of labels (replaces existing labels)
 
         EXAMPLES:
-        - Rename device: ha_update_device("abc123", name="Living Room Hub")
-        - Move to area: ha_update_device("abc123", area_id="living_room")
-        - Disable device: ha_update_device("abc123", disabled_by="user")
-        - Enable device: ha_update_device("abc123", disabled_by="")
-        - Add labels: ha_update_device("abc123", labels=["important", "sensor"])
+        - Rename device: ha_set_device("abc123", name="Living Room Hub")
+        - Move to area: ha_set_device("abc123", area_id="living_room")
+        - Disable device: ha_set_device("abc123", disabled_by="user")
+        - Enable device: ha_set_device("abc123", disabled_by="")
+        - Add labels: ha_set_device("abc123", labels=["important", "sensor"])
         """
         # Parse labels if provided as string
         parsed_labels = None
@@ -659,6 +666,18 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
+        # Empty/whitespace device_id would reach the
+        # ``config/device_registry/update`` WS message inside
+        # ``_update_device_internal`` and surface as a misleading HA
+        # "device not found" — same destructive-WS-call class as the
+        # ``ha_remove_device`` guard added in this PR.
+        validate_identifier_not_empty(
+            device_id,
+            "device_id",
+            suggestions=[
+                "Use ha_get_device() to find valid device IDs",
+            ],
+        )
         # Delegate to internal implementation
         return await _update_device_internal(
             device_id=device_id,
@@ -698,9 +717,20 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - Remove orphaned device: ha_remove_device("abc123def456")
 
         NOTE: For most use cases, consider disabling the device instead:
-        ha_update_device(device_id="abc123", disabled_by="user")
+        ha_set_device(device_id="abc123", disabled_by="user")
         """
         try:
+            # Empty/whitespace device_id would slip past the local-filter
+            # ``next((d for d in devices if d.get("id") == device_id), None)``
+            # check below and surface as a generic "Device not found: " error
+            # after a wasted registry-list round-trip.
+            validate_identifier_not_empty(
+                device_id,
+                "device_id",
+                suggestions=[
+                    "Use ha_get_device() to find valid device IDs",
+                ],
+            )
             # First, get device details to find config entries
             list_message: dict[str, Any] = {"type": "config/device_registry/list"}
             list_result = await client.send_websocket_message(list_message)
@@ -717,14 +747,20 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             device = next((d for d in devices if d.get("id") == device_id), None)
 
             if not device:
+                available_device_ids = [
+                    d.get("id") for d in devices[:10] if d.get("id")
+                ]
                 raise_tool_error(
                     create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
+                        ErrorCode.RESOURCE_NOT_FOUND,
                         f"Device not found: {device_id}",
                         suggestions=[
                             "Use ha_get_device() to find valid device IDs",
                         ],
-                        context={"device_id": device_id},
+                        context={
+                            "device_id": device_id,
+                            "available_device_ids": available_device_ids,
+                        },
                     )
                 )
 

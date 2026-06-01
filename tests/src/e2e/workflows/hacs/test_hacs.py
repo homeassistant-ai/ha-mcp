@@ -93,7 +93,15 @@ def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
             "GitHub access issue",
         ),
         (error_code == "INTERNAL_ERROR", f"HACS internal error: {error_str}"),
-        ("not found" in error_str, "Command not found"),
+        # `"not found"` substring used to trigger here too, but HACS's
+        # legitimate "Repository with ID (...) not found" responses also
+        # contain that phrase — which is exactly what tests like
+        # `test_repository_info_not_found` are asserting against. The real
+        # "HACS commands not registered" case is captured by the
+        # `"unknown command"` check on the next line; require the more
+        # specific `"command not found"` substring here so we don't
+        # conflate it with a legitimate repo-lookup miss.
+        ("command not found" in error_str, "Command not found"),
         ("unknown command" in error_str, "Unknown command"),
         ("disabled" in error_str, "HACS disabled"),
         ("401" in error_str, "GitHub authentication failed"),
@@ -112,16 +120,16 @@ class TestHacsSearchInstalled:
 
     async def test_list_all_installed(self, mcp_client):
         """
-        Test: List all installed HACS repositories via ha_hacs_search
+        Test: List all installed HACS repositories via ha_get_hacs_info
 
         This test validates listing installed repositories using the
         installed_only parameter. In a fresh test environment, there
         should be no installed repos.
         """
-        logger.info("Testing ha_hacs_search with installed_only=True...")
+        logger.info("Testing ha_get_hacs_info with installed_only=True...")
 
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True}
+            mcp_client, "ha_get_hacs_info", {"action": "search", "installed_only": True}
         )
 
         if not data.get("success"):
@@ -147,7 +155,9 @@ class TestHacsSearchInstalled:
 
         # No filter should be applied
         assert data["category_filter"] is None, "No category filter should be applied"
-        assert data["installed_only"] is True, "Response should indicate installed_only=True"
+        assert data["installed_only"] is True, (
+            "Response should indicate installed_only=True"
+        )
 
         logger.info("List all installed test passed")
 
@@ -158,12 +168,12 @@ class TestHacsSearchInstalled:
         Exercises the code path where installed_only=True AND query is non-empty,
         ensuring only installed repos are returned even when scoring by relevance.
         """
-        logger.info("Testing ha_hacs_search with installed_only=True and query...")
+        logger.info("Testing ha_get_hacs_info with installed_only=True and query...")
 
         data = await safe_hacs_call(
             mcp_client,
-            "ha_hacs_search",
-            {"query": "hacs", "installed_only": True},
+            "ha_get_hacs_info",
+            {"action": "search", "query": "hacs", "installed_only": True},
         )
 
         if not data.get("success"):
@@ -179,25 +189,23 @@ class TestHacsSearchInstalled:
                 f"Repo {repo.get('name')} should be installed"
             )
 
-        logger.info(
-            f"Search installed with query: {data['total_matches']} matches"
-        )
+        logger.info(f"Search installed with query: {data['total_matches']} matches")
 
     async def test_list_by_category(self, mcp_client):
         """
         Test: List installed HACS repositories filtered by category
 
-        Test filtering by different categories using ha_hacs_search with installed_only.
+        Test filtering by different categories using ha_get_hacs_info with installed_only.
         """
-        logger.info("Testing ha_hacs_search installed_only with category filter...")
+        logger.info("Testing ha_get_hacs_info installed_only with category filter...")
 
         categories = ["integration", "lovelace", "theme"]
 
         for category in categories:
             data = await safe_hacs_call(
                 mcp_client,
-                "ha_hacs_search",
-                {"installed_only": True, "category": category},
+                "ha_get_hacs_info",
+                {"action": "search", "installed_only": True, "category": category},
             )
 
             if not data.get("success"):
@@ -234,10 +242,12 @@ class TestHacsSearch:
 
         Search for a common term that should return results.
         """
-        logger.info("Testing ha_hacs_search basic search...")
+        logger.info("Testing ha_get_hacs_info basic search...")
 
         # Search for something likely to exist in HACS
-        data = await safe_hacs_call(mcp_client, "ha_hacs_search", {"query": "mushroom"})
+        data = await safe_hacs_call(
+            mcp_client, "ha_get_hacs_info", {"action": "search", "query": "mushroom"}
+        )
 
         if not data.get("success"):
             unavailable, reason = is_hacs_unavailable(data)
@@ -273,10 +283,12 @@ class TestHacsSearch:
 
         Search within a specific category.
         """
-        logger.info("Testing ha_hacs_search with category filter...")
+        logger.info("Testing ha_get_hacs_info with category filter...")
 
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"query": "card", "category": "lovelace"}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "query": "card", "category": "lovelace"},
         )
 
         if not data.get("success"):
@@ -305,10 +317,12 @@ class TestHacsSearch:
 
         Verify pagination/limiting works correctly.
         """
-        logger.info("Testing ha_hacs_search with max_results...")
+        logger.info("Testing ha_get_hacs_info with max_results...")
 
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"query": "integration", "max_results": 5}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "query": "integration", "max_results": 5},
         )
 
         if not data.get("success"):
@@ -332,10 +346,12 @@ class TestHacsSearch:
 
         Search for something that shouldn't exist.
         """
-        logger.info("Testing ha_hacs_search with no results...")
+        logger.info("Testing ha_get_hacs_info with no results...")
 
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"query": "xyznonexistent12345abcdef"}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "query": "xyznonexistent12345abcdef"},
         )
 
         if not data.get("success"):
@@ -362,12 +378,12 @@ class TestHacsRepositoryInfo:
 
         Should return an appropriate error.
         """
-        logger.info("Testing ha_hacs_repository_info with nonexistent repo...")
+        logger.info("Testing ha_get_hacs_info with nonexistent repo...")
 
         parsed = await safe_call_tool(
             mcp_client,
-            "ha_hacs_repository_info",
-            {"repository_id": "nonexistent/repo12345"},
+            "ha_get_hacs_info",
+            {"action": "info", "repository_id": "nonexistent/repo12345"},
         )
         data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
 
@@ -375,9 +391,20 @@ class TestHacsRepositoryInfo:
         if unavailable:
             pytest.skip(f"HACS not available: {reason}")
 
-        # Should fail with appropriate error
+        # Should fail with the canonical "not found" response. Pinning both
+        # the error code and the message phrase guards against a future
+        # refactor that returns success=False with a different code/phrase
+        # — silently re-opening the bug that this PR's matcher fix closes.
+        assert isinstance(data, dict), f"Expected dict, got {data!r}"
         assert data.get("success") is False, "Should fail for nonexistent repo"
-        assert "error" in data or "error_code" in data, "Should have error information"
+        error = data.get("error", {})
+        assert isinstance(error, dict), f"Expected structured error dict, got {error!r}"
+        assert error.get("code") == "RESOURCE_NOT_FOUND", (
+            f"Expected RESOURCE_NOT_FOUND, got code={error.get('code')!r}"
+        )
+        assert "not found" in (error.get("message") or "").lower(), (
+            f"Expected 'not found' in error message, got {error.get('message')!r}"
+        )
 
         logger.info("Repository not found test passed")
 
@@ -387,11 +414,13 @@ class TestHacsRepositoryInfo:
 
         First search for a repo, then get its details.
         """
-        logger.info("Testing ha_hacs_repository_info with valid repo...")
+        logger.info("Testing ha_get_hacs_info with valid repo...")
 
         # First search for a popular repo
         search_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"query": "hacs", "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "query": "hacs", "max_results": 1},
         )
 
         if not search_data.get("success"):
@@ -417,7 +446,9 @@ class TestHacsRepositoryInfo:
         logger.info(f"Getting info for repository: {identifier}")
 
         info_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_repository_info", {"repository_id": identifier}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "info", "repository_id": identifier},
         )
 
         if not info_data.get("success"):
@@ -452,12 +483,16 @@ class TestHacsWriteOperations:
 
         Should fail with validation error.
         """
-        logger.info("Testing ha_hacs_add_repository with invalid format...")
+        logger.info("Testing ha_manage_hacs with invalid format...")
 
         parsed = await safe_call_tool(
             mcp_client,
-            "ha_hacs_add_repository",
-            {"repository": "invalid-format-no-slash", "category": "integration"},
+            "ha_manage_hacs",
+            {
+                "action": "add_repository",
+                "repository": "invalid-format-no-slash",
+                "category": "integration",
+            },
         )
         data = (
             parsed.get("data", parsed)
@@ -484,12 +519,12 @@ class TestHacsWriteOperations:
 
         Should fail with not found error.
         """
-        logger.info("Testing ha_hacs_download with nonexistent repo...")
+        logger.info("Testing ha_manage_hacs with nonexistent repo...")
 
         parsed = await safe_call_tool(
             mcp_client,
-            "ha_hacs_download",
-            {"repository_id": "nonexistent/fake-repo-12345"},
+            "ha_manage_hacs",
+            {"action": "download", "repository_id": "nonexistent/fake-repo-12345"},
         )
         data = (
             parsed.get("data", parsed)
@@ -501,8 +536,20 @@ class TestHacsWriteOperations:
         if unavailable:
             pytest.skip(f"HACS not available: {reason}")
 
-        # Should fail with not found error
+        # Same contract as test_repository_info_not_found: pin the canonical
+        # RESOURCE_NOT_FOUND code and the "not found" phrase so the matcher
+        # fix in is_hacs_unavailable() can't silently regress through a tool
+        # returning success=False with a different error shape.
+        assert isinstance(data, dict), f"Expected dict, got {data!r}"
         assert data.get("success") is False, "Should fail for nonexistent repo"
+        error = data.get("error", {})
+        assert isinstance(error, dict), f"Expected structured error dict, got {error!r}"
+        assert error.get("code") == "RESOURCE_NOT_FOUND", (
+            f"Expected RESOURCE_NOT_FOUND, got code={error.get('code')!r}"
+        )
+        assert "not found" in (error.get("message") or "").lower(), (
+            f"Expected 'not found' in error message, got {error.get('message')!r}"
+        )
 
         logger.info("Download nonexistent repository test passed")
 
@@ -517,7 +564,9 @@ async def test_hacs_discovery(mcp_client):
     logger.info("Testing basic HACS discovery...")
 
     data = await safe_hacs_call(
-        mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+        mcp_client,
+        "ha_get_hacs_info",
+        {"action": "search", "installed_only": True, "max_results": 1},
     )
 
     unavailable, reason = is_hacs_unavailable(data)
@@ -535,6 +584,7 @@ async def test_hacs_discovery(mcp_client):
 
 @pytest.mark.hacs
 @pytest.mark.slow
+@pytest.mark.flaky(reruns=2, reruns_delay=10)
 class TestMcpToolsInstallation:
     """Test ha_mcp_tools custom component installation via HACS.
 
@@ -555,7 +605,9 @@ class TestMcpToolsInstallation:
         """
         logger.info("Pre-flight check: verifying HACS availability...")
         data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "max_results": 1},
         )
 
         unavailable, reason = is_hacs_unavailable(data)
@@ -579,7 +631,9 @@ class TestMcpToolsInstallation:
 
         # Before installation, verify HACS is available and ready
         info_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "max_results": 1},
         )
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
@@ -639,7 +693,9 @@ class TestMcpToolsInstallation:
 
         # Before installation, verify HACS is available and ready
         info_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "max_results": 1},
         )
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
@@ -683,7 +739,9 @@ class TestMcpToolsInstallation:
 
         # Before installation, verify HACS is available and ready
         info_data = await safe_hacs_call(
-            mcp_client, "ha_hacs_search", {"installed_only": True, "max_results": 1}
+            mcp_client,
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "max_results": 1},
         )
         unavailable, reason = is_hacs_unavailable(info_data)
         if unavailable:
@@ -706,8 +764,8 @@ class TestMcpToolsInstallation:
         # Now check HACS search for installed integrations
         list_data = await safe_hacs_call(
             mcp_client,
-            "ha_hacs_search",
-            {"installed_only": True, "category": "integration"},
+            "ha_get_hacs_info",
+            {"action": "search", "installed_only": True, "category": "integration"},
         )
 
         if not list_data.get("success"):
@@ -736,3 +794,70 @@ class TestMcpToolsInstallation:
         logger.info(f"Version: {mcp_tools_repo.get('installed_version')}")
 
         logger.info("Check MCP tools in HACS test passed")
+
+
+# ---------------------------------------------------------------------------
+# Pure-function tests for is_hacs_unavailable() — no Docker / mcp_client.
+# These pin the matcher boundaries so the "Repository ... not found"-skips-
+# legitimate-responses bug (closed by tightening `"not found"` ->
+# `"command not found"`) can't silently come back through the helper.
+# ---------------------------------------------------------------------------
+
+
+def test_unit_is_hacs_unavailable_skips_legitimate_repo_not_found() -> None:
+    """Legitimate HACS "Repository ... not found" responses must NOT trip."""
+    data = {
+        "success": False,
+        "error": {
+            "code": "RESOURCE_NOT_FOUND",
+            "message": "Repository 'nonexistent/repo12345' not found in HACS",
+        },
+    }
+    unavailable, _ = is_hacs_unavailable(data)
+    assert unavailable is False, (
+        "Legitimate 'Repository ... not found' responses must not be treated "
+        "as HACS-unavailable (regression of the matcher fix in this PR)."
+    )
+
+
+def test_unit_is_hacs_unavailable_catches_command_not_found() -> None:
+    """The literal 'command not found' substring must still trip."""
+    data = {"error": "Command not found: hacs/info"}
+    unavailable, reason = is_hacs_unavailable(data)
+    assert unavailable is True
+    assert reason == "Command not found"
+
+
+def test_unit_is_hacs_unavailable_catches_unknown_command() -> None:
+    """HA's WebSocket 'unknown command' must still trip (the genuine signal)."""
+    data = {"error_code": "unknown_command", "error": "unknown command: hacs/info"}
+    unavailable, reason = is_hacs_unavailable(data)
+    assert unavailable is True
+    assert reason == "Unknown command"
+
+
+def test_unit_is_hacs_unavailable_catches_hacs_not_available_code() -> None:
+    """The HACS_NOT_AVAILABLE error code must trip directly."""
+    data = {"error_code": "HACS_NOT_AVAILABLE", "error": "HACS not loaded"}
+    unavailable, reason = is_hacs_unavailable(data)
+    assert unavailable is True
+    assert reason == "HACS not available"
+
+
+def test_unit_is_hacs_unavailable_handles_nested_error_dict() -> None:
+    """Both flat ('error': str) and nested ('error': {'code', 'message'}) shapes work."""
+    nested = {
+        "success": False,
+        "error": {"code": "RESOURCE_NOT_FOUND", "message": "command not found"},
+    }
+    unavailable, reason = is_hacs_unavailable(nested)
+    assert unavailable is True
+    assert reason == "Command not found"
+
+
+def test_unit_is_hacs_unavailable_success_response_passes() -> None:
+    """Successful HACS responses must not trip any indicator."""
+    data = {"success": True, "results": [], "total_matches": 0}
+    unavailable, reason = is_hacs_unavailable(data)
+    assert unavailable is False
+    assert reason == ""

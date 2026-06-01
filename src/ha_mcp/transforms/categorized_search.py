@@ -35,18 +35,39 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default HA tools to pin (always visible, bypass search transform)
+# Default HA tools to pin (always visible, bypass search transform).
+#
+# These are DEFAULTS, not mandatory — users can unpin any of them via the
+# Tools tab in the settings UI by explicitly setting the tool's state to
+# ``"enabled"`` in ``tool_config.json``. Server-side, the effective pinned
+# set is computed as ``DEFAULT_PINNED_TOOLS`` minus any tool whose saved
+# state is ``"enabled"``, plus any user-pinned tools. Tools with no entry
+# in ``tool_config.json`` stay pinned by default.
+#
+# Removed in #966 (operational recovery actions, low frequency, low value
+# in the default LLM tool surface — still discoverable via tool search):
+#   - ``ha_restart``
+#   - ``ha_reload_core``
+#
+# ``ha_config_set_yaml`` and ``ha_manage_custom_tool`` were previously
+# pinned here (the latter conditionally in server.py when code mode was
+# enabled) so users could gate them via per-tool MCP permission prompts
+# even when toolsearch hid the rest of the catalog. The tool security
+# policies middleware shipped in #966 now gates those tools at call time
+# regardless of catalog visibility, so they no longer need to be pinned
+# just to be reachable for gating — keeping them behind the search proxy
+# reduces the LLM's tool surface without sacrificing the safety check.
 DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
-    "ha_restart",
-    "ha_reload_core",
-    "ha_backup_create",
-    "ha_backup_restore",
+    "ha_manage_backup",
     "ha_get_overview",
     "ha_report_issue",
     "ha_search_entities",
     "ha_config_get_automation",
     "ha_config_set_automation",
-    "ha_config_set_yaml",
+    # Skill guide must stay visible when tool search hides the catalog —
+    # its description carries the bundled best-practices trigger
+    # conditions that the LLM needs to see before writing config.
+    "ha_get_skill_guide",
 )
 
 # Tool name patterns that indicate delete/remove operations
@@ -97,6 +118,7 @@ class SearchKeywordsTransform(Transform):
         tool = await call_next(name, version=version)
         return self._enrich(tool) if tool else None
 
+
 # Proxy description suffix (shared across all proxies)
 _PROXY_PARAMS_SUFFIX = (
     "Params: name (str) = tool name, arguments (dict) = tool parameters. "
@@ -119,14 +141,14 @@ def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
             f"Creates or updates data. Use for any tool that modifies "
             f"state but does not delete/remove resources.\n"
             f"{_PROXY_PARAMS_SUFFIX}\n"
-            f'EXAMPLE: ha_call_write_tool(name="ha_config_set_area", arguments={{"name": "Kitchen"}})'
+            f'EXAMPLE: ha_call_write_tool(name="ha_set_area_or_floor", arguments={{"kind": "area", "name": "Kitchen"}})'
         ),
         "delete": (
             f"Execute a delete/remove tool discovered via {search_tool_name}. "
             f"Permanently removes data. Use for tools that delete or "
             f"remove resources (areas, automations, devices, etc.).\n"
             f"{_PROXY_PARAMS_SUFFIX}\n"
-            f'EXAMPLE: ha_call_delete_tool(name="ha_config_remove_area", arguments={{"area_id": "old_area"}})'
+            f'EXAMPLE: ha_call_delete_tool(name="ha_remove_area_or_floor", arguments={{"kind": "area", "id": "old_area"}})'
         ),
     }
 
@@ -137,8 +159,10 @@ def _categorize_tool(tool: Tool) -> str:
     if annotations and annotations.readOnlyHint:
         return "read"
     # A tool is 'delete' only if it's destructive AND its name suggests deletion
-    if annotations and annotations.destructiveHint and any(
-        pattern in tool.name for pattern in _DELETE_PATTERNS
+    if (
+        annotations
+        and annotations.destructiveHint
+        and any(pattern in tool.name for pattern in _DELETE_PATTERNS)
     ):
         return "delete"
     return "write"
@@ -166,6 +190,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
         call_read_name: str = "ha_call_read_tool",
         call_write_name: str = "ha_call_write_tool",
         call_delete_name: str = "ha_call_delete_tool",
+        enable_code_mode: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -183,6 +208,15 @@ class CategorizedSearchTransform(BM25SearchTransform):
         self._call_delete_name = call_delete_name
         self._search_tool_description = search_tool_description
         self._proxy_descs = _build_proxy_descriptions(search_tool_name)
+        # When code mode is enabled, the proxy must NOT dispatch to pinned
+        # tools (specifically ``ha_manage_custom_tool``) — otherwise a
+        # sandbox call to ``ha_call_write_tool`` with name=
+        # "ha_manage_custom_tool" would launder a recursive invocation
+        # past ``_BLOCKED_TOOLS`` inside the sandbox. Default False
+        # preserves existing behaviour for installations that aren't
+        # running code mode; server.py flips this on when
+        # ``settings.enable_code_mode`` is True.
+        self._enable_code_mode = enable_code_mode
 
         # Category caches rebuilt when the catalog hash changes,
         # matching BM25SearchTransform's staleness detection pattern.
@@ -195,14 +229,25 @@ class CategorizedSearchTransform(BM25SearchTransform):
     @staticmethod
     def _catalog_hash(tools: Sequence[Tool]) -> str:
         """Hash tool names + categories for staleness detection."""
-        key = "|".join(
-            sorted(f"{t.name}:{_categorize_tool(t)}" for t in tools)
-        )
+        key = "|".join(sorted(f"{t.name}:{_categorize_tool(t)}" for t in tools))
         return hashlib.sha256(key.encode()).hexdigest()
 
     async def _rebuild_category_cache(self, ctx: Any) -> None:
-        """Rebuild the read/write/delete category sets if catalog changed."""
-        catalog = await self.get_tool_catalog(ctx)
+        """Rebuild the read/write/delete category sets if catalog changed.
+
+        When ``self._enable_code_mode`` is True, pinned tools are excluded
+        from the category sets via ``_get_visible_tools`` (the same
+        FastMCP helper that ``BM25SearchTransform`` uses). This prevents
+        a sandbox-side recursive invocation laundered as
+        ``ha_call_write_tool(name="ha_manage_custom_tool", ...)`` —
+        without the filter, the pinned-and-callable
+        ``ha_manage_custom_tool`` ends up in ``_write_tools`` and the
+        proxy will happily dispatch.
+        """
+        if self._enable_code_mode:
+            catalog = await self._get_visible_tools(ctx)
+        else:
+            catalog = await self.get_tool_catalog(ctx)
         current_hash = self._catalog_hash(catalog)
         if current_hash == self._last_catalog_hash:
             return
@@ -271,26 +316,34 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 try:
                     parsed = json.loads(arguments)
                 except json.JSONDecodeError as e:
-                    raise ToolError(json.dumps(create_error_response(
-                        code=ErrorCode.VALIDATION_INVALID_JSON,
-                        message=f"'arguments' is a string but not valid JSON: {e}",
-                        suggestions=[
-                            "Pass 'arguments' as an object, not a JSON string.",
-                        ],
-                        context={"proxy_used": proxy_name, "tool_name": name},
-                    ))) from e
+                    raise ToolError(
+                        json.dumps(
+                            create_error_response(
+                                code=ErrorCode.VALIDATION_INVALID_JSON,
+                                message=f"'arguments' is a string but not valid JSON: {e}",
+                                suggestions=[
+                                    "Pass 'arguments' as an object, not a JSON string.",
+                                ],
+                                context={"proxy_used": proxy_name, "tool_name": name},
+                            )
+                        )
+                    ) from e
                 if not isinstance(parsed, dict):
-                    raise ToolError(json.dumps(create_error_response(
-                        code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        message=(
-                            "'arguments' must be a JSON object "
-                            f"(got {type(parsed).__name__})."
-                        ),
-                        suggestions=[
-                            "Pass 'arguments' as an object (dict), not a list or scalar.",
-                        ],
-                        context={"proxy_used": proxy_name, "tool_name": name},
-                    )))
+                    raise ToolError(
+                        json.dumps(
+                            create_error_response(
+                                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                                message=(
+                                    "'arguments' must be a JSON object "
+                                    f"(got {type(parsed).__name__})."
+                                ),
+                                suggestions=[
+                                    "Pass 'arguments' as an object (dict), not a list or scalar.",
+                                ],
+                                context={"proxy_used": proxy_name, "tool_name": name},
+                            )
+                        )
+                    )
                 logger.warning(
                     "Proxy %s received 'arguments' as a JSON string for tool %s — parsed as fallback",
                     proxy_name,
@@ -317,7 +370,8 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 arguments
                 and isinstance(arguments.get("name"), str)
                 and "arguments" in arguments
-                and name in (
+                and name
+                in (
                     transform._call_read_name,
                     transform._call_write_name,
                     transform._call_delete_name,
@@ -346,17 +400,31 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     actual_category = "delete"
                     correct_proxy = transform._call_delete_name
                 else:
-                    raise ToolError(json.dumps(create_error_response(
-                        code=ErrorCode.RESOURCE_NOT_FOUND,
-                        message=f"Tool '{name}' not found. Use ha_search_tools to discover available tools.",
-                        context={"tool_name": name},
-                    )))
-                raise ToolError(json.dumps(create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=f"Tool '{name}' is a {actual_category} tool. Use {correct_proxy} instead of {proxy_name}.",
-                    suggestions=[f"Use '{correct_proxy}' for {actual_category} operations."],
-                    context={"tool_name": name, "proxy_used": proxy_name, "correct_proxy": correct_proxy},
-                )))
+                    raise ToolError(
+                        json.dumps(
+                            create_error_response(
+                                code=ErrorCode.RESOURCE_NOT_FOUND,
+                                message=f"Tool '{name}' not found. Use ha_search_tools to discover available tools.",
+                                context={"tool_name": name},
+                            )
+                        )
+                    )
+                raise ToolError(
+                    json.dumps(
+                        create_error_response(
+                            code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            message=f"Tool '{name}' is a {actual_category} tool. Use {correct_proxy} instead of {proxy_name}.",
+                            suggestions=[
+                                f"Use '{correct_proxy}' for {actual_category} operations."
+                            ],
+                            context={
+                                "tool_name": name,
+                                "proxy_used": proxy_name,
+                                "correct_proxy": correct_proxy,
+                            },
+                        )
+                    )
+                )
 
             return await ctx.fastmcp.call_tool(name, arguments)
 
@@ -373,10 +441,12 @@ class CategorizedSearchTransform(BM25SearchTransform):
 
         search_tool = self._make_search_tool()
         # Always set readOnlyHint and override description if provided
-        search_tool = search_tool.model_copy(update={
-            "description": self._search_tool_description or search_tool.description,
-            "annotations": ToolAnnotations(readOnlyHint=True),
-        })
+        search_tool = search_tool.model_copy(
+            update={
+                "description": self._search_tool_description or search_tool.description,
+                "annotations": ToolAnnotations(readOnlyHint=True),
+            }
+        )
 
         call_read = self._make_categorized_proxy(
             proxy_name=self._call_read_name,
@@ -412,19 +482,22 @@ class CategorizedSearchTransform(BM25SearchTransform):
         """
         if name == self._call_read_name:
             return self._make_categorized_proxy(
-                self._call_read_name, "read",
+                self._call_read_name,
+                "read",
                 ToolAnnotations(readOnlyHint=True),
                 self._proxy_descs["read"],
             )
         if name == self._call_write_name:
             return self._make_categorized_proxy(
-                self._call_write_name, "write",
+                self._call_write_name,
+                "write",
                 ToolAnnotations(destructiveHint=True),
                 self._proxy_descs["write"],
             )
         if name == self._call_delete_name:
             return self._make_categorized_proxy(
-                self._call_delete_name, "delete",
+                self._call_delete_name,
+                "delete",
                 ToolAnnotations(destructiveHint=True),
                 self._proxy_descs["delete"],
             )

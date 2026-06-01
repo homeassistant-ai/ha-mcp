@@ -1,0 +1,8 @@
+# E2E seed scenes — referenced by tests that would otherwise skip with
+# "No scene entities available for testing" (test_service.py::test_call_service_scene_turn_on).
+# Keep entries minimal and side-effect-free.
+- id: e2e_test_scene_seed
+  name: E2E Test Seed Scene
+  entities:
+    light.bed_light:
+      state: 'off'

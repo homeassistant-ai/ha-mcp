@@ -77,15 +77,16 @@ def register_tools(mock_client):
 
     registered_tools: dict[str, Any] = {}
 
-    def capture_tool(**kwargs):
-        def decorator(fn):
-            registered_tools[fn.__name__] = fn
-            return fn
-
-        return decorator
+    def capture_add_tool(method):
+        name = (
+            method.__fastmcp__.name
+            if hasattr(method, "__fastmcp__")
+            else method.__name__
+        )
+        registered_tools[name] = method
 
     mock_mcp = MagicMock()
-    mock_mcp.tool = capture_tool
+    mock_mcp.add_tool = capture_add_tool
     register_config_helper_tools(mock_mcp, mock_client)
     return registered_tools
 
@@ -484,7 +485,11 @@ class TestFlowHelperRouting:
         assert result["method"] == "config_flow"
         assert result["entry_id"] == "entry-1"
         assert result["entity_ids"] == ["sensor.avg_temp"]
-        mock_client.start_config_flow.assert_awaited_once_with("min_max")
+        # start_config_flow is awaited twice for create: once for schema
+        # introspection (to decide whether to inject `name`), once for the
+        # real flow. Both calls pass the same helper_type.
+        for call in mock_client.start_config_flow.await_args_list:
+            assert call.args == ("min_max",)
 
     async def test_flow_helper_update_routes_via_options_flow(
         self, register_tools, mock_client
@@ -535,9 +540,19 @@ class TestFlowHelperRouting:
             }
         )
 
-        # Simulate HA: first call lists 3 entities (select + 2 tariff sensors);
-        # subsequent calls are entity_registry/update, all succeed.
+        # Simulate HA: Bug 12 collision check (config_entries/get) returns
+        # empty (no collision); Bug 16 registry-ID validation lookups (area +
+        # label); first business call lists 3 entities (select + 2 tariff
+        # sensors); then entity_registry/update calls all succeed.
         responses = [
+            # Bug 12 collision check
+            {"success": True, "result": []},
+            # Bug 16 validation: area_registry/list, label_registry/list
+            {"success": True, "result": [{"area_id": "kitchen", "name": "Kitchen"}]},
+            {
+                "success": True,
+                "result": [{"label_id": "metered", "name": "Metered"}],
+            },
             {
                 "success": True,
                 "result": [
@@ -559,18 +574,24 @@ class TestFlowHelperRouting:
         result = await register_tools["ha_config_set_helper"](
             helper_type="utility_meter",
             name="daily_kwh",
-            config={"source": "sensor.energy", "cycle": "daily", "tariffs": ["peak", "offpeak"]},
+            config={
+                "source": "sensor.energy",
+                "cycle": "daily",
+                "tariffs": ["peak", "offpeak"],
+            },
             area_id="kitchen",
             labels=["metered"],
             wait=False,
         )
 
         assert result["success"] is True
-        assert sorted(result["entity_ids"]) == sorted([
-            "select.daily_kwh",
-            "sensor.daily_kwh_peak",
-            "sensor.daily_kwh_offpeak",
-        ])
+        assert sorted(result["entity_ids"]) == sorted(
+            [
+                "select.daily_kwh",
+                "sensor.daily_kwh_peak",
+                "sensor.daily_kwh_offpeak",
+            ]
+        )
         assert result["area_id"] == "kitchen"
         assert result["labels"] == ["metered"]
         assert len(result["applied"]) == 3
@@ -600,8 +621,11 @@ class TestFlowHelperRouting:
                 "result": {"entry_id": "entry-g", "title": "grp", "domain": "group"},
             }
         )
-        # One entity, registry/update fails
+        # Bug 12 collision check (no collision), then Bug 16 area_registry/list,
+        # then entity_registry/list, then entity_registry/update (which fails).
         responses = [
+            {"success": True, "result": []},
+            {"success": True, "result": [{"area_id": "hallway", "name": "Hallway"}]},
             {
                 "success": True,
                 "result": [
@@ -655,8 +679,7 @@ class TestFlowHelperRouting:
         assert result["entity_ids"] == []
         assert "warnings" in result
         assert any(
-            "entity_registry/list" in w and "entry-r1" in w
-            for w in result["warnings"]
+            "entity_registry/list" in w and "entry-r1" in w for w in result["warnings"]
         )
 
     async def test_flow_helper_registry_update_raises_continues_loop(
@@ -667,14 +690,19 @@ class TestFlowHelperRouting:
             return_value={
                 "type": "create_entry",
                 "flow_id": "flow-w3",
-                "result": {"entry_id": "entry-w3", "title": "um", "domain": "utility_meter"},
+                "result": {
+                    "entry_id": "entry-w3",
+                    "title": "um",
+                    "domain": "utility_meter",
+                },
             }
         )
-        # First call: registry/list returns 3 entities.
-        # Call #2: update for entity 1 raises.
-        # Call #3: update for entity 2 succeeds.
-        # Call #4: update for entity 3 succeeds.
+        # Bug 12 collision check (no collision), Bug 16 area_registry/list
+        # (only area_id passed, no labels/category), entity_registry/list
+        # returns 3 entities, then update for entity 1 raises, entity 2+3 succeed.
         responses: list = [
+            {"success": True, "result": []},
+            {"success": True, "result": [{"area_id": "hallway", "name": "Hallway"}]},
             {
                 "success": True,
                 "result": [
@@ -716,9 +744,7 @@ class TestFlowHelperRouting:
         assert not any("sensor.um_peak" in w for w in result["warnings"])
         assert not any("sensor.um_offpeak" in w for w in result["warnings"])
 
-    async def test_flow_helper_create_requires_name(
-        self, register_tools, mock_client
-    ):
+    async def test_flow_helper_create_requires_name(self, register_tools, mock_client):
         """Flow helper create without name (neither top-level nor in config) errors."""
         from fastmcp.exceptions import ToolError
 
@@ -773,9 +799,7 @@ class TestFlowHelperRouting:
 
         assert captured_config.get("name") == "my_helper_name"
 
-    async def test_simple_type_rejects_config_param(
-        self, register_tools, mock_client
-    ):
+    async def test_simple_type_rejects_config_param(self, register_tools, mock_client):
         """Passing config for a simple helper type raises VALIDATION_INVALID_PARAMETER.
 
         Silent-ignore would mislead agents into thinking the payload took effect.
@@ -847,7 +871,10 @@ class TestFlowHelperRouting:
         assert result["action"] == "create"
         assert result["method"] == "config_flow"
         assert result["entry_id"] == "entry-empty"
-        mock_client.start_config_flow.assert_awaited_once_with("min_max")
+        # start_config_flow is awaited twice for create: introspection + real
+        # flow. Both calls use the same helper_type.
+        for call in mock_client.start_config_flow.await_args_list:
+            assert call.args == ("min_max",)
 
     async def test_flow_helper_clears_area_on_empty_string(
         self, register_tools, mock_client
@@ -900,8 +927,12 @@ class TestFlowHelperRouting:
 
         assert result["success"] is True
         # Find the entity_registry/update call
-        updates = [c for c in ws_calls if c.get("type") == "config/entity_registry/update"]
-        assert len(updates) == 1, f"expected 1 registry update, got {len(updates)}: {ws_calls}"
+        updates = [
+            c for c in ws_calls if c.get("type") == "config/entity_registry/update"
+        ]
+        assert len(updates) == 1, (
+            f"expected 1 registry update, got {len(updates)}: {ws_calls}"
+        )
         assert "area_id" in updates[0], (
             f"area_id must be present in payload (even when clearing): {updates[0]}"
         )
@@ -956,8 +987,12 @@ class TestFlowHelperRouting:
         )
 
         assert result["success"] is True
-        updates = [c for c in ws_calls if c.get("type") == "config/entity_registry/update"]
-        assert len(updates) == 1, f"expected 1 registry update, got {len(updates)}: {ws_calls}"
+        updates = [
+            c for c in ws_calls if c.get("type") == "config/entity_registry/update"
+        ]
+        assert len(updates) == 1, (
+            f"expected 1 registry update, got {len(updates)}: {ws_calls}"
+        )
         assert "labels" in updates[0], (
             f"labels must be present in payload (even when clearing): {updates[0]}"
         )
@@ -976,9 +1011,7 @@ class TestOptionalNameOnUpdate:
     matching the ha_set_entity convention.
     """
 
-    async def test_simple_helper_update_without_name(
-        self, register_tools, mock_client
-    ):
+    async def test_simple_helper_update_without_name(self, register_tools, mock_client):
         """Clearing area on input_boolean without supplying name succeeds (SIMPLE path)."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=mock_client._make_ws_responses("input_boolean")
@@ -1000,15 +1033,17 @@ class TestOptionalNameOnUpdate:
         # registry update must have fired with area_id: None (clear)
         ws_calls = mock_client.send_websocket_message.call_args_list
         reg_update = next(
-            (c for c in ws_calls if c[0][0].get("type") == "config/entity_registry/update"),
+            (
+                c
+                for c in ws_calls
+                if c[0][0].get("type") == "config/entity_registry/update"
+            ),
             None,
         )
         assert reg_update is not None, f"no registry update: {ws_calls}"
         assert reg_update[0][0].get("area_id") is None, reg_update[0][0]
 
-    async def test_flow_helper_update_without_name(
-        self, register_tools, mock_client
-    ):
+    async def test_flow_helper_update_without_name(self, register_tools, mock_client):
         """Clearing area on min_max without supplying name succeeds (FLOW path)."""
         mock_client.get_config_entry = AsyncMock(
             return_value={"domain": "min_max", "entry_id": "entry-1"}
@@ -1048,7 +1083,9 @@ class TestOptionalNameOnUpdate:
         )
 
         assert result["success"] is True, result
-        reg_updates = [c for c in ws_calls if c.get("type") == "config/entity_registry/update"]
+        reg_updates = [
+            c for c in ws_calls if c.get("type") == "config/entity_registry/update"
+        ]
         assert reg_updates, f"no registry update: {ws_calls}"
         assert reg_updates[0].get("area_id") is None, reg_updates[0]
 

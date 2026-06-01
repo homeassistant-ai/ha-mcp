@@ -83,7 +83,9 @@ class OAuthProxyClient:
             logger.error(
                 f"OAuth token missing HA credentials. Keys present: {list(claims.keys()) if claims else []}"
             )
-            raise HomeAssistantAuthError("No Home Assistant credentials in OAuth token claims")
+            raise HomeAssistantAuthError(
+                "No Home Assistant credentials in OAuth token claims"
+            )
 
         ha_token = claims["ha_token"]
 
@@ -286,11 +288,11 @@ def _setup_standard_mode() -> None:
     _log_startup_version()
 
 
-def _http_run_kwargs(transport: str, port: int, path: str) -> dict:
+def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict:
     """Build common run_async kwargs for HTTP-based transports."""
     return {
         "transport": transport,
-        "host": "0.0.0.0",
+        "host": host,
         "port": port,
         "path": path,
         "show_banner": _get_show_banner(),
@@ -627,7 +629,90 @@ def main() -> None:
     _setup_logging(settings.log_level)
     _log_startup_version()
 
+    # Spawn the persistent settings UI sidecar (issue #863). The sidecar
+    # is a detached subprocess so the settings page stays reachable even
+    # when this stdio process is SIGTERM'd or idle-killed by the client.
+    # Best-effort: failure logs a warning but doesn't block MCP startup.
+    _maybe_spawn_settings_sidecar()
+
     _run_entrypoint(_run_with_graceful_shutdown(), "Server")
+
+
+def _maybe_spawn_settings_sidecar() -> None:
+    """Dump tool metadata cache + spawn the stdio settings UI sidecar.
+
+    Split out of ``main()`` to keep the entrypoint readable. The cache
+    dump uses a one-off ``asyncio.run`` because ``_get_tool_metadata``
+    is async; this happens before the main stdio loop so there's no
+    nested-loop conflict with ``_run_entrypoint``'s own ``asyncio.run``.
+
+    Performance: the dump constructs the full FastMCP server, which is
+    heavy. Skip it (and the server build) when there's nothing to spawn
+    for — sidecar disabled or already alive. Warm restarts that already
+    have a sidecar pay zero cold-start tax from this path.
+    """
+    from ha_mcp.settings_ui import (
+        _get_tool_metadata,
+        dump_tool_metadata_cache,
+    )
+    from ha_mcp.stdio_settings_sidecar import (
+        _existing_sidecar_alive,
+        _is_disabled,
+        maybe_spawn,
+    )
+
+    # Cheap gates first; skip the heavy metadata dump when the sidecar
+    # would be a no-op anyway. Any condition that makes maybe_spawn()
+    # short-circuit also makes the dump pointless (the running sidecar
+    # already has a cache from a prior parent startup; a disabled
+    # sidecar never reads one).
+    if _is_disabled() or _existing_sidecar_alive():
+        try:
+            maybe_spawn()
+        except Exception as e:
+            logger.warning(
+                "Failed to invoke maybe_spawn no-op path (%s)",
+                type(e).__name__,
+                exc_info=True,
+            )
+        return
+
+    try:
+        metadata = asyncio.run(_get_tool_metadata(_get_server()))
+        dumped = dump_tool_metadata_cache(metadata)
+        # Log a deliberate one-liner so users debugging an empty
+        # settings page can see whether the parent's dump succeeded
+        # by grepping the stdio process output (which Claude Desktop
+        # surfaces in its MCP server log panel).
+        logger.info(
+            "Tool metadata cache: %d tools dumped, write %s",
+            len(metadata),
+            "succeeded" if dumped else "FAILED",
+        )
+    except Exception as e:
+        # Cache dump is best-effort — the sidecar falls back to an empty
+        # tools list rather than blocking stdio startup. Include the
+        # exception class in the warning so ops can distinguish
+        # server-init failures (Pydantic ValidationError) from cache I/O
+        # (OSError) from event-loop issues (RuntimeError).
+        logger.warning(
+            "Failed to dump tool metadata cache (%s)",
+            type(e).__name__,
+            exc_info=True,
+        )
+
+    try:
+        maybe_spawn()
+    except Exception as e:
+        # Spawn failures already log inside maybe_spawn(); the bare
+        # except here is a defense-in-depth guard for any unexpected
+        # path (e.g. import error in the sidecar module). Settings UI
+        # is advisory — never let it block MCP startup.
+        logger.warning(
+            "Failed to spawn settings UI sidecar (%s)",
+            type(e).__name__,
+            exc_info=True,
+        )
 
 
 def main_dev() -> None:
@@ -639,13 +724,26 @@ def main_dev() -> None:
 
 
 # HTTP entry point for web clients
-def _get_http_runtime(default_port: int = 8086) -> tuple[int, str]:
+def _get_http_runtime(default_port: int = 8086) -> tuple[str, int, str]:
     """Return runtime configuration shared by HTTP transports.
 
     Args:
         default_port: Default port to use if MCP_PORT env var is not set.
+
+    The bind host comes from ``MCP_HOST`` and defaults to ``0.0.0.0``. The
+    explicit literal default is load-bearing: FastMCP's own ``Settings.host``
+    defaults to ``127.0.0.1``, so dropping the fallback would silently flip
+    the default and break existing LAN deployments. Set ``MCP_HOST=127.0.0.1``
+    to bind to loopback on workstation deployments.
+
+    Note: FastMCP also honors a ``FASTMCP_HOST`` env var natively, but
+    because ``_http_run_kwargs`` passes ``host=`` explicitly to
+    ``run_async``, any ``FASTMCP_HOST`` value in the environment is
+    ignored — ``MCP_HOST`` is the only env var that affects bind host
+    for ha-mcp's CLI entry points.
     """
 
+    host = os.getenv("MCP_HOST", "0.0.0.0")
     port_str = os.getenv("MCP_PORT", str(default_port))
     try:
         port = int(port_str)
@@ -653,17 +751,18 @@ def _get_http_runtime(default_port: int = 8086) -> tuple[int, str]:
         logger.error(f"Invalid MCP_PORT value: {port_str!r}. Must be an integer.")
         sys.exit(1)
     path = os.getenv("MCP_SECRET_PATH", "/mcp")
-    return port, path
+    return host, port, path
 
 
 async def _run_http_with_graceful_shutdown(
     transport: str,
+    host: str,
     port: int,
     path: str,
 ) -> None:
     """Run HTTP server with graceful shutdown support."""
     await _run_with_shutdown(
-        _get_mcp().run_async(**_http_run_kwargs(transport, port, path))
+        _get_mcp().run_async(**_http_run_kwargs(transport, host, port, path))
     )
 
 
@@ -726,6 +825,27 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
         )
 
 
+def _log_settings_url(host: str, port: int, path: str) -> None:
+    """Log the web settings-UI URL at HTTP startup.
+
+    Non-add-on operators (Docker / standalone) otherwise have no easy way to
+    discover the settings page or its secret-path URL (issue #1458). When the
+    bind host is the wildcard (``0.0.0.0`` / ``::``) the process can't know its
+    externally reachable address, so we log a ``<host>`` placeholder.
+    """
+    is_wildcard = host in ("0.0.0.0", "::")
+    if is_wildcard:
+        display_host = "<host>"
+    elif ":" in host:
+        # IPv6 literal (e.g. ::1, 2001:db8::1) needs brackets in a URL.
+        display_host = f"[{host}]"
+    else:
+        display_host = host
+    url = f"http://{display_host}:{port}{path.rstrip('/')}/settings"
+    note = "  (substitute this server's address for <host>)" if is_wildcard else ""
+    logger.info(f"Settings UI available at: {url}{note}")
+
+
 def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """Common runner for HTTP-based transports.
 
@@ -735,12 +855,13 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """
     from ha_mcp.settings_ui import register_settings_routes
 
-    port, path = _get_http_runtime(default_port)
+    host, port, path = _get_http_runtime(default_port)
     register_browser_landing(_get_mcp(), path)
     register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
+    _log_settings_url(host, port, path)
 
     _run_entrypoint(
-        _run_http_with_graceful_shutdown(transport, port, path),
+        _run_http_with_graceful_shutdown(transport, host, port, path),
         "HTTP server",
     )
 
@@ -751,6 +872,7 @@ def main_web() -> None:
     Environment:
     - HOMEASSISTANT_URL (required)
     - HOMEASSISTANT_TOKEN (required)
+    - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback)
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
@@ -764,6 +886,7 @@ def main_sse() -> None:
     Environment:
     - HOMEASSISTANT_URL (required)
     - HOMEASSISTANT_TOKEN (required)
+    - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback)
     - MCP_PORT (optional, default: 8087)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     """
@@ -781,6 +904,7 @@ def main_oauth() -> None:
     Environment:
     - HOMEASSISTANT_URL (required): URL of the Home Assistant instance
     - MCP_BASE_URL (required): Public URL where this server is accessible (e.g., https://your-tunnel.com)
+    - MCP_HOST (optional, default: "0.0.0.0"; set 127.0.0.1 to restrict to loopback)
     - MCP_PORT (optional, default: 8086)
     - MCP_SECRET_PATH (optional, default: "/mcp")
     - LOG_LEVEL (optional, default: INFO)
@@ -806,7 +930,7 @@ def main_oauth() -> None:
     logger.info(f"OAuth mode logging configured at {log_level} level")
     _log_startup_version()
 
-    port, path = _get_http_runtime(default_port=8086)
+    host, port, path = _get_http_runtime(default_port=8086)
     base_url = os.getenv("MCP_BASE_URL")
     ha_url = os.getenv("HOMEASSISTANT_URL")
 
@@ -839,15 +963,20 @@ For setup instructions, see:
     # Type narrowing: ha_url and base_url are guaranteed non-None after the check above
     assert ha_url is not None
     assert base_url is not None
-    _run_entrypoint(_run_oauth_server(ha_url, base_url, port, path), "OAuth server")
+    _run_entrypoint(
+        _run_oauth_server(ha_url, base_url, host, port, path), "OAuth server"
+    )
 
 
-async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) -> None:
+async def _run_oauth_server(
+    ha_url: str, base_url: str, host: str, port: int, path: str
+) -> None:
     """Run the OAuth-authenticated MCP server.
 
     Args:
         ha_url: Home Assistant instance URL (server-side config)
         base_url: Public URL where this server is accessible (required)
+        host: Bind host (typically 0.0.0.0; override via MCP_HOST)
         port: Port to listen on
         path: MCP endpoint path
     """
@@ -875,14 +1004,18 @@ async def _run_oauth_server(ha_url: str, base_url: str, port: int, path: str) ->
     register_browser_landing(mcp, path)
 
     from ha_mcp.settings_ui import register_settings_routes
+
     register_settings_routes(mcp, _server, secret_path=path)
+    _log_settings_url(host, port, path)
 
     tools = await mcp.list_tools()
     logger.info(
         f"Starting OAuth-enabled MCP server with {len(tools)} tools on {base_url}{path}"
     )
 
-    await _run_with_shutdown(mcp.run_async(**_http_run_kwargs("http", port, path)))
+    await _run_with_shutdown(
+        mcp.run_async(**_http_run_kwargs("http", host, port, path))
+    )
 
 
 if __name__ == "__main__":

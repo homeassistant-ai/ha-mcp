@@ -122,7 +122,12 @@ class TestAttemptCParallelFetch:
             return {
                 "id": uid,
                 "trigger": [{"platform": "time", "at": "18:00"}],
-                "action": [{"service": "light.turn_on", "target": {"entity_id": "light.living_room"}}],
+                "action": [
+                    {
+                        "service": "light.turn_on",
+                        "target": {"entity_id": "light.living_room"},
+                    }
+                ],
             }
 
         mock_client._request = AsyncMock(side_effect=_individual_fetch)
@@ -179,7 +184,7 @@ class TestAttemptCParallelFetch:
         # Budget of 0.005s: batch 1 starts at t=0 (passes check), but by the
         # time it completes (~0.01s), the budget is exceeded so batch 2 is skipped.
         with patch(
-            "ha_mcp.tools.smart_search.AUTOMATION_CONFIG_TIME_BUDGET", 0.005
+            "ha_mcp.tools.smart_search._deep.AUTOMATION_CONFIG_TIME_BUDGET", 0.005
         ):
             await smart_tools.deep_search(
                 query="test",

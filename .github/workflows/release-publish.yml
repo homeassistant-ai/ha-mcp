@@ -129,6 +129,13 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
+          # Required for the bundled skills (resources/skills-vendor is a
+          # git submodule). Without this, `uv build` packages an empty
+          # skills directory and stdio/PyPI installs report
+          # "Skills directory not found" at runtime — issue #1280. The
+          # dev publish path (publish-dev.yml) already sets this; aligning
+          # the stable path closes the gap between the two channels.
+          submodules: true
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -157,6 +164,11 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
+          # Required for the bundled skills (resources/skills-vendor is a
+          # git submodule). The Dockerfile COPYs src/ into the image, so
+          # an uninitialized submodule would ship a skills-less stable
+          # Docker image — same root cause as the PyPI fix above (#1280).
+          submodules: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
