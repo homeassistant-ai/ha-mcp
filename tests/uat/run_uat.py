@@ -62,7 +62,9 @@ class SuggestingArgumentParser(argparse.ArgumentParser):
         match = re.search(r"unrecognized arguments?: (--\S+)", message)
         if match:
             known = [opt for opt in self._option_string_actions if opt.startswith("--")]
-            suggestions = difflib.get_close_matches(match.group(1), known, n=1, cutoff=0.6)
+            suggestions = difflib.get_close_matches(
+                match.group(1), known, n=1, cutoff=0.6
+            )
             if suggestions:
                 message = f"{message} (did you mean {suggestions[0]}?)"
         super().error(message)
@@ -341,6 +343,7 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         cost_usd = None
         tokens_input = None
         tokens_output = None
+        tokens_thoughts = None
         tokens_first_input = None
         if raw_json and isinstance(raw_json, dict):
             # Claude JSON format
@@ -359,6 +362,7 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             # OpenAI agent token counts and first-input baseline (included directly in JSON output)
             tokens_input = raw_json.get("tokens_input")
             tokens_output = raw_json.get("tokens_output")
+            tokens_thoughts = raw_json.get("tokens_thoughts")
             tokens_first_input = raw_json.get("tokens_first_input")
 
         result: dict = {
@@ -380,6 +384,8 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
             result["tokens_input"] = tokens_input
         if tokens_output is not None:
             result["tokens_output"] = tokens_output
+        if tokens_thoughts is not None:
+            result["tokens_thoughts"] = tokens_thoughts
         if tokens_first_input is not None:
             result["tokens_first_input"] = tokens_first_input
         if raw_json is not None:
@@ -597,6 +603,8 @@ def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
         summary["tokens_input"] = phase_result["tokens_input"]
     if phase_result.get("tokens_output") is not None:
         summary["tokens_output"] = phase_result["tokens_output"]
+    if phase_result.get("tokens_thoughts") is not None:
+        summary["tokens_thoughts"] = phase_result["tokens_thoughts"]
     return summary
 
 
@@ -690,7 +698,7 @@ async def run(args: argparse.Namespace) -> dict:
         if sys.stdin.isatty():
             raise ValueError(
                 "No scenario provided. Pipe scenario JSON via stdin, or pass --scenario-file.\n"
-                "  echo '{\"test_prompt\":\"...\"}' | uv run python tests/uat/run_uat.py --agents gemini\n"
+                '  echo \'{"test_prompt":"..."}\' | uv run python tests/uat/run_uat.py --agents gemini\n'
                 "  uv run python tests/uat/run_uat.py --scenario-file scenario.json --agents gemini\n"
                 "For the pre-built story catalog, use tests/uat/stories/run_story.py --all."
             )
@@ -743,7 +751,9 @@ async def run(args: argparse.Namespace) -> dict:
 
     try:
         logger.info(f"HA: {ha_url}")
-        logger.info(f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else ""))
+        logger.info(
+            f"MCP source: {mcp_source}" + (f" ({args.branch})" if args.branch else "")
+        )
         logger.info(f"Agents: {', '.join(active_agents)}")
 
         extra_env = parse_mcp_env(
@@ -851,7 +861,11 @@ Examples:
     parser.add_argument(
         "--no-think",
         action="store_true",
-        help="Prepend /no_think to disable reasoning mode (qwen3 and compatible models)",
+        help=(
+            "Disable reasoning mode: prepends /no_think (original Qwen3) and "
+            "sends enable_thinking=false chat-template kwarg (Qwen3.5/3.6, "
+            "honored by vLLM/llama-server)"
+        ),
     )
     parser.add_argument(
         "--mcp-env",

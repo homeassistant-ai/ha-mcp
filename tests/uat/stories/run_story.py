@@ -273,9 +273,7 @@ def _find_latest_session_file(agent: str, after: float) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-async def _run_mcp_steps(
-    mcp_client: MCPClient, steps: list[dict], phase: str
-) -> None:
+async def _run_mcp_steps(mcp_client: MCPClient, steps: list[dict], phase: str) -> None:
     """Execute setup or teardown steps via a shared in-memory MCP client."""
     for step in steps:
         tool_name = step["tool"]
@@ -428,6 +426,7 @@ async def _run_test_prompt_inline(
         "tool_stats": result.get("tool_stats"),
         "tokens_input": result.get("tokens_input"),
         "tokens_output": result.get("tokens_output"),
+        "tokens_thoughts": result.get("tokens_thoughts"),
         "tool_trace": tool_trace,
         "cost_usd": result.get("cost_usd", 0),
     }
@@ -624,13 +623,22 @@ def append_result(
         ti = test_phase.get("tokens_input")
         to = test_phase.get("tokens_output")
         if ti is not None or to is not None:
-            tokens = {"input": ti or 0, "output": to or 0, "cached": 0, "thoughts": 0}
+            # reasoning_tokens are a subset of completion_tokens, so tokens_output
+            # already counts them; tokens_thoughts is the informational breakdown.
+            tokens = {
+                "input": ti or 0,
+                "output": to or 0,
+                "cached": 0,
+                "thoughts": test_phase.get("tokens_thoughts") or 0,
+            }
     if tokens:
         record["tokens_input"] = tokens["input"]
         record["tokens_output"] = tokens["output"]
         record["tokens_cached"] = tokens["cached"]
         record["tokens_thoughts"] = tokens["thoughts"]
-        record["tokens_billable"] = (tokens["input"] - tokens["cached"]) + tokens["output"]
+        record["tokens_billable"] = (tokens["input"] - tokens["cached"]) + tokens[
+            "output"
+        ]
 
     # First-turn input tokens: most direct measure of idle context size (openai agent only).
     # Comes from aggregate (not test_phase) since make_phase_summary doesn't propagate it.
@@ -742,7 +750,9 @@ async def run_stories(
                     )
                     agent_stack.push_async_callback(openai_client.close)
                 except Exception as e:
-                    error_msg = f"Failed to initialise OpenAI client: {type(e).__name__}: {e}"
+                    error_msg = (
+                        f"Failed to initialise OpenAI client: {type(e).__name__}: {e}"
+                    )
                     logger.error(f"[{agent}] {error_msg}")
                     _record_setup_failure(
                         filtered,
@@ -764,7 +774,9 @@ async def run_stories(
                     openai_tools = await fetch_openai_tools(
                         inline_mcp_client, max_tools=args.max_tools
                     )
-                    logger.info(f"[{agent}] MCP server ready ({len(openai_tools)} tools)")
+                    logger.info(
+                        f"[{agent}] MCP server ready ({len(openai_tools)} tools)"
+                    )
                 except Exception as e:
                     error_msg = f"Failed to start MCP server: {type(e).__name__}: {e}"
                     logger.error(f"[{agent}] {error_msg}")
@@ -814,7 +826,9 @@ async def run_stories(
                         openai_client is not None
                         and inline_mcp_client is not None
                         and resolved_model is not None
-                    ), "inline setup invariant: clients/model are populated when use_inline is True"
+                    ), (
+                        "inline setup invariant: clients/model are populated when use_inline is True"
+                    )
                     rc, summary = await _run_test_prompt_inline(
                         story["prompt"],
                         agent_name=agent,
@@ -862,7 +876,9 @@ async def run_stories(
                         .get("test", {})
                         .get("output", "")
                     )
-                    logger.info(f"[{agent}/{sid}] Verifying {len(ha_checks)} ha_check(s)...")
+                    logger.info(
+                        f"[{agent}/{sid}] Verifying {len(ha_checks)} ha_check(s)..."
+                    )
                     verify_results = await verify_ha_checks(
                         ha_url, ha_token, ha_checks, agent_output, shared_mcp
                     )
@@ -876,7 +892,12 @@ async def run_stories(
                     else:
                         logger.info(f"[{agent}/{sid}] All checks passed")
 
-                agg = (summary or {}).get("agents", {}).get(agent, {}).get("aggregate", {})
+                agg = (
+                    (summary or {})
+                    .get("agents", {})
+                    .get(agent, {})
+                    .get("aggregate", {})
+                )
                 passed = _compute_passed(
                     exit_code=rc,
                     tool_calls=agg.get("total_tool_calls"),
@@ -978,7 +999,11 @@ def main() -> None:
     parser.add_argument(
         "--no-think",
         action="store_true",
-        help="Prepend /no_think to disable reasoning mode (qwen3 and compatible models)",
+        help=(
+            "Disable reasoning mode: prepends /no_think (original Qwen3) and "
+            "sends enable_thinking=false chat-template kwarg (Qwen3.5/3.6, "
+            "honored by vLLM/llama-server)"
+        ),
     )
     parser.add_argument(
         "--max-tokens",

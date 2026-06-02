@@ -26,5 +26,5 @@ UV_CACHE_DIR=/tmp/claude-1000/uv-cache TMPDIR=/tmp/claude-1000 \
 
 Key flags:
 - `--mcp-env KEY=VALUE` — pass env vars to the MCP server (repeatable)
-- `--no-think` — disable reasoning mode for qwen3 and compatible models
+- `--no-think` disables reasoning: prepends /no_think (original Qwen3) and sends the enable_thinking=false chat-template kwarg (Qwen3.5/3.6)
 - `--results-file` — JSONL file to append results to (default: `local/uat-results.jsonl`)
