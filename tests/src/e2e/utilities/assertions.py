@@ -48,15 +48,24 @@ def parse_mcp_result(result) -> dict[str, Any]:
                     return {"success": False, "error": error_text}
         return {"success": False, "error": "Unknown error (isError=true)"}
 
+    # Tools that return a FastMCP ``ToolResult`` with a non-text content block
+    # (e.g. ``include_screenshot`` / ``return_screenshot`` attach an image)
+    # carry their real payload in ``structured_content`` — the content block is
+    # the image, not JSON. Prefer it when text parsing isn't possible.
+    structured = getattr(result, "structured_content", None)
+
     if hasattr(result, "content") and result.content:
         if hasattr(result.content[0], "text"):
             response_text = result.content[0].text
             try:
-                parsed = json.loads(response_text)
-                return parsed
+                return json.loads(response_text)
             except json.JSONDecodeError:
                 return {"raw_response": response_text}
+        if isinstance(structured, dict):
+            return structured
         return {"content": str(result.content[0])}
+    if isinstance(structured, dict):
+        return structured
     return {"error": "No content in result"}
 
 

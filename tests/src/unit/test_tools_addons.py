@@ -3715,3 +3715,558 @@ class TestSupervisorApiCall:
             )
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+
+class TestSupervisorApiCallTimeout:
+    """The client's local await must outlast the Supervisor-side timeout.
+
+    ``send_command`` defaults to a 30s local wait. A long Supervisor
+    operation (add-on install/update/rebuild gets ``timeout=1800``) needs
+    the local await raised in lockstep, or the client abandons a
+    still-running install after 30s even though the server keeps working.
+    """
+
+    @pytest.mark.asyncio
+    async def test_long_timeout_extends_local_wait(self):
+        """timeout=1800 forwards to Supervisor AND extends the local await."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        mock_ws = MagicMock()
+        mock_ws.disconnect = AsyncMock()
+        mock_ws.send_command = AsyncMock(return_value={"success": True, "result": {}})
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_connected_ws_client",
+            return_value=(mock_ws, None),
+        ):
+            await _supervisor_api_call(
+                _make_mock_client(),
+                "/store/addons/local_ha_mcp_screenshot/install",
+                method="POST",
+                timeout=1800,
+            )
+
+        kwargs = mock_ws.send_command.call_args.kwargs
+        # Supervisor-side proxy timeout is forwarded as the command field...
+        assert kwargs["timeout"] == 1800
+        # ...and the client's own await outlasts it by a margin (the old
+        # hard-coded 30s default would have fired ~1770s too early). The
+        # control kwarg is underscored so it can't collide with a message field.
+        assert kwargs["_wait_timeout"] == 1815.0
+
+    @pytest.mark.asyncio
+    async def test_no_timeout_keeps_default_local_wait(self):
+        """Without a timeout override, the local wait stays at the 30s default
+        and no ``timeout`` field is forwarded to Supervisor."""
+        from ha_mcp.tools.tools_addons import _supervisor_api_call
+
+        mock_ws = MagicMock()
+        mock_ws.disconnect = AsyncMock()
+        mock_ws.send_command = AsyncMock(return_value={"success": True, "result": {}})
+
+        with patch(
+            "ha_mcp.tools.tools_addons.get_connected_ws_client",
+            return_value=(mock_ws, None),
+        ):
+            await _supervisor_api_call(_make_mock_client(), "/addons", method="GET")
+
+        kwargs = mock_ws.send_command.call_args.kwargs
+        assert kwargs["_wait_timeout"] == 30.0
+        assert "timeout" not in kwargs
+
+
+class TestManageAddonActionMode:
+    """Lifecycle (action) mode: install/start/stop/etc. via Supervisor."""
+
+    def _tools(self):
+        from ha_mcp.tools.tools_addons import AddOnTools
+
+        return AddOnTools(_make_mock_client())
+
+    @pytest.mark.asyncio
+    async def test_install_posts_to_store_endpoint(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools._execute_action_mode(
+                "d6450bd1_ha_mcp_screenshot", "install"
+            )
+
+        assert result["success"] is True
+        assert result["action"] == "install"
+        assert result["slug"] == "d6450bd1_ha_mcp_screenshot"
+        endpoint = mock_call.call_args.args[1]
+        assert endpoint == "/store/addons/d6450bd1_ha_mcp_screenshot/install"
+        assert mock_call.call_args.kwargs["method"] == "POST"
+
+    @pytest.mark.asyncio
+    async def test_start_posts_to_addons_endpoint(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools._execute_action_mode("core_ssh", "start")
+
+        assert result["action"] == "start"
+        assert mock_call.call_args.args[1] == "/addons/core_ssh/start"
+
+    @pytest.mark.asyncio
+    async def test_invalid_action_rejected(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools._execute_action_mode("core_ssh", "frobnicate")
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_supervisor_failure_propagates(self):
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": False,
+                    "error": {"code": "SERVICE_CALL_FAILED", "message": "boom"},
+                },
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools._execute_action_mode("core_ssh", "start")
+        payload = _parse_tool_error(exc_info)
+        assert payload["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_action_mutually_exclusive_with_path(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                slug="core_ssh",
+                path="/info",
+                method="GET",
+                body=None,
+                debug=False,
+                port=None,
+                offset=0,
+                limit=None,
+                websocket=False,
+                wait_for_close=True,
+                message_limit=None,
+                message_offset=0,
+                summarize=True,
+                python_transform=None,
+                options=None,
+                network=None,
+                boot=None,
+                auto_update=None,
+                watchdog=None,
+                array_patch=None,
+                request_headers=None,
+                action="start",
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_action_mutually_exclusive_with_config_params(self):
+        """A lifecycle action plus a config-param write is an ambiguous mode."""
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    slug="core_ssh", action="start", options={"k": "v"}
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_action_mutually_exclusive_with_array_patch(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    slug="core_ssh", action="start", array_patch={"ops": []}
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+
+def _manage_addon_kwargs(**overrides):
+    """Build the full ha_manage_addon kwargs with defaults, applying overrides.
+
+    manage_addon takes every operating-mode param positionally-by-keyword; a
+    helper keeps the store-repository tests focused on the few params that
+    matter instead of restating the whole signature each time.
+    """
+    base = {
+        "slug": "",
+        "path": None,
+        "method": "GET",
+        "body": None,
+        "debug": False,
+        "port": None,
+        "offset": 0,
+        "limit": None,
+        "websocket": False,
+        "wait_for_close": True,
+        "message_limit": None,
+        "message_offset": 0,
+        "summarize": True,
+        "python_transform": None,
+        "options": None,
+        "network": None,
+        "boot": None,
+        "auto_update": None,
+        "watchdog": None,
+        "array_patch": None,
+        "request_headers": None,
+        "action": None,
+        "repository": None,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestManageAddonRepositoryAction:
+    """Store-repository mode: add_repository / remove_repository via Supervisor."""
+
+    def _tools(self):
+        from ha_mcp.tools.tools_addons import AddOnTools
+
+        return AddOnTools(_make_mock_client())
+
+    @pytest.mark.asyncio
+    async def test_add_repository_posts_to_store_repositories(self):
+        tools = self._tools()
+        url = "https://github.com/balloob/home-assistant-addons"
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="add_repository", repository=url)
+            )
+
+        assert result["success"] is True
+        assert result["action"] == "add_repository"
+        assert result["repository"] == url
+        assert mock_call.call_args.args[1] == "/store/repositories"
+        assert mock_call.call_args.kwargs["method"] == "POST"
+        assert mock_call.call_args.kwargs["data"] == {"repository": url}
+
+    @pytest.mark.asyncio
+    async def test_add_repository_idempotent_when_already_present(self):
+        """Re-adding a repo Supervisor already has returns success, not a
+        confusing error — the desired end state (repo registered) already holds,
+        so the 'add repo then install' flow can re-add freely."""
+        tools = self._tools()
+        url = "https://github.com/balloob/home-assistant-addons"
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": f"Command failed: Can't add {url}, "
+                        "already in the store",
+                    },
+                }
+            )
+        )
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=err,
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="add_repository", repository=url)
+            )
+        assert result["success"] is True
+        assert result["action"] == "add_repository"
+
+    @pytest.mark.asyncio
+    async def test_remove_repository_idempotent_when_not_present(self):
+        """Removing a repo Supervisor doesn't have returns success."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": "Command failed: repository not found",
+                    },
+                }
+            )
+        )
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=err,
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="remove_repository", repository="deadbeef"
+                )
+            )
+        assert result["success"] is True
+        assert result["action"] == "remove_repository"
+
+    @pytest.mark.asyncio
+    async def test_remove_repository_unrelated_not_found_still_raises(self):
+        """A failure that merely mentions 'not found' for a non-repository
+        reason (e.g. a dependent add-on) must NOT be reclassified as a
+        successful no-op — it still raises."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": "Supervisor API call failed: /store/repositories/x",
+                        "details": "{'message': 'Add-on core_foo not found'}",
+                    },
+                }
+            )
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            pytest.raises(ToolError),
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(action="remove_repository", repository="x")
+            )
+
+    @pytest.mark.asyncio
+    async def test_add_repository_other_error_gives_repo_specific_suggestion(self):
+        """A non-duplicate failure (e.g. invalid URL) still raises, but with a
+        repository-specific suggestion — not the generic 'check your HA
+        connection' one that _supervisor_api_call attaches."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": "Command failed: invalid repository",
+                        "suggestions": [
+                            "Check Home Assistant connection and Supervisor availability"
+                        ],
+                    },
+                }
+            )
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/bad"
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        err_obj = payload["error"]
+        suggestions = " ".join(
+            [err_obj.get("suggestion", "")] + err_obj.get("suggestions", [])
+        )
+        assert "add-on repository URL" in suggestions
+        assert "connection" not in suggestions.lower()
+
+    async def test_remove_repository_in_use_suggests_uninstall(self):
+        """Removing a repo still used by installed add-ons suggests uninstalling
+        them, not checking the connection."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": "Command failed: Can't remove ... used by installed apps",
+                    },
+                }
+            )
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(action="remove_repository", repository="abc123")
+            )
+        payload = _parse_tool_error(exc_info)
+        err_obj = payload["error"]
+        suggestions = " ".join(
+            [err_obj.get("suggestion", "")] + err_obj.get("suggestions", [])
+        )
+        assert "uninstalled" in suggestions
+
+    @pytest.mark.asyncio
+    async def test_add_repository_uses_generous_timeout(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/repo"
+                )
+            )
+
+        assert mock_call.call_args.kwargs["timeout"] == 120
+
+    @pytest.mark.asyncio
+    async def test_remove_repository_deletes_by_slug(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="remove_repository", repository="0f1cc410"
+                )
+            )
+
+        assert result["success"] is True
+        assert result["action"] == "remove_repository"
+        assert result["repository"] == "0f1cc410"
+        assert mock_call.call_args.args[1] == "/store/repositories/0f1cc410"
+        assert mock_call.call_args.kwargs["method"] == "DELETE"
+        # DELETE carries no body
+        assert mock_call.call_args.kwargs["data"] is None
+
+    @pytest.mark.asyncio
+    async def test_repository_action_does_not_require_slug(self):
+        """Repo actions reach Supervisor with no slug supplied (slug defaults to '')."""
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/repo"
+                )
+            )
+
+        assert result["success"] is True
+        # Endpoint is the store collection, never an /addons/{slug}/... path.
+        assert mock_call.call_args.args[1] == "/store/repositories"
+
+    @pytest.mark.asyncio
+    async def test_add_repository_missing_repository_raises_validation(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(action="add_repository", repository=None)
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_remove_repository_blank_repository_raises_validation(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(action="remove_repository", repository="   ")
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_repository_action_rejects_slug(self):
+        """A slug alongside a repo action is an ambiguous-mode error."""
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    slug="core_ssh",
+                    action="add_repository",
+                    repository="https://example.com/repo",
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_repository_action_rejects_path(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository",
+                    repository="https://example.com/repo",
+                    path="/info",
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_add_repository_strips_whitespace(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value={"success": True, "result": {}},
+        ) as mock_call:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository",
+                    repository="  https://example.com/repo  ",
+                )
+            )
+
+        assert mock_call.call_args.kwargs["data"] == {
+            "repository": "https://example.com/repo"
+        }
+
+    @pytest.mark.asyncio
+    async def test_repository_action_supervisor_failure_propagates(self):
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": False,
+                    "error": {"code": "SERVICE_CALL_FAILED", "message": "boom"},
+                },
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    action="add_repository", repository="https://example.com/repo"
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["success"] is False

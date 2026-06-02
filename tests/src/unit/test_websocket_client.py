@@ -242,6 +242,114 @@ class TestSendCommandErrorContract:
         assert "system_health failure" in str(exc_info.value)
 
 
+class TestSendCommandWaitTimeout:
+    """``send_command``'s local await honors the ``_wait_timeout`` argument.
+
+    The default suits fast commands, but a long-running ``supervisor/api``
+    operation (e.g. an add-on install that runs for minutes) passes a larger
+    ``_wait_timeout``. If that value didn't reach ``asyncio.wait_for`` the
+    client would abandon the still-running operation after the 30s default —
+    the exact bug that capped add-on installs. The leading underscore keeps it
+    out of the HA message namespace so it can never shadow a command field.
+    """
+
+    @staticmethod
+    def _prepare_client():
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        client = HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123",
+            token="test-token",
+        )
+        client._state.mark_connected()
+        client._state.mark_authenticated()
+        return client
+
+    def _resolve_ok(self, client):
+        """Return a send_json_message stub that immediately resolves success."""
+
+        async def _resolve(message: dict) -> None:
+            message_id = message["id"]
+            future = client._state._pending_requests.get(message_id)
+            assert future is not None, "send_command did not register a pending future"
+            future.set_result(
+                {
+                    "id": message_id,
+                    "type": "result",
+                    "success": True,
+                    "result": {},
+                }
+            )
+
+        return _resolve
+
+    def _spy_wait_for(self, monkeypatch, captured: dict):
+        """Patch the module's asyncio.wait_for to record the timeout it gets.
+
+        Captures the real wait_for first so the spy still awaits normally
+        (the monkeypatch replaces it on the shared asyncio module object).
+        """
+        real_wait_for = asyncio.wait_for
+
+        async def _spy(coro, timeout):
+            captured["timeout"] = timeout
+            return await real_wait_for(coro, timeout=timeout)
+
+        monkeypatch.setattr("ha_mcp.client.websocket_client.asyncio.wait_for", _spy)
+
+    @pytest.mark.asyncio
+    async def test_explicit_wait_timeout_reaches_wait_for(self, monkeypatch):
+        client = self._prepare_client()
+        client.send_json_message = self._resolve_ok(client)  # type: ignore[method-assign]
+        captured: dict[str, float] = {}
+        self._spy_wait_for(monkeypatch, captured)
+
+        await client.send_command("supervisor/api", _wait_timeout=1815.0)
+
+        assert captured["timeout"] == 1815.0
+
+    @pytest.mark.asyncio
+    async def test_default_wait_timeout_is_thirty_seconds(self, monkeypatch):
+        client = self._prepare_client()
+        client.send_json_message = self._resolve_ok(client)  # type: ignore[method-assign]
+        captured: dict[str, float] = {}
+        self._spy_wait_for(monkeypatch, captured)
+
+        await client.send_command("test/ping")
+
+        assert captured["timeout"] == 30.0
+
+    @pytest.mark.asyncio
+    async def test_wait_timeout_message_field_is_forwarded_not_consumed(
+        self, monkeypatch
+    ):
+        """A command field literally named ``wait_timeout`` must reach the HA
+        message — only the underscored ``_wait_timeout`` control kwarg is
+        consumed. Guards the namespace-collision fix."""
+        client = self._prepare_client()
+        sent: dict[str, object] = {}
+
+        async def _capture(message: dict) -> None:
+            sent.update(message)
+            message_id = message["id"]
+            future = client._state._pending_requests.get(message_id)
+            assert future is not None
+            future.set_result(
+                {"id": message_id, "type": "result", "success": True, "result": {}}
+            )
+
+        client.send_json_message = _capture  # type: ignore[method-assign]
+        captured: dict[str, float] = {}
+        self._spy_wait_for(monkeypatch, captured)
+
+        await client.send_command("some/command", wait_timeout=99, _wait_timeout=1815.0)
+
+        # The plain field is forwarded; the underscored control kwarg is not.
+        assert sent["wait_timeout"] == 99
+        assert "_wait_timeout" not in sent
+        assert captured["timeout"] == 1815.0
+
+
 class TestSubscribeEventsContract:
     """Tests that pin the subscribe_events HA-wire-contract semantics.
 

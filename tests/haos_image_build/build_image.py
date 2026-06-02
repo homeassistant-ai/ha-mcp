@@ -201,6 +201,11 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # ``_ha_mcp`` / ``_ha_mcp_dev``, so the dev addon installed just before this
 # one (slug=``local_ha_mcp_dev``) is the discovery target.
 HA_MCP_WEBHOOK_PROXY_ADDON_SLUG = "local_ha_mcp_webhook_proxy"
+# Screenshot engine = balloob's Puppet add-on, installed from its add-on
+# repository during the bake (no longer vendored in-repo). The slug is
+# SHA-derived from the repo URL, so it's resolved at install time by name.
+PUPPET_REPO_URL = "https://github.com/balloob/home-assistant-addons"
+PUPPET_ADDON = Addon(repo=PUPPET_REPO_URL, name="Puppet", start=False)
 # Advanced SSH addon user/password set at install time so the runtime
 # helper (``haos_runtime.ssh_exec``) can authenticate non-interactively.
 # CI-test-only credential — overridable via env so the value never has
@@ -1186,6 +1191,11 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
                 "enable_lite_docstrings": False,
                 "enable_filesystem_tools": True,
                 "enable_custom_component_integration": True,
+                # Register ha_get_dashboard_screenshot + the dashboard get/set
+                # screenshot params so the screenshot-engine E2E (haos_only)
+                # can exercise them. The engine add-on is discovered lazily at
+                # tool-call time via the Supervisor, so no engine URL is set.
+                "enable_dashboard_screenshot": True,
                 "tool_search_max_results": 5,
                 "disabled_tools": "",
                 "pinned_tools": "",
@@ -1278,6 +1288,56 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
         timeout=60.0,
     )
     LOG.info("webhook-proxy addon installed (not started); slug=%s", slug)
+    return slug
+
+
+def install_puppet_addon(ws: HAWebSocket) -> str:
+    """Install balloob's Puppet screenshot engine from its add-on repository.
+
+    Registers balloob's add-on repository, then installs the Puppet add-on so
+    Supervisor builds its Chromium image into the cached qcow2 (the heavy build
+    is paid once per cache-key change). The slug is SHA-derived from the repo
+    URL, so it's resolved by name from the live store after registration.
+
+    Install-only — ``boot`` is set to ``manual`` so the cached qcow2 doesn't
+    auto-start it on resume (the haos_only test starts it via a module
+    fixture). ``access_token`` is left empty so no credential is baked into the
+    cached qcow2; the engine cannot authenticate without one, so the runtime
+    fixture injects a real HA access token via the addon options API and starts
+    the addon then. The other required options are seeded with defaults so the
+    runtime fixture only has to update the token.
+
+    Returns the installed slug (``<repo-hash>_puppet``).
+    """
+    _add_repository(ws, PUPPET_REPO_URL)
+    _reload_store(ws)
+    slug = _discover_slug(ws, PUPPET_ADDON)
+    LOG.info(
+        "Installing Puppet screenshot engine (slug=%s) — building the Chromium "
+        "Docker image; this is the slowest addon build, cached in the qcow2...",
+        slug,
+    )
+    # Generous timeout: Debian + Chromium + Node + npm-ci is the heaviest
+    # addon build in the bake.
+    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=1800.0)
+
+    LOG.info("Setting Puppet addon options (boot=manual, empty token)")
+    ws.supervisor_api(
+        f"/addons/{slug}/options",
+        method="post",
+        data={
+            # Seed all of Puppet's required options; the runtime fixture only
+            # overwrites access_token with a real token before starting.
+            "options": {
+                "access_token": "",
+                "keep_browser_open": False,
+                "home_assistant_url": "http://homeassistant:8123",
+            },
+            "boot": "manual",
+        },
+        timeout=60.0,
+    )
+    LOG.info("Puppet screenshot engine installed (not started); slug=%s", slug)
     return slug
 
 
@@ -1567,6 +1627,10 @@ def build(work_dir: Path, output: Path) -> None:
     # independent), but the install order below DOES — the webhook-proxy's
     # auto-discovery needs the dev addon present at first start.
     stage_webhook_proxy_addon_source(qcow2)
+    # The screenshot engine (balloob's Puppet) is NOT staged — it's installed
+    # from balloob's add-on repository during the running phase below
+    # (install_puppet_addon), which builds its Chromium image into the cached
+    # qcow2.
     qemu = start_qemu(qcow2, work_dir)
     base_url = f"http://127.0.0.1:{HA_HOST_PORT}"
     try:
@@ -1582,6 +1646,10 @@ def build(work_dir: Path, output: Path) -> None:
             # Supervisor auto-discovery (slug-suffix match on _ha_mcp_dev)
             # finds a target on first start.
             install_webhook_proxy_addon(ws)
+            # Screenshot engine = balloob's Puppet, installed from its add-on
+            # repository (boot=manual, empty token; the runtime fixture injects
+            # a real HA access token and starts it).
+            install_puppet_addon(ws)
             install_advanced_ssh(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
             # companion, Local Calendar, Sun verification) and mock RTSP/MQTT

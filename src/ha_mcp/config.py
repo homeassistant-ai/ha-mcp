@@ -193,6 +193,25 @@ class Settings(BaseSettings):
         False, alias="HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"
     )
 
+    # Dashboard screenshot mode — the ``ha_get_dashboard_screenshot`` tool
+    # plus the ``include_screenshot`` / ``return_screenshot`` params on the
+    # dashboard get/set tools. Renders a Lovelace view to a PNG via a
+    # separate, opt-in headless-Chromium screenshot add-on (balloob's Puppet
+    # add-on, or a docker-compose sidecar). Off by default; nothing heavy is
+    # pulled unless the user enables it AND installs the engine.
+    enable_dashboard_screenshot: bool = Field(
+        False, alias="HAMCP_ENABLE_DASHBOARD_SCREENSHOT"
+    )
+
+    # Base URL of the screenshot engine (e.g. ``http://puppet:10000`` or a
+    # docker-compose sidecar). A connection string, NOT a beta toggle, so
+    # it is intentionally absent from FEATURE_FLAG_FIELDS. Left blank, the
+    # provisioner auto-discovers the Puppet add-on via the Supervisor in
+    # HA OS / Supervised mode; Container / Core users set it explicitly.
+    dashboard_screenshot_engine_url: str = Field(
+        "", alias="HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL"
+    )
+
     # Code Mode — sandboxed Python execution via pydantic-monty.
     # Provides an "escape hatch" tool (ha_manage_custom_tool) that lets LLMs write
     # custom one-off Python code when no existing tool covers the request.
@@ -265,6 +284,7 @@ class Settings(BaseSettings):
     @field_validator(
         "enable_filesystem_tools",
         "enable_custom_component_integration",
+        "enable_dashboard_screenshot",
         mode="before",
     )
     @classmethod
@@ -288,6 +308,23 @@ class Settings(BaseSettings):
         if not v.startswith(("http://", "https://")):
             raise ValueError("Home Assistant URL must start with http:// or https://")
         return v.rstrip("/")  # Remove trailing slash
+
+    @field_validator("dashboard_screenshot_engine_url")
+    @classmethod
+    def validate_dashboard_screenshot_engine_url(cls, v: str) -> str:
+        """Validate the optional screenshot-engine URL (env/.env only).
+
+        Blank = auto-discover the engine add-on via the Supervisor. When set
+        (the Docker/Container sidecar path) it must be an http(s) URL, so a
+        typo fails loudly at startup instead of silently 0-byte-failing later.
+        """
+        if not v:
+            return v
+        if not v.startswith(("http://", "https://")):
+            raise ValueError(
+                "Screenshot engine URL must start with http:// or https://"
+            )
+        return v.rstrip("/")
 
     @field_validator("homeassistant_token")
     @classmethod
@@ -478,6 +515,11 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
     # the web UI Server Settings tab) can write the flag. Without this
     # entry, the UI save logic would have nowhere to land the value.
     FeatureFlagField("enable_code_mode", "ENABLE_CODE_MODE", bool),
+    FeatureFlagField(
+        "enable_dashboard_screenshot",
+        "HAMCP_ENABLE_DASHBOARD_SCREENSHOT",
+        bool,
+    ),
 )
 
 # Override-file location is the same data dir that holds tool_config.json
@@ -517,6 +559,7 @@ BETA_FEATURE_FIELDS: tuple[str, ...] = (
     "enable_custom_component_integration",
     "enable_code_mode",
     "enable_lite_docstrings",
+    "enable_dashboard_screenshot",
 )
 
 # ===== Advanced settings panel registry =====

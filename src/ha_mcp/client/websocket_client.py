@@ -536,13 +536,26 @@ class HomeAssistantWebSocketClient:
 
         Args:
             command_type: Type of command to send
-            **kwargs: Command parameters
+            _wait_timeout: Seconds to wait for the response (consumed from
+                ``kwargs``, not forwarded to Home Assistant). Defaults to 30s,
+                which suits fast commands; long-running ones (e.g. a
+                ``supervisor/api`` add-on install) must raise this so the
+                client doesn't give up before Home Assistant replies.
+            **kwargs: Command parameters (merged into the outgoing message)
 
         Returns:
             Response from Home Assistant
         """
         if not self._state.is_ready:
             raise HomeAssistantConnectionError("WebSocket not authenticated")
+
+        # Pull the wait timeout out of kwargs rather than making it a positional
+        # parameter: callers unpack a ``dict[str, object]`` via
+        # ``send_command(cmd, **message)``, and a typed positional param would
+        # break that call shape under mypy. The leading underscore keeps it out
+        # of the HA message namespace — HA WebSocket fields never start with
+        # one — so it can never shadow a real command field when popped.
+        wait_timeout: float = kwargs.pop("_wait_timeout", 30.0)
 
         message_id = self.get_next_message_id()
         message = {"id": message_id, "type": command_type, **kwargs}
@@ -556,9 +569,9 @@ class HomeAssistantWebSocketClient:
             self.cancel_pending_response(message_id)
             raise
 
-        # Wait for response outside the lock (30 second timeout)
+        # Wait for response outside the lock.
         try:
-            response = await asyncio.wait_for(future, timeout=30.0)
+            response = await asyncio.wait_for(future, timeout=wait_timeout)
             logger.debug(f"WebSocket response for id {message_id}: {response}")
 
             # Process standard Home Assistant WebSocket response

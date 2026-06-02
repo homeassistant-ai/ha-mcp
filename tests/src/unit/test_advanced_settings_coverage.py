@@ -27,6 +27,11 @@ ALLOWLIST: set[str] = {
     # Advanced Settings or Feature Flags panels.
     "DISABLED_TOOLS",
     "PINNED_TOOLS",
+    # Screenshot-engine URL is a deployment-environment connection string
+    # (the Docker/Container sidecar path), not a user-facing UI toggle — it
+    # is deliberately env/.env-only and absent from every override registry.
+    # See the comment on dashboard_screenshot_engine_url in config.py.
+    "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL",
 }
 
 

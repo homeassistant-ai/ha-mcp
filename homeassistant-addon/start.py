@@ -198,12 +198,13 @@ _DEV_ADDON_BETA_KEYS = (
     "enable_custom_component_integration",
     "enable_code_mode",
     "enable_lite_docstrings",
+    "enable_dashboard_screenshot",
 )
 
 
 def maybe_auto_enable_beta_master(config: dict[str, Any]) -> None:
     """Auto-write ``ENABLE_BETA_FEATURES=true`` when the dev-addon
-    options have at least one of the 5 beta sub-flag keys set to True.
+    options have at least one beta sub-flag key set to True.
 
     The dev addon's ``config.yaml`` is the only addon schema that
     exposes those keys; the stable addon's ``options.json`` never
@@ -298,6 +299,8 @@ def main() -> int:
     custom_component_in_config = False  # presence flag
     enable_code_mode = False  # default
     code_mode_in_config = False  # presence flag
+    enable_dashboard_screenshot = False  # default
+    dashboard_screenshot_in_config = False  # presence flag
     enable_lite_docstrings = False  # default
     lite_docstrings_in_config = False  # presence flag
     enable_mandatory_bps = True  # default (issue #1182 — on by default, non-beta)
@@ -377,6 +380,13 @@ def main() -> int:
             enable_filesystem_tools = (
                 raw_filesystem_tools
                 if isinstance(raw_filesystem_tools, bool)
+                else False
+            )
+            dashboard_screenshot_in_config = "enable_dashboard_screenshot" in config
+            raw_dashboard_screenshot = config.get("enable_dashboard_screenshot", False)
+            enable_dashboard_screenshot = (
+                raw_dashboard_screenshot
+                if isinstance(raw_dashboard_screenshot, bool)
                 else False
             )
             custom_component_in_config = "enable_custom_component_integration" in config
@@ -521,6 +531,10 @@ def main() -> int:
         os.environ["HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION"] = str(
             enable_custom_component_integration
         ).lower()
+    if dashboard_screenshot_in_config:
+        os.environ["HAMCP_ENABLE_DASHBOARD_SCREENSHOT"] = str(
+            enable_dashboard_screenshot
+        ).lower()
     if code_mode_in_config:
         os.environ["ENABLE_CODE_MODE"] = str(enable_code_mode).lower()
     if lite_docstrings_in_config:
@@ -549,6 +563,11 @@ def main() -> int:
                     "enable_custom_component_integration",
                     custom_component_in_config,
                     enable_custom_component_integration,
+                ),
+                (
+                    "enable_dashboard_screenshot",
+                    dashboard_screenshot_in_config,
+                    enable_dashboard_screenshot,
                 ),
                 ("enable_code_mode", code_mode_in_config, enable_code_mode),
                 (

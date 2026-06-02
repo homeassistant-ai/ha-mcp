@@ -10,8 +10,10 @@ import re
 from typing import Annotated, Any, cast, overload
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
+from ..dashboard_screenshot.capture import FULL_PAGE_PARAM_DESC
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
@@ -515,6 +517,112 @@ async def _lazy_resolve_and_retry(
     return url_path, response
 
 
+def _dashboard_frontend_path(url_path: str | None) -> str:
+    """Map a dashboard url_path to its Lovelace frontend path for screenshots."""
+    if not url_path or url_path == "default":
+        return "lovelace"
+    return url_path
+
+
+def _note_screenshot_ignored(
+    result: dict[str, Any],
+    *,
+    include_screenshot: bool,
+    full_page: bool,
+    mode: str,
+) -> None:
+    """Warn when a screenshot was requested in a mode that can't render one.
+
+    ``include_screenshot`` / ``full_page`` are only honoured in get mode. In
+    list and search mode they are accepted but inapplicable, so surface a
+    ``warnings`` entry rather than dropping the request as a silent no-op
+    (matches the warn-don't-fail contract the params document)."""
+    if include_screenshot or full_page:
+        result.setdefault("warnings", []).append(
+            f"include_screenshot/full_page is ignored in {mode} mode; call "
+            "ha_config_get_dashboard with a url_path (and no search criteria) "
+            "to get a screenshot."
+        )
+
+
+async def _maybe_attach_screenshot(
+    result: dict[str, Any],
+    url_path: str | None,
+    requested: bool,
+    *,
+    full_page: bool = False,
+    raise_on_failure: bool = False,
+) -> "dict[str, Any] | ToolResult":
+    """Optionally render the dashboard and attach it as an image content block.
+
+    Shared by ``ha_config_get_dashboard`` (include_screenshot) and
+    ``ha_config_set_dashboard`` (return_screenshot). On success returns a
+    FastMCP ``ToolResult`` carrying ``result`` as structured_content plus the
+    PNG as an image content block — so structured_content is present on both
+    the screenshot and no-screenshot paths (a bare ``[dict, Image]`` list
+    would drop structured_content because the Image isn't JSON-serializable).
+    ``full_page`` captures the whole scrollable dashboard rather than the
+    viewport.
+
+    ``raise_on_failure`` governs what a capture failure does. The set path
+    (``return_screenshot``) leaves it False: a screenshot failure must never
+    break a write that already committed, so it degrades to a ``warnings``
+    entry. The get path (``include_screenshot``) passes True: it is a pure
+    read with nothing to protect, and the screenshot is the requested payload,
+    so an engine failure propagates as a ToolError (matching the dedicated
+    ``ha_get_dashboard_screenshot`` tool) instead of being demoted to a
+    warning the caller may never inspect. A disabled feature flag is always a
+    warning either way — it is an expected configuration state, not a failure.
+    """
+    if not requested:
+        if full_page:
+            result.setdefault("warnings", []).append(
+                "full_page is ignored because no screenshot was requested "
+                "(set include_screenshot / return_screenshot to use it)."
+            )
+        return result
+
+    from ..config import get_global_settings
+
+    if not get_global_settings().enable_dashboard_screenshot:
+        result.setdefault("warnings", []).append(
+            "Screenshot requested but dashboard screenshot mode is disabled. "
+            "Enable the 'dashboard screenshot' beta feature to use it."
+        )
+        return result
+
+    try:
+        from fastmcp.utilities.types import Image
+
+        from ..dashboard_screenshot.capture import capture_dashboard_png
+
+        png = await capture_dashboard_png(
+            _dashboard_frontend_path(url_path), full_page=full_page
+        )
+        return ToolResult(
+            content=[Image(data=png, format="png").to_image_content()],
+            structured_content=result,
+        )
+    except ToolError as e:
+        if raise_on_failure:
+            raise
+        result.setdefault("warnings", []).append(
+            f"Screenshot unavailable: {extract_tool_error_message(e)}"
+        )
+        return result
+    except Exception as e:
+        # On the set path a screenshot failure must never break a write that
+        # already committed, so catch everything non-ToolError (lazy import
+        # errors, Image construction, timeouts, transport) and degrade to a
+        # warning. On the get path (raise_on_failure) there is nothing to
+        # protect, so let it surface.
+        if raise_on_failure:
+            raise
+        logger.warning("Dashboard screenshot capture failed: %s", e, exc_info=True)
+        result.setdefault("warnings", []).append(f"Screenshot unavailable: {e}")
+        return result
+
+
 def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     """Register Home Assistant dashboard configuration tools."""
 
@@ -581,7 +689,23 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 "not the full dashboard. Ignored outside search mode."
             ),
         ] = False,
-    ) -> dict[str, Any]:
+        include_screenshot: Annotated[
+            bool,
+            Field(
+                description="Get mode only: also return a rendered PNG of the "
+                "dashboard for visual verification. Requires the 'dashboard "
+                "screenshot' beta feature + engine add-on/sidecar. If the "
+                "feature is disabled the config is returned with a warning; if "
+                "the engine is configured but the render fails, the call errors "
+                "(the screenshot is the requested payload). Ignored in "
+                "list/search mode."
+            ),
+        ] = False,
+        full_page: Annotated[
+            bool,
+            Field(description=f"With include_screenshot: {FULL_PAGE_PARAM_DESC}."),
+        ] = False,
+    ) -> "dict[str, Any] | ToolResult":
         """
         Get dashboard info - list all dashboards, get config, or search for cards.
 
@@ -627,12 +751,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # List mode
             if list_only:
                 dashboards = await fetch_dashboards_list(client) or []
-                return {
+                list_result: dict[str, Any] = {
                     "success": True,
                     "action": "list",
                     "dashboards": dashboards,
                     "count": len(dashboards),
                 }
+                _note_screenshot_ignored(
+                    list_result,
+                    include_screenshot=include_screenshot,
+                    full_page=full_page,
+                    mode="list",
+                )
+                return list_result
 
             # ``url_path`` is optional in this tool (omitted with
             # ``list_only=True`` lists all dashboards — handled above; omitted
@@ -754,6 +885,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 }
                 if search_resolved_from is not None:
                     search_result["resolved_from"] = search_resolved_from
+                _note_screenshot_ignored(
+                    search_result,
+                    include_screenshot=include_screenshot,
+                    full_page=full_page,
+                    mode="search",
+                )
                 return search_result
 
             # Get mode - build WebSocket message
@@ -826,7 +963,13 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "instead of full config replacement."
                 )
 
-            return get_result
+            return await _maybe_attach_screenshot(
+                get_result,
+                url_path,
+                include_screenshot,
+                full_page=full_page,
+                raise_on_failure=True,
+            )
         except ToolError:
             raise
         except Exception as e:
@@ -932,7 +1075,21 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             bool,
             Field(default=True),
         ] = True,
-    ) -> dict[str, Any]:
+        return_screenshot: Annotated[
+            bool,
+            Field(
+                description="After writing, also return a rendered PNG of the "
+                "dashboard so you can see what it looks like in a single call "
+                "(the dashboard creation/iteration loop). Requires the "
+                "'dashboard screenshot' beta feature + engine add-on/sidecar; "
+                "if unavailable, the write result is returned with a warning."
+            ),
+        ] = False,
+        full_page: Annotated[
+            bool,
+            Field(description=f"With return_screenshot: {FULL_PAGE_PARAM_DESC}."),
+        ] = False,
+    ) -> "dict[str, Any] | ToolResult":
         """
         Create or update a Home Assistant dashboard. MUST call ha_get_skill_guide first.
 
@@ -1519,7 +1676,9 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 result_dict["resolved_from"] = pre_resolved_from
 
             _attach_dashboard_skill(result_dict, MandatoryBPS)
-            return result_dict
+            return await _maybe_attach_screenshot(
+                result_dict, url_path, return_screenshot, full_page=full_page
+            )
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None

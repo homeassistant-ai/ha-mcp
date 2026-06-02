@@ -1,0 +1,56 @@
+# Example: dashboard-screenshot engine sidecar for Docker / Container installs
+# (the deployments without a Supervisor, so the HA OS add-on path is N/A).
+#
+# Pairs with the opt-in "dashboard screenshot" beta feature: enable
+# HAMCP_ENABLE_DASHBOARD_SCREENSHOT on the ha-mcp service AND run this engine
+# as a sidecar, then point ha-mcp at it via HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL.
+# Merge these two services into your existing docker-compose.yml.
+#
+# The engine performs NO inbound authentication on its HTTP listener, so keep
+# it on an internal Docker network only — do NOT publish port 10000 to an
+# untrusted LAN/internet (anyone who can reach it could pull authenticated
+# dashboard renders). It is reached by service name over the compose network.
+
+services:
+  ha-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: homeassistant-ai/ha-mcp:latest
+    container_name: ha-mcp-server
+    environment:
+      - HOMEASSISTANT_URL=http://homeassistant:8123
+      - HOMEASSISTANT_TOKEN=${HA_TOKEN}
+      # Opt into the beta feature (the master beta gate must also be on).
+      - HAMCP_ENABLE_DASHBOARD_SCREENSHOT=true
+      # Reach the engine sidecar by its compose service name (internal only).
+      - HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL=http://ha-mcp-screenshot:10000
+    restart: unless-stopped
+
+  # Headless-Chromium screenshot engine — balloob's Puppet (ha-puppet).
+  # Renders a Lovelace dashboard to a PNG that ha-mcp fetches over the internal
+  # network. ha-mcp does not vendor it and balloob publishes no image, so build
+  # it from balloob's repository:
+  #   git clone https://github.com/balloob/home-assistant-addons
+  # then point the build context at its `puppet/` directory (below).
+  ha-mcp-screenshot:
+    build:
+      context: ./home-assistant-addons/puppet
+      dockerfile: Dockerfile
+    image: ha-mcp-screenshot:latest
+    container_name: ha-mcp-screenshot
+    environment:
+      # Puppet authenticates to Home Assistant with this token. Prefer a
+      # long-lived token from a dedicated, low-privilege HA user. ha-puppet
+      # reads it from /data/options.json in add-on mode; in plain Docker mount
+      # an options file (see balloob's puppet/ha-puppet/options-dev.json.sample).
+      - HA_TOKEN=${HA_TOKEN}
+    # NOTE: intentionally NO `ports:` mapping — the engine is unauthenticated
+    # and must stay reachable only on the internal compose network.
+    restart: unless-stopped
+
+# Usage:
+# 1. Create .env file: HA_TOKEN=your_long_lived_access_token
+# 2. Merge both services into your docker-compose.yml (same network as HA).
+# 3. Run: docker-compose -f docker-compose.yml -f docker-compose.screenshot.yml up -d
+# 4. In ha-mcp, the master beta toggle must also be enabled.

@@ -65,9 +65,24 @@ _COLLECTION_FLOOR = 850
 # (14 tests started skipping silently because a marker was applied
 # too broadly).
 _SKIP_CEILING_PER_LANE = {
-    "container": 55,
-    "haos": 20,
-    "haos_inaddon": 45,
+    # The 5 dashboard-screenshot E2E tests
+    # (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py) are marked
+    # haos_only + inaddon_only: they RUN only on the haos_inaddon lane (the
+    # only place the MCP server shares the Supervisor network and can reach the
+    # screenshot engine), and SKIP on both the container lane (haos_only) and
+    # the external-haos lane (inaddon_only). So both those ceilings gain 5;
+    # haos_inaddon is unchanged because the tests run there.
+    # The 5 dashboard-screenshot SIDECAR E2E tests
+    # (tests/src/e2e/tools/test_dashboard_screenshot_sidecar.py) are marked
+    # container_only: they RUN only on the container lane (in-process server +
+    # fake engine) and SKIP on both HAOS lanes. So haos and haos_inaddon each
+    # gain 5; container is unchanged because the tests run there.
+    # Baselines are the observed skip counts as of 2026-05-22 (container=46,
+    # haos=14, haos_inaddon=39 from the prose above), plus this PR's new
+    # marker-gated skips, plus a 5-9 growth buffer.
+    "container": 62,  # was 55 (observed 57 with the 5 addon tests added)
+    "haos": 29,  # 14 + 5 addon-test + 5 sidecar skips = 24, + buffer
+    "haos_inaddon": 49,  # 39 + 5 sidecar skips = 44, + buffer (addon tests run here)
 }
 
 

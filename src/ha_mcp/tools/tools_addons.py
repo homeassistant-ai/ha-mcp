@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import time
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal, NoReturn
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -246,10 +246,19 @@ async def _supervisor_api_call(
         kwargs: dict[str, Any] = {"endpoint": endpoint, "method": method}
         if data is not None:
             kwargs["data"] = data
+        # ``timeout`` is the Supervisor-side proxy timeout (how long Supervisor
+        # waits on the underlying REST op). The client's own wait must outlast
+        # it by a margin, otherwise the local await fires first and we abandon a
+        # still-running operation (e.g. a multi-minute add-on install) — the
+        # send_command default is only 30s. Keep them coupled.
+        wait_timeout = 30.0
         if timeout is not None:
             kwargs["timeout"] = timeout
+            wait_timeout = float(timeout) + 15.0
 
-        result = await ws_client.send_command("supervisor/api", **kwargs)
+        result = await ws_client.send_command(
+            "supervisor/api", _wait_timeout=wait_timeout, **kwargs
+        )
 
         if not result.get("success"):
             error_msg = str(result.get("error", ""))
@@ -1481,7 +1490,9 @@ def _add_http_error_hints(
                 "host_network": addon.get("host_network"),
                 "ingress_port": addon.get("ingress_port"),
             }
-            slug_val = addon.get("slug") or "<slug>"
+            # Prefer the caller-resolved slug (authoritative); fall back to the
+            # addon dict, then a placeholder only if neither is populated.
+            slug_val = slug or addon.get("slug") or "<slug>"
             example_proto = unmapped[0] if unmapped else ""
             example_port = example_proto.split("/", 1)[0] if example_proto else ""
             if unmapped and example_port.isdigit():
@@ -1778,6 +1789,201 @@ class AddOnTools:
                 )
             )
 
+    # Supervisor lifecycle endpoints. install/update live under /store; the
+    # rest under /addons. install/rebuild build a local image and can be slow,
+    # so they get a generous timeout.
+    _ACTION_ENDPOINTS: ClassVar[dict[str, tuple[str, int]]] = {
+        "install": ("/store/addons/{slug}/install", 1800),
+        "update": ("/store/addons/{slug}/update", 1800),
+        "rebuild": ("/addons/{slug}/rebuild", 1800),
+        "start": ("/addons/{slug}/start", 120),
+        "stop": ("/addons/{slug}/stop", 60),
+        "restart": ("/addons/{slug}/restart", 120),
+        "uninstall": ("/addons/{slug}/uninstall", 120),
+    }
+
+    # Store-repository actions operate on the store, not an installed add-on,
+    # so they take a repository URL/slug via the `repository` param instead of
+    # `slug`. add can clone a remote git repo (network-bound), so it gets a
+    # generous timeout.
+    _REPOSITORY_ACTIONS: ClassVar[frozenset[str]] = frozenset(
+        {"add_repository", "remove_repository"}
+    )
+
+    async def _execute_action_mode(self, slug: str, action: str) -> dict[str, Any]:
+        """Run a Supervisor add-on lifecycle action (install/start/stop/etc.).
+
+        Powers the "install the engine for the user" flow: an LLM can install
+        an add-on from a registered store repository and start it, rather than
+        only updating config or proxying to an already-running add-on.
+        """
+        key = action.lower().strip()
+        endpoint_tmpl, timeout = self._ACTION_ENDPOINTS.get(key, (None, 0))
+        if endpoint_tmpl is None:
+            raise_tool_error(
+                create_validation_error(
+                    f"Invalid action: {action!r}. Must be one of: "
+                    f"{', '.join(sorted(self._ACTION_ENDPOINTS))}.",
+                    parameter="action",
+                )
+            )
+        endpoint = endpoint_tmpl.format(slug=slug)
+        result = await _supervisor_api_call(
+            self._client, endpoint, method="POST", timeout=timeout
+        )
+        if not result.get("success"):
+            raise_tool_error(result)
+        return {
+            "success": True,
+            "action": key,
+            "slug": slug,
+            "message": f"Add-on {slug} {key} completed.",
+        }
+
+    async def _execute_repository_action(
+        self, action: str, repository: str
+    ) -> dict[str, Any]:
+        """Add or remove a Supervisor add-on store repository.
+
+        ``add_repository`` registers a custom add-on repository by URL
+        (``POST /store/repositories`` with body ``{"repository": "<url>"}``);
+        ``remove_repository`` unregisters one by its repository slug
+        (``DELETE /store/repositories/{slug}``). Registering a repository is
+        what makes its add-ons show up in ``ha_get_addon(source="available")``
+        so they can then be installed via lifecycle ``action="install"``.
+        """
+        key = action.lower().strip()
+        # add clones a remote git repo (network-bound); both operations can take
+        # a little time, so give them a reasonable timeout. _supervisor_api_call
+        # couples the local await to timeout+15.
+        timeout = 120
+        if key == "add_repository":
+            endpoint = "/store/repositories"
+            method = "POST"
+            data: dict[str, Any] | None = {"repository": repository}
+        else:  # remove_repository
+            endpoint = f"/store/repositories/{repository}"
+            method = "DELETE"
+            data = None
+        # Make the actions idempotent: adding a repo Supervisor already has
+        # ("already in the store") or removing one it doesn't have are both the
+        # desired end state, so report success instead of a confusing error (the
+        # "add repo then install" flow re-adds freely). _supervisor_api_call
+        # raises a ToolError on failure; the returned-failure branch is a
+        # defensive fallback.
+        try:
+            result = await _supervisor_api_call(
+                self._client, endpoint, method=method, data=data, timeout=timeout
+            )
+        except ToolError as e:
+            return self._repo_noop_or_raise(key, repository, str(e))
+        if not result.get("success"):
+            return self._repo_noop_or_raise(key, repository, str(result))
+        return {
+            "success": True,
+            "action": key,
+            "repository": repository,
+            "message": f"Repository {repository} {key} completed.",
+        }
+
+    def _repo_noop_or_raise(
+        self, key: str, repository: str, error_text: str
+    ) -> dict[str, Any]:
+        """Reclassify an idempotent no-op failure as success, else raise.
+
+        Logs the reclassification so a failure that gets demoted to a success
+        is never invisible."""
+        noop = self._repo_noop_verb(key, self._supervisor_error_text(error_text))
+        if noop:
+            logger.info(
+                "Treating %s of repository %r as an idempotent no-op (%s).",
+                key,
+                repository,
+                noop,
+            )
+            return self._repo_noop_result(key, repository, noop)
+        self._raise_repo_action_error(key, repository, error_text)
+
+    @staticmethod
+    def _supervisor_error_text(error_text: str) -> str:
+        """Extract just the Supervisor-reported error from a serialized failure.
+
+        ``_supervisor_api_call`` wraps a failure as a ToolError whose JSON
+        carries a generic ``message`` ("Supervisor API call failed:
+        /store/repositories/<slug>") plus the raw Supervisor response in
+        ``details``. The endpoint in ``message`` always contains
+        "repositories", so scanning the whole blob would make any
+        repository-action failure look repository-scoped. Return ``details``
+        (what Supervisor actually said) — falling back to ``message`` or the
+        raw text — so idempotency matching keys only on the real cause."""
+        try:
+            payload = json.loads(error_text)
+        except (ValueError, TypeError):
+            return error_text
+        err = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(err, dict):
+            return str(err.get("details") or err.get("message") or error_text)
+        return error_text
+
+    @staticmethod
+    def _repo_noop_verb(key: str, error_text: str) -> str | None:
+        """Return a status word if a repo-action failure means the desired end
+        state already holds (an idempotent no-op), else None.
+
+        Scoped tightly so an unrelated failure that merely happens to mention
+        "not found" somewhere (a dependent add-on, a misrouted 404, a file
+        path) is NOT silently reclassified as success: the not-found phrasing
+        must be about a repository."""
+        text = error_text.lower()
+        if key == "add_repository" and "already in the store" in text:
+            return "already registered"
+        if (
+            key == "remove_repository"
+            and "repositor" in text
+            and ("not found" in text or "does not exist" in text)
+        ):
+            return "not registered"
+        return None
+
+    @staticmethod
+    def _repo_noop_result(key: str, repository: str, verb: str) -> dict[str, Any]:
+        return {
+            "success": True,
+            "action": key,
+            "repository": repository,
+            "message": f"Repository {repository} is {verb}; no change needed.",
+        }
+
+    @staticmethod
+    def _raise_repo_action_error(key: str, repository: str, detail: str) -> NoReturn:
+        """Raise a repository-action-specific error.
+
+        ``_supervisor_api_call`` attaches a generic "check your HA connection"
+        suggestion to every failure, which is misleading for a store-repository
+        domain error (bad URL, or a repo still used by installed add-ons). Give
+        actionable, action-specific guidance instead.
+        """
+        if key == "add_repository":
+            suggestions = [
+                "Verify the repository is a valid Home Assistant add-on "
+                "repository URL, e.g. https://github.com/<owner>/<repo>",
+            ]
+        else:
+            suggestions = [
+                "Verify the repository slug — list current repositories with "
+                "ha_get_addon(source='available')",
+                "A repository that still has installed add-ons can't be removed "
+                "until those add-ons are uninstalled",
+            ]
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Could not {key.replace('_', ' ')} {repository!r}.",
+                details=detail,
+                suggestions=suggestions,
+            )
+        )
+
     async def _execute_config_mode(
         self,
         slug: str,
@@ -2045,6 +2251,52 @@ class AddOnTools:
             result.append(("request_headers", "request_headers"))
         return result
 
+    async def _dispatch_repository_action(
+        self,
+        action: str,
+        repository: str | None,
+        *,
+        slug: str,
+        path: str | None,
+        config_data: dict[str, Any],
+        array_patch: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Validate and run a store-repository action (add/remove).
+
+        Repository actions don't target an installed add-on, so a `slug` is
+        not required; `repository` (URL for add, slug for remove) is. Reject
+        the other operating modes' params so the call has one unambiguous
+        intent.
+        """
+        conflicts = []
+        if slug:
+            conflicts.append("slug")
+        if path is not None:
+            conflicts.append("path")
+        if config_data:
+            conflicts.append("config parameters")
+        if array_patch is not None:
+            conflicts.append("array_patch")
+        if conflicts:
+            raise_tool_error(
+                create_validation_error(
+                    f"action='{action}' (store-repository mode) operates on the "
+                    f"store, not an add-on, and cannot be combined with "
+                    f"{', '.join(conflicts)}. Pass only 'repository'.",
+                    parameter="action",
+                )
+            )
+        if not repository or not repository.strip():
+            raise_tool_error(
+                create_validation_error(
+                    f"action='{action}' requires the 'repository' parameter "
+                    "(the repository URL for add_repository, or the repository "
+                    "slug for remove_repository).",
+                    parameter="repository",
+                )
+            )
+        return await self._execute_repository_action(action, repository.strip())
+
     async def manage_addon(
         self,
         slug: str,
@@ -2068,7 +2320,24 @@ class AddOnTools:
         watchdog: bool | None,
         array_patch: dict[str, Any] | None,
         request_headers: dict[str, str] | None,
+        action: str | None = None,
+        repository: str | None = None,
     ) -> dict[str, Any]:
+        # Store-repository actions operate on the store, not an add-on, so they
+        # take `repository` instead of `slug`. Handle them before the slug
+        # requirement applies.
+        if action is not None and action.lower().strip() in self._REPOSITORY_ACTIONS:
+            return await self._dispatch_repository_action(
+                action,
+                repository,
+                slug=slug,
+                path=path,
+                config_data=self._build_config_payload(
+                    options, network, boot, auto_update, watchdog
+                ),
+                array_patch=array_patch,
+            )
+
         validate_identifier_not_empty(
             slug,
             "slug",
@@ -2077,6 +2346,27 @@ class AddOnTools:
         config_data = self._build_config_payload(
             options, network, boot, auto_update, watchdog
         )
+
+        # Lifecycle mode takes precedence and is mutually exclusive with the
+        # proxy / config / array-patch modes.
+        if action is not None:
+            conflicts = []
+            if path is not None:
+                conflicts.append("path")
+            if config_data:
+                conflicts.append("config parameters")
+            if array_patch is not None:
+                conflicts.append("array_patch")
+            if conflicts:
+                raise_tool_error(
+                    create_validation_error(
+                        f"action='{action}' (lifecycle mode) cannot be combined "
+                        f"with {', '.join(conflicts)}. Use one mode at a time.",
+                        parameter="action",
+                    )
+                )
+            return await self._execute_action_mode(slug, action)
+
         self._validate_manage_mode(path, config_data)
 
         if config_data:
@@ -2302,9 +2592,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             Field(
                 description="Add-on slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). "
                 "Slug prefixes vary by add-on repository — call ha_get_addon() "
-                "to discover the actual installed slug.",
+                "to discover the actual installed slug. Required for every mode "
+                "except the store-repository actions "
+                "(action='add_repository'/'remove_repository'), which use "
+                "'repository' instead and take no slug.",
+                default="",
             ),
-        ],
+        ] = "",
         path: Annotated[
             str | None,
             Field(
@@ -2474,10 +2768,55 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 default=None,
             ),
         ] = None,
+        action: Annotated[
+            str | None,
+            Field(
+                description="Lifecycle mode: run a Supervisor add-on action. One of "
+                "'install', 'uninstall', 'start', 'stop', 'restart', 'rebuild', "
+                "'update'. 'install'/'update' require the add-on's repository to be "
+                "registered (it appears in ha_get_addon(source='available')). "
+                "Store-repository mode: 'add_repository' / 'remove_repository' "
+                "register or unregister a custom add-on store repository — these "
+                "use the 'repository' param instead of 'slug'. "
+                "Mutually exclusive with path / config parameters / array_patch. "
+                "HA OS / Supervised only.",
+                default=None,
+            ),
+        ] = None,
+        repository: Annotated[
+            str | None,
+            Field(
+                description="Store-repository mode only (action='add_repository' or "
+                "'remove_repository'). For add_repository: the repository URL "
+                "(e.g., 'https://github.com/balloob/home-assistant-addons'). For "
+                "remove_repository: the repository slug (e.g., '0f1cc410', as shown "
+                "in ha_get_addon(source='available')). Required for those actions; "
+                "ignored otherwise.",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage a Home Assistant add-on — update its configuration or call its internal API.
 
-        Three mutually exclusive operating modes:
+        Five mutually exclusive operating modes:
+
+        **Lifecycle mode** (when ``action`` is one of install/uninstall/start/
+        stop/restart/rebuild/update):
+        Runs a Supervisor add-on action on ``slug``. ``install`` / ``update`` go
+        through the store (the add-on's repository must be registered — it shows
+        up in ``ha_get_addon(source="available")``); the rest act on an installed
+        add-on. This is how an assistant brings an add-on online for the user
+        (e.g. installing + starting the dashboard screenshot engine).
+
+        **Store-repository mode** (when ``action`` is ``add_repository`` or
+        ``remove_repository``):
+        Registers or unregisters a custom add-on store repository. These actions
+        operate on the store rather than an installed add-on, so they take the
+        ``repository`` param and no ``slug``: ``add_repository`` POSTs the
+        repository URL to ``/store/repositories``; ``remove_repository`` DELETEs
+        ``/store/repositories/{slug}`` by the repository's slug. Adding a
+        repository (e.g. balloob's add-ons) is the missing step that lets an
+        assistant then install an add-on from it via ``action="install"``.
 
         **Config mode** (when any of options/network/boot/auto_update/watchdog is provided):
         Updates the add-on's Supervisor configuration via POST /addons/{slug}/options.
@@ -2522,6 +2861,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         **NOTE:** This tool only works with Home Assistant OS or Supervised installations.
 
         **Examples:**
+        - Install an add-on: ha_manage_addon(slug="...", action="install")
+        - Start an add-on: ha_manage_addon(slug="...", action="start")
+        - Add a store repository: ha_manage_addon(action="add_repository", repository="https://github.com/balloob/home-assistant-addons")
+        - Remove a store repository: ha_manage_addon(action="remove_repository", repository="0f1cc410")
         - Set add-on option: ha_manage_addon(slug="...", options={"log_level": "debug"})
           Note: only the fields you provide are updated — current values are fetched first
           and merged automatically. Fields not in the add-on's schema are ignored with a warning.
@@ -2577,4 +2920,6 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             watchdog=watchdog,
             array_patch=array_patch,
             request_headers=request_headers,
+            action=action,
+            repository=repository,
         )
