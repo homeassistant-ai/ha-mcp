@@ -24,6 +24,18 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+# Findings under these path prefixes are dropped before gating. These are
+# vendored / third-party trees we do not own and ruff already excludes them
+# (see ``extend-exclude`` in pyproject.toml). Keep this in sync with that list.
+PATHS_IGNORE: tuple[str, ...] = ("tests/initial_test_state/",)
+
+# Rules dropped before gating. ``py/syntax-error`` here is not a real syntax
+# error: it is a ``tsg-python`` parser diagnostic that CodeQL's code-quality
+# engine emits when it cannot parse a (valid Python 3) construct such as a
+# percent-format string. It is a tool limitation, not a code-quality finding,
+# and cannot be fixed in our source.
+RULES_IGNORE: frozenset[str] = frozenset({"py/syntax-error"})
+
 
 def _rule_id(result: dict[str, Any], run: dict[str, Any]) -> str:
     """Resolve a result's rule id, falling back to the rules table by index."""
@@ -56,7 +68,11 @@ def load_findings(sarif_path: Path) -> list[tuple[str, int, str, str]]:
     for run in data.get("runs", []):
         for result in run.get("results", []):
             rule_id = _rule_id(result, run)
+            if rule_id in RULES_IGNORE:
+                continue
             file, line = _location(result)
+            if any(file.startswith(prefix) for prefix in PATHS_IGNORE):
+                continue
             message = result.get("message", {}).get("text", "").strip()
             findings.append((file, line, rule_id, message))
     findings.sort(key=lambda f: (f[2], f[0], f[1]))

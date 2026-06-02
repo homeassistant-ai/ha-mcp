@@ -104,5 +104,29 @@ def test_render_empty() -> None:
     assert "No CodeQL code-quality findings" in gate.render([])
 
 
+def test_vendored_paths_are_ignored(tmp_path: Path) -> None:
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result("py/empty-except", "tests/initial_test_state/x.py", 1, "vendored"),
+            _result("py/empty-except", "src/a.py", 1, "first-party"),
+        ],
+    )
+    findings = gate.load_findings(path)
+    assert [f[0] for f in findings] == ["src/a.py"]
+
+
+def test_parser_diagnostic_rule_is_ignored(tmp_path: Path) -> None:
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result("py/syntax-error", "tests/src/e2e/conftest.py", 1, "tsg-python"),
+            _result("py/empty-except", "src/a.py", 1, "real"),
+        ],
+    )
+    findings = gate.load_findings(path)
+    assert [f[2] for f in findings] == ["py/empty-except"]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
