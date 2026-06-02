@@ -128,5 +128,46 @@ def test_parser_diagnostic_rule_is_ignored(tmp_path: Path) -> None:
     assert [f[2] for f in findings] == ["py/empty-except"]
 
 
+def test_allowlisted_finding_is_suppressed_not_gated(tmp_path: Path) -> None:
+    """An allowlisted false positive is reported as suppressed, not gated."""
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/unused-global-variable",
+                "src/ha_mcp/__main__.py",
+                580,
+                "The global variable '_shutdown_in_progress' is not used.",
+            ),
+            _result("py/empty-except", "src/a.py", 1, "real finding"),
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert [f[2] for f in findings] == ["py/empty-except"]
+    assert len(suppressed) == 1
+    assert suppressed[0][2] == "py/unused-global-variable"
+    assert suppressed[0][4]  # a non-empty reason string
+    # The gate still fails because a real finding remains.
+    assert gate.main(["prog", str(path)]) == 1
+
+
+def test_allowlist_requires_all_three_of_rule_path_message(tmp_path: Path) -> None:
+    """Same rule+path but a different symbol must NOT be suppressed."""
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/unused-global-variable",
+                "src/ha_mcp/__main__.py",
+                99,
+                "The global variable 'something_else' is not used.",
+            ),
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert len(findings) == 1
+    assert not suppressed
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
