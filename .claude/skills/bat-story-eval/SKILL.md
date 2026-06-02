@@ -281,10 +281,10 @@ the agent is ambiguous after the fact. (Quant is `-` for cloud backends that
 don't expose it.)
 
 ```
-| Story | Agent  | Model   | Quant | Baseline | Target | Trend  | Baseline Tokens | Target Tokens | Delta |
-|-------|--------|---------|-------|----------|--------|--------|-----------------|---------------|-------|
-| s01   | gemini | <model> | -     | pass     | pass   | stable | 36,262          | 34,100        | -6%   |
-| s03   | gemini | <model> | -     | pass     | pass   | stable | 42,000          | 41,500        | -1%   |
+| Story | Agent  | Model         | Quant | Baseline | Target | Trend  | Baseline Tokens | Target Tokens | Delta |
+|-------|--------|---------------|-------|----------|--------|--------|-----------------|---------------|-------|
+| s01   | gemini | gemini-2.5-pro| -     | pass     | pass   | stable | 36,262          | 34,100        | -6%   |
+| s03   | gemini | gemini-2.5-pro| -     | pass     | pass   | stable | 42,000          | 41,500        | -1%   |
 ```
 
 ### Custom Story Details
