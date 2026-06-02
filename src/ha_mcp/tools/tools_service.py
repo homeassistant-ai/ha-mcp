@@ -499,6 +499,7 @@ class ServiceTools:
                 },
                 suggestions=suggestions,
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_get_operation_status",
@@ -563,6 +564,7 @@ class ServiceTools:
                     "Use ha_get_state() to check current entity states instead",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_bulk_control",

@@ -34,7 +34,7 @@ def queue():
 
 @pytest.mark.anyio
 async def test_empty_policy_passes_through(queue):
-    mw = PolicyMiddleware(policy_provider=lambda: Policy(), queue=queue)
+    mw = PolicyMiddleware(policy_provider=Policy, queue=queue)
     call_next = AsyncMock(return_value="real_result")
     result = await mw.on_call_tool(
         make_context("ha_call_service", {"domain": "lock"}), call_next

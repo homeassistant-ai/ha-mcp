@@ -403,6 +403,7 @@ class AutomationConfigTools:
                     "Use ha_get_skill_guide for help",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_config_set_automation",
@@ -1296,6 +1297,7 @@ class AutomationConfigTools:
                     "Check Home Assistant connection",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

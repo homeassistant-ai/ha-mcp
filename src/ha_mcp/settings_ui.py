@@ -1703,9 +1703,9 @@ def build_settings_handlers(
                     ),
                     suggestions=[
                         "Include enable_beta_features=true in the same save "
-                        "payload as the sub-flag(s).",
+                        + "payload as the sub-flag(s).",
                         "Or turn on the master 'Enable beta features' toggle "
-                        "first, then enable the sub-flag(s).",
+                        + "first, then enable the sub-flag(s).",
                     ],
                     context={"rejected": beta_sub_writes},
                 ),
@@ -1874,10 +1874,10 @@ def build_settings_handlers(
                             "Supervisor helper returned ok=False with no error",
                             suggestions=[
                                 "Check the Home Assistant Supervisor logs and "
-                                "the add-on logs for the underlying failure.",
+                                + "the add-on logs for the underlying failure.",
                                 "Report this at "
-                                "https://github.com/homeassistant-ai/ha-mcp/issues "
-                                "if it persists — this indicates an internal bug.",
+                                + "https://github.com/homeassistant-ai/ha-mcp/issues "
+                                + "if it persists — this indicates an internal bug.",
                             ],
                         ),
                         status_code=500,
@@ -2575,10 +2575,10 @@ def build_settings_handlers(
                             "Supervisor helper returned ok=False with no error",
                             suggestions=[
                                 "Check the Home Assistant Supervisor logs and "
-                                "the add-on logs for the underlying failure.",
+                                + "the add-on logs for the underlying failure.",
                                 "Report this at "
-                                "https://github.com/homeassistant-ai/ha-mcp/issues "
-                                "if it persists — this indicates an internal bug.",
+                                + "https://github.com/homeassistant-ai/ha-mcp/issues "
+                                + "if it persists — this indicates an internal bug.",
                             ],
                         ),
                         status_code=500,

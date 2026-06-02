@@ -142,14 +142,14 @@ async def capture_dashboard_png(
                 context={"engine_url": engine},
                 suggestions=[
                     "Ensure the Puppet screenshot add-on (or sidecar) is "
-                    "installed and running",
+                    + "installed and running",
                     # Puppet restarts itself when navigation fails, so a
                     # missing/invalid token shows up as a dropped connection
                     # rather than an HTTP error.
                     f"If it is running, its access token is likely missing or "
                     f"invalid — {TOKEN_HINT}",
                     "Check HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL on "
-                    "Docker/Container deployments",
+                    + "Docker/Container deployments",
                 ],
             )
         )

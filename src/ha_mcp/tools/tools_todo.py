@@ -200,7 +200,7 @@ class TodoTools:
                     "Verify todo integration is enabled",
                 ]
             )
-            exception_to_structured_error(
+            return exception_to_structured_error(
                 e, context=context or None, suggestions=suggestions
             )
 
@@ -399,7 +399,7 @@ class TodoTools:
         except ToolError:
             raise
         except Exception as e:
-            exception_to_structured_error(
+            return exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id, "item": summary},
                 suggestions=[
@@ -461,7 +461,7 @@ class TodoTools:
         except ToolError:
             raise
         except Exception as e:
-            exception_to_structured_error(
+            return exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id, "item": item},
                 suggestions=[
@@ -618,7 +618,7 @@ class TodoTools:
         except ToolError:
             raise
         except Exception as e:
-            exception_to_structured_error(
+            return exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id, "item": item},
                 suggestions=[

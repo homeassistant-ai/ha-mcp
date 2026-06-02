@@ -87,6 +87,7 @@ class WebSocketListenerService:
             try:
                 await self.listener_task
             except asyncio.CancelledError:
+                # Expected: awaiting a cancelled task re-raises CancelledError.
                 pass
 
         if self.cleanup_task and not self.cleanup_task.done():
@@ -94,6 +95,7 @@ class WebSocketListenerService:
             try:
                 await self.cleanup_task
             except asyncio.CancelledError:
+                # Expected: awaiting a cancelled task re-raises CancelledError.
                 pass
 
         # Remove event handler if WebSocket client exists
@@ -164,7 +166,9 @@ class WebSocketListenerService:
             if updated_ops:
                 operations_updated = self.stats["operations_updated"]
                 if isinstance(operations_updated, int):
-                    self.stats["operations_updated"] = operations_updated + len(updated_ops)
+                    self.stats["operations_updated"] = operations_updated + len(
+                        updated_ops
+                    )
                 logger.info(f"Updated {len(updated_ops)} operations for {entity_id}")
 
         except (RuntimeError, ConnectionError, OSError) as e:
@@ -307,7 +311,6 @@ _listener_lock: asyncio.Lock | None = None
 async def get_listener_service() -> WebSocketListenerService:
     """Get the global WebSocket listener service instance."""
     global _listener_service, _listener_lock
-    import asyncio
 
     current_loop = asyncio.get_event_loop()
 
@@ -373,7 +376,12 @@ class WebSocketContextManager:
         self.service = service
         return service
 
-    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
         """Stop WebSocket listener."""
         if self.service:
             await self.service.stop()

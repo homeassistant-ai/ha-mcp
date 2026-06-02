@@ -87,6 +87,8 @@ def _detect_installation_method() -> str:
         if (project_root / ".git").exists():
             return "git"
     except Exception:
+        # Best-effort probe: path resolution may fail in unusual layouts;
+        # fall through to the next detection heuristic.
         pass
 
     # 5. PyPI install - marker file exists in package
@@ -95,6 +97,8 @@ def _detect_installation_method() -> str:
         if marker_path.exists():
             return "pypi"
     except Exception:
+        # Best-effort probe: marker lookup may fail in unusual layouts;
+        # fall through to the default "unknown" result.
         pass
 
     # 6. Default - unknown

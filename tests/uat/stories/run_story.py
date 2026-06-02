@@ -358,6 +358,7 @@ def _run_test_prompt(
         try:
             summary = json.loads(result.stdout)
         except json.JSONDecodeError:
+            # Non-JSON stdout (e.g. partial/garbled output); leave summary as None.
             pass
 
     return result.returncode, summary
@@ -533,6 +534,7 @@ def get_git_info() -> tuple[str, str]:
         )
         sha = result.stdout.strip()
     except Exception:
+        # Best-effort git lookup; keep the "unknown" default if git is unavailable.
         pass
     try:
         result = subprocess.run(
@@ -543,6 +545,7 @@ def get_git_info() -> tuple[str, str]:
         )
         describe = result.stdout.strip()
     except Exception:
+        # Best-effort git lookup; keep the "unknown" default if git is unavailable.
         pass
     return sha, describe
 

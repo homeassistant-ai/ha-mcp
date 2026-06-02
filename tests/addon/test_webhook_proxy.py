@@ -1564,8 +1564,9 @@ class TestResolveOAuthCreds:
         assert sec1 == sec2
 
     def test_user_value_overrides_persisted(self, start, tmp_path):
-        # First call generates and persists
-        gen_cid, gen_sec = start._resolve_oauth_creds(tmp_path, "", "")
+        # First call generates and persists (return value intentionally unused;
+        # this call's side effect is writing oauth_creds.json to disk).
+        start._resolve_oauth_creds(tmp_path, "", "")
         # Second call with user-supplied values uses those
         cid, sec = start._resolve_oauth_creds(
             tmp_path, "user-id-1234567890123", "user-secret"

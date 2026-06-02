@@ -204,6 +204,7 @@ class GroupTools:
                     "Verify REST API is accessible",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_config_set_group",
@@ -379,6 +380,7 @@ class GroupTools:
                     "Use ha_config_list_groups() to see existing groups",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_config_remove_group",
@@ -493,6 +495,7 @@ class GroupTools:
                     "Groups defined in YAML cannot be permanently removed",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

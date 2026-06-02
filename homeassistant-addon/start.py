@@ -703,6 +703,9 @@ def main() -> int:
         log_info("Interrupted, exiting")
         return 0
     except BaseException as e:
+        # Top-level crash handler: intentionally catch ANY exit (including
+        # SystemExit, translated to its code below) so the add-on supervisor
+        # always sees a clean process exit code instead of a traceback.
         import traceback
 
         log_error(f"MCP server crashed: {e}")

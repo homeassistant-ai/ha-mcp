@@ -383,6 +383,7 @@ class YamlConfigTools:
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
             raise_tool_error(error)
+            return None  # raise_tool_error always raises; explicit for CodeQL
 
 
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

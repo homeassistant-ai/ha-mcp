@@ -762,14 +762,6 @@ class TestFlowHelperRouting:
         """Top-level name param is injected into config dict when not already present."""
         captured_config: dict = {}
 
-        async def capture_start(helper_type):
-            # called by create_flow_helper; return minimal success
-            return {
-                "type": "create_entry",
-                "flow_id": "flow-c",
-                "result": {"entry_id": "entry-c", "title": "t", "domain": helper_type},
-            }
-
         async def capture_submit(flow_id, data):
             captured_config.update(data)
             return {

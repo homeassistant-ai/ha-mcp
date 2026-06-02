@@ -78,9 +78,12 @@ def run_gemini_query(
         result = subprocess.run(
             [
                 "gemini",
-                "-p", query,
-                "--approval-mode", "yolo",
-                "--allowed-mcp-server-names", "homeassistant",
+                "-p",
+                query,
+                "--approval-mode",
+                "yolo",
+                "--allowed-mcp-server-names",
+                "homeassistant",
             ],
             capture_output=True,
             text=True,
@@ -96,6 +99,7 @@ def run_gemini_query(
             if isinstance(data, dict) and "response" in data:
                 output = data["response"]
         except json.JSONDecodeError:
+            # Output wasn't JSON; keep the raw stdout text as-is.
             pass
 
         if result.returncode != 0 and result.stderr:
@@ -139,14 +143,20 @@ def run_claude_query(
         result = subprocess.run(
             [
                 "claude",
-                "-p", query,
-                "--mcp-config", str(config_file),
+                "-p",
+                query,
+                "--mcp-config",
+                str(config_file),
                 "--strict-mcp-config",
-                "--allowedTools", "mcp__home-assistant",
-                "--output-format", "text",
+                "--allowedTools",
+                "mcp__home-assistant",
+                "--output-format",
+                "text",
                 "--no-session-persistence",
-                "--permission-mode", "bypassPermissions",
-                "--model", "sonnet",
+                "--permission-mode",
+                "bypassPermissions",
+                "--model",
+                "sonnet",
             ],
             capture_output=True,
             text=True,

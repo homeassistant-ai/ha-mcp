@@ -377,6 +377,7 @@ class AreaTools:
                     "Verify WebSocket connection is active",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     # ============================================================
     # COMBINED SET / REMOVE
@@ -628,6 +629,7 @@ class AreaTools:
                 context={"operation": operation, "kind": kind, "name": name, "id": id},
                 suggestions=suggestions,
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_remove_area_or_floor",
@@ -717,6 +719,7 @@ class AreaTools:
                     f"Verify the {kind} id exists using ha_list_floors_areas()",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

@@ -33,6 +33,7 @@ class IntegrationInstall(NamedTuple):
     first_install: bool
     version_changed: bool
 
+
 if TYPE_CHECKING:
     from typing import TextIO
 
@@ -83,7 +84,9 @@ def _supervisor_get(path: str) -> dict | None:
         with urllib.request.urlopen(req, timeout=10) as resp:
             response_data = json.loads(resp.read())
             if not isinstance(response_data, dict):
-                log_error(f"Supervisor API GET {path}: unexpected response type {type(response_data)}")
+                log_error(
+                    f"Supervisor API GET {path}: unexpected response type {type(response_data)}"
+                )
                 return None
             data = response_data.get("data", {})
             return data if isinstance(data, dict) else {}
@@ -116,10 +119,10 @@ def _supervisor_post(path: str, data: dict) -> bool:
         try:
             err_body = e.read().decode("utf-8", errors="replace")[:200]
         except Exception:
+            # Best-effort: the error body is optional diagnostic detail; if it
+            # can't be read/decoded we still log the HTTPError below.
             pass
-        log_error(
-            f"Supervisor API POST {path} ({type(e).__name__}): {e} — {err_body}"
-        )
+        log_error(f"Supervisor API POST {path} ({type(e).__name__}): {e} — {err_body}")
         return False
     except (urllib.error.URLError, TimeoutError) as e:
         log_error(f"Supervisor API POST {path} ({type(e).__name__}): {e}")
@@ -147,6 +150,8 @@ def _supervisor_get_text(path: str) -> str | None:
         try:
             body = e.read().decode("utf-8", errors="replace")[:200]
         except Exception:
+            # Best-effort: the error body is optional diagnostic detail; if it
+            # can't be read/decoded we still log the HTTPError below.
             pass
         log_error(f"Supervisor API GET text {path}: {e} — {body}")
         return None
@@ -155,7 +160,9 @@ def _supervisor_get_text(path: str) -> str | None:
         return None
 
 
-def _ha_core_api(method: str, path: str, data: dict | None = None) -> dict | list | None:
+def _ha_core_api(
+    method: str, path: str, data: dict | None = None
+) -> dict | list | None:
     """Request to HA Core API via Supervisor proxy. Returns parsed JSON."""
     token = os.environ.get("SUPERVISOR_TOKEN")
     if not token:
@@ -175,7 +182,12 @@ def _ha_core_api(method: str, path: str, data: dict | None = None) -> dict | lis
         with urllib.request.urlopen(req, timeout=15) as resp:
             result: dict | list = json.loads(resp.read())
             return result
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as e:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        json.JSONDecodeError,
+    ) as e:
         log_error(f"HA Core API {method} {path}: {e}")
         return None
 
@@ -345,8 +357,7 @@ def _regenerate_oauth_creds(data_dir: Path) -> None:
             log_info("Wiped existing OAuth credentials per regenerate toggle")
     except OSError as e:
         log_error(
-            f"Failed to wipe OAuth creds for regeneration "
-            f"({type(e).__name__}): {e}"
+            f"Failed to wipe OAuth creds for regeneration ({type(e).__name__}): {e}"
         )
 
 
@@ -389,10 +400,7 @@ def _resolve_oauth_creds(
             if isinstance(loaded, dict):
                 stored = loaded
         except (OSError, json.JSONDecodeError) as e:
-            log_error(
-                f"Could not read existing OAuth creds "
-                f"({type(e).__name__}): {e}"
-            )
+            log_error(f"Could not read existing OAuth creds ({type(e).__name__}): {e}")
 
     final_id = configured_id.strip() or stored.get("client_id", "")
     final_secret = configured_secret.strip() or stored.get("client_secret", "")
@@ -417,18 +425,14 @@ def _resolve_oauth_creds(
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
             creds_file.write_text(
-                json.dumps(
-                    {"client_id": final_id, "client_secret": final_secret}
-                )
+                json.dumps({"client_id": final_id, "client_secret": final_secret})
             )
             try:
                 creds_file.chmod(0o600)
             except OSError:
                 pass  # tmpfs / non-POSIX filesystems may not support chmod
         except OSError as e:
-            log_error(
-                f"Failed to persist OAuth creds ({type(e).__name__}): {e}"
-            )
+            log_error(f"Failed to persist OAuth creds ({type(e).__name__}): {e}")
             return "", ""
 
     return final_id, final_secret
@@ -443,6 +447,8 @@ def _get_or_create_webhook_id(data_dir: Path) -> str:
             if wid:
                 return wid
         except OSError:
+            # Existing file unreadable (permissions/corruption); fall through
+            # to generate and persist a fresh webhook ID below.
             pass
     wid = f"mcp_{secrets.token_hex(16)}"
     try:
@@ -468,9 +474,7 @@ def _read_integration_domain() -> str | None:
     try:
         domain = json.loads(src_manifest.read_text()).get("domain")
     except (OSError, json.JSONDecodeError) as e:
-        log_error(
-            f"Could not read integration manifest ({type(e).__name__}): {e}"
-        )
+        log_error(f"Could not read integration manifest ({type(e).__name__}): {e}")
         return None
     return domain if isinstance(domain, str) else None
 
@@ -491,9 +495,7 @@ def _probe_oauth_active() -> bool:
     domain = _read_integration_domain()
     if not domain:
         return False
-    result = _ha_core_api(
-        "GET", f"/{domain}/oauth/protected-resource"
-    )
+    result = _ha_core_api("GET", f"/{domain}/oauth/protected-resource")
     return isinstance(result, dict) and "authorization_servers" in result
 
 
@@ -586,7 +588,10 @@ def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
                 complete = _ha_core_api(
                     "POST", f"/config/config_entries/flow/{flow['flow_id']}", {}
                 )
-                if isinstance(complete, dict) and complete.get("type") == "create_entry":
+                if (
+                    isinstance(complete, dict)
+                    and complete.get("type") == "create_entry"
+                ):
                     log_info("Config entry created")
                     return True
 
@@ -747,9 +752,7 @@ def main() -> int:
             enable_oauth = bool(config.get("enable_oauth", False))
             oauth_client_id = config.get("oauth_client_id", "")
             oauth_client_secret = config.get("oauth_client_secret", "")
-            regenerate_oauth_creds = bool(
-                config.get("regenerate_oauth_creds", False)
-            )
+            regenerate_oauth_creds = bool(config.get("regenerate_oauth_creds", False))
         except (OSError, json.JSONDecodeError) as e:
             log_error(f"Failed to read config ({type(e).__name__}): {e}")
 
@@ -783,9 +786,7 @@ def main() -> int:
                     "POST",
                     "/services/persistent_notification/create",
                     {
-                        "title": (
-                            "MCP Webhook Proxy: manual action required"
-                        ),
+                        "title": ("MCP Webhook Proxy: manual action required"),
                         "message": (
                             "The Webhook Proxy addon could not "
                             "automatically clear the 'Regenerate OAuth "
@@ -947,9 +948,7 @@ def main() -> int:
                 "POST",
                 "/services/persistent_notification/create",
                 {
-                    "title": (
-                        "MCP Webhook Proxy: setup did not complete"
-                    ),
+                    "title": ("MCP Webhook Proxy: setup did not complete"),
                     "message": (
                         "After restarting Home Assistant, the addon "
                         "could not create the integration's config "
@@ -981,9 +980,7 @@ def main() -> int:
                 "POST",
                 "/services/persistent_notification/create",
                 {
-                    "title": (
-                        "MCP Webhook Proxy: webhook URL is not active"
-                    ),
+                    "title": ("MCP Webhook Proxy: webhook URL is not active"),
                     "message": (
                         "The addon could not create the integration's "
                         "config entry, so the webhook URL is currently "
@@ -1021,22 +1018,12 @@ def main() -> int:
     if enable_oauth and not _probe_oauth_active():
         log_error("")
         log_error("=" * 70)
-        log_error(
-            "  OAuth is enabled but the integration code currently loaded "
-            "in"
-        )
-        log_error(
-            "  Home Assistant does not enforce it (HA was not restarted "
-            "after"
-        )
+        log_error("  OAuth is enabled but the integration code currently loaded in")
+        log_error("  Home Assistant does not enforce it (HA was not restarted after")
         log_error("  the addon update).")
         log_error("")
-        log_error(
-            "  Disabling the webhook to prevent unauthenticated access."
-        )
-        log_error(
-            "  RESTART HOME ASSISTANT (Settings → System → Restart) — the"
-        )
+        log_error("  Disabling the webhook to prevent unauthenticated access.")
+        log_error("  RESTART HOME ASSISTANT (Settings → System → Restart) — the")
         log_error("  webhook will reactivate automatically afterwards.")
         log_error("=" * 70)
         log_error("")
@@ -1050,17 +1037,12 @@ def main() -> int:
                 json.dumps({"reason": "stale_integration_code"})
             )
         except OSError as e:
-            log_error(
-                f"Could not write OAuth restart marker "
-                f"({type(e).__name__}): {e}"
-            )
+            log_error(f"Could not write OAuth restart marker ({type(e).__name__}): {e}")
         _ha_core_api(
             "POST",
             "/services/persistent_notification/create",
             {
-                "title": (
-                    "MCP Webhook Proxy: HA restart required for OAuth"
-                ),
+                "title": ("MCP Webhook Proxy: HA restart required for OAuth"),
                 "message": (
                     "OAuth is enabled in the addon configuration, but "
                     "the new OAuth-enforcing integration code has not "
@@ -1098,10 +1080,11 @@ def main() -> int:
             try:
                 oauth_restart_marker.unlink(missing_ok=True)
             except OSError:
+                # Best-effort cleanup; the integration's async_setup_entry
+                # removes this marker on its next boot regardless.
                 pass
             log_info(
-                "OAuth-enforcing integration code is now active; "
-                "webhook re-enabled."
+                "OAuth-enforcing integration code is now active; webhook re-enabled."
             )
         else:
             # Re-probe failed AFTER HA was restarted and the config entry
@@ -1121,9 +1104,7 @@ def main() -> int:
                 "POST",
                 "/services/persistent_notification/create",
                 {
-                    "title": (
-                        "MCP Webhook Proxy: OAuth could not be enabled"
-                    ),
+                    "title": ("MCP Webhook Proxy: OAuth could not be enabled"),
                     "message": (
                         "After Home Assistant was restarted, the "
                         "OAuth-enforcing integration code still did "
@@ -1152,7 +1133,9 @@ def main() -> int:
     if resolved_remote:
         log_info(f"  MCP Server URL (remote): {resolved_remote}{webhook_path}")
     else:
-        log_info(f"  MCP Server URL (remote): https://<your-external-url>{webhook_path}")
+        log_info(
+            f"  MCP Server URL (remote): https://<your-external-url>{webhook_path}"
+        )
         log_info("    Set 'remote_url' in addon config, or enable Nabu Casa")
     log_info("")
     log_info("  Copy the remote URL above into your MCP client.")
@@ -1161,18 +1144,10 @@ def main() -> int:
         log_info("  OAuth (Beta) is ENABLED for this URL.")
         log_info(f"    OAuth Client ID:     {oauth_client_id}")
         log_info(f"    OAuth Client Secret: {oauth_client_secret}")
-        log_info(
-            "    Paste both into the OAuth fields of your MCP client's"
-        )
-        log_info(
-            "    connector setup (Claude.ai: connector → Advanced settings)."
-        )
-        log_info(
-            "    These values persist at /data/oauth_creds.json — same"
-        )
-        log_info(
-            "    values across addon restarts."
-        )
+        log_info("    Paste both into the OAuth fields of your MCP client's")
+        log_info("    connector setup (Claude.ai: connector → Advanced settings).")
+        log_info("    These values persist at /data/oauth_creds.json — same")
+        log_info("    values across addon restarts.")
     log_info("=" * 70)
     log_info("")
 
@@ -1196,8 +1171,7 @@ def main() -> int:
                 log_error(f"MCP server unreachable: {target_url}")
             elif consecutive_failures % 5 == 0:
                 log_error(
-                    f"MCP server still unreachable after "
-                    f"{consecutive_failures} checks"
+                    f"MCP server still unreachable after {consecutive_failures} checks"
                 )
 
     # Cleanup on stop: remove config entry to unregister the webhook (stops

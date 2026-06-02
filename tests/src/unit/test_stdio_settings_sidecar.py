@@ -512,8 +512,11 @@ class TestRunMainWiring:
             touched = False
 
             def __getattr__(self, name: str) -> object:
+                # __getattr__ must raise AttributeError per the protocol;
+                # the ``touched`` flag (asserted False below) is the real
+                # detection mechanism if uvicorn is accessed at all.
                 _TrackingProxy.touched = True
-                raise AssertionError(
+                raise AttributeError(
                     f"uvicorn.{name} accessed despite disable sentinel"
                 )
 

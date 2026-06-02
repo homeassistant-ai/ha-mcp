@@ -335,6 +335,9 @@ class McpComponentTools:
                     "Ensure GitHub is accessible",
                 ],
             )
+            return (
+                None  # exception_to_structured_error always raises; explicit for CodeQL
+            )
 
 
 def register_mcp_component_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

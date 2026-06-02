@@ -191,7 +191,7 @@ async def _fetch_caller_token(client: Any) -> str:
                     "Reinstall ha_mcp_tools via HACS",
                     "Restart Home Assistant after reinstalling",
                     "If the version is still malformed, file an issue at "
-                    "https://github.com/homeassistant-ai/ha-mcp/issues",
+                    + "https://github.com/homeassistant-ai/ha-mcp/issues",
                 ],
             )
         )
@@ -431,6 +431,7 @@ class FilesystemTools:
                 e,
                 context={"tool": "ha_list_files", "path": path, "pattern": pattern},
             )
+            return None
 
     @tool(
         name="ha_read_file",
@@ -539,6 +540,7 @@ class FilesystemTools:
                 e,
                 context={"tool": "ha_read_file", "path": path},
             )
+            return None
 
     @tool(
         name="ha_write_file",
@@ -669,6 +671,7 @@ class FilesystemTools:
                 e,
                 context={"tool": "ha_write_file", "path": path},
             )
+            return None
 
     @tool(
         name="ha_delete_file",
@@ -780,6 +783,7 @@ class FilesystemTools:
                 e,
                 context={"tool": "ha_delete_file", "path": path},
             )
+            return None
 
 
 def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

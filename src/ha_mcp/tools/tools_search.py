@@ -1032,6 +1032,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Check area/domain filter spelling",
                 ],
             )
+            return None  # unreachable: error helpers above always raise
 
     @mcp.tool(
         tags={"Search & Discovery"},
@@ -1525,6 +1526,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Try simpler search terms",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @mcp.tool(
         tags={"Search & Discovery"},
@@ -1794,3 +1796,4 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 e,
                 context={"entity_ids": entity_ids},
             )
+            return None  # unreachable: exception_to_structured_error always raises

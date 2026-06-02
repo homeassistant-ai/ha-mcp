@@ -129,6 +129,7 @@ class ZoneTools:
                     "Use ha_get_zone() without zone_id to see all available zones",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @staticmethod
     def _validate_coordinates(
@@ -354,6 +355,7 @@ class ZoneTools:
                     else "Verify zone_id exists using ha_get_zone()",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_remove_zone",
@@ -439,6 +441,7 @@ class ZoneTools:
                     "Ensure zone is not the 'home' zone (YAML-defined)",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

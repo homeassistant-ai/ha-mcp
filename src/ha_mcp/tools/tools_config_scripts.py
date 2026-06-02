@@ -201,6 +201,7 @@ class ConfigScriptTools:
                     "Use ha_get_skill_guide for help",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     async def _list_script_entity_ids(self) -> list[str]:
         """Best-effort list of bare script IDs (up to 10) from the entity registry.
@@ -917,6 +918,7 @@ class ConfigScriptTools:
                     "Use ha_get_skill_guide for help",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

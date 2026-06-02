@@ -659,7 +659,7 @@ class TestSandboxErrorSubclasses:
         except PythonSandboxExecutionError:
             pytest.fail("validation error matched PythonSandboxExecutionError")
         except PythonSandboxValidationError:
-            pass
+            pass  # Expected: the validation error is caught here, not above.
 
     def test_execution_error_is_distinct_from_validation_error(self):
         """A runtime failure should not match a validation-error catcher."""
@@ -670,7 +670,7 @@ class TestSandboxErrorSubclasses:
         except PythonSandboxValidationError:
             pytest.fail("execution error matched PythonSandboxValidationError")
         except PythonSandboxExecutionError:
-            pass
+            pass  # Expected: the execution error is caught here, not above.
 
     def test_execution_error_truncates_long_exception_text(self):
         """Runtime exception text is capped so embedded config/data isn't pasted whole.

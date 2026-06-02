@@ -203,6 +203,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     "helpers": [],
                 },
             )
+            return None  # unreachable: exception_to_structured_error raises
 
     @staticmethod
     def _build_automation_uid_map(

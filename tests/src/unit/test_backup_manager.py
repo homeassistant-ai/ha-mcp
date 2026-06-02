@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 import yaml
 
+from ha_mcp import backup_manager as bm
 from ha_mcp.backup_manager import (
     SCHEMA_VERSION,
     BackupManager,
@@ -513,8 +514,6 @@ class TestTrackerPrune:
     ) -> None:
         # Patch the cap to a small number so we can exercise the prune
         # path without needing 10_000 entries.
-        import ha_mcp.backup_manager as bm
-
         monkeypatch.setattr(bm, "_TRACKER_SOFT_CAP", 5)
         monkeypatch.setattr(bm, "_TRACKER_PRUNE_BATCH", 2)
         mgr = BackupManager(_StubSettings(auto_backup_dir=str(tmp_path)), _StubClient())

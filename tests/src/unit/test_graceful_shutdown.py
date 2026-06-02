@@ -18,10 +18,10 @@ class TestSignalHandlerSetup:
 
     def test_setup_signal_handlers_registers_sigterm(self):
         """Signal handlers should register SIGTERM handler."""
-        from ha_mcp.__main__ import _setup_signal_handlers, _signal_handler
+        import ha_mcp.__main__ as main_module
 
         with patch("signal.signal") as mock_signal:
-            _setup_signal_handlers()
+            main_module._setup_signal_handlers()
             # Check that SIGTERM handler was registered
             calls = [
                 call
@@ -29,14 +29,14 @@ class TestSignalHandlerSetup:
                 if call[0][0] == signal.SIGTERM
             ]
             assert len(calls) == 1
-            assert calls[0][0][1] == _signal_handler
+            assert calls[0][0][1] == main_module._signal_handler
 
     def test_setup_signal_handlers_registers_sigint(self):
         """Signal handlers should register SIGINT handler."""
-        from ha_mcp.__main__ import _setup_signal_handlers, _signal_handler
+        import ha_mcp.__main__ as main_module
 
         with patch("signal.signal") as mock_signal:
-            _setup_signal_handlers()
+            main_module._setup_signal_handlers()
             # Check that SIGINT handler was registered
             calls = [
                 call
@@ -44,7 +44,7 @@ class TestSignalHandlerSetup:
                 if call[0][0] == signal.SIGINT
             ]
             assert len(calls) == 1
-            assert calls[0][0][1] == _signal_handler
+            assert calls[0][0][1] == main_module._signal_handler
 
 
 class TestSignalHandler:
@@ -209,9 +209,9 @@ class TestShutdownTimeout:
 
     def test_shutdown_timeout_is_two_seconds(self):
         """Shutdown timeout should be 2 seconds as per requirements."""
-        from ha_mcp.__main__ import SHUTDOWN_TIMEOUT_SECONDS
+        import ha_mcp.__main__ as main_module
 
-        assert SHUTDOWN_TIMEOUT_SECONDS == 2.0
+        assert main_module.SHUTDOWN_TIMEOUT_SECONDS == 2.0
 
 
 class TestGracefulShutdownIntegration:
@@ -291,6 +291,8 @@ class TestGracefulShutdownIntegration:
             try:
                 await asyncio.wait_for(server_task, timeout=3.0)
             except (TimeoutError, asyncio.CancelledError):
+                # Either outcome is acceptable here: the test only asserts that
+                # cleanup ran (checked below), not how the task ultimately ended.
                 pass
 
             # Verify cleanup was called
@@ -304,7 +306,7 @@ class TestStdinDetection:
         """Stdin should be available when connected to a tty."""
         import stat as stat_module
 
-        from ha_mcp.__main__ import _check_stdin_available
+        import ha_mcp.__main__ as main_module
 
         with (
             patch("sys.stdin") as mock_stdin,
@@ -315,13 +317,13 @@ class TestStdinDetection:
             mock_stdin.fileno.return_value = 0
             mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFCHR)
 
-            assert _check_stdin_available() is True
+            assert main_module._check_stdin_available() is True
 
     def test_stdin_available_when_pipe(self):
         """Stdin should be available when connected to a pipe (FIFO)."""
         import stat as stat_module
 
-        from ha_mcp.__main__ import _check_stdin_available
+        import ha_mcp.__main__ as main_module
 
         with (
             patch("sys.stdin") as mock_stdin,
@@ -332,13 +334,13 @@ class TestStdinDetection:
             mock_stdin.fileno.return_value = 0
             mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFIFO)
 
-            assert _check_stdin_available() is True
+            assert main_module._check_stdin_available() is True
 
     def test_stdin_available_when_regular_file(self):
         """Stdin should be available when connected to a regular file."""
         import stat as stat_module
 
-        from ha_mcp.__main__ import _check_stdin_available
+        import ha_mcp.__main__ as main_module
 
         with (
             patch("sys.stdin") as mock_stdin,
@@ -349,28 +351,28 @@ class TestStdinDetection:
             mock_stdin.fileno.return_value = 0
             mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFREG)
 
-            assert _check_stdin_available() is True
+            assert main_module._check_stdin_available() is True
 
     def test_stdin_not_available_when_closed(self):
         """Stdin should not be available when closed."""
-        from ha_mcp.__main__ import _check_stdin_available
+        import ha_mcp.__main__ as main_module
 
         with patch("sys.stdin") as mock_stdin:
             mock_stdin.closed = True
-            assert _check_stdin_available() is False
+            assert main_module._check_stdin_available() is False
 
     def test_stdin_not_available_when_none(self):
         """Stdin should not be available when None."""
-        from ha_mcp.__main__ import _check_stdin_available
+        import ha_mcp.__main__ as main_module
 
         with patch("sys.stdin", None):
-            assert _check_stdin_available() is False
+            assert main_module._check_stdin_available() is False
 
     def test_stdin_not_available_when_char_device_not_tty(self):
         """Stdin should not be available when char device but not tty (like /dev/null)."""
         import stat as stat_module
 
-        from ha_mcp.__main__ import _check_stdin_available
+        import ha_mcp.__main__ as main_module
 
         with (
             patch("sys.stdin") as mock_stdin,
@@ -381,20 +383,20 @@ class TestStdinDetection:
             mock_stdin.fileno.return_value = 0
             mock_fstat.return_value = MagicMock(st_mode=stat_module.S_IFCHR)
 
-            assert _check_stdin_available() is False
+            assert main_module._check_stdin_available() is False
 
     def test_stdin_not_available_when_fileno_raises(self):
         """Stdin should not be available when fileno() raises."""
-        from ha_mcp.__main__ import _check_stdin_available
+        import ha_mcp.__main__ as main_module
 
         with patch("sys.stdin") as mock_stdin:
             mock_stdin.closed = False
             mock_stdin.fileno.side_effect = ValueError("no fileno")
-            assert _check_stdin_available() is False
+            assert main_module._check_stdin_available() is False
 
     def test_stdin_not_available_when_fstat_raises(self):
         """Stdin should not be available when fstat() raises."""
-        from ha_mcp.__main__ import _check_stdin_available
+        import ha_mcp.__main__ as main_module
 
         with (
             patch("sys.stdin") as mock_stdin,
@@ -403,7 +405,7 @@ class TestStdinDetection:
             mock_stdin.closed = False
             mock_stdin.fileno.return_value = 0
 
-            assert _check_stdin_available() is False
+            assert main_module._check_stdin_available() is False
 
     def test_main_exits_when_stdin_not_available(self):
         """Main should exit with error when stdin is not available."""
@@ -424,7 +426,7 @@ class TestMainEntryPoint:
 
     def test_smoke_test_flag_runs_smoke_test(self):
         """--smoke-test flag should run smoke test instead of server."""
-        from ha_mcp.__main__ import main
+        import ha_mcp.__main__ as main_module
 
         mock_smoke_test = MagicMock(return_value=0)
 
@@ -433,7 +435,7 @@ class TestMainEntryPoint:
             patch("ha_mcp.smoke_test.main", mock_smoke_test),
             pytest.raises(SystemExit) as exc_info,
         ):
-            main()
+            main_module.main()
 
         assert exc_info.value.code == 0
         mock_smoke_test.assert_called_once()
@@ -539,13 +541,13 @@ class TestHTTPEntryPoints:
 
     def test_http_runtime_uses_env_vars(self):
         """HTTP runtime should read host, port, and path from environment."""
-        from ha_mcp.__main__ import _get_http_runtime
+        import ha_mcp.__main__ as main_module
 
         with patch.dict(
             os.environ,
             {"MCP_HOST": "127.0.0.1", "MCP_PORT": "9000", "MCP_SECRET_PATH": "/custom"},
         ):
-            host, port, path = _get_http_runtime()
+            host, port, path = main_module._get_http_runtime()
 
         assert host == "127.0.0.1"
         assert port == 9000
@@ -557,7 +559,7 @@ class TestHTTPEntryPoints:
         Default host is 0.0.0.0 (preserves prior behavior — FastMCP's own
         default is 127.0.0.1, so the explicit fallback is load-bearing).
         """
-        from ha_mcp.__main__ import _get_http_runtime
+        import ha_mcp.__main__ as main_module
 
         # Clear any existing env vars
         env = os.environ.copy()
@@ -566,7 +568,7 @@ class TestHTTPEntryPoints:
         env.pop("MCP_SECRET_PATH", None)
 
         with patch.dict(os.environ, env, clear=True):
-            host, port, path = _get_http_runtime()
+            host, port, path = main_module._get_http_runtime()
 
         assert host == "0.0.0.0"
         assert port == 8086
@@ -574,12 +576,12 @@ class TestHTTPEntryPoints:
 
     def test_http_runtime_invalid_port_exits(self):
         """Non-integer MCP_PORT should cause sys.exit(1)."""
-        from ha_mcp.__main__ import _get_http_runtime
+        import ha_mcp.__main__ as main_module
 
         with (
             patch.dict(os.environ, {"MCP_PORT": "not-a-number"}),
             pytest.raises(SystemExit) as exc_info,
         ):
-            _get_http_runtime()
+            main_module._get_http_runtime()
 
         assert exc_info.value.code == 1
