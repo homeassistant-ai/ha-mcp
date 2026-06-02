@@ -232,7 +232,6 @@ class TestToolAnnotations:
         read_only_tools = [t for t in tools if t["has_read_only_hint"]]
 
         # These prefixes/patterns indicate read-only operations
-        read_only_patterns = ["get", "list", "search", "check", "eval", "render"]
 
         suspicious = []
         for tool in read_only_tools:

@@ -133,7 +133,6 @@ def pytest_collection_modifyitems(config, items):
     del config
     haos = is_haos_backend_selected()
     inaddon = haos and is_haos_inaddon_mode()
-    external_haos = haos and not inaddon
     skip_haos = pytest.mark.skip(
         reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)"
     )

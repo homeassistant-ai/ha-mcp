@@ -63,7 +63,9 @@ class TestLabelSetOperation:
         data = assert_mcp_success(result, "set labels")
         assert label_id in data.get("entity_entry", {}).get("labels", [])
 
-        logger.info(f"Set labels on {entity_id}: {data.get('entity_entry', {}).get('labels')}")
+        logger.info(
+            f"Set labels on {entity_id}: {data.get('entity_entry', {}).get('labels')}"
+        )
 
         # Clean up: clear labels
         await mcp_client.call_tool(
@@ -71,7 +73,9 @@ class TestLabelSetOperation:
             {"entity_id": entity_id, "labels": []},
         )
 
-    async def test_set_multiple_labels(self, mcp_client, cleanup_tracker, test_entity_id):
+    async def test_set_multiple_labels(
+        self, mcp_client, cleanup_tracker, test_entity_id
+    ):
         """Test: Set multiple labels on an entity at once."""
         entity_id = test_entity_id
 
@@ -196,7 +200,7 @@ class TestLabelEntityRegistryIntegrity:
             "ha_get_state",
             {"entity_id": entity_id},
         )
-        initial_data = parse_mcp_result(initial_result)
+        parse_mcp_result(initial_result)
 
         # Create and set a label
         create_result = await mcp_client.call_tool(
