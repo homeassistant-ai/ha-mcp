@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 83+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 84+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -276,7 +276,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Replaces the full tool catalog (~83 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~84 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
 
@@ -440,7 +440,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 83+ MCP tools for controlling Home Assistant:
+The add-on provides 84+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -474,6 +474,9 @@ The add-on provides 83+ MCP tools for controlling Home Assistant:
 
 ### Camera
 - `ha_get_camera_image` — Retrieve a snapshot image from a Home Assistant camera entity.
+
+### Dashboard
+- `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get a rendered PNG image of a Home Assistant Lovelace dashboard view.
 
 ### Dashboards
 - `ha_config_delete_dashboard` — Delete a storage-mode dashboard completely.
