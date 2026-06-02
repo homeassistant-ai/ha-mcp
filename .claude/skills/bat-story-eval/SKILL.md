@@ -274,19 +274,17 @@ Skipped: s02, s04, s06-s12 (tools unchanged)
 
 ### Pre-built Story Results
 
-Read the `model` and `quantization` fields from each JSONL record (written by
-`run_story.py`) and state them. Results vary by model, so a report naming only
-the agent is ambiguous after the fact, and the same base model at different
-quants behaves very differently, so the quant matters too. Put them in the run
-header (single-model runs) and as columns.
+Also read the `model` and `quantization` fields from each JSONL record (written
+by `run_story.py`) and show them as columns. Results vary by model, and the same
+base model at different quants behaves very differently, so a report naming only
+the agent is ambiguous after the fact. (Quant is `-` for cloud backends that
+don't expose it.)
 
 ```
-Run: agent=openai model=<model> quant=<quant>   (baseline <vX> vs HEAD)
-
-| Story | Agent  | Model   | Quant  | Baseline | Target | Trend  | Baseline Tokens | Target Tokens | Delta |
-|-------|--------|---------|--------|----------|--------|--------|-----------------|---------------|-------|
-| s01   | openai | <model> | <quant>| pass     | pass   | stable | ...             | ...           | ...   |
-| s03   | openai | <model> | <quant>| pass     | pass   | stable | ...             | ...           | ...   |
+| Story | Agent  | Model   | Quant | Baseline | Target | Trend  | Baseline Tokens | Target Tokens | Delta |
+|-------|--------|---------|-------|----------|--------|--------|-----------------|---------------|-------|
+| s01   | gemini | <model> | -     | pass     | pass   | stable | 36,262          | 34,100        | -6%   |
+| s03   | gemini | <model> | -     | pass     | pass   | stable | 42,000          | 41,500        | -1%   |
 ```
 
 ### Custom Story Details
