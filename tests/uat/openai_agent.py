@@ -96,7 +96,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-think",
         action="store_true",
-        help="Prepend /no_think to disable reasoning mode (qwen3 and compatible models)",
+        help=(
+            "Disable reasoning mode: prepends /no_think (original Qwen3) and "
+            "sends enable_thinking=false chat-template kwarg (Qwen3.5/3.6, "
+            "honored by vLLM/llama-server)"
+        ),
     )
     parser.add_argument(
         "--max-tokens",
@@ -127,6 +131,7 @@ async def tool_call_loop(
     tools: list[dict],
     mcp_client: MCPClient,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    no_think: bool = False,
     tool_trace_sink: list[str] | None = None,
 ) -> dict:
     """Run the LLM tool-call loop until a final text response or iteration limit.
@@ -142,12 +147,24 @@ async def tool_call_loop(
     total_fail = 0
     tokens_input = 0
     tokens_output = 0
+    tokens_thoughts = 0
     tokens_first_input: int | None = None
+    no_think_warned = False
 
     for _ in range(MAX_TOOL_LOOP_ITERATIONS):
         kwargs = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if tools:
             kwargs["tools"] = tools
+        if no_think:
+            # Qwen3.5/3.6 dropped the in-band ``/no_think`` soft switch (still
+            # prepended below for older Qwen3) and moved reasoning control to
+            # the ``enable_thinking`` chat-template kwarg. Pass it via
+            # extra_body for servers that honor it (recent llama-server, vLLM).
+            # Servers that don't either silently ignore it (reasoning stays on)
+            # or reject the unknown field with HTTP 400; LM Studio's support
+            # varies by version. The reasoning-token check below warns when the
+            # model kept reasoning despite this request, so a no-op is visible.
+            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
 
         response = await client.chat.completions.create(**kwargs)
         num_turns += 1
@@ -156,10 +173,18 @@ async def tool_call_loop(
         # idle context baseline.  If a turn's usage is None (some local servers
         # omit it), tokens_first_input stays None until the first turn that does
         # report usage — so it reflects "first available" rather than "turn 1".
+        reasoning_this_turn = 0
         if response.usage:
             prompt_toks = response.usage.prompt_tokens or 0
             tokens_input += prompt_toks
             tokens_output += response.usage.completion_tokens or 0
+            # reasoning_tokens (when reported, e.g. LM Studio / o1-style usage) is
+            # a subset of completion_tokens; track it so a run can show how much
+            # output was reasoning. Absent or null on backends that don't report.
+            details = getattr(response.usage, "completion_tokens_details", None)
+            raw_reasoning = getattr(details, "reasoning_tokens", None)
+            reasoning_this_turn = raw_reasoning if isinstance(raw_reasoning, int) else 0
+            tokens_thoughts += reasoning_this_turn
             if tokens_first_input is None:
                 tokens_first_input = prompt_toks
 
@@ -170,6 +195,32 @@ async def tool_call_loop(
             )
         choice = response.choices[0]
         message = choice.message
+
+        # If --no-think was requested but the model still reasoned, the backend
+        # didn't honor it (e.g. LM Studio can't map enable_thinking to some
+        # Qwen3.6 GGUFs). Warn once so the no-op is visible instead of silently
+        # paying full reasoning-decode cost. reasoning_tokens is the structured
+        # signal; reasoning_content and an inline <think> block in content cover
+        # servers that emit reasoning without a separate token detail.
+        if no_think and not no_think_warned:
+            still_reasoning = (
+                reasoning_this_turn
+                or getattr(message, "reasoning_content", None)
+                or "<think>" in (message.content or "").lower()
+            )
+            if still_reasoning:
+                detail = (
+                    f"{reasoning_this_turn} reasoning tokens"
+                    if reasoning_this_turn
+                    else "reasoning in output, token count unavailable"
+                )
+                logger.warning(
+                    "--no-think requested but model %s still produced reasoning "
+                    "(%s); backend may not honor enable_thinking",
+                    model,
+                    detail,
+                )
+                no_think_warned = True
 
         # No tool calls — we have a final response
         if not message.tool_calls:
@@ -184,6 +235,7 @@ async def tool_call_loop(
                 "tokens_input": tokens_input,
                 "tokens_first_input": tokens_first_input,
                 "tokens_output": tokens_output,
+                "tokens_thoughts": tokens_thoughts,
                 "cost_usd": 0,
             }
 
@@ -245,9 +297,7 @@ async def tool_call_loop(
                 # Server-side WARNING log already shows the failure details;
                 # only record to the trace sink for test artifacts.
                 if tool_trace_sink is not None:
-                    tool_trace_sink.append(
-                        f"[tool] {tool_name} failed: {err_text}"
-                    )
+                    tool_trace_sink.append(f"[tool] {tool_name} failed: {err_text}")
 
             messages.append(
                 {
@@ -272,6 +322,7 @@ async def tool_call_loop(
         "tokens_input": tokens_input,
         "tokens_first_input": tokens_first_input,
         "tokens_output": tokens_output,
+        "tokens_thoughts": tokens_thoughts,
         "cost_usd": 0,
     }
 
@@ -343,6 +394,7 @@ async def run_scenario_inline(
         openai_tools,
         mcp_client,
         max_tokens=max_tokens,
+        no_think=no_think,
         tool_trace_sink=tool_trace_sink,
     )
     result["model"] = model

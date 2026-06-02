@@ -104,7 +104,7 @@ class TestToolCallLoop:
         mock_response.choices[0].message.tool_calls = None
         mock_response.choices[0].finish_reason = "stop"
         mock_response.usage = MagicMock(prompt_tokens=100, completion_tokens=50)
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         result = await openai_agent.tool_call_loop(
             client=mock_client,
@@ -120,6 +120,275 @@ class TestToolCallLoop:
         assert result["tokens_input"] == 100
         assert result["tokens_output"] == 50
         assert result["cost_usd"] == 0
+
+    @pytest.mark.asyncio
+    async def test_no_think_sends_enable_thinking_false(self):
+        """no_think=True sends the enable_thinking=false chat-template kwarg.
+
+        Qwen3.5/3.6 ignore the in-band ``/no_think`` token, so disabling
+        reasoning relies on this extra_body kwarg reaching the server.
+        """
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Done."
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.usage = MagicMock(
+            prompt_tokens=10,
+            completion_tokens=5,
+            completion_tokens_details=MagicMock(reasoning_tokens=0),
+        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        await openai_agent.tool_call_loop(
+            client=mock_client,
+            model="qwen3.6",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[],
+            mcp_client=AsyncMock(),
+            no_think=True,
+        )
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        assert kwargs["extra_body"] == {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_think_default_omits_extra_body(self):
+        """Default (no_think=False) sends no extra_body, leaving other models untouched."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Done."
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        await openai_agent.tool_call_loop(
+            client=mock_client,
+            model="some-model",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[],
+            mcp_client=AsyncMock(),
+        )
+
+        _, kwargs = mock_client.chat.completions.create.call_args
+        assert "extra_body" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_no_think_warns_when_backend_still_reasons(self, caplog):
+        """Warn when --no-think is set but the model still returns reasoning tokens."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Done."
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.usage = MagicMock(
+            prompt_tokens=10,
+            completion_tokens=235,
+            completion_tokens_details=MagicMock(reasoning_tokens=220),
+        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        with caplog.at_level("WARNING"):
+            await openai_agent.tool_call_loop(
+                client=mock_client,
+                model="qwen3.6",
+                messages=[{"role": "user", "content": "Hello"}],
+                tools=[],
+                mcp_client=AsyncMock(),
+                no_think=True,
+            )
+
+        assert any("still produced reasoning" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_no_think_silent_when_backend_honors_it(self, caplog):
+        """No warning when reasoning is actually suppressed (zero reasoning tokens)."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "Done."
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.usage = MagicMock(
+            prompt_tokens=10,
+            completion_tokens=5,
+            completion_tokens_details=MagicMock(reasoning_tokens=0),
+        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        with caplog.at_level("WARNING"):
+            await openai_agent.tool_call_loop(
+                client=mock_client,
+                model="qwen3.6",
+                messages=[{"role": "user", "content": "Hello"}],
+                tools=[],
+                mcp_client=AsyncMock(),
+                no_think=True,
+            )
+
+        assert not any("still produced reasoning" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_reasoning_tokens_captured_in_tokens_thoughts(self):
+        """reasoning_tokens from completion_tokens_details flows into tokens_thoughts."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "391."
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.usage = MagicMock(
+            prompt_tokens=23,
+            completion_tokens=235,
+            completion_tokens_details=MagicMock(reasoning_tokens=220),
+        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        result = await openai_agent.tool_call_loop(
+            client=mock_client,
+            model="qwen3.6",
+            messages=[{"role": "user", "content": "17*23?"}],
+            tools=[],
+            mcp_client=AsyncMock(),
+        )
+
+        assert result["tokens_thoughts"] == 220
+        assert result["tokens_output"] == 235
+
+    @pytest.mark.asyncio
+    async def test_tokens_thoughts_zero_when_backend_omits_details(self):
+        """Backends without completion_tokens_details report zero thoughts, not a crash."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "ok"
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.usage = MagicMock(
+            prompt_tokens=10,
+            completion_tokens=5,
+            completion_tokens_details=None,
+        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        result = await openai_agent.tool_call_loop(
+            client=mock_client,
+            model="some-model",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+            mcp_client=AsyncMock(),
+        )
+
+        assert result["tokens_thoughts"] == 0
+
+    @pytest.mark.asyncio
+    async def test_no_think_warns_on_reasoning_content_without_token_detail(
+        self, caplog
+    ):
+        """Warn via reasoning_content when the backend reports no reasoning token count."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "391."
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].message.reasoning_content = "let me think..."
+        mock_response.usage = MagicMock(
+            prompt_tokens=10, completion_tokens=5, completion_tokens_details=None
+        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        with caplog.at_level("WARNING"):
+            await openai_agent.tool_call_loop(
+                client=mock_client,
+                model="qwen3.6",
+                messages=[{"role": "user", "content": "Hi"}],
+                tools=[],
+                mcp_client=AsyncMock(),
+                no_think=True,
+            )
+
+        msgs = [
+            r.message for r in caplog.records if "still produced reasoning" in r.message
+        ]
+        assert len(msgs) == 1
+        assert "token count unavailable" in msgs[0]
+
+    @pytest.mark.asyncio
+    async def test_no_think_warns_on_inline_think_block(self, caplog):
+        """Warn when reasoning is inlined as a <think> block with no structured signal.
+
+        Uses uppercase tags to also pin the case-insensitive detection.
+        """
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "<THINK>17*23</THINK>391."
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].message.reasoning_content = None
+        mock_response.usage = MagicMock(
+            prompt_tokens=10, completion_tokens=5, completion_tokens_details=None
+        )
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        with caplog.at_level("WARNING"):
+            await openai_agent.tool_call_loop(
+                client=mock_client,
+                model="qwen3.6",
+                messages=[{"role": "user", "content": "Hi"}],
+                tools=[],
+                mcp_client=AsyncMock(),
+                no_think=True,
+            )
+
+        assert any("still produced reasoning" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_no_think_warns_only_once_across_turns(self, caplog):
+        """The warning fires at most once even when every turn keeps reasoning."""
+
+        def _reasoning_resp(content, tool_calls):
+            resp = MagicMock()
+            resp.choices = [MagicMock()]
+            resp.choices[0].message.content = content
+            resp.choices[0].message.tool_calls = tool_calls
+            resp.choices[0].message.reasoning_content = None
+            resp.usage = MagicMock(
+                prompt_tokens=10,
+                completion_tokens=60,
+                completion_tokens_details=MagicMock(reasoning_tokens=50),
+            )
+            return resp
+
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.function.name = "some_tool"
+        tc.function.arguments = "{}"
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=[_reasoning_resp(None, [tc]), _reasoning_resp("done", None)]
+        )
+        mock_mcp = AsyncMock()
+        mock_mcp.call_tool.return_value = MagicMock(content=[MagicMock(text="ok")])
+
+        with caplog.at_level("WARNING"):
+            result = await openai_agent.tool_call_loop(
+                client=mock_client,
+                model="qwen3.6",
+                messages=[{"role": "user", "content": "Hi"}],
+                tools=[],
+                mcp_client=mock_mcp,
+                no_think=True,
+            )
+
+        warnings = [
+            r for r in caplog.records if "still produced reasoning" in r.message
+        ]
+        assert len(warnings) == 1
+        assert result["tokens_thoughts"] == 100  # 50 per turn, accumulated
 
     @pytest.mark.asyncio
     async def test_single_tool_call(self):
@@ -147,7 +416,7 @@ class TestToolCallLoop:
         resp2.choices[0].finish_reason = "stop"
         resp2.usage = MagicMock(prompt_tokens=300, completion_tokens=20)
 
-        mock_client.chat.completions.create.side_effect = [resp1, resp2]
+        mock_client.chat.completions.create = AsyncMock(side_effect=[resp1, resp2])
 
         # Mock MCP client
         mock_mcp = AsyncMock()
@@ -195,7 +464,7 @@ class TestToolCallLoop:
         resp2.choices[0].message.tool_calls = None
         resp2.usage = MagicMock(prompt_tokens=200, completion_tokens=10)
 
-        mock_client.chat.completions.create.side_effect = [resp1, resp2]
+        mock_client.chat.completions.create = AsyncMock(side_effect=[resp1, resp2])
 
         mock_mcp = AsyncMock()
         mock_mcp.call_tool.side_effect = RuntimeError("Tool not found")
@@ -234,7 +503,7 @@ class TestToolCallLoop:
         resp2.choices[0].message.tool_calls = None
         resp2.usage = MagicMock(prompt_tokens=20, completion_tokens=5)
 
-        mock_client.chat.completions.create.side_effect = [resp1, resp2]
+        mock_client.chat.completions.create = AsyncMock(side_effect=[resp1, resp2])
 
         mock_mcp = AsyncMock()
 
@@ -267,9 +536,13 @@ class TestToolCallLoop:
         resp.choices = [MagicMock()]
         resp.choices[0].message.content = None
         resp.choices[0].message.tool_calls = [tool_call]
-        resp.usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+        resp.usage = MagicMock(
+            prompt_tokens=10,
+            completion_tokens=15,
+            completion_tokens_details=MagicMock(reasoning_tokens=5),
+        )
 
-        mock_client.chat.completions.create.return_value = resp
+        mock_client.chat.completions.create = AsyncMock(return_value=resp)
 
         mock_mcp = AsyncMock()
         mock_mcp.call_tool.return_value = MagicMock(content=[MagicMock(text="ok")])
@@ -287,6 +560,9 @@ class TestToolCallLoop:
         assert (
             result["tool_stats"]["totalCalls"] == openai_agent.MAX_TOOL_LOOP_ITERATIONS
         )
+        # tokens_thoughts accumulates across every turn and is reported at the
+        # max-iterations exit too (not just the final-response exit).
+        assert result["tokens_thoughts"] == 5 * openai_agent.MAX_TOOL_LOOP_ITERATIONS
 
     @pytest.mark.asyncio
     async def test_null_usage_handled(self):
@@ -297,7 +573,7 @@ class TestToolCallLoop:
         mock_response.choices[0].message.content = "Result."
         mock_response.choices[0].message.tool_calls = None
         mock_response.usage = None
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         result = await openai_agent.tool_call_loop(
             client=mock_client,
@@ -318,7 +594,7 @@ class TestToolCallLoop:
         mock_response = MagicMock()
         mock_response.choices = []
         mock_response.usage = None
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         with pytest.raises(RuntimeError, match="empty choices"):
             await openai_agent.tool_call_loop(
@@ -328,6 +604,59 @@ class TestToolCallLoop:
                 tools=[],
                 mcp_client=AsyncMock(),
             )
+
+
+class TestRunScenarioInline:
+    """Test the scenario wrapper that owns the /no_think prepend and threading."""
+
+    @staticmethod
+    def _mock_client():
+        client = MagicMock()
+        resp = MagicMock()
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.content = "Done."
+        resp.choices[0].message.tool_calls = None
+        resp.choices[0].message.reasoning_content = None
+        resp.usage = MagicMock(
+            prompt_tokens=10,
+            completion_tokens=5,
+            completion_tokens_details=MagicMock(reasoning_tokens=0),
+        )
+        client.chat.completions.create = AsyncMock(return_value=resp)
+        return client
+
+    @pytest.mark.asyncio
+    async def test_no_think_prepends_token_and_sends_kwarg(self):
+        """no_think=True both prepends /no_think and sends the enable_thinking kwarg."""
+        client = self._mock_client()
+        await openai_agent.run_scenario_inline(
+            client,
+            AsyncMock(),
+            "qwen3.6",
+            "Find lights",
+            no_think=True,
+            openai_tools=[],
+        )
+        _, kwargs = client.chat.completions.create.call_args
+        assert kwargs["messages"][0]["content"] == "/no_think\n\nFind lights"
+        assert kwargs["extra_body"] == {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
+
+    @pytest.mark.asyncio
+    async def test_default_omits_prepend_and_kwarg(self):
+        """Default leaves the prompt verbatim and sends no extra_body."""
+        client = self._mock_client()
+        await openai_agent.run_scenario_inline(
+            client,
+            AsyncMock(),
+            "some-model",
+            "Find lights",
+            openai_tools=[],
+        )
+        _, kwargs = client.chat.completions.create.call_args
+        assert kwargs["messages"][0]["content"] == "Find lights"
+        assert "extra_body" not in kwargs
 
 
 class TestExtractToolResultText:
@@ -361,17 +690,19 @@ class TestExtractToolResultText:
 class TestDetectModel:
     """Test model auto-detection."""
 
-    def test_returns_first_model_id(self):
+    @pytest.mark.asyncio
+    async def test_returns_first_model_id(self):
         """Returns the first model ID from the API."""
         client = MagicMock()
         model = MagicMock()
         model.id = "llama-3.1-8b"
-        client.models.list.return_value = MagicMock(data=[model])
-        assert openai_agent.detect_model(client) == "llama-3.1-8b"
+        client.models.list = AsyncMock(return_value=MagicMock(data=[model]))
+        assert await openai_agent.detect_model(client) == "llama-3.1-8b"
 
-    def test_raises_when_no_models(self):
+    @pytest.mark.asyncio
+    async def test_raises_when_no_models(self):
         """Raises RuntimeError when no models are available."""
         client = MagicMock()
-        client.models.list.return_value = MagicMock(data=[])
+        client.models.list = AsyncMock(return_value=MagicMock(data=[]))
         with pytest.raises(RuntimeError, match="No models available"):
-            openai_agent.detect_model(client)
+            await openai_agent.detect_model(client)
