@@ -73,6 +73,34 @@ async def detect_model(client: openai.AsyncOpenAI) -> str:
     return model_id
 
 
+async def detect_quantization(base_url: str, model_id: str) -> str | None:
+    """Best-effort lookup of a model's quantization (e.g. ``IQ2_M``).
+
+    Reads LM Studio's native ``/api/v0/models`` endpoint, which exposes
+    ``quantization`` that the OpenAI-compatible ``/v1/models`` does not.
+    The same base model at full precision vs a heavy quant behaves very
+    differently, so the quant belongs in the result record. Returns
+    ``None`` for backends that don't expose it (Ollama, cloud) or on any
+    error.
+    """
+    import httpx
+
+    root = base_url.rsplit("/v1", 1)[0].rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=5) as http:
+            resp = await http.get(f"{root}/api/v0/models")
+            resp.raise_for_status()
+            for entry in resp.json().get("data", []):
+                if entry.get("id") == model_id:
+                    quant = entry.get("quantization")
+                    if quant:
+                        logger.info(f"Detected quantization: {quant}")
+                    return quant
+    except Exception as e:  # best-effort enrichment, never fatal
+        logger.debug(f"Quantization detection skipped: {type(e).__name__}: {e}")
+    return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="OpenAI-compatible UAT agent for MCP testing",
@@ -406,17 +434,20 @@ async def create_and_warm_openai_client(
     api_key: str = DEFAULT_API_KEY,
     timeout: int = DEFAULT_TIMEOUT,
     model: str | None = None,
-) -> tuple[openai.AsyncOpenAI, str]:
+) -> tuple[openai.AsyncOpenAI, str, str | None]:
     """Construct an OpenAI client, resolve the model, and warm it up once.
 
-    Returns ``(client, model)``. Issues a 1-token completion to force
-    backends like LM Studio and Ollama to load the model into VRAM
+    Returns ``(client, model, quantization)``. Issues a 1-token completion
+    to force backends like LM Studio and Ollama to load the model into VRAM
     before the first real request (otherwise that request can stall
-    30-120s while the model is copied in). Raises on failure.
+    30-120s while the model is copied in). ``quantization`` is best-effort
+    (``None`` when the backend doesn't expose it). Raises on failure.
     """
     client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
     resolved_model = model or await detect_model(client)
-    logger.info(f"Using model: {resolved_model}")
+    quantization = await detect_quantization(base_url, resolved_model)
+    suffix = f" ({quantization})" if quantization else ""
+    logger.info(f"Using model: {resolved_model}{suffix}")
     logger.info("Warming up model (may take a minute if not loaded)...")
     await client.chat.completions.create(
         model=resolved_model,
@@ -424,12 +455,12 @@ async def create_and_warm_openai_client(
         max_tokens=1,
     )
     logger.info("Model ready")
-    return client, resolved_model
+    return client, resolved_model, quantization
 
 
 async def _main_async(args: argparse.Namespace) -> None:
     try:
-        client, model = await create_and_warm_openai_client(
+        client, model, _quant = await create_and_warm_openai_client(
             base_url=args.base_url,
             api_key=args.api_key,
             timeout=args.timeout,
