@@ -15,9 +15,17 @@ import httpx
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error
-from .provision import resolve_engine_url
+from .provision import TOKEN_HINT, resolve_engine_url
 
 logger = logging.getLogger(__name__)
+
+# Shared Field-description clause for the ``full_page`` screenshot param, reused
+# across ha_get_dashboard_screenshot and the get/set screenshot options so the
+# wording stays in one place instead of being copy-pasted per tool.
+FULL_PAGE_PARAM_DESC = (
+    "capture the whole scrollable dashboard instead of just the viewport "
+    "(use when content runs below the fold)"
+)
 
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 800
@@ -100,7 +108,6 @@ async def capture_dashboard_png(
     height: int = DEFAULT_HEIGHT,
     zoom: float = 1.0,
     wait_ms: int = DEFAULT_WAIT_MS,
-    theme: str | None = None,
     full_page: bool = False,
 ) -> bytes:
     """Render ``dashboard_path`` to PNG bytes via the screenshot engine.
@@ -121,8 +128,6 @@ async def capture_dashboard_png(
         "wait": str(int(wait_ms)),
         "format": "png",
     }
-    if theme:
-        params["theme"] = theme
     url = f"{engine}/{path}"
 
     try:
@@ -138,11 +143,11 @@ async def capture_dashboard_png(
                 suggestions=[
                     "Ensure the Puppet screenshot add-on (or sidecar) is "
                     "installed and running",
-                    # Puppet restarts itself when navigation fails, so a "
-                    # missing/invalid token shows up as a dropped connection.
-                    "If it is running, its long-lived access token is likely "
-                    "missing or invalid — set the add-on's 'access_token' "
-                    "option (Profile > Security) and restart it",
+                    # Puppet restarts itself when navigation fails, so a
+                    # missing/invalid token shows up as a dropped connection
+                    # rather than an HTTP error.
+                    f"If it is running, its access token is likely missing or "
+                    f"invalid — {TOKEN_HINT}",
                     "Check HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL on "
                     "Docker/Container deployments",
                 ],
@@ -159,9 +164,8 @@ async def capture_dashboard_png(
                 context={"status_code": resp.status_code, "path": path},
                 suggestions=[
                     "Verify the dashboard path exists",
-                    "If the engine landed on the login page, its long-lived "
-                    "access token is missing/invalid — set the add-on's "
-                    "'access_token' option and restart it",
+                    f"If the engine landed on the login page, its access token "
+                    f"is missing/invalid — {TOKEN_HINT}",
                     "Increase wait_ms for heavy chart cards",
                 ],
             )

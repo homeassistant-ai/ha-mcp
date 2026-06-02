@@ -12,7 +12,6 @@ import json
 import logging
 import re
 import time
-from collections.abc import Coroutine
 from typing import Annotated, Any, ClassVar, Literal, NoReturn
 from urllib.parse import unquote, urlsplit
 
@@ -258,7 +257,7 @@ async def _supervisor_api_call(
             wait_timeout = float(timeout) + 15.0
 
         result = await ws_client.send_command(
-            "supervisor/api", wait_timeout=wait_timeout, **kwargs
+            "supervisor/api", _wait_timeout=wait_timeout, **kwargs
         )
 
         if not result.get("success"):
@@ -1877,15 +1876,9 @@ class AddOnTools:
                 self._client, endpoint, method=method, data=data, timeout=timeout
             )
         except ToolError as e:
-            noop = self._repo_noop_verb(key, str(e))
-            if noop:
-                return self._repo_noop_result(key, repository, noop)
-            self._raise_repo_action_error(key, repository, str(e))
+            return self._repo_noop_or_raise(key, repository, str(e))
         if not result.get("success"):
-            noop = self._repo_noop_verb(key, str(result))
-            if noop:
-                return self._repo_noop_result(key, repository, noop)
-            self._raise_repo_action_error(key, repository, str(result))
+            return self._repo_noop_or_raise(key, repository, str(result))
         return {
             "success": True,
             "action": key,
@@ -1893,15 +1886,61 @@ class AddOnTools:
             "message": f"Repository {repository} {key} completed.",
         }
 
+    def _repo_noop_or_raise(
+        self, key: str, repository: str, error_text: str
+    ) -> dict[str, Any]:
+        """Reclassify an idempotent no-op failure as success, else raise.
+
+        Logs the reclassification so a failure that gets demoted to a success
+        is never invisible."""
+        noop = self._repo_noop_verb(key, self._supervisor_error_text(error_text))
+        if noop:
+            logger.info(
+                "Treating %s of repository %r as an idempotent no-op (%s).",
+                key,
+                repository,
+                noop,
+            )
+            return self._repo_noop_result(key, repository, noop)
+        self._raise_repo_action_error(key, repository, error_text)
+
+    @staticmethod
+    def _supervisor_error_text(error_text: str) -> str:
+        """Extract just the Supervisor-reported error from a serialized failure.
+
+        ``_supervisor_api_call`` wraps a failure as a ToolError whose JSON
+        carries a generic ``message`` ("Supervisor API call failed:
+        /store/repositories/<slug>") plus the raw Supervisor response in
+        ``details``. The endpoint in ``message`` always contains
+        "repositories", so scanning the whole blob would make any
+        repository-action failure look repository-scoped. Return ``details``
+        (what Supervisor actually said) — falling back to ``message`` or the
+        raw text — so idempotency matching keys only on the real cause."""
+        try:
+            payload = json.loads(error_text)
+        except (ValueError, TypeError):
+            return error_text
+        err = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(err, dict):
+            return str(err.get("details") or err.get("message") or error_text)
+        return error_text
+
     @staticmethod
     def _repo_noop_verb(key: str, error_text: str) -> str | None:
         """Return a status word if a repo-action failure means the desired end
-        state already holds (an idempotent no-op), else None."""
+        state already holds (an idempotent no-op), else None.
+
+        Scoped tightly so an unrelated failure that merely happens to mention
+        "not found" somewhere (a dependent add-on, a misrouted 404, a file
+        path) is NOT silently reclassified as success: the not-found phrasing
+        must be about a repository."""
         text = error_text.lower()
         if key == "add_repository" and "already in the store" in text:
             return "already registered"
-        if key == "remove_repository" and (
-            "not found" in text or "does not exist" in text
+        if (
+            key == "remove_repository"
+            and "repositor" in text
+            and ("not found" in text or "does not exist" in text)
         ):
             return "not registered"
         return None
@@ -2212,7 +2251,7 @@ class AddOnTools:
             result.append(("request_headers", "request_headers"))
         return result
 
-    def _dispatch_repository_action(
+    async def _dispatch_repository_action(
         self,
         action: str,
         repository: str | None,
@@ -2221,14 +2260,13 @@ class AddOnTools:
         path: str | None,
         config_data: dict[str, Any],
         array_patch: dict[str, Any] | None,
-    ) -> Coroutine[Any, Any, dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Validate and run a store-repository action (add/remove).
 
         Repository actions don't target an installed add-on, so a `slug` is
         not required; `repository` (URL for add, slug for remove) is. Reject
         the other operating modes' params so the call has one unambiguous
-        intent. Returns the coroutine from ``_execute_repository_action`` so
-        the async caller can await it.
+        intent.
         """
         conflicts = []
         if slug:
@@ -2257,7 +2295,7 @@ class AddOnTools:
                     parameter="repository",
                 )
             )
-        return self._execute_repository_action(action, repository.strip())
+        return await self._execute_repository_action(action, repository.strip())
 
     async def manage_addon(
         self,

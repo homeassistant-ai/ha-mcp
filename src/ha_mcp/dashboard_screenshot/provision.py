@@ -40,25 +40,30 @@ ENGINE_SLUG_SUFFIXES = ("_puppet", "_ha_mcp_screenshot")
 
 _REPO_URL = "https://github.com/balloob/home-assistant-addons"
 
+# The single source of truth for the "configure the access token" instruction,
+# reused across every engine-troubleshooting message here and in capture.py so
+# a copy edit only has to happen once.
+TOKEN_HINT = (
+    "set the add-on's 'access_token' option to a Home Assistant long-lived "
+    "access token (create one in Profile > Security, ideally for a dedicated "
+    "low-privilege user) and (re)start it"
+)
+
 _INSTALL_HELP = (
     "Dashboard screenshot mode is enabled, but the Puppet screenshot engine "
     "add-on is not installed. On HA OS / Supervised: (1) add balloob's add-on "
     f"repository ({_REPO_URL}) under Settings > Add-ons > Add-on Store > "
     "Repositories, then install the 'Puppet' add-on; and (2) it REQUIRES a "
-    "Home Assistant long-lived access token — create one in Profile > Security "
-    "(ideally for a dedicated low-privilege user), set it as the add-on's "
-    "'access_token' option, and (re)start the add-on. Without a token the "
-    "engine only serves a configuration-instructions page. On Docker / "
-    "Container, run the Puppet image as a sidecar (with its access_token set) "
-    "and point ha-mcp at it via HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL "
-    "(e.g. http://puppet:10000)."
+    f"token — {TOKEN_HINT}. Without a token the engine only serves a "
+    "configuration-instructions page. On Docker / Container, run the Puppet "
+    "image as a sidecar (with its access_token set) and point ha-mcp at it via "
+    "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL (e.g. http://puppet:10000)."
 )
 
 _NOT_STARTED_HELP = (
     "The Puppet screenshot engine add-on is installed but not started. Open "
-    "Settings > Add-ons > Puppet, set its 'access_token' option to a Home "
-    "Assistant long-lived access token (Profile > Security) if you haven't, "
-    "and start it (enable 'Start on boot' to keep it available)."
+    f"Settings > Add-ons > Puppet, {TOKEN_HINT} (enable 'Start on boot' to keep "
+    "it available)."
 )
 
 _STDIO_HELP = (

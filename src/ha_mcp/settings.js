@@ -1094,7 +1094,7 @@ const FEATURE_META = {
   },
 };
 
-// The 5 beta sub-flag fields gated by the master beta toggle. Populated
+// The beta sub-flag fields gated by the master beta toggle. Populated
 // from the ``beta_sub_flags`` array in the /api/settings/features
 // response so the JS stays in sync with Python's
 // ``config.BETA_FEATURE_FIELDS`` without duplicating the name list here.

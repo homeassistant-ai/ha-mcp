@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 import pytest
 from fastmcp.exceptions import ToolError
+from pydantic import ValidationError
 
 from ha_mcp.config import BETA_FEATURE_FIELDS, FEATURE_FLAG_FIELDS, Settings
 
@@ -56,6 +57,21 @@ class TestSettings:
     def test_engine_url_from_env(self, monkeypatch: Any) -> None:
         monkeypatch.setenv(
             "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", "http://engine:10000"
+        )
+        assert Settings().dashboard_screenshot_engine_url == "http://engine:10000"
+
+    @pytest.mark.parametrize("bad", ["ftp://engine:10000", "engine:10000", "//engine"])
+    def test_engine_url_rejects_non_http(self, monkeypatch: Any, bad: str) -> None:
+        # The validator must fail loudly at startup on a scheme-less / wrong
+        # scheme URL instead of letting it 0-byte-fail at render time.
+        monkeypatch.setenv("HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", bad)
+        with pytest.raises(ValidationError):
+            Settings()
+
+    def test_engine_url_validator_strips_trailing_slash(self, monkeypatch: Any) -> None:
+        # The field validator (not just resolve_engine_url) normalizes the URL.
+        monkeypatch.setenv(
+            "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", "http://engine:10000/"
         )
         assert Settings().dashboard_screenshot_engine_url == "http://engine:10000"
 
@@ -143,6 +159,129 @@ class TestResolveEngineUrl:
         )
         with pytest.raises(ToolError):
             await provision.resolve_engine_url()
+
+
+# ---------------------------------------------------------------------------
+# Supervisor engine discovery (mode 2)
+# ---------------------------------------------------------------------------
+
+
+class _FakeSupResponse:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _FakeSupClient:
+    """Async-context Supervisor httpx stand-in driven by a path->payload map."""
+
+    def __init__(self, routes: dict[str, Any]) -> None:
+        self._routes = routes
+
+    async def __aenter__(self) -> _FakeSupClient:
+        return self
+
+    async def __aexit__(self, *_a: Any) -> None:
+        return None
+
+    async def get(self, path: str) -> _FakeSupResponse:
+        val = self._routes[path]
+        if isinstance(val, Exception):
+            raise val
+        return _FakeSupResponse(val)
+
+
+def _patch_supervisor(monkeypatch: Any, routes: dict[str, Any]) -> None:
+    import ha_mcp.client.supervisor_client as sup_mod
+
+    monkeypatch.setattr(
+        sup_mod,
+        "make_supervisor_httpx_client",
+        lambda *_a, **_kw: _FakeSupClient(routes),
+    )
+
+
+class TestDiscoverEngineViaSupervisor:
+    async def test_not_installed_raises_resource_not_found(
+        self, monkeypatch: Any
+    ) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {"/addons": {"data": {"addons": [{"slug": "core_ssh"}, {"slug": "a_db"}]}}},
+        )
+        with pytest.raises(ToolError) as exc:
+            await provision._discover_engine_url_via_supervisor()
+        assert "not installed" in str(exc.value).lower()
+
+    async def test_prefers_started_match(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {
+                    "data": {
+                        "addons": [
+                            {"slug": "abc_ha_mcp_screenshot"},  # legacy, stopped
+                            {"slug": "def_puppet"},  # stock, started
+                        ]
+                    }
+                },
+                "/addons/abc_ha_mcp_screenshot/info": {"data": {"state": "stopped"}},
+                "/addons/def_puppet/info": {
+                    "data": {"state": "started", "hostname": "def-puppet"}
+                },
+            },
+        )
+        url = await provision._discover_engine_url_via_supervisor()
+        assert url == "http://def-puppet:10000"
+
+    async def test_started_without_hostname_raises(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
+                "/addons/def_puppet/info": {"data": {"state": "started"}},
+            },
+        )
+        with pytest.raises(ToolError) as exc:
+            await provision._discover_engine_url_via_supervisor()
+        assert "hostname" in str(exc.value).lower()
+
+    async def test_installed_but_not_started_raises(self, monkeypatch: Any) -> None:
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(
+            monkeypatch,
+            {
+                "/addons": {"data": {"addons": [{"slug": "def_puppet"}]}},
+                "/addons/def_puppet/info": {"data": {"state": "stopped"}},
+            },
+        )
+        with pytest.raises(ToolError) as exc:
+            await provision._discover_engine_url_via_supervisor()
+        assert "not started" in str(exc.value).lower()
+
+    async def test_supervisor_http_error_raises_connection_failed(
+        self, monkeypatch: Any
+    ) -> None:
+        import httpx
+
+        from ha_mcp.dashboard_screenshot import provision
+
+        _patch_supervisor(monkeypatch, {"/addons": httpx.ConnectError("boom")})
+        with pytest.raises(ToolError) as exc:
+            await provision._discover_engine_url_via_supervisor()
+        assert "supervisor" in str(exc.value).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +394,42 @@ class TestCapture:
         with pytest.raises(ToolError):
             capture._validate_dashboard_path(path)
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "http://evil/x",  # scheme injection
+            "lovelace/0?x=://evil",  # query + scheme
+            "lovelace/../admin",  # traversal
+            "user@host/x",  # authority
+            "lovelace\\0",  # backslash
+            "lovelace/0?a=b",  # query string
+            "lovelace/0#frag",  # fragment
+            "lovelace/\x01ctrl",  # control character
+        ],
+    )
+    async def test_attack_vector_paths_rejected(self, path: str) -> None:
+        """Each path that could re-point the credentialed engine at an
+        arbitrary URL / admin route must raise, not just root/empty."""
+        from ha_mcp.dashboard_screenshot import capture
+
+        with pytest.raises(ToolError):
+            capture._validate_dashboard_path(path)
+
+    async def test_path_segments_are_percent_encoded(self, monkeypatch: Any) -> None:
+        """A valid segment with an encodable char reaches the engine
+        percent-encoded (defense-in-depth), not raw."""
+        from ha_mcp.dashboard_screenshot import capture
+
+        async def fake_resolve() -> str:
+            return "http://engine:10000"
+
+        monkeypatch.setattr(capture, "resolve_engine_url", fake_resolve)
+        _FakeAsyncClient._next = _FakeResponse(200, b"\x89PNG\r\n\x1a\nfake")
+        monkeypatch.setattr(capture.httpx, "AsyncClient", _FakeAsyncClient)
+
+        await capture.capture_dashboard_png("my dash/0")
+        assert _FakeAsyncClient.last_get["url"] == "http://engine:10000/my%20dash/0"
+
 
 # ---------------------------------------------------------------------------
 # Graceful get/set screenshot helper
@@ -320,6 +495,7 @@ class TestMaybeAttachScreenshot:
 
         async def record(_path: str, **kw: Any) -> bytes:
             seen["full_page"] = kw.get("full_page")
+            seen["path"] = _path
             return b"\x89PNG\r\n\x1a\nfake"
 
         monkeypatch.setattr(capture, "capture_dashboard_png", record)
@@ -328,6 +504,8 @@ class TestMaybeAttachScreenshot:
             {"success": True}, "my-dash", requested=True, full_page=True
         )
         assert seen["full_page"] is True
+        # A concrete url_path passes through unchanged to the engine path.
+        assert seen["path"] == "my-dash"
 
     async def test_success_returns_toolresult_with_image(
         self, monkeypatch: Any
@@ -358,3 +536,80 @@ class TestMaybeAttachScreenshot:
         assert out.structured_content == result
         assert len(out.content) == 1
         assert out.content[0].type == "image"
+
+    async def test_get_path_raises_on_capture_failure(self, monkeypatch: Any) -> None:
+        """raise_on_failure (the get path) propagates the engine error instead
+        of demoting it to a warning the caller may never read."""
+        import ha_mcp.config as config
+        from ha_mcp.dashboard_screenshot import capture
+        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+
+        async def boom(*_a: Any, **_kw: Any) -> bytes:
+            raise ToolError("engine unreachable")
+
+        monkeypatch.setattr(capture, "capture_dashboard_png", boom)
+
+        with pytest.raises(ToolError):
+            await _maybe_attach_screenshot(
+                {"success": True}, "my-dash", requested=True, raise_on_failure=True
+            )
+
+    async def test_full_page_without_request_warns(self) -> None:
+        """full_page is meaningless without a screenshot flag — make the
+        dropped request observable rather than a silent no-op."""
+        from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
+
+        result: dict[str, Any] = {"success": True}
+        out = await _maybe_attach_screenshot(
+            result, "my-dash", requested=False, full_page=True
+        )
+        assert out is result
+        assert any("full_page is ignored" in w for w in result.get("warnings", []))
+
+
+class TestDashboardFrontendPath:
+    @pytest.mark.parametrize(
+        ("url_path", "expected"),
+        [(None, "lovelace"), ("default", "lovelace"), ("my-dash", "my-dash")],
+    )
+    def test_maps_default_and_passes_through(
+        self, url_path: str | None, expected: str
+    ) -> None:
+        from ha_mcp.tools.tools_config_dashboards import _dashboard_frontend_path
+
+        assert _dashboard_frontend_path(url_path) == expected
+
+
+class TestNoteScreenshotIgnored:
+    def test_warns_when_screenshot_requested(self) -> None:
+        from ha_mcp.tools.tools_config_dashboards import _note_screenshot_ignored
+
+        result: dict[str, Any] = {"success": True}
+        _note_screenshot_ignored(
+            result, include_screenshot=True, full_page=False, mode="list"
+        )
+        assert any("ignored in list mode" in w for w in result["warnings"])
+
+    def test_warns_when_only_full_page_set(self) -> None:
+        from ha_mcp.tools.tools_config_dashboards import _note_screenshot_ignored
+
+        result: dict[str, Any] = {"success": True}
+        _note_screenshot_ignored(
+            result, include_screenshot=False, full_page=True, mode="search"
+        )
+        assert any("ignored in search mode" in w for w in result["warnings"])
+
+    def test_silent_when_neither_set(self) -> None:
+        from ha_mcp.tools.tools_config_dashboards import _note_screenshot_ignored
+
+        result: dict[str, Any] = {"success": True}
+        _note_screenshot_ignored(
+            result, include_screenshot=False, full_page=False, mode="list"
+        )
+        assert "warnings" not in result

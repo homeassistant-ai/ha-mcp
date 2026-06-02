@@ -22,6 +22,7 @@ from ..dashboard_screenshot.capture import (
     DEFAULT_HEIGHT,
     DEFAULT_WAIT_MS,
     DEFAULT_WIDTH,
+    FULL_PAGE_PARAM_DESC,
     capture_dashboard_png,
 )
 from .helpers import log_tool_usage, register_tool_methods
@@ -57,7 +58,13 @@ class DashboardScreenshotTools:
             int, Field(description="Viewport width in px.", ge=64, le=4096)
         ] = DEFAULT_WIDTH,
         height: Annotated[
-            int, Field(description="Viewport height in px.", ge=64, le=4096)
+            int,
+            Field(
+                description="Viewport height in px. Ignored when "
+                "full_page=True (the engine renders a tall page instead).",
+                ge=64,
+                le=4096,
+            ),
         ] = DEFAULT_HEIGHT,
         zoom: Annotated[
             float, Field(description="Page zoom factor (1.0 = 100%).", ge=0.1, le=5.0)
@@ -75,10 +82,10 @@ class DashboardScreenshotTools:
         full_page: Annotated[
             bool,
             Field(
-                description="Capture the whole scrollable dashboard instead of "
-                "just the viewport (use when content runs below the fold). "
-                "Overrides 'height' with a tall render; raise 'wait_ms' for long "
-                "dashboards so lazy cards finish painting."
+                description=f"{FULL_PAGE_PARAM_DESC[:1].upper()}"
+                f"{FULL_PAGE_PARAM_DESC[1:]}. Overrides 'height' with a tall "
+                "render; raise 'wait_ms' for long dashboards so lazy cards "
+                "finish painting."
             ),
         ] = False,
     ) -> Image:

@@ -13,6 +13,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
+from ..dashboard_screenshot.capture import FULL_PAGE_PARAM_DESC
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash
 from ..utils.python_sandbox import (
@@ -523,12 +524,34 @@ def _dashboard_frontend_path(url_path: str | None) -> str:
     return url_path
 
 
+def _note_screenshot_ignored(
+    result: dict[str, Any],
+    *,
+    include_screenshot: bool,
+    full_page: bool,
+    mode: str,
+) -> None:
+    """Warn when a screenshot was requested in a mode that can't render one.
+
+    ``include_screenshot`` / ``full_page`` are only honoured in get mode. In
+    list and search mode they are accepted but inapplicable, so surface a
+    ``warnings`` entry rather than dropping the request as a silent no-op
+    (matches the warn-don't-fail contract the params document)."""
+    if include_screenshot or full_page:
+        result.setdefault("warnings", []).append(
+            f"include_screenshot/full_page is ignored in {mode} mode; call "
+            "ha_config_get_dashboard with a url_path (and no search criteria) "
+            "to get a screenshot."
+        )
+
+
 async def _maybe_attach_screenshot(
     result: dict[str, Any],
     url_path: str | None,
     requested: bool,
     *,
     full_page: bool = False,
+    raise_on_failure: bool = False,
 ) -> "dict[str, Any] | ToolResult":
     """Optionally render the dashboard and attach it as an image content block.
 
@@ -541,11 +564,22 @@ async def _maybe_attach_screenshot(
     ``full_page`` captures the whole scrollable dashboard rather than the
     viewport.
 
-    Never raises: if dashboard screenshot mode is disabled or the capture
-    fails, a ``warnings`` entry is appended to ``result`` and the plain dict is
-    returned unchanged, so the get/set operation itself never breaks.
+    ``raise_on_failure`` governs what a capture failure does. The set path
+    (``return_screenshot``) leaves it False: a screenshot failure must never
+    break a write that already committed, so it degrades to a ``warnings``
+    entry. The get path (``include_screenshot``) passes True: it is a pure
+    read with nothing to protect, and the screenshot is the requested payload,
+    so an engine failure propagates as a ToolError (matching the dedicated
+    ``ha_get_dashboard_screenshot`` tool) instead of being demoted to a
+    warning the caller may never inspect. A disabled feature flag is always a
+    warning either way — it is an expected configuration state, not a failure.
     """
     if not requested:
+        if full_page:
+            result.setdefault("warnings", []).append(
+                "full_page is ignored because no screenshot was requested "
+                "(set include_screenshot / return_screenshot to use it)."
+            )
         return result
 
     from ..config import get_global_settings
@@ -570,15 +604,20 @@ async def _maybe_attach_screenshot(
             structured_content=result,
         )
     except ToolError as e:
+        if raise_on_failure:
+            raise
         result.setdefault("warnings", []).append(
             f"Screenshot unavailable: {extract_tool_error_message(e)}"
         )
         return result
     except Exception as e:
-        # The docstring guarantees a screenshot failure never breaks the
-        # get/set operation — most critically a set that already committed.
-        # Catch everything non-ToolError (lazy import errors, Image
-        # construction, timeouts, transport) and degrade to a warning.
+        # On the set path a screenshot failure must never break a write that
+        # already committed, so catch everything non-ToolError (lazy import
+        # errors, Image construction, timeouts, transport) and degrade to a
+        # warning. On the get path (raise_on_failure) there is nothing to
+        # protect, so let it surface.
+        if raise_on_failure:
+            raise
         logger.warning("Dashboard screenshot capture failed: %s", e, exc_info=True)
         result.setdefault("warnings", []).append(f"Screenshot unavailable: {e}")
         return result
@@ -655,18 +694,16 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             Field(
                 description="Get mode only: also return a rendered PNG of the "
                 "dashboard for visual verification. Requires the 'dashboard "
-                "screenshot' beta feature + engine add-on/sidecar; if "
-                "unavailable, the config is returned with a warning instead "
-                "of failing."
+                "screenshot' beta feature + engine add-on/sidecar. If the "
+                "feature is disabled the config is returned with a warning; if "
+                "the engine is configured but the render fails, the call errors "
+                "(the screenshot is the requested payload). Ignored in "
+                "list/search mode."
             ),
         ] = False,
         full_page: Annotated[
             bool,
-            Field(
-                description="With include_screenshot: capture the whole "
-                "scrollable dashboard instead of just the viewport (use when "
-                "content runs below the fold)."
-            ),
+            Field(description=f"With include_screenshot: {FULL_PAGE_PARAM_DESC}."),
         ] = False,
     ) -> "dict[str, Any] | ToolResult":
         """
@@ -714,12 +751,19 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             # List mode
             if list_only:
                 dashboards = await fetch_dashboards_list(client) or []
-                return {
+                list_result: dict[str, Any] = {
                     "success": True,
                     "action": "list",
                     "dashboards": dashboards,
                     "count": len(dashboards),
                 }
+                _note_screenshot_ignored(
+                    list_result,
+                    include_screenshot=include_screenshot,
+                    full_page=full_page,
+                    mode="list",
+                )
+                return list_result
 
             # ``url_path`` is optional in this tool (omitted with
             # ``list_only=True`` lists all dashboards — handled above; omitted
@@ -841,6 +885,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 }
                 if search_resolved_from is not None:
                     search_result["resolved_from"] = search_resolved_from
+                _note_screenshot_ignored(
+                    search_result,
+                    include_screenshot=include_screenshot,
+                    full_page=full_page,
+                    mode="search",
+                )
                 return search_result
 
             # Get mode - build WebSocket message
@@ -914,7 +964,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 )
 
             return await _maybe_attach_screenshot(
-                get_result, url_path, include_screenshot, full_page=full_page
+                get_result,
+                url_path,
+                include_screenshot,
+                full_page=full_page,
+                raise_on_failure=True,
             )
         except ToolError:
             raise
@@ -1033,11 +1087,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         ] = False,
         full_page: Annotated[
             bool,
-            Field(
-                description="With return_screenshot: capture the whole "
-                "scrollable dashboard instead of just the viewport (use when "
-                "content runs below the fold)."
-            ),
+            Field(description=f"With return_screenshot: {FULL_PAGE_PARAM_DESC}."),
         ] = False,
     ) -> "dict[str, Any] | ToolResult":
         """

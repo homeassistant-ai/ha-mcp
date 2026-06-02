@@ -22,7 +22,7 @@ There are three paths depending on how you run ha-mcp:
 
 ### Dev channel add-on (Home Assistant users)
 
-The dev channel add-on continues to expose the 5 beta sub-flags on its
+The dev channel add-on continues to expose its beta sub-flags on its
 Configuration page. Toggle them there, restart the add-on, done — the
 master beta toggle is auto-enabled for dev add-on users at start-up.
 No web-UI step is needed.

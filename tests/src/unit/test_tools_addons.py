@@ -3750,8 +3750,9 @@ class TestSupervisorApiCallTimeout:
         # Supervisor-side proxy timeout is forwarded as the command field...
         assert kwargs["timeout"] == 1800
         # ...and the client's own await outlasts it by a margin (the old
-        # hard-coded 30s default would have fired ~1770s too early).
-        assert kwargs["wait_timeout"] == 1815.0
+        # hard-coded 30s default would have fired ~1770s too early). The
+        # control kwarg is underscored so it can't collide with a message field.
+        assert kwargs["_wait_timeout"] == 1815.0
 
     @pytest.mark.asyncio
     async def test_no_timeout_keeps_default_local_wait(self):
@@ -3770,7 +3771,7 @@ class TestSupervisorApiCallTimeout:
             await _supervisor_api_call(_make_mock_client(), "/addons", method="GET")
 
         kwargs = mock_ws.send_command.call_args.kwargs
-        assert kwargs["wait_timeout"] == 30.0
+        assert kwargs["_wait_timeout"] == 30.0
         assert "timeout" not in kwargs
 
 
@@ -3867,6 +3868,31 @@ class TestManageAddonActionMode:
                 array_patch=None,
                 request_headers=None,
                 action="start",
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_action_mutually_exclusive_with_config_params(self):
+        """A lifecycle action plus a config-param write is an ambiguous mode."""
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    slug="core_ssh", action="start", options={"k": "v"}
+                )
+            )
+        payload = _parse_tool_error(exc_info)
+        assert payload["error"]["code"] == "VALIDATION_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_action_mutually_exclusive_with_array_patch(self):
+        tools = self._tools()
+        with pytest.raises(ToolError) as exc_info:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(
+                    slug="core_ssh", action="start", array_patch={"ops": []}
+                )
             )
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "VALIDATION_FAILED"
@@ -3993,6 +4019,36 @@ class TestManageAddonRepositoryAction:
             )
         assert result["success"] is True
         assert result["action"] == "remove_repository"
+
+    @pytest.mark.asyncio
+    async def test_remove_repository_unrelated_not_found_still_raises(self):
+        """A failure that merely mentions 'not found' for a non-repository
+        reason (e.g. a dependent add-on) must NOT be reclassified as a
+        successful no-op — it still raises."""
+        tools = self._tools()
+        err = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": "Supervisor API call failed: /store/repositories/x",
+                        "details": "{'message': 'Add-on core_foo not found'}",
+                    },
+                }
+            )
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=err,
+            ),
+            pytest.raises(ToolError),
+        ):
+            await tools.manage_addon(
+                **_manage_addon_kwargs(action="remove_repository", repository="x")
+            )
 
     @pytest.mark.asyncio
     async def test_add_repository_other_error_gives_repo_specific_suggestion(self):

@@ -230,11 +230,12 @@ async def _wait_engine_serving(
 ) -> None:
     """Poll the standalone tool until the engine returns a valid PNG.
 
-    Retries only on transient transport blips and on AssertionError (the
-    engine returns a not-yet-PNG body during Chromium cold start). Any other
-    exception is a genuine wiring/config failure (e.g. ToolError from a
-    disabled feature flag) and surfaces immediately instead of burning the
-    timeout — see wait_helpers.py / issue #1266.
+    Retries only on transient transport blips and on ValueError (the engine
+    returns a not-yet-PNG body during Chromium cold start; _png_dimensions /
+    _screenshot raise ValueError on it). Any other exception — AssertionError,
+    TypeError, KeyError — is a genuine wiring/config failure and surfaces
+    immediately instead of burning the timeout — see wait_helpers.py /
+    issue #1266.
     """
     deadline = time.monotonic() + _ENGINE_READY_TIMEOUT
     last_err: Exception | None = None
