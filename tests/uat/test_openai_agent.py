@@ -319,11 +319,14 @@ class TestToolCallLoop:
 
     @pytest.mark.asyncio
     async def test_no_think_warns_on_inline_think_block(self, caplog):
-        """Warn when reasoning is inlined as a <think> block with no structured signal."""
+        """Warn when reasoning is inlined as a <think> block with no structured signal.
+
+        Uses uppercase tags to also pin the case-insensitive detection.
+        """
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "<think>17*23</think>391."
+        mock_response.choices[0].message.content = "<THINK>17*23</THINK>391."
         mock_response.choices[0].message.tool_calls = None
         mock_response.choices[0].message.reasoning_content = None
         mock_response.usage = MagicMock(

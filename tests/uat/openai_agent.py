@@ -206,7 +206,7 @@ async def tool_call_loop(
             still_reasoning = (
                 reasoning_this_turn
                 or getattr(message, "reasoning_content", None)
-                or "<think>" in (message.content or "")
+                or "<think>" in (message.content or "").lower()
             )
             if still_reasoning:
                 detail = (
