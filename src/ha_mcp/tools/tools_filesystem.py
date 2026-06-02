@@ -432,6 +432,7 @@ class FilesystemTools:
                 context={"tool": "ha_list_files", "path": path, "pattern": pattern},
             )
             return None
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_read_file",
@@ -541,6 +542,7 @@ class FilesystemTools:
                 context={"tool": "ha_read_file", "path": path},
             )
             return None
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_write_file",
@@ -672,6 +674,7 @@ class FilesystemTools:
                 context={"tool": "ha_write_file", "path": path},
             )
             return None
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_delete_file",
@@ -784,6 +787,7 @@ class FilesystemTools:
                 context={"tool": "ha_delete_file", "path": path},
             )
             return None
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_filesystem_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

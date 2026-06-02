@@ -1433,6 +1433,7 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     # === Path 2: FLOW helper delete via entity_id → entry_id lookup ===
     async def _delete_flow_helper(
@@ -2056,6 +2057,7 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

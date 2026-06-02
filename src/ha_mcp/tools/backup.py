@@ -728,6 +728,7 @@ async def restore_backup(
                     type(err).__name__,
                     err,
                 )
+    return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 # Valid (scope, action) combinations. Anything outside this set is
@@ -961,7 +962,7 @@ def register_backup_tools(
                             "Verify the entity exists via the matching "
                             + "ha_config_get_* tool first",
                             "For helpers, pass domain='helper_<helper_type>' "
-                            "(e.g. 'helper_input_boolean')",
+                            + "(e.g. 'helper_input_boolean')",
                         ],
                     )
                 )

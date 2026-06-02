@@ -1837,6 +1837,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "Cannot delete YAML-mode or default dashboard",
                 ],
             )
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     # =========================================================================
     # Dashboard Resource Management Tools

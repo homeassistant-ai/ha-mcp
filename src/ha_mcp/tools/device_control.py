@@ -195,7 +195,7 @@ class DeviceControlTools:
             raise
         except Exception as e:
             logger.error(f"Error in control_device_smart: {e}")
-            return exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id, "action": action},
                 suggestions=[
@@ -204,6 +204,8 @@ class DeviceControlTools:
                     "Try simpler action like 'toggle'",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     def _parse_parameters(
         self,
@@ -655,11 +657,12 @@ class DeviceControlTools:
             raise
         except Exception as e:
             logger.error(f"Error in bulk_device_control: {e}")
-            return exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"results": results},
                 suggestions=["Check operation parameters and try again"],
             )
+            raise  # unreachable: exception_to_structured_error always raises
 
     @staticmethod
     def _tool_error_to_dict(e: ToolError) -> dict[str, Any]:

@@ -146,6 +146,7 @@ class LabelTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_config_set_label",
@@ -282,6 +283,7 @@ class LabelTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_config_remove_label",
@@ -372,6 +374,7 @@ class LabelTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

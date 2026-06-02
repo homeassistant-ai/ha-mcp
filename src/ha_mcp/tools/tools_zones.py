@@ -356,6 +356,7 @@ class ZoneTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_remove_zone",
@@ -442,6 +443,7 @@ class ZoneTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_zone_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

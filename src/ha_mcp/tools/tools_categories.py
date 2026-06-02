@@ -165,6 +165,7 @@ class CategoryTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_config_set_category",
@@ -306,6 +307,7 @@ class CategoryTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_config_remove_category",
@@ -415,6 +417,7 @@ class CategoryTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

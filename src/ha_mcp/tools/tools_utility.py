@@ -778,6 +778,7 @@ class UtilityTools:
                 ],
             )
             raise  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @staticmethod
     def _addon_auth_error_suggestions() -> list[str]:
@@ -917,6 +918,7 @@ class UtilityTools:
                 ],
             )
             raise  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def eval_template(
         self, template: str, timeout: int, report_errors: bool
@@ -1005,6 +1007,7 @@ class UtilityTools:
                 suggestions=suggestions,
             )
             raise  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

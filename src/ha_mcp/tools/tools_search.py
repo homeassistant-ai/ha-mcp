@@ -1033,6 +1033,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ],
             )
             return None  # unreachable: error helpers above always raise
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @mcp.tool(
         tags={"Search & Discovery"},

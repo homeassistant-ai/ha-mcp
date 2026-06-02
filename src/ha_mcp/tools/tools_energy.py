@@ -1422,6 +1422,7 @@ class EnergyTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_energy_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

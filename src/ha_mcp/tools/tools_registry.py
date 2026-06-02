@@ -128,6 +128,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 context={"device_id": device_id},
             )
             return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @mcp.tool(
         tags={"Device Registry", "Zigbee", "Z-Wave"},
@@ -851,3 +852,4 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 context={"device_id": device_id},
             )
             return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable

@@ -630,6 +630,7 @@ class AreaTools:
                 suggestions=suggestions,
             )
             return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_remove_area_or_floor",
@@ -720,6 +721,7 @@ class AreaTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_area_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

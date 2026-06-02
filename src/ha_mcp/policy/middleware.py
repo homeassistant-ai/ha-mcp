@@ -149,6 +149,7 @@ class PolicyMiddleware(Middleware):
                 name,
             )
         self._raise_pending_error(pending, rule)
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _wait_for_decision(
         self,
