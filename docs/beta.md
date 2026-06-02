@@ -194,10 +194,14 @@ past the viewport. With stock Puppet this renders a tall viewport, so short
 dashboards may have trailing whitespace and a dashboard taller than ~4096px is
 still clipped — limitations removed once Puppet gains a native full-page mode.
 
-**Graceful by design.** If the feature is off or the engine is unreachable,
-`include_screenshot` / `return_screenshot` still return the dashboard config /
-write result with a `warnings` entry — they never fail the underlying read or
-write.
+**Graceful by design — with one deliberate exception.** If the feature is off,
+both `include_screenshot` and `return_screenshot` return the dashboard config /
+write result with a `warnings` entry. `return_screenshot` (set) also degrades a
+render failure to a warning so it never breaks a write that already committed.
+`include_screenshot` (get) is a pure read where the screenshot *is* the
+requested payload, so a render failure surfaces as an error (matching the
+standalone `ha_get_dashboard_screenshot` tool) rather than a warning a caller
+might miss.
 
 **The rendered path comes from the caller.** `ha_get_dashboard_screenshot`
 validates `dashboard_path` (rejects URLs, query strings, fragments, `..`, and
