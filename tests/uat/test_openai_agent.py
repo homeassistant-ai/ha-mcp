@@ -706,3 +706,86 @@ class TestDetectModel:
         client.models.list = AsyncMock(return_value=MagicMock(data=[]))
         with pytest.raises(RuntimeError, match="No models available"):
             await openai_agent.detect_model(client)
+
+
+class TestDetectQuantization:
+    """Test best-effort LM Studio quantization detection."""
+
+    @staticmethod
+    def _patch_client(monkeypatch, *, payload=None, get_exc=None, raise_status=False):
+        """Swap httpx.AsyncClient for a fake; returns a dict capturing the GET url."""
+        import httpx
+
+        captured: dict = {}
+
+        class _Resp:
+            def raise_for_status(self):
+                if raise_status:
+                    raise httpx.HTTPError("500 Server Error")
+
+            def json(self):
+                return payload or {}
+
+        class _Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url):
+                captured["url"] = url
+                if get_exc:
+                    raise get_exc
+                return _Resp()
+
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_returns_quant_and_strips_v1_suffix(self, monkeypatch):
+        """Happy path: returns the quant and queries /api/v0/models with /v1 stripped."""
+        captured = self._patch_client(
+            monkeypatch,
+            payload={"data": [{"id": "qwen3.6-27b", "quantization": "IQ2_M"}]},
+        )
+        result = await openai_agent.detect_quantization(
+            "http://172.19.0.1:1234/v1", "qwen3.6-27b"
+        )
+        assert result == "IQ2_M"
+        assert captured["url"] == "http://172.19.0.1:1234/api/v0/models"
+
+    @pytest.mark.asyncio
+    async def test_none_when_model_not_listed(self, monkeypatch):
+        """A model id absent from the listing yields None."""
+        self._patch_client(
+            monkeypatch, payload={"data": [{"id": "other", "quantization": "Q4_K_M"}]}
+        )
+        result = await openai_agent.detect_quantization("http://h/v1", "qwen3.6-27b")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_none_when_entry_has_no_quant(self, monkeypatch):
+        """A matching entry without a quantization key yields None."""
+        self._patch_client(monkeypatch, payload={"data": [{"id": "qwen3.6-27b"}]})
+        result = await openai_agent.detect_quantization("http://h/v1", "qwen3.6-27b")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_none_on_transport_error(self, monkeypatch):
+        """A transport error is swallowed (never fatal); returns None."""
+        import httpx
+
+        self._patch_client(monkeypatch, get_exc=httpx.ConnectError("boom"))
+        result = await openai_agent.detect_quantization("http://h/v1", "m")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_none_on_http_error_status(self, monkeypatch):
+        """A 5xx (raise_for_status) is swallowed; returns None."""
+        self._patch_client(monkeypatch, raise_status=True)
+        result = await openai_agent.detect_quantization("http://h/v1", "m")
+        assert result is None

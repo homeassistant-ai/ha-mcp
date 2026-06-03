@@ -199,6 +199,32 @@ def _extract_tokens(session_file: str | None, agent: str) -> dict | None:
     return None
 
 
+def _extract_model(session_file: str | None, agent: str) -> str | None:
+    """Extract the resolved model id from a subprocess agent's session file.
+
+    Claude records the resolved id (e.g. ``claude-sonnet-4-6``) as
+    ``message.model`` on each assistant entry, so the recorded model is
+    accurate even on a bare ``--agents claude`` run with no ``--model``.
+    Returns None for agents whose session format does not expose it
+    (gemini) or on any error, so the caller falls back to None.
+    """
+    if not session_file or not Path(session_file).exists():
+        return None
+    try:
+        if agent == "claude":
+            for line in Path(session_file).read_text().splitlines():
+                entry = json.loads(line)
+                if entry.get("type") == "assistant":
+                    model = entry.get("message", {}).get("model")
+                    if model:
+                        return model
+    except Exception as exc:
+        logger.warning(f"  Model extraction failed: {exc}")
+        return None
+
+    return None
+
+
 def _extract_tool_calls(session_file: str | None, agent: str) -> int | None:
     """Count tool calls from an agent session file."""
     if not session_file or not Path(session_file).exists():
@@ -598,7 +624,9 @@ def append_result(
         "branch": branch,
         "timestamp": datetime.now(UTC).isoformat(),
         "agent": agent,
-        "model": model or test_phase.get("model"),
+        "model": model
+        or test_phase.get("model")
+        or _extract_model(session_file, agent),
         "quantization": quantization,
         "story": story["id"],
         "category": story["category"],
