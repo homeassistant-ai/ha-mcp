@@ -1940,21 +1940,6 @@ _WRITE_TOOL_BP_HINT_SUGGESTION = (
     "the relevant reference file before retrying."
 )
 
-# Hint shipped at the top of ha_get_skill_guide responses that deliver
-# best-practice skill content directly (Tier 3 on the
-# `home-assistant-best-practices` skill). Smart clients that fetch the
-# reference files proactively via this tool would otherwise still
-# receive duplicate canonical content from the per-call write-tool
-# attach — this hint tells them to opt out so the same body doesn't
-# ride along again on every subsequent write.
-_SKILL_GUIDE_MANDATORYBPS_HINT = (
-    "You now have this best-practice reference in your context. "
-    "Pass `MandatoryBPS=false` on subsequent write-tool calls in this "
-    "session (ha_config_set_automation / _script / _scene / _helper / "
-    "_dashboard / _yaml) to avoid re-receiving the canonical reference "
-    "files inline."
-)
-
 
 def attach_skill_content(
     response: dict[str, Any],

@@ -517,6 +517,7 @@ async def create_backup(
             context={"tool": "create_backup"},
             suggestions=["Check Home Assistant connection and backup configuration"],
         )
+        return None  # unreachable: exception_to_structured_error always raises
     finally:
         # Always disconnect WebSocket — narrow to transport errors; a
         # programming error during cleanup should still surface.
@@ -714,6 +715,7 @@ async def restore_backup(
             context={"tool": "restore_backup", "backup_id": backup_id},
             suggestions=["Check Home Assistant connection and backup availability"],
         )
+        return None  # unreachable: exception_to_structured_error always raises
     finally:
         # Always disconnect WebSocket — narrow to transport errors; a
         # programming error during cleanup should still surface.
@@ -726,6 +728,7 @@ async def restore_backup(
                     type(err).__name__,
                     err,
                 )
+    return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 # Valid (scope, action) combinations. Anything outside this set is
@@ -953,13 +956,13 @@ def register_backup_tools(
                     create_error_response(
                         ErrorCode.RESOURCE_NOT_FOUND,
                         f"Could not snapshot {dom}:{eid} — entity not found "
-                        "or fetch returned no config",
+                        + "or fetch returned no config",
                         context={"domain": dom, "entity_id": eid},
                         suggestions=[
                             "Verify the entity exists via the matching "
-                            "ha_config_get_* tool first",
+                            + "ha_config_get_* tool first",
                             "For helpers, pass domain='helper_<helper_type>' "
-                            "(e.g. 'helper_input_boolean')",
+                            + "(e.g. 'helper_input_boolean')",
                         ],
                     )
                 )
@@ -1053,13 +1056,13 @@ def register_backup_tools(
                     context={"backup_name": bname, "action": "restore"},
                     suggestions=[
                         "Verify the entity referenced by the backup still "
-                        "exists; restore re-POSTs to its current registry "
-                        "key",
+                        + "exists; restore re-POSTs to its current registry "
+                        + "key",
                         "Compare the captured schema vs current HA — HA "
-                        "minor versions occasionally drop/rename fields",
+                        + "minor versions occasionally drop/rename fields",
                         "Inspect the snapshot YAML via "
-                        "ha_manage_backup(scope='edits', action='view', "
-                        "backup_name=...)",
+                        + "ha_manage_backup(scope='edits', action='view', "
+                        + "backup_name=...)",
                     ],
                 )
             return {

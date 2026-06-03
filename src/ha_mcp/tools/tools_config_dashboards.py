@@ -435,7 +435,8 @@ async def _lazy_resolve_and_retry(
     url_path: str,
     ws_data: dict[str, Any],
     response: Any,
-) -> tuple[str, Any]: ...
+) -> tuple[str, Any]:
+    pass
 
 
 @overload
@@ -444,7 +445,8 @@ async def _lazy_resolve_and_retry(
     url_path: None,
     ws_data: dict[str, Any],
     response: Any,
-) -> tuple[None, Any]: ...
+) -> tuple[None, Any]:
+    pass
 
 
 async def _lazy_resolve_and_retry(
@@ -1000,6 +1002,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                 context=context,
                 suggestions=suggestions,
             )
+            return None
 
     @mcp.tool(
         tags={"Dashboards"},
@@ -1598,6 +1601,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                             existing_hash,
                         ) = await _get_dashboard_config_internal(client, url_path)
                     except ToolError:
+                        # Pre-read failure is non-fatal on the force-replace
+                        # path: skip the optimistic-lock check and large-config
+                        # warning and proceed with the replacement (see the
+                        # rationale above the try).
                         pass
 
                     if isinstance(existing_config, dict):
@@ -1696,6 +1703,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
             raise_tool_error(error)
+            return None
 
     @mcp.tool(
         tags={"Dashboards"},
@@ -1829,6 +1837,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "Cannot delete YAML-mode or default dashboard",
                 ],
             )
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     # =========================================================================
     # Dashboard Resource Management Tools

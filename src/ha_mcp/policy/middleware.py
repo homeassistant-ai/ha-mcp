@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NoReturn
 
 import anyio
 from anyio.to_thread import run_sync as run_in_thread
@@ -149,6 +149,7 @@ class PolicyMiddleware(Middleware):
                 name,
             )
         self._raise_pending_error(pending, rule)
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _wait_for_decision(
         self,
@@ -176,7 +177,7 @@ class PolicyMiddleware(Middleware):
                 await pending.wait()
 
     @staticmethod
-    def _raise_denied_error() -> None:
+    def _raise_denied_error() -> NoReturn:
         raise_tool_error(
             create_error_response(
                 ErrorCode.USER_DENIED,
@@ -189,7 +190,7 @@ class PolicyMiddleware(Middleware):
 
     def _raise_pending_error(
         self, pending: PendingApproval, rule: Rule | None = None
-    ) -> None:
+    ) -> NoReturn:
         # Time-remaining, not total TTL: an LLM that re-calls a minute
         # before expiry should see "~60s left", not the original 300s.
         remaining = max(
@@ -216,9 +217,9 @@ class PolicyMiddleware(Middleware):
                 "with the same arguments after the user approves.",
                 suggestions=[
                     "Tell the user to open the Tool Security Policies tab in "
-                    "the ha-mcp settings UI and approve the pending request.",
+                    + "the ha-mcp settings UI and approve the pending request.",
                     "Re-call this tool with the same arguments after the user "
-                    "approves.",
+                    + "approves.",
                 ],
                 context=context,
             )

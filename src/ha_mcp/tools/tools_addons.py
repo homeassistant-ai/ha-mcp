@@ -292,11 +292,14 @@ async def _supervisor_api_call(
             context={"endpoint": endpoint},
             suggestions=["Check Home Assistant connection and Supervisor availability"],
         )
+        return None  # unreachable: exception_to_structured_error always raises
     finally:
         if ws_client:
             try:
                 await ws_client.disconnect()
             except Exception:
+                # Best-effort cleanup: the WS connection is being torn down, so a
+                # disconnect failure is non-fatal and must not mask the real result.
                 pass
 
 
@@ -314,16 +317,16 @@ def _addon_connection_failure_suggestions(
         return [
             "Check that the add-on is running",
             "Direct-port access requires the MCP host to share Home "
-            "Assistant's container network. On PyPI/uvx installs, drop "
-            "the 'port' parameter to route through Ingress instead.",
+            + "Assistant's container network. On PyPI/uvx installs, drop "
+            + "the 'port' parameter to route through Ingress instead.",
         ]
     if is_running_in_addon():
         return [
             "The target add-on container may not be reachable from this "
-            "MCP add-on. Check that the target add-on is running.",
+            + "MCP add-on. Check that the target add-on is running.",
             "If the failure persists, the addon Docker network may be "
-            "unhealthy — try restarting the target add-on, then this "
-            "MCP add-on.",
+            + "unhealthy — try restarting the target add-on, then this "
+            + "MCP add-on.",
         ]
     return [
         f"Verify Home Assistant is reachable at {client.base_url}",
@@ -1903,6 +1906,7 @@ class AddOnTools:
             )
             return self._repo_noop_result(key, repository, noop)
         self._raise_repo_action_error(key, repository, error_text)
+        return None  # unreachable: _raise_repo_action_error always raises
 
     @staticmethod
     def _supervisor_error_text(error_text: str) -> str:
@@ -1971,9 +1975,9 @@ class AddOnTools:
         else:
             suggestions = [
                 "Verify the repository slug — list current repositories with "
-                "ha_get_addon(source='available')",
+                + "ha_get_addon(source='available')",
                 "A repository that still has installed add-ons can't be removed "
-                "until those add-ons are uninstalled",
+                + "until those add-ons are uninstalled",
             ]
         raise_tool_error(
             create_error_response(

@@ -403,6 +403,7 @@ class AutomationConfigTools:
                     "Use ha_get_skill_guide for help",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_config_set_automation",
@@ -925,7 +926,8 @@ class AutomationConfigTools:
             # automation_id omitted when all three fallbacks are falsy —
             # the create path is unguarded by validate_identifier_not_empty,
             # and surfacing automation_id=None would lie about resolvability.
-            # HA's upsert contract makes this branch unreachable in practice.
+            # Defensive: HA's upsert normally returns a usable id, so this
+            # fallback rarely triggers.
             **({"automation_id": automation_id} if automation_id else {}),
             **_strip_redundant_identifier_echo(result),
         }
@@ -1296,6 +1298,7 @@ class AutomationConfigTools:
                     "Check Home Assistant connection",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

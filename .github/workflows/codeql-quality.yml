@@ -1,0 +1,84 @@
+name: CodeQL Code Quality
+
+# Runs the CodeQL "python-code-quality" suite and fails the PR on ANY finding.
+#
+# Why a custom workflow instead of GitHub's Code Quality page:
+#   - GitHub Code Quality (Preview) is gated to Team/Enterprise Cloud org plans;
+#     this repo's org is on the free plan, so the Settings → Security → Code
+#     quality toggle is unavailable.
+#   - We do NOT upload SARIF to code scanning: the repo already uses CodeQL
+#     *default setup* for security, and SARIF uploads are rejected while default
+#     setup is enabled. This workflow keeps the quality results out of the
+#     Security tab and gates purely on the job status + artifact/summary.
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - '**.py'
+      - '.github/workflows/codeql-quality.yml'
+      - 'scripts/codeql_quality_gate.py'
+  push:
+    branches: [ master ]
+    paths:
+      - '**.py'
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-quality:
+    name: CodeQL Code Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install CodeQL CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extensions install github/gh-codeql
+          gh codeql set-version latest
+
+      - name: Create CodeQL database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh codeql database create ha-mcp-db \
+            --language=python \
+            --build-mode=none \
+            --source-root . \
+            --overwrite
+
+      - name: Analyze with python-code-quality suite
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh codeql database analyze ha-mcp-db \
+            codeql/python-queries:codeql-suites/python-code-quality.qls \
+            --format=sarif-latest \
+            --output quality.sarif \
+            --download
+
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-quality-sarif
+          path: quality.sarif
+          if-no-files-found: warn
+
+      - name: Gate on findings
+        run: python scripts/codeql_quality_gate.py quality.sarif

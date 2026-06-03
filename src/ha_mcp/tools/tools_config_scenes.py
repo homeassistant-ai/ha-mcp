@@ -243,8 +243,7 @@ class ConfigSceneTools:
                 message="scene_id must not be empty",
                 suggestions=[
                     "Pass a non-empty scene identifier (e.g. 'movie_night')",
-                    "Use ha_search_entities(domain_filter='scene') "
-                    "to find existing scene_ids",
+                    "Use ha_search_entities(domain_filter='scene') to find existing scene_ids",
                 ],
                 context={"scene_id": scene_id},
             )
@@ -294,6 +293,10 @@ class ConfigSceneTools:
                     "Use ha_get_skill_guide for help",
                 ],
             )
+            # ``exception_to_structured_error`` always raises (NoReturn); this
+            # explicit raise makes the function's exit unambiguous (no implicit
+            # ``return None`` fall-through) and is never reached at runtime.
+            raise
 
     async def _get_scene_config_internal(
         self, scene_id: str
@@ -985,8 +988,7 @@ class ConfigSceneTools:
                 message="scene_id must not be empty",
                 suggestions=[
                     "Pass a non-empty scene identifier (e.g. 'old_scene')",
-                    "Use ha_search_entities(domain_filter='scene') "
-                    "to find existing scene_ids",
+                    "Use ha_search_entities(domain_filter='scene') to find existing scene_ids",
                 ],
                 context={"scene_id": scene_id},
             )
@@ -1035,6 +1037,10 @@ class ConfigSceneTools:
                     "Use ha_get_skill_guide for help",
                 ],
             )
+            # ``exception_to_structured_error`` always raises (NoReturn); this
+            # explicit raise makes the function's exit unambiguous (no implicit
+            # ``return None`` fall-through) and is never reached at runtime.
+            raise
 
 
 def register_config_scene_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

@@ -193,7 +193,7 @@ class TestBulkControl:
             {"operations": operations},
         )
 
-        data = assert_mcp_success(result, "Bulk turn_off multiple lights")
+        assert_mcp_success(result, "Bulk turn_off multiple lights")
         logger.info("Multiple lights bulk turn_off executed")
 
     async def test_bulk_control_with_parameters(self, mcp_client, test_light_entity):

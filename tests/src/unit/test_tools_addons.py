@@ -3237,6 +3237,7 @@ class TestManageAddon:
                     "in SSH (core_ssh)",
                 )
             )
+            return None  # raise_tool_error always raises; explicit for CodeQL
 
         with (
             patch(

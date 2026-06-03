@@ -172,7 +172,7 @@ class UtilityTools:
                         suggestions=[
                             "Pick a valid service name (e.g. 'supervisor', 'host')",
                             "For add-on container logs use source='supervisor' with "
-                            "the add-on slug instead",
+                            + "the add-on slug instead",
                         ],
                     )
                 )
@@ -414,6 +414,7 @@ class UtilityTools:
                 },
                 suggestions=suggestions,
             )
+            raise  # unreachable: exception_to_structured_error always raises
 
     async def _get_system_log(
         self,
@@ -492,6 +493,7 @@ class UtilityTools:
                     "Verify system_log integration is enabled",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
 
     async def _get_error_log(
         self,
@@ -558,6 +560,7 @@ class UtilityTools:
                     "The error log may be empty if no errors have occurred",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
 
     @staticmethod
     def _parse_logger_entry(entry: Any) -> dict[str, Any] | None:
@@ -655,6 +658,7 @@ class UtilityTools:
                     "Verify the 'logger' integration is enabled",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
 
     async def _get_supervisor_log(
         self,
@@ -773,6 +777,8 @@ class UtilityTools:
                     "Ensure Supervisor is available (HA OS or Supervised install)",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @staticmethod
     def _addon_auth_error_suggestions() -> list[str]:
@@ -863,16 +869,16 @@ class UtilityTools:
                 if is_running_in_addon():
                     suggestions = [
                         "Addon's hassio_role must be 'manager' or higher to "
-                        "read /<service>/logs",
+                        + "read /<service>/logs",
                         "Verify the addon was reinstalled after the role bump "
-                        "took effect",
+                        + "took effect",
                     ]
                 else:
                     suggestions = [
                         "The Long-Lived Access Token must belong to a user "
-                        "with admin privileges",
+                        + "with admin privileges",
                         "Generate a new LLAT under an admin account and set "
-                        "HOMEASSISTANT_TOKEN to it",
+                        + "HOMEASSISTANT_TOKEN to it",
                     ]
                 exception_to_structured_error(
                     e,
@@ -911,6 +917,8 @@ class UtilityTools:
                     "Ensure Supervisor is available (HA OS or Supervised install)",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def eval_template(
         self, template: str, timeout: int, report_errors: bool
@@ -998,6 +1006,8 @@ class UtilityTools:
                 context={"template": template},
                 suggestions=suggestions,
             )
+            raise  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

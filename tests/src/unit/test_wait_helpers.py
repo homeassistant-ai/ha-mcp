@@ -476,7 +476,7 @@ class TestWsPathRegistered:
         result = await wait_for_entity_registered(
             mock_client, "light.test", timeout=5.0
         )
-        await fire_task
+        _ = await fire_task
 
         assert result is True
         assert mock_client.get_entity_state.call_count == 2
@@ -498,7 +498,7 @@ class TestWsPathRegistered:
         result = await wait_for_entity_registered(
             mock_client, "light.target", timeout=0.2
         )
-        await noise_task
+        _ = await noise_task
 
         assert result is False  # Timed out — noise event was correctly filtered.
 
@@ -535,7 +535,7 @@ class TestWsPathRemoved:
 
         fire_task = asyncio.create_task(fire_after())
         result = await wait_for_entity_removed(mock_client, "light.test", timeout=5.0)
-        await fire_task
+        _ = await fire_task
 
         assert result is True
         # Cleanup still ran.
@@ -563,7 +563,7 @@ class TestWsPathStateChange:
         result = await wait_for_state_change(
             mock_client, "light.test", expected_state="on", timeout=5.0
         )
-        await fire_task
+        _ = await fire_task
 
         assert result is not None
         assert result["state"] == "on"
@@ -612,7 +612,7 @@ class TestWsPathStateChange:
 
         fire_task = asyncio.create_task(fire_two())
         result = await wait_for_state_change(mock_client, "light.test", timeout=5.0)
-        await fire_task
+        _ = await fire_task
 
         assert result is not None
         assert result["state"] == "on"
@@ -656,7 +656,7 @@ class TestWsPathConnectionDrop:
         result = await wait_for_entity_registered(
             mock_client, "light.test", timeout=5.0, poll_interval=0.01
         )
-        await fire_task
+        _ = await fire_task
 
         assert result is True
         # We sampled at least three times: post-subscribe, post-noise-nudge,
@@ -926,7 +926,7 @@ class TestWsPathAutomationDiscovery:
         result = await wait_for_automation_entity_by_unique_id(
             mock_client, "uid_99", timeout=2.0
         )
-        await fire_task
+        _ = await fire_task
 
         assert result == "automation.discovered"
 
@@ -949,7 +949,7 @@ class TestWsPathAutomationDiscovery:
         result = await wait_for_automation_entity_by_unique_id(
             mock_client, "uid_42", timeout=0.2, poll_interval=0.05
         )
-        await noise_task
+        _ = await noise_task
 
         assert result is None
 
@@ -972,7 +972,7 @@ class TestWsPathAutomationDiscovery:
         result = await wait_for_automation_entity_by_unique_id(
             mock_client, "uid_target", timeout=0.2, poll_interval=0.05
         )
-        await noise_task
+        _ = await noise_task
 
         assert result is None
 
@@ -1032,7 +1032,7 @@ class TestWsPathAutomationDiscovery:
         result = await wait_for_automation_entity_by_unique_id(
             mock_client, "uid_dup", timeout=2.0
         )
-        await fire_task
+        _ = await fire_task
 
         # Working short-circuit: event payload's entity_id wins.
         # Regression (no short-circuit): REST entity would override.
@@ -1118,7 +1118,7 @@ class TestWsPathAutomationDiscovery:
             result = await wait_for_automation_entity_by_unique_id(
                 mock_client, "uid_dup", timeout=2.0
             )
-            await fire_task
+            _ = await fire_task
 
         assert result == "automation.first"
         # Collision warning emitted naming both entity_ids.

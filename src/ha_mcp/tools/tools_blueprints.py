@@ -30,7 +30,9 @@ class BlueprintTools:
         self._client = client
 
     @staticmethod
-    def _format_blueprint_list(blueprints_data: dict[str, Any], domain: str) -> dict[str, Any]:
+    def _format_blueprint_list(
+        blueprints_data: dict[str, Any], domain: str
+    ) -> dict[str, Any]:
         """Format blueprint data into list response structure.
 
         Args:
@@ -45,17 +47,21 @@ class BlueprintTools:
             blueprint_info = {
                 "path": bp_path,
                 "domain": domain,
-                "name": metadata.get("name", bp_path.split("/")[-1].replace(".yaml", "")),
+                "name": metadata.get(
+                    "name", bp_path.split("/")[-1].replace(".yaml", "")
+                ),
             }
 
             # Add optional metadata if available
             if "metadata" in metadata:
                 meta = metadata["metadata"]
-                blueprint_info.update({
-                    "description": meta.get("description"),
-                    "source_url": meta.get("source_url"),
-                    "author": meta.get("author"),
-                })
+                blueprint_info.update(
+                    {
+                        "description": meta.get("description"),
+                        "source_url": meta.get("source_url"),
+                        "author": meta.get("author"),
+                    }
+                )
 
             blueprints.append(blueprint_info)
 
@@ -69,7 +75,11 @@ class BlueprintTools:
     @tool(
         name="ha_get_blueprint",
         tags={"Blueprints"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Blueprint"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Blueprint",
+        },
     )
     @log_tool_usage
     async def ha_get_blueprint(
@@ -115,11 +125,13 @@ class BlueprintTools:
             # Validate domain
             valid_domains = ["automation", "script"]
             if domain not in valid_domains:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid domain '{domain}'. Must be one of: {', '.join(valid_domains)}",
-                    context={"domain": domain, "valid_domains": valid_domains},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid domain '{domain}'. Must be one of: {', '.join(valid_domains)}",
+                        context={"domain": domain, "valid_domains": valid_domains},
+                    )
+                )
 
             # Get list of blueprints
             list_response = await self._client.send_websocket_message(
@@ -127,11 +139,13 @@ class BlueprintTools:
             )
 
             if not list_response.get("success"):
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    list_response.get("error", "Failed to query blueprints"),
-                    context={"domain": domain},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        list_response.get("error", "Failed to query blueprints"),
+                        context={"domain": domain},
+                    )
+                )
 
             blueprints_data = list_response.get("result", {})
 
@@ -142,15 +156,21 @@ class BlueprintTools:
             # Path provided - get specific blueprint details
             if path not in blueprints_data:
                 available_paths = list(blueprints_data.keys())[:10]
-                raise_tool_error(create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    f"Blueprint not found: {path}",
-                    context={"path": path, "domain": domain, "available_blueprints": available_paths},
-                    suggestions=[
-                        "Use ha_get_blueprint() without path to see all available blueprints",
-                        "Check the path format (e.g., 'homeassistant/motion_light.yaml')",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Blueprint not found: {path}",
+                        context={
+                            "path": path,
+                            "domain": domain,
+                            "available_blueprints": available_paths,
+                        },
+                        suggestions=[
+                            "Use ha_get_blueprint() without path to see all available blueprints",
+                            "Check the path format (e.g., 'homeassistant/motion_light.yaml')",
+                        ],
+                    )
+                )
 
             # Get the blueprint details from the list response
             blueprint_data = blueprints_data[path]
@@ -160,7 +180,9 @@ class BlueprintTools:
                 "success": True,
                 "path": path,
                 "domain": domain,
-                "name": blueprint_data.get("name", path.split("/")[-1].replace(".yaml", "")),
+                "name": blueprint_data.get(
+                    "name", path.split("/")[-1].replace(".yaml", "")
+                ),
             }
 
             # Add metadata if available
@@ -197,6 +219,7 @@ class BlueprintTools:
                     "Check Home Assistant connection",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_import_blueprint",
@@ -237,11 +260,13 @@ class BlueprintTools:
         try:
             # Validate URL format
             if not url.startswith(("http://", "https://")):
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Invalid URL format. URL must start with http:// or https://",
-                    context={"url": url},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "Invalid URL format. URL must start with http:// or https://",
+                        context={"url": url},
+                    )
+                )
 
             # Send WebSocket command to import blueprint
             response = await self._client.send_websocket_message(
@@ -259,14 +284,19 @@ class BlueprintTools:
                 ]
 
                 if "already exists" in str(error_msg).lower():
-                    suggestions.insert(0, "Blueprint already exists - use ha_get_blueprint() to see installed blueprints")
+                    suggestions.insert(
+                        0,
+                        "Blueprint already exists - use ha_get_blueprint() to see installed blueprints",
+                    )
 
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    error_msg,
-                    context={"url": url},
-                    suggestions=suggestions,
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        error_msg,
+                        context={"url": url},
+                        suggestions=suggestions,
+                    )
+                )
 
             # Extract import result (blueprint/import only validates, does not save)
             result_data = response.get("result", {})
@@ -276,15 +306,17 @@ class BlueprintTools:
             domain = blueprint_meta.get("domain", "automation")
 
             if not suggested_filename or not raw_data:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Blueprint validated but no filename or YAML data was returned",
-                    context={"url": url},
-                    suggestions=[
-                        "This may indicate an incompatible blueprint format",
-                        "Try a different blueprint URL",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Blueprint validated but no filename or YAML data was returned",
+                        context={"url": url},
+                        suggestions=[
+                            "This may indicate an incompatible blueprint format",
+                            "Try a different blueprint URL",
+                        ],
+                    )
+                )
 
             # Ensure the path has a .yaml extension — HA's blueprint/import returns
             # suggested_filename without the extension (e.g. "user/blueprint_name")
@@ -318,12 +350,14 @@ class BlueprintTools:
                 if "already exists" in save_error.lower():
                     suggestions.insert(0, "A blueprint with this path already exists")
 
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    save_error,
-                    context={"url": url, "path": suggested_filename},
-                    suggestions=suggestions,
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        save_error,
+                        context={"url": url, "path": suggested_filename},
+                        suggestions=suggestions,
+                    )
+                )
 
             save_result = save_response.get("result") or {}
 
@@ -353,6 +387,7 @@ class BlueprintTools:
                     "Try importing from a different source (GitHub, Community, direct URL)",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_blueprint_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

@@ -317,8 +317,6 @@ async def test_find_or_create_lock_blocks_concurrent_create_under_real_race():
     a missing lock would let multiple tasks pass the find()==None
     check before any of them runs create().
     """
-    import ha_mcp.policy.approval_queue as mod
-
     q = ApprovalQueue()
     orig_find = q.find
 
@@ -369,4 +367,3 @@ async def test_find_or_create_lock_blocks_concurrent_create_under_real_race():
     # Silence the slow_find reference so ruff doesn't complain about
     # the unused helper — kept in the source for future strengthening.
     _ = slow_find
-    _ = mod

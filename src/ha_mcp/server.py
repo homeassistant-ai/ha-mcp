@@ -47,6 +47,20 @@ _OLD_SKILL_TOOL_ALIASES = (
     "If you were going to call any of those, call this instead."
 )
 
+# Hint shipped at the top of ha_get_skill_guide responses that deliver
+# best-practice skill content directly. Smart clients that fetch the reference
+# files proactively via this tool would otherwise still receive duplicate
+# canonical content from the per-call write-tool attach — this hint tells them
+# to opt out so the same body doesn't ride along again on every subsequent
+# write. Defined here (its only consumer) rather than in util_helpers.
+_SKILL_GUIDE_MANDATORYBPS_HINT = (
+    "You now have this best-practice reference in your context. "
+    "Pass `MandatoryBPS=false` on subsequent write-tool calls in this "
+    "session (ha_config_set_automation / _script / _scene / _helper / "
+    "_dashboard / _yaml) to avoid re-receiving the canonical reference "
+    "files inline."
+)
+
 
 # Server icon configuration using GitHub-hosted images
 # These icons are bundled in packaging/mcpb/ and also available via GitHub raw URLs
@@ -1447,10 +1461,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # parsing the (potentially large) content body. Scoped to the
         # best-practice skill because that's the one the write-tool
         # MandatoryBPS param gates; other skills (if any) are unrelated.
-        from .tools.util_helpers import (
-            _HA_BEST_PRACTICES_SKILL_NAME,
-            _SKILL_GUIDE_MANDATORYBPS_HINT,
-        )
+        from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
 
         response: dict[str, Any] = {}
         if skill == _HA_BEST_PRACTICES_SKILL_NAME:

@@ -90,15 +90,17 @@ class DeviceControlTools:
 
             # Parse domain from entity ID
             if "." not in entity_id:
-                raise_tool_error(create_error_response(
-                    ErrorCode.ENTITY_INVALID_ID,
-                    f"Invalid entity ID format: {entity_id}",
-                    suggestions=[
-                        "Entity ID must be in format 'domain.entity_name'",
-                        "Use smart_entity_search to find correct entity ID",
-                    ],
-                    context={"entity_id": entity_id, "action": action},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_INVALID_ID,
+                        f"Invalid entity ID format: {entity_id}",
+                        suggestions=[
+                            "Entity ID must be in format 'domain.entity_name'",
+                            "Use smart_entity_search to find correct entity ID",
+                        ],
+                        context={"entity_id": entity_id, "action": action},
+                    )
+                )
 
             domain = entity_id.split(".")[0]
             handler = get_domain_handler(domain)
@@ -111,15 +113,21 @@ class DeviceControlTools:
             # Validate action for domain
             valid_actions = handler.get("valid_actions", ["on", "off", "toggle"])
             if action not in valid_actions:
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_INVALID_ACTION,
-                    f"Invalid action '{action}' for domain '{domain}'",
-                    suggestions=[
-                        f"Valid actions for {domain}: {', '.join(valid_actions)}",
-                        "Use 'toggle' for simple on/off control",
-                    ],
-                    context={"entity_id": entity_id, "action": action, "valid_actions": valid_actions},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_INVALID_ACTION,
+                        f"Invalid action '{action}' for domain '{domain}'",
+                        suggestions=[
+                            f"Valid actions for {domain}: {', '.join(valid_actions)}",
+                            "Use 'toggle' for simple on/off control",
+                        ],
+                        context={
+                            "entity_id": entity_id,
+                            "action": action,
+                            "valid_actions": valid_actions,
+                        },
+                    )
+                )
 
             # Build service call
             service_call = self._build_service_call(
@@ -196,6 +204,8 @@ class DeviceControlTools:
                     "Try simpler action like 'toggle'",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     def _parse_parameters(
         self,
@@ -207,15 +217,17 @@ class DeviceControlTools:
             try:
                 return json.loads(parameters)
             except json.JSONDecodeError:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_JSON,
-                    f"Invalid JSON in parameters: {parameters}",
-                    suggestions=[
-                        "Parameters should be a valid JSON object",
-                        "Example: {'brightness': 102, 'color_temp_kelvin': 4000}",
-                    ],
-                    context={"entity_id": entity_id, "action": action},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_JSON,
+                        f"Invalid JSON in parameters: {parameters}",
+                        suggestions=[
+                            "Parameters should be a valid JSON object",
+                            "Example: {'brightness': 102, 'color_temp_kelvin': 4000}",
+                        ],
+                        context={"entity_id": entity_id, "action": action},
+                    )
+                )
         return parameters
 
     async def _validate_entity_exists(
@@ -227,15 +239,17 @@ class DeviceControlTools:
         try:
             current_state = await self.client.get_entity_state(entity_id)
             if not current_state:
-                raise_tool_error(create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Entity not found: {entity_id}",
-                    suggestions=[
-                        "Use smart_entity_search to find the correct entity",
-                        "Check entity is not disabled in Home Assistant",
-                    ],
-                    context={"entity_id": entity_id, "action": action},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        f"Entity not found: {entity_id}",
+                        suggestions=[
+                            "Use smart_entity_search to find the correct entity",
+                            "Check entity is not disabled in Home Assistant",
+                        ],
+                        context={"entity_id": entity_id, "action": action},
+                    )
+                )
             return current_state
         except ToolError:
             raise
@@ -325,7 +339,9 @@ class DeviceControlTools:
         parameters: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Build Home Assistant service call from action and parameters."""
-        service_name, parameters = self._resolve_service_name(domain, action, parameters)
+        service_name, parameters = self._resolve_service_name(
+            domain, action, parameters
+        )
 
         service_data: dict[str, Any] = {"entity_id": entity_id}
 
@@ -411,16 +427,18 @@ class DeviceControlTools:
         operation = get_operation_from_memory(operation_id)
 
         if not operation:
-            raise_tool_error(create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                "Operation not found or expired",
-                suggestions=[
-                    "Operation may have been cleaned up after completion",
-                    "Check operation ID spelling",
-                    "Use control_device_smart to start new operation",
-                ],
-                context={"operation_id": operation_id},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    "Operation not found or expired",
+                    suggestions=[
+                        "Operation may have been cleaned up after completion",
+                        "Check operation ID spelling",
+                        "Use control_device_smart to start new operation",
+                    ],
+                    context={"operation_id": operation_id},
+                )
+            )
 
         # Wait up to timeout_seconds for the operation to leave the pending state.
         # The WebSocket listener mutates operation.status as state changes arrive,
@@ -434,16 +452,18 @@ class DeviceControlTools:
                 await asyncio.sleep(0.2)
                 refreshed = get_operation_from_memory(operation_id)
                 if refreshed is None:
-                    raise_tool_error(create_error_response(
-                        ErrorCode.RESOURCE_NOT_FOUND,
-                        "Operation cleaned up during status poll",
-                        suggestions=[
-                            "Operation may have completed and been purged before "
-                            "verification finished",
-                            "Use control_device_smart to start new operation",
-                        ],
-                        context={"operation_id": operation_id},
-                    ))
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.RESOURCE_NOT_FOUND,
+                            "Operation cleaned up during status poll",
+                            suggestions=[
+                                "Operation may have completed and been purged before "
+                                + "verification finished",
+                                "Use control_device_smart to start new operation",
+                            ],
+                            context={"operation_id": operation_id},
+                        )
+                    )
                 operation = refreshed
 
         # Check operation status
@@ -470,40 +490,44 @@ class DeviceControlTools:
             }
 
         elif operation.status.value == "failed":
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                operation.error_message or "Device operation failed",
-                context={
-                    "operation_id": operation_id,
-                    "entity_id": operation.entity_id,
-                    "action": operation.action,
-                    "duration_ms": operation.duration_ms,
-                },
-                suggestions=[
-                    "Check if device is available and responding",
-                    "Verify device supports the requested action",
-                    "Check Home Assistant logs for error details",
-                    "Try a simpler action like toggle",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    operation.error_message or "Device operation failed",
+                    context={
+                        "operation_id": operation_id,
+                        "entity_id": operation.entity_id,
+                        "action": operation.action,
+                        "duration_ms": operation.duration_ms,
+                    },
+                    suggestions=[
+                        "Check if device is available and responding",
+                        "Verify device supports the requested action",
+                        "Check Home Assistant logs for error details",
+                        "Try a simpler action like toggle",
+                    ],
+                )
+            )
 
         elif operation.status.value == "timeout":
-            raise_tool_error(create_error_response(
-                ErrorCode.TIMEOUT_OPERATION,
-                f"Operation timed out after {operation.timeout_ms}ms",
-                context={
-                    "operation_id": operation_id,
-                    "entity_id": operation.entity_id,
-                    "action": operation.action,
-                    "elapsed_ms": operation.elapsed_ms,
-                },
-                suggestions=[
-                    "Device may be slow to respond or offline",
-                    "Check device connectivity",
-                    "Try increasing timeout for slow devices",
-                    "Verify device is powered on",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.TIMEOUT_OPERATION,
+                    f"Operation timed out after {operation.timeout_ms}ms",
+                    context={
+                        "operation_id": operation_id,
+                        "entity_id": operation.entity_id,
+                        "action": operation.action,
+                        "elapsed_ms": operation.elapsed_ms,
+                    },
+                    suggestions=[
+                        "Device may be slow to respond or offline",
+                        "Check device connectivity",
+                        "Try increasing timeout for slow devices",
+                        "Verify device is powered on",
+                    ],
+                )
+            )
 
         else:  # pending
             return {
@@ -576,12 +600,14 @@ class DeviceControlTools:
             Bulk operation results
         """
         if not operations:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "No operations provided",
-                suggestions=["Provide a list of device control operations"],
-                context={"results": []},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "No operations provided",
+                    suggestions=["Provide a list of device control operations"],
+                    context={"results": []},
+                )
+            )
 
         results: list[dict[str, Any]] = []
         operation_ids: list[str] = []
@@ -636,6 +662,7 @@ class DeviceControlTools:
                 context={"results": results},
                 suggestions=["Check operation parameters and try again"],
             )
+            raise  # unreachable: exception_to_structured_error always raises
 
     @staticmethod
     def _tool_error_to_dict(e: ToolError) -> dict[str, Any]:
@@ -671,10 +698,12 @@ class DeviceControlTools:
                 if isinstance(result, ToolError):
                     results.append(self._tool_error_to_dict(result))
                 elif isinstance(result, Exception):
-                    results.append(create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Exception during execution: {result!s}",
-                    ))
+                    results.append(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            f"Exception during execution: {result!s}",
+                        )
+                    )
                 elif isinstance(result, dict):
                     results.append(result)
                     if "operation_id" in result:
@@ -703,10 +732,12 @@ class DeviceControlTools:
             except ToolError as e:
                 results.append(self._tool_error_to_dict(e))
             except Exception as e:
-                results.append(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Exception during execution: {e!s}",
-                ))
+                results.append(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Exception during execution: {e!s}",
+                    )
+                )
             await safe_progress(
                 ctx,
                 progress=i + 1,
@@ -775,11 +806,15 @@ class DeviceControlTools:
             Status summary for all operations
         """
         if not operation_ids:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "No operation IDs provided",
-                suggestions=["Provide a list of operation IDs from control_device_smart"],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "No operation IDs provided",
+                    suggestions=[
+                        "Provide a list of operation IDs from control_device_smart"
+                    ],
+                )
+            )
 
         # Check all operations
         statuses = []

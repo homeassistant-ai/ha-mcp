@@ -387,7 +387,7 @@ class TestRouteRegistration:
     def _reset_http_settings_prefix(self):
         # _http_settings_prefix is process-global; isolate each test so the
         # recording assertions below are not order-dependent (issue #1458).
-        import ha_mcp.settings_ui as _su
+        from ha_mcp import settings_ui as _su
 
         saved = _su._http_settings_prefix
         _su._http_settings_prefix = None
@@ -1075,7 +1075,7 @@ class TestGetBackupSettingOrigin:
         assert get_backup_setting_origin("AUTO_BACKUP_THROTTLE_MINUTES") == "env"
 
     def test_file_present_returns_file(self, monkeypatch, tmp_path):
-        import ha_mcp.config as cfg_mod
+        from ha_mcp import config as cfg_mod
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.delenv("ENABLE_AUTO_BACKUP", raising=False)
@@ -1105,7 +1105,7 @@ class TestApplyBackupOverrides:
     """``get_global_settings`` applies the override file unless env wins."""
 
     def test_file_value_applied_when_no_env(self, monkeypatch, tmp_path):
-        import ha_mcp.config as cfg_mod
+        from ha_mcp import config as cfg_mod
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         for env in (
@@ -1129,7 +1129,7 @@ class TestApplyBackupOverrides:
         cfg_mod._reset_global_settings()
 
     def test_env_var_wins_over_file(self, monkeypatch, tmp_path):
-        import ha_mcp.config as cfg_mod
+        from ha_mcp import config as cfg_mod
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
@@ -1147,7 +1147,7 @@ class TestApplyBackupOverrides:
         cfg_mod._reset_global_settings()
 
     def test_addon_mode_ignores_override_file(self, monkeypatch, tmp_path):
-        import ha_mcp.config as cfg_mod
+        from ha_mcp import config as cfg_mod
 
         monkeypatch.setenv("SUPERVISOR_TOKEN", "abc")
         # start.py would set this in real addon; simulate.
@@ -1163,7 +1163,7 @@ class TestApplyBackupOverrides:
         cfg_mod._reset_global_settings()
 
     def test_out_of_range_skipped(self, monkeypatch, tmp_path):
-        import ha_mcp.config as cfg_mod
+        from ha_mcp import config as cfg_mod
 
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         for env in (
@@ -1289,8 +1289,8 @@ class TestSaveBackupConfigEndpoint:
     async def test_standalone_writes_file_and_invalidates_cache(
         self, monkeypatch, tmp_path
     ):
-        import ha_mcp.config as cfg_mod
-        import ha_mcp.settings_ui as sui_mod
+        from ha_mcp import config as cfg_mod
+        from ha_mcp import settings_ui as sui_mod
 
         override_path = tmp_path / "backup_settings.json"
         monkeypatch.setattr(
@@ -3061,7 +3061,7 @@ class TestBetaMasterGateInSave:
             monkeypatch.delenv(ename, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         # Wrap _get_override_file_lock so we can count entries.
-        import ha_mcp.settings_ui as ui_mod
+        from ha_mcp import settings_ui as ui_mod
 
         real_get_lock = ui_mod._get_override_file_lock
         entries = {"count": 0}
@@ -3113,7 +3113,7 @@ class TestBetaMasterGateInSave:
         monkeypatch.delenv("HA_TIMEOUT", raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         get_data_dir.cache_clear()
-        import ha_mcp.settings_ui as ui_mod
+        from ha_mcp import settings_ui as ui_mod
 
         real_get_lock = ui_mod._get_override_file_lock
         entries = {"count": 0}

@@ -90,6 +90,10 @@ class EntitySearchMixin(_SearchBase):
                     "error_source": "smart_entity_search",
                 },
             )
+            # ``exception_to_structured_error`` always raises (NoReturn); this
+            # explicit raise makes the function's exit unambiguous (no implicit
+            # ``return None`` fall-through) and is never reached at runtime.
+            raise
 
     @staticmethod
     def _build_registry_slim(reg_result: Any) -> dict[str, dict[str, Any]]:
@@ -340,6 +344,10 @@ class EntitySearchMixin(_SearchBase):
                 ],
                 context={"area_query": area_query},
             )
+            # ``exception_to_structured_error`` always raises (NoReturn); this
+            # explicit raise makes the function's exit unambiguous (no implicit
+            # ``return None`` fall-through) and is never reached at runtime.
+            raise
 
     @classmethod
     def _parse_area_registry(cls, result: Any) -> dict[str, dict[str, Any]]:

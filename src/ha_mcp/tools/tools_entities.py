@@ -1096,6 +1096,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             logger.error(f"Error updating entity: {e}")
             eid_context = entity_id if isinstance(entity_id, str) else entity_ids
             exception_to_structured_error(e, context={"entity_id": eid_context})
+            return None  # unreachable: exception_to_structured_error always raises
 
     @mcp.tool(
         tags={"Entity Registry"},
@@ -1294,6 +1295,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "entity_id": entity_id if isinstance(entity_id, str) else entity_ids
                 },
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @mcp.tool(
         tags={"Entity Registry"},
@@ -1387,3 +1389,4 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 e,
                 context={"entity_id": entity_id},
             )
+            return None  # unreachable: exception_to_structured_error always raises

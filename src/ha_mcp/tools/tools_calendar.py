@@ -168,6 +168,7 @@ class CalendarTools:
             exception_to_structured_error(
                 error, context={"entity_id": entity_id}, suggestions=suggestions
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_config_set_calendar_event",
@@ -309,6 +310,7 @@ class CalendarTools:
             exception_to_structured_error(
                 error, context={"entity_id": entity_id}, suggestions=suggestions
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_config_remove_calendar_event",
@@ -493,6 +495,7 @@ class CalendarTools:
                 context={"entity_id": entity_id, "uid": uid},
                 suggestions=suggestions,
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_calendar_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

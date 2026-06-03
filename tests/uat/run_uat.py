@@ -333,6 +333,7 @@ async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict
         try:
             raw_json = json.loads(stdout_text)
         except json.JSONDecodeError:
+            # stdout wasn't JSON; fields are extracted from raw text below.
             pass
 
         # Extract fields from JSON if available

@@ -3,14 +3,15 @@
 import sys
 
 if sys.version_info < (3, 13):  # noqa: UP036 — uvx can bypass requires-python and run on 3.12
-    print(
+    # Write directly to stderr (not print) so this import-time version gate
+    # fires before any 3.13-only syntax in the rest of the module is parsed.
+    sys.stderr.write(
         f"ERROR: ha-mcp requires Python 3.13+, but you are running Python "
         f"{sys.version_info.major}.{sys.version_info.minor}.\n"
         "If using uvx, add '--python 3.13' to your config args:\n"
         '  "args": ["--python", "3.13", "--refresh", "ha-mcp@latest"]\n'
         "Or install Python 3.13: brew install python@3.13 (macOS) / "
-        "sudo apt install python3.13 (Linux)",
-        file=sys.stderr,
+        "sudo apt install python3.13 (Linux)\n"
     )
     sys.exit(1)
 
@@ -496,6 +497,8 @@ async def _cancel_tasks(*tasks: asyncio.Task) -> None:
             try:
                 await task
             except asyncio.CancelledError:
+                # Expected: we just cancelled this task, swallow its
+                # CancelledError so remaining tasks still get awaited.
                 pass
 
 
@@ -525,6 +528,8 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
             except TimeoutError:
                 logger.warning("Server did not stop within timeout")
             except asyncio.CancelledError:
+                # Expected: we just cancelled server_task above; swallow its
+                # CancelledError so shutdown can proceed to cleanup.
                 pass
 
     except asyncio.CancelledError:

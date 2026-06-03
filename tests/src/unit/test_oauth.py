@@ -1396,13 +1396,15 @@ class TestWebSocketManagerPool:
 
         # Both connections created
         assert call_count == 2
+        count_before_reuse = call_count
 
         # User A again — should reuse existing connection
         client_a2 = await manager.get_client(
             url="http://ha.local:8123", token="token_user_a"
         )
         assert client_a2 is mock_client_a
-        assert call_count == 2  # No new connection
+        # No new connection: the factory was not invoked again.
+        assert call_count == count_before_reuse
 
     @pytest.mark.asyncio
     async def test_pool_evicts_lru_when_over_max_size(self):

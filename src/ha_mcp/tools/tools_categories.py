@@ -164,6 +164,8 @@ class CategoryTools:
                     "Ensure scope is valid (e.g., 'automation', 'script', 'scene', 'helpers')",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_config_set_category",
@@ -304,6 +306,8 @@ class CategoryTools:
                     "For updates, verify the category_id exists using ha_config_get_category()",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_config_remove_category",
@@ -412,6 +416,8 @@ class CategoryTools:
                     "Verify the category_id exists using ha_config_get_category()",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_category_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

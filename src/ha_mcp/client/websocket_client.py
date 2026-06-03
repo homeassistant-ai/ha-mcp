@@ -352,6 +352,8 @@ class HomeAssistantWebSocketClient:
             try:
                 await self.background_task
             except asyncio.CancelledError:
+                # Expected: we just cancelled the task above; swallow the
+                # propagated CancelledError so disconnect can finish cleanly.
                 pass
             finally:
                 self.background_task = None

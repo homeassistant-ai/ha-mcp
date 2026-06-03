@@ -387,8 +387,10 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 arguments = arguments.get("arguments") or {}
 
             if name not in allowed:
-                # Provide a helpful error with the correct proxy name
-                actual_category = "unknown"
+                # Provide a helpful error with the correct proxy name.
+                # actual_category/correct_proxy are assigned in every branch
+                # below that reaches the raise (the else branch raises early),
+                # so no initial sentinel value is needed.
                 correct_proxy = ""
                 if name in transform._read_tools:
                     actual_category = "read"

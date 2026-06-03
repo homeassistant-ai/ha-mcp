@@ -21,7 +21,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
-from ha_mcp.config import BETA_FEATURE_FIELDS, FEATURE_FLAG_FIELDS, Settings
+import ha_mcp.config as config
 
 
 @pytest.fixture(autouse=True)
@@ -41,24 +41,26 @@ def _clear_env(monkeypatch: Any) -> None:
 
 class TestSettings:
     def test_flag_default_disabled(self) -> None:
-        assert Settings().enable_dashboard_screenshot is False
+        assert config.Settings().enable_dashboard_screenshot is False
 
     def test_flag_enabled_via_env(self, monkeypatch: Any) -> None:
         monkeypatch.setenv("HAMCP_ENABLE_DASHBOARD_SCREENSHOT", "true")
-        assert Settings().enable_dashboard_screenshot is True
+        assert config.Settings().enable_dashboard_screenshot is True
 
     def test_flag_empty_string_means_false(self, monkeypatch: Any) -> None:
         monkeypatch.setenv("HAMCP_ENABLE_DASHBOARD_SCREENSHOT", "")
-        assert Settings().enable_dashboard_screenshot is False
+        assert config.Settings().enable_dashboard_screenshot is False
 
     def test_engine_url_default_empty(self) -> None:
-        assert Settings().dashboard_screenshot_engine_url == ""
+        assert config.Settings().dashboard_screenshot_engine_url == ""
 
     def test_engine_url_from_env(self, monkeypatch: Any) -> None:
         monkeypatch.setenv(
             "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", "http://engine:10000"
         )
-        assert Settings().dashboard_screenshot_engine_url == "http://engine:10000"
+        assert (
+            config.Settings().dashboard_screenshot_engine_url == "http://engine:10000"
+        )
 
     @pytest.mark.parametrize("bad", ["ftp://engine:10000", "engine:10000", "//engine"])
     def test_engine_url_rejects_non_http(self, monkeypatch: Any, bad: str) -> None:
@@ -66,26 +68,30 @@ class TestSettings:
         # scheme URL instead of letting it 0-byte-fail at render time.
         monkeypatch.setenv("HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", bad)
         with pytest.raises(ValidationError):
-            Settings()
+            config.Settings()
 
     def test_engine_url_validator_strips_trailing_slash(self, monkeypatch: Any) -> None:
         # The field validator (not just resolve_engine_url) normalizes the URL.
         monkeypatch.setenv(
             "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL", "http://engine:10000/"
         )
-        assert Settings().dashboard_screenshot_engine_url == "http://engine:10000"
+        assert (
+            config.Settings().dashboard_screenshot_engine_url == "http://engine:10000"
+        )
 
     def test_flag_in_feature_flag_fields(self) -> None:
-        assert "enable_dashboard_screenshot" in {f.field for f in FEATURE_FLAG_FIELDS}
+        assert "enable_dashboard_screenshot" in {
+            f.field for f in config.FEATURE_FLAG_FIELDS
+        }
 
     def test_flag_is_beta_gated(self) -> None:
-        assert "enable_dashboard_screenshot" in BETA_FEATURE_FIELDS
+        assert "enable_dashboard_screenshot" in config.BETA_FEATURE_FIELDS
 
     def test_engine_url_not_a_feature_flag(self) -> None:
         # Connection string, deliberately not a web-editable beta toggle.
-        names = {f.field for f in FEATURE_FLAG_FIELDS}
+        names = {f.field for f in config.FEATURE_FLAG_FIELDS}
         assert "dashboard_screenshot_engine_url" not in names
-        assert "dashboard_screenshot_engine_url" not in BETA_FEATURE_FIELDS
+        assert "dashboard_screenshot_engine_url" not in config.BETA_FEATURE_FIELDS
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +109,6 @@ class _RecordingMcp:
 
 class TestRegistrationGate:
     def test_gate_off_registers_nothing(self, monkeypatch: Any) -> None:
-        import ha_mcp.config as config
         from ha_mcp.tools import tools_dashboard_screenshot as mod
 
         monkeypatch.setattr(
@@ -116,7 +121,6 @@ class TestRegistrationGate:
         assert mcp.added == []
 
     def test_gate_on_registers_tool(self, monkeypatch: Any) -> None:
-        import ha_mcp.config as config
         from ha_mcp.tools import tools_dashboard_screenshot as mod
 
         monkeypatch.setattr(
@@ -136,7 +140,6 @@ class TestRegistrationGate:
 
 class TestResolveEngineUrl:
     async def test_explicit_url_strips_trailing_slash(self, monkeypatch: Any) -> None:
-        import ha_mcp.config as config
         from ha_mcp.dashboard_screenshot import provision
 
         monkeypatch.setattr(
@@ -149,7 +152,6 @@ class TestResolveEngineUrl:
         assert await provision.resolve_engine_url() == "http://engine:10000"
 
     async def test_stdio_no_token_raises(self, monkeypatch: Any) -> None:
-        import ha_mcp.config as config
         from ha_mcp.dashboard_screenshot import provision
 
         monkeypatch.setattr(
@@ -445,7 +447,6 @@ class TestMaybeAttachScreenshot:
         assert out is result
 
     async def test_feature_off_warns(self, monkeypatch: Any) -> None:
-        import ha_mcp.config as config
         from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
 
         monkeypatch.setattr(
@@ -459,7 +460,6 @@ class TestMaybeAttachScreenshot:
         assert any("disabled" in w.lower() for w in result.get("warnings", []))
 
     async def test_capture_failure_warns(self, monkeypatch: Any) -> None:
-        import ha_mcp.config as config
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
 
@@ -481,7 +481,6 @@ class TestMaybeAttachScreenshot:
 
     async def test_full_page_passed_through(self, monkeypatch: Any) -> None:
         """_maybe_attach_screenshot forwards full_page to the capture call."""
-        import ha_mcp.config as config
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
 
@@ -512,7 +511,6 @@ class TestMaybeAttachScreenshot:
     ) -> None:
         from fastmcp.tools.tool import ToolResult
 
-        import ha_mcp.config as config
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
 
@@ -540,7 +538,6 @@ class TestMaybeAttachScreenshot:
     async def test_get_path_raises_on_capture_failure(self, monkeypatch: Any) -> None:
         """raise_on_failure (the get path) propagates the engine error instead
         of demoting it to a warning the caller may never read."""
-        import ha_mcp.config as config
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
 

@@ -96,10 +96,11 @@ async def resolve_engine_url() -> str:
             suggestions=[
                 "Use HA OS / Supervised and install the screenshot engine add-on",
                 "Or run the engine as a sidecar and set "
-                "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL",
+                + "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL",
             ],
         )
     )
+    raise AssertionError("unreachable: raise_tool_error always raises")
 
 
 async def _discover_engine_url_via_supervisor() -> str:

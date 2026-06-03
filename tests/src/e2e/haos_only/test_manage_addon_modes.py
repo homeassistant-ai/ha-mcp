@@ -106,6 +106,9 @@ async def _resolve_slug(mcp_client: Any, display_name: str) -> str:
         f"Addon {display_name!r} not found in installed listing. "
         f"Installed: {installed}. Check build_image.py ADDONS tuple."
     )
+    raise AssertionError(
+        "unreachable: pytest.fail always raises"
+    )  # explicit for CodeQL
 
 
 async def _wait_addon_running(

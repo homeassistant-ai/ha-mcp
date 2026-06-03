@@ -127,6 +127,7 @@ def wait_for_api(base_url: str, timeout_s: int = 90) -> None:
                 print(f"✓ HA API ready after {attempt + 1}s")
                 return
         except requests.exceptions.RequestException:
+            # Expected while HA is still starting: keep polling until timeout.
             pass
         time.sleep(1)
     raise RuntimeError(f"HA API at {base_url} didn't become ready in {timeout_s}s")
@@ -143,6 +144,7 @@ def wait_for_entity(base_url: str, entity_id: str, timeout_s: int = 30) -> None:
                 print(f"✓ Entity {entity_id} registered after {attempt + 1}s")
                 return
         except requests.exceptions.RequestException:
+            # Expected until the entity is registered: keep polling until timeout.
             pass
         time.sleep(1)
     raise RuntimeError(

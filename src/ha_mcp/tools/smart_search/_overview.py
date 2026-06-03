@@ -162,6 +162,9 @@ class SystemOverviewMixin(_SearchBase):
                     "controllable_devices": {},
                 },
             )
+            # exception_to_structured_error always raises; unreachable but makes
+            # every code path return explicitly (py/mixed-returns).
+            return None
 
     @staticmethod
     def _build_entity_area_map(

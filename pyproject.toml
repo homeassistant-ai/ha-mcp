@@ -131,7 +131,6 @@ ignore = [
     "RUF001",  # ambiguous unicode — HA entity names use degree symbols etc
     "RUF003",  # ambiguous unicode in comments
     "RUF010",  # explicit f-string type conversion — str(x) is clearer than !s
-    "F841",    # unused variable — too many to fix now
     "RUF059",  # unused unpacked variable
     "SIM118",  # in-dict-keys — style preference
     "PIE810",  # multiple-starts-ends-with — style preference
