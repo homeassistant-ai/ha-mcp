@@ -108,9 +108,9 @@ def _location(result: dict[str, Any]) -> tuple[str, int]:
     locations = result.get("locations") or []
     if not locations:
         return ("<no-location>", 0)
-    phys = locations[0].get("physicalLocation", {})
-    uri = phys.get("artifactLocation", {}).get("uri", "<no-file>")
-    line = phys.get("region", {}).get("startLine", 0)
+    phys = locations[0].get("physicalLocation") or {}
+    uri = (phys.get("artifactLocation") or {}).get("uri") or "<no-file>"
+    line = (phys.get("region") or {}).get("startLine") or 0
     return (uri, line)
 
 
@@ -135,7 +135,7 @@ def classify(
             file, line = _location(result)
             if any(file.startswith(prefix) for prefix in PATHS_IGNORE):
                 continue
-            message = result.get("message", {}).get("text", "").strip()
+            message = ((result.get("message") or {}).get("text") or "").strip()
             if reason := _allowlist_reason(file, rule_id, message):
                 suppressed.append((file, line, rule_id, message, reason))
                 continue
