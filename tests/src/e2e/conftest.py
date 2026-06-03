@@ -674,6 +674,7 @@ def _wait_for_ha_api_ready(
                 logger.info(f"🏠 Home Assistant API ready after {elapsed}s")
                 return True
         except _requests.exceptions.RequestException:
+            # Boot-phase polling: HA API not up yet — retry until timeout (#1266).
             pass
         time.sleep(1)
     return False
@@ -985,10 +986,10 @@ def _reset_ha_in_process_caches() -> None:
     attribute on the singleton without clearing the connection pool, since
     ``_client`` is not declared on the class.
     """
-    import ha_mcp.config
+    from ha_mcp import config
     from ha_mcp.client.websocket_client import websocket_manager
 
-    ha_mcp.config._settings = None
+    config._settings = None
     websocket_manager._clients.clear()
     websocket_manager._last_used.clear()
     websocket_manager._current_loop = None
@@ -1276,6 +1277,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     requests.exceptions.RequestException,
                     json.JSONDecodeError,
                 ):
+                    # Boot-phase polling: state machine not ready — retry (#1266).
                     pass
                 time.sleep(1)
             else:
