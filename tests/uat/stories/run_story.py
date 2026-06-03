@@ -199,6 +199,32 @@ def _extract_tokens(session_file: str | None, agent: str) -> dict | None:
     return None
 
 
+def _extract_model(session_file: str | None, agent: str) -> str | None:
+    """Extract the resolved model id from a subprocess agent's session file.
+
+    Claude records the resolved id (e.g. ``claude-sonnet-4-6``) as
+    ``message.model`` on each assistant entry, so the recorded model is
+    accurate even on a bare ``--agents claude`` run with no ``--model``.
+    Returns None for agents whose session format does not expose it
+    (gemini) or on any error, so the caller falls back to None.
+    """
+    if not session_file or not Path(session_file).exists():
+        return None
+    try:
+        if agent == "claude":
+            for line in Path(session_file).read_text().splitlines():
+                entry = json.loads(line)
+                if entry.get("type") == "assistant":
+                    model = entry.get("message", {}).get("model")
+                    if model:
+                        return model
+    except Exception as exc:
+        logger.warning(f"  Model extraction failed: {exc}")
+        return None
+
+    return None
+
+
 def _extract_tool_calls(session_file: str | None, agent: str) -> int | None:
     """Count tool calls from an agent session file."""
     if not session_file or not Path(session_file).exists():
@@ -421,6 +447,7 @@ async def _run_test_prompt_inline(
         "completed": True,
         "duration_ms": duration_ms,
         "exit_code": exit_code,
+        "model": result.get("model"),
         "output": result.get("result", ""),
         "num_turns": result.get("num_turns"),
         "tool_stats": result.get("tool_stats"),
@@ -583,6 +610,8 @@ def append_result(
     session_file: str | None = None,
     passed: bool = False,
     verify_results: list[dict] | None = None,
+    model: str | None = None,
+    quantization: str | None = None,
 ) -> None:
     """Append a single story result as one JSONL line."""
     agent_data = bat_summary.get("agents", {}).get(agent, {})
@@ -595,6 +624,10 @@ def append_result(
         "branch": branch,
         "timestamp": datetime.now(UTC).isoformat(),
         "agent": agent,
+        "model": model
+        or test_phase.get("model")
+        or _extract_model(session_file, agent),
+        "quantization": quantization,
         "story": story["id"],
         "category": story["category"],
         "weight": story["weight"],
@@ -726,6 +759,7 @@ async def run_stories(
         inline_mcp_client: MCPClient | None = None
         openai_client: openai.AsyncOpenAI | None = None
         resolved_model: str | None = None
+        resolved_quant: str | None = None
         openai_tools: list[dict] = []
 
         async with contextlib.AsyncExitStack() as agent_stack:
@@ -743,7 +777,11 @@ async def run_stories(
                     ha_url, ha_token, args.branch, mcp_env_dict or None
                 )
                 try:
-                    openai_client, resolved_model = await create_and_warm_openai_client(
+                    (
+                        openai_client,
+                        resolved_model,
+                        resolved_quant,
+                    ) = await create_and_warm_openai_client(
                         base_url=args.base_url,
                         api_key=args.api_key,
                         model=args.model,
@@ -919,6 +957,8 @@ async def run_stories(
                         session_file,
                         passed=passed,
                         verify_results=verify_results,
+                        model=resolved_model or args.model,
+                        quantization=resolved_quant,
                     )
 
                 if session_file:
