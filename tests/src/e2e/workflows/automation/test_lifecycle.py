@@ -180,7 +180,9 @@ class TestAutomationLifecycle:
         # automation engine — much faster than the 10s logbook poll the
         # previous flow used, which was the largest single chunk of
         # this test's runtime (~10s of the ~16s total on regular e2e).
-        logger.info("🚀 Triggering automation + waiting for automation_triggered event...")
+        logger.info(
+            "🚀 Triggering automation + waiting for automation_triggered event..."
+        )
 
         async def _fire_trigger():
             trigger_result = await mcp_client.call_tool(
@@ -196,13 +198,16 @@ class TestAutomationLifecycle:
         triggered_event = await wait_for_ha_event(
             "automation_triggered",
             _fire_trigger,
-            predicate=lambda ev: (ev.get("data") or {}).get("entity_id")
-            == automation_entity,
+            predicate=lambda ev: (
+                (ev.get("data") or {}).get("entity_id") == automation_entity
+            ),
             timeout=5.0,
         )
 
         if triggered_event:
-            logger.info(f"✅ automation_triggered event observed for {automation_entity}")
+            logger.info(
+                f"✅ automation_triggered event observed for {automation_entity}"
+            )
         else:
             # Belt-and-suspenders fallback: even though the WS event
             # missed, the trigger service call succeeded. Try the
@@ -242,12 +247,10 @@ class TestAutomationLifecycle:
 
         update_result = await mcp_client.call_tool(
             "ha_config_set_automation",
-            {
-                "identifier": automation_entity,
-                "config": update_config},
+            {"identifier": automation_entity, "config": update_config},
         )
 
-        update_data = assert_mcp_success(update_result, "automation update")
+        assert_mcp_success(update_result, "automation update")
         logger.info("✅ Automation updated successfully")
 
         # 7. VERIFY: Update was applied
@@ -283,10 +286,10 @@ class TestAutomationLifecycle:
         logger.info("🗑️ Deleting automation...")
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            { "identifier": automation_entity},
+            {"identifier": automation_entity},
         )
 
-        delete_data = assert_mcp_success(delete_result, "automation deletion")
+        assert_mcp_success(delete_result, "automation deletion")
         logger.info("✅ Automation deleted successfully")
 
         # 9. VERIFY: Automation is gone
@@ -345,8 +348,7 @@ class TestAutomationLifecycle:
 
         logger.info(f"📝 Creating disabled automation: {automation_name}")
         create_result = await mcp_client.call_tool(
-            "ha_config_set_automation",
-            { "config": config}
+            "ha_config_set_automation", {"config": config}
         )
 
         create_data = assert_mcp_success(create_result, "disabled automation creation")
@@ -376,7 +378,7 @@ class TestAutomationLifecycle:
             },
         )
 
-        enable_data = assert_mcp_success(enable_result, "automation enable")
+        assert_mcp_success(enable_result, "automation enable")
 
         # Verify automation is now enabled
         state_reached = await wait_for_entity_state(
@@ -398,7 +400,7 @@ class TestAutomationLifecycle:
             },
         )
 
-        disable_data = assert_mcp_success(disable_result, "automation disable")
+        assert_mcp_success(disable_result, "automation disable")
 
         # Verify automation is now disabled
         state_reached = await wait_for_entity_state(
@@ -412,7 +414,7 @@ class TestAutomationLifecycle:
         # Clean up
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            { "identifier": automation_entity},
+            {"identifier": automation_entity},
         )
         assert_mcp_success(delete_result, "automation cleanup")
         logger.info("🗑️ Automation cleaned up")
@@ -451,8 +453,7 @@ class TestAutomationLifecycle:
         )
 
         create_result = await mcp_client.call_tool(
-            "ha_config_set_automation",
-            { "config": valid_config}
+            "ha_config_set_automation", {"config": valid_config}
         )
 
         create_data = assert_mcp_success(create_result, "valid configuration creation")
@@ -465,8 +466,7 @@ class TestAutomationLifecycle:
 
         # Verify configuration structure
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation",
-            { "identifier": automation_entity}
+            "ha_config_get_automation", {"identifier": automation_entity}
         )
 
         get_data = assert_mcp_success(get_result, "configuration retrieval")
@@ -506,8 +506,7 @@ class TestAutomationLifecycle:
 
         try:
             invalid_result = await mcp_client.call_tool(
-                "ha_config_set_automation",
-                { "config": invalid_config}
+                "ha_config_set_automation", {"config": invalid_config}
             )
 
             invalid_data = parse_mcp_result(invalid_result)
@@ -529,7 +528,7 @@ class TestAutomationLifecycle:
         # Clean up valid automation
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            { "identifier": automation_entity},
+            {"identifier": automation_entity},
         )
         assert_mcp_success(delete_result, "valid automation cleanup")
         logger.info("🗑️ Test automations cleaned up")
@@ -592,8 +591,7 @@ class TestAutomationLifecycle:
 
         logger.info(f"📝 Creating complex automation: {automation_name}")
         create_result = await mcp_client.call_tool(
-            "ha_config_set_automation",
-            { "config": complex_config}
+            "ha_config_set_automation", {"config": complex_config}
         )
 
         create_data = assert_mcp_success(create_result, "complex automation creation")
@@ -629,8 +627,7 @@ class TestAutomationLifecycle:
         # Verify complex configuration
         logger.info("🔍 Verifying complex automation configuration...")
         get_result = await mcp_client.call_tool(
-            "ha_config_get_automation",
-            { "identifier": automation_entity}
+            "ha_config_get_automation", {"identifier": automation_entity}
         )
 
         get_data = assert_mcp_success(get_result, "complex automation retrieval")
@@ -664,10 +661,10 @@ class TestAutomationLifecycle:
         logger.info("🗑️ Cleaning up complex automation...")
         delete_result = await mcp_client.call_tool(
             "ha_config_remove_automation",
-            { "identifier": automation_entity},
+            {"identifier": automation_entity},
         )
 
-        delete_data = assert_mcp_success(delete_result, "complex automation deletion")
+        assert_mcp_success(delete_result, "complex automation deletion")
         logger.info("✅ Complex automation cleaned up")
 
     async def test_automation_mode_behaviors(
@@ -706,8 +703,7 @@ class TestAutomationLifecycle:
                 mode_config.pop("max", None)
 
             create_result = await mcp_client.call_tool(
-                "ha_config_set_automation",
-                { "config": mode_config}
+                "ha_config_set_automation", {"config": mode_config}
             )
 
             create_data = assert_mcp_success(
@@ -728,7 +724,7 @@ class TestAutomationLifecycle:
             # Verify mode is set correctly
             get_result = await mcp_client.call_tool(
                 "ha_config_get_automation",
-                { "identifier": automation_entity},
+                {"identifier": automation_entity},
             )
 
             get_data = assert_mcp_success(
@@ -756,12 +752,10 @@ class TestAutomationLifecycle:
             # Cleanup immediately to avoid entity ID conflicts
             delete_result = await mcp_client.call_tool(
                 "ha_config_remove_automation",
-                { "identifier": automation_entity},
+                {"identifier": automation_entity},
             )
 
-            delete_data = assert_mcp_success(
-                delete_result, f"{mode} mode automation deletion"
-            )
+            assert_mcp_success(delete_result, f"{mode} mode automation deletion")
             logger.info(f"🗑️ Mode {mode} automation cleaned up")
 
 
@@ -827,7 +821,6 @@ async def test_automation_search_and_discovery(mcp_client):
         logger.info(f"🔍 Pattern '{pattern}' search: {len(results)} results")
 
     logger.info("✅ Automation search and discovery tests completed")
-
 
 
 @pytest.mark.automation
@@ -976,16 +969,16 @@ async def test_automation_with_choose_block(mcp_client):
         # The key could be 'conditions' or 'condition' depending on HA version
         # But our normalization should have sent 'conditions' to the API
         has_conditions = "conditions" in option or "condition" in option
-        assert has_conditions, (
-            f"Choose option {i} should have conditions defined"
-        )
+        assert has_conditions, f"Choose option {i} should have conditions defined"
         logger.info(f"✅ Choose option {i} has condition key: {list(option.keys())}")
 
     # The fact that we successfully created and retrieved the automation
     # with choose blocks proves the normalization fix works.
     # Execution testing would require more complex setup (triggering actual
     # entity state changes) which is beyond the scope of this normalization test.
-    logger.info("✅ Choose block normalization verified - automation API accepted the config")
+    logger.info(
+        "✅ Choose block normalization verified - automation API accepted the config"
+    )
 
     # Clean up
     logger.info("🧹 Cleaning up test automation...")
@@ -1039,11 +1032,15 @@ async def test_duplicate_automation_prevention(mcp_client, cleanup_tracker):
     # Now retrieve the automation config — it will contain the 'id' field
     config = await wait_for_automation(mcp_client, automation_entity, timeout=10)
     assert config is not None, "Could not retrieve created automation"
-    assert "id" in config, f"Retrieved config should contain 'id' field: {config.keys()}"
+    assert "id" in config, (
+        f"Retrieved config should contain 'id' field: {config.keys()}"
+    )
 
     # Attempt to create a new automation using this config WITHOUT passing identifier.
     # This should be rejected because the config contains an existing 'id'.
-    logger.info("Attempting to create automation with existing 'id' in config (no identifier)...")
+    logger.info(
+        "Attempting to create automation with existing 'id' in config (no identifier)..."
+    )
     duplicate_result = await safe_call_tool(
         mcp_client,
         "ha_config_set_automation",
@@ -1057,9 +1054,7 @@ async def test_duplicate_automation_prevention(mcp_client, cleanup_tracker):
     # Verify the error mentions the 'id' field and provides guidance
     error = duplicate_result.get("error", {})
     error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
-    assert "id" in error_msg.lower(), (
-        f"Error should mention 'id' field: {error_msg}"
-    )
+    assert "id" in error_msg.lower(), f"Error should mention 'id' field: {error_msg}"
     logger.info(f"Correctly rejected with error: {error_msg}")
 
     # Clean up
@@ -1128,7 +1123,6 @@ async def test_automation_creation_returns_verified_entity(
     )
     assert_mcp_success(delete_result, "verified entity test cleanup")
     logger.info("Automation creation verified entity test passed")
-
 
 
 async def _find_test_light_entity(mcp_client) -> str:
@@ -1210,7 +1204,9 @@ class TestConfigHashMismatch:
         logger.info(f"Real config_hash: {real_hash[:12]}...")
 
         # 3. Construct a stale hash — guarantee it differs from the real one
-        stale_hash = real_hash[:-4] + ("0000" if not real_hash.endswith("0000") else "ffff")
+        stale_hash = real_hash[:-4] + (
+            "0000" if not real_hash.endswith("0000") else "ffff"
+        )
         assert stale_hash != real_hash, "stale_hash must differ from real_hash"
 
         # 4. Attempt update with the stale hash — guard must reject it
@@ -1284,7 +1280,9 @@ class TestConfigHashMismatch:
                 "config_hash": real_hash,
             },
         )
-        assert result.get("success") is True, f"expected success with correct hash: {result}"
+        assert result.get("success") is True, (
+            f"expected success with correct hash: {result}"
+        )
         logger.info("Correct hash accepted — update succeeded")
 
     async def test_update_without_hash_succeeds(
@@ -1357,9 +1355,7 @@ class TestSetAutomationNegativeInputs:
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "both config and python_transform" in result["error"]["message"].lower()
 
-    async def test_python_transform_requires_identifier(
-        self, mcp_client
-    ) -> None:
+    async def test_python_transform_requires_identifier(self, mcp_client) -> None:
         """Rejects python_transform when identifier is absent.
 
         Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
@@ -1377,9 +1373,7 @@ class TestSetAutomationNegativeInputs:
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "identifier is required" in result["error"]["message"].lower()
 
-    async def test_python_transform_requires_config_hash(
-        self, mcp_client
-    ) -> None:
+    async def test_python_transform_requires_config_hash(self, mcp_client) -> None:
         """Rejects python_transform when config_hash is absent.
 
         Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
@@ -1397,9 +1391,7 @@ class TestSetAutomationNegativeInputs:
         assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "config_hash is required" in result["error"]["message"].lower()
 
-    async def test_requires_at_least_one_input(
-        self, mcp_client
-    ) -> None:
+    async def test_requires_at_least_one_input(self, mcp_client) -> None:
         """Rejects a call that supplies neither config nor python_transform.
 
         Guard: tools_config_automations.py — raises VALIDATION_INVALID_PARAMETER
@@ -1440,7 +1432,9 @@ class TestAutomationDestructiveNegativeInputs:
         Source path: Exception with "404"/"not found" in str →
         RESOURCE_NOT_FOUND branch → raise_tool_error.
         """
-        logger.info("Testing ha_config_remove_automation with nonexistent identifier...")
+        logger.info(
+            "Testing ha_config_remove_automation with nonexistent identifier..."
+        )
 
         data = await safe_call_tool(
             mcp_client,
@@ -1458,7 +1452,9 @@ class TestAutomationDestructiveNegativeInputs:
         assert any(kw in error_msg for kw in ("not found", "does not exist", "404")), (
             f"Expected 'not found'/'does not exist'/'404' in error, got: {data.get('error')}"
         )
-        logger.info("\u2705 Nonexistent automation removal correctly returned structured error")
+        logger.info(
+            "\u2705 Nonexistent automation removal correctly returned structured error"
+        )
 
     async def test_remove_automation_double_delete(
         self, mcp_client, test_data_factory, cleanup_tracker
@@ -1476,7 +1472,9 @@ class TestAutomationDestructiveNegativeInputs:
         config = test_data_factory.automation_config(
             automation_name,
             trigger=[{"platform": "time", "at": "06:00:00"}],
-            action=[{"service": "light.turn_on", "target": {"entity_id": "light.bed_light"}}],
+            action=[
+                {"service": "light.turn_on", "target": {"entity_id": "light.bed_light"}}
+            ],
         )
 
         logger.info("Creating automation for double-delete test...")
@@ -1484,7 +1482,9 @@ class TestAutomationDestructiveNegativeInputs:
             "ha_config_set_automation",
             {"config": config},
         )
-        create_data = assert_mcp_success(create_result, "automation creation for double-delete")
+        create_data = assert_mcp_success(
+            create_result, "automation creation for double-delete"
+        )
         entity_id = create_data.get("entity_id")
         assert entity_id, f"No entity_id returned: {create_data}"
         cleanup_tracker.track("automation", entity_id)
@@ -1515,4 +1515,6 @@ class TestAutomationDestructiveNegativeInputs:
         assert any(kw in error_msg for kw in ("not found", "does not exist", "404")), (
             f"Expected not-found error on second delete, got: {second_delete.get('error')}"
         )
-        logger.info("\u2705 Double-delete correctly returned structured error on second call")
+        logger.info(
+            "\u2705 Double-delete correctly returned structured error on second call"
+        )

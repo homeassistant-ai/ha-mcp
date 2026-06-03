@@ -184,10 +184,7 @@ class TestShapeCheckValidateOnly:
                 {"name": "no-stat-bad-2"},
             ],
         }
-        assert (
-            _shape_check(bad, validate_only={"device_consumption": set()})
-            == []
-        )
+        assert _shape_check(bad, validate_only={"device_consumption": set()}) == []
 
     def test_unlisted_key_is_skipped(self):
         # Bad entry under device_consumption — but validate_only only asks
@@ -196,12 +193,7 @@ class TestShapeCheckValidateOnly:
             "device_consumption": [{"name": "no-stat"}],
             "energy_sources": [{"type": "grid"}],
         }
-        assert (
-            _shape_check(
-                config, validate_only={"energy_sources": {0}}
-            )
-            == []
-        )
+        assert _shape_check(config, validate_only={"energy_sources": {0}}) == []
 
     def test_unlisted_indices_within_a_key_are_skipped(self):
         # device_consumption[0] is bad, [1] is good. validate_only={1} only
@@ -222,9 +214,7 @@ class TestShapeCheckValidateOnly:
                 {"name": "no-stat-bad"},
             ],
         }
-        errors = _shape_check(
-            config, validate_only={"device_consumption": {1}}
-        )
+        errors = _shape_check(config, validate_only={"device_consumption": {1}})
         assert any("stat_consumption" in e["message"] for e in errors)
 
     def test_structural_must_be_a_list_check_still_fires_for_listed_keys(self):
@@ -340,9 +330,7 @@ class TestGetPrefs:
         assert "config_hash_per_key" in result
         assert set(result["config_hash_per_key"]) == set(_PREFS_TOP_LEVEL_KEYS)
         for key in _PREFS_TOP_LEVEL_KEYS:
-            assert result["config_hash_per_key"][key] == compute_config_hash(
-                {key: []}
-            )
+            assert result["config_hash_per_key"][key] == compute_config_hash({key: []})
 
 
 # -----------------------------------------------------------------------------
@@ -829,9 +817,7 @@ class TestSetPrefsPerKeyHash:
         assert result["success"] is True
         assert result["mode"] == "set"
         # Save payload only carries the submitted top-level key.
-        save_payload = tools._client.send_websocket_message.call_args_list[
-            1
-        ].args[0]
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
         assert save_payload["type"] == "energy/save_prefs"
         assert save_payload["device_consumption"] == new_dc
         assert "energy_sources" not in save_payload
@@ -876,7 +862,10 @@ class TestSetPrefsPerKeyHash:
         on the comprehension at the dict-branch's mismatch loop.
         """
         current_prefs = _sample_prefs()
-        per_key = _compute_per_key_hashes(current_prefs)
+        hashes = _compute_per_key_hashes(current_prefs)
+        assert hashes and all(
+            isinstance(h, str) and len(h) > 0 for h in hashes.values()
+        )
         # Both device_consumption and energy_sources are stale; only
         # device_consumption_water hash is fresh (and not submitted).
         config = {
@@ -1034,9 +1023,7 @@ class TestSetPrefsPerKeyHash:
         assert "at least one top-level key" in json.dumps(err)
         assert tools._client.send_websocket_message.call_count == 1
 
-    async def test_response_includes_fresh_per_key_hashes_after_write(
-        self, tools
-    ):
+    async def test_response_includes_fresh_per_key_hashes_after_write(self, tools):
         """After a per-key write, the response carries an updated
         config_hash_per_key reflecting the new merged state. An agent can
         chain another per-key write without an intermediate mode='get'.
@@ -1063,13 +1050,9 @@ class TestSetPrefsPerKeyHash:
         expected_after = {
             "energy_sources": current_prefs["energy_sources"],
             "device_consumption": new_dc,
-            "device_consumption_water": current_prefs[
-                "device_consumption_water"
-            ],
+            "device_consumption_water": current_prefs["device_consumption_water"],
         }
-        assert result["config_hash_per_key"] == _compute_per_key_hashes(
-            expected_after
-        )
+        assert result["config_hash_per_key"] == _compute_per_key_hashes(expected_after)
         # Backward-compat: full-blob config_hash is also still emitted.
         assert result["config_hash"] == compute_config_hash(expected_after)
 
@@ -1181,9 +1164,7 @@ class TestConvenienceModesPassStrHash:
         )
         assert captured["config_hash_type"] == "str"
 
-    async def test_add_source_forwards_str_hash_to_set_prefs(
-        self, tools, monkeypatch
-    ):
+    async def test_add_source_forwards_str_hash_to_set_prefs(self, tools, monkeypatch):
         from ha_mcp.tools.tools_energy import EnergyTools
 
         original_set_prefs = EnergyTools._set_prefs
@@ -1244,9 +1225,7 @@ class TestConvenienceModesPreExistingInvalid:
         assert result["success"] is True
         # The pre-existing broken entry survives unchanged in the saved
         # payload — full-replace semantics on the top-level key.
-        save_payload = tools._client.send_websocket_message.call_args_list[
-            1
-        ].args[0]
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
         assert save_payload["device_consumption"] == [
             {"name": "broken_no_stat"},
             {"stat_consumption": "sensor.fridge_energy"},
@@ -1276,9 +1255,7 @@ class TestConvenienceModesPreExistingInvalid:
             mode="add_source", source=new_source
         )
         assert result["success"] is True
-        save_payload = tools._client.send_websocket_message.call_args_list[
-            1
-        ].args[0]
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
         assert save_payload["energy_sources"][1] == new_source
 
     async def test_remove_device_succeeds_with_invalid_pre_existing(self, tools):
@@ -1302,9 +1279,7 @@ class TestConvenienceModesPreExistingInvalid:
         )
         assert result["success"] is True
         # The unaffected (still-broken) entry remains in the saved payload.
-        save_payload = tools._client.send_websocket_message.call_args_list[
-            1
-        ].args[0]
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
         assert save_payload["device_consumption"] == [
             {"name": "broken_no_stat"},
         ]
@@ -1365,9 +1340,7 @@ class TestConvenienceModesPreExistingInvalid:
             "result": invalid_prefs,
         }
 
-        result = await tools.ha_manage_energy_prefs(
-            mode=mode, dry_run=True, **kwargs
-        )
+        result = await tools.ha_manage_energy_prefs(mode=mode, dry_run=True, **kwargs)
         assert result["success"] is True
         assert result["dry_run"] is True
 

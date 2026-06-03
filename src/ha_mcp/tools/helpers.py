@@ -363,9 +363,9 @@ def _append_macos_hints(error_response: dict[str, Any]) -> None:
         return
     macos_hints = [
         "macOS may block local network access for Claude Desktop subprocesses "
-        "(System Settings > Privacy & Security > Local Network)",
+        + "(System Settings > Privacy & Security > Local Network)",
         "Try an SSH tunnel: ssh -N -L 8123:localhost:8123 user@ha-server, "
-        "then use http://localhost:8123",
+        + "then use http://localhost:8123",
         "Ensure you are using http:// (not https://) unless SSL/TLS is configured",
     ]
     # Handle both "suggestions" (plural, 2+ items) and "suggestion" (singular, 1 item)
@@ -384,7 +384,8 @@ def exception_to_structured_error(
     *,
     raise_error: Literal[True] = True,
     suggestions: list[str] | None = None,
-) -> NoReturn: ...
+) -> NoReturn:
+    pass
 
 
 @overload
@@ -394,7 +395,8 @@ def exception_to_structured_error(
     *,
     raise_error: Literal[False],
     suggestions: list[str] | None = None,
-) -> dict[str, Any]: ...
+) -> dict[str, Any]:
+    pass
 
 
 def exception_to_structured_error(

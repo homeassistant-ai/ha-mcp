@@ -88,7 +88,10 @@ def create_local_calendar(base_url: str) -> str:
         timeout=15,
     )
     if not submit_r.ok:
-        print(f"  flow submit returned {submit_r.status_code}: {submit_r.text}", file=sys.stderr)
+        print(
+            f"  flow submit returned {submit_r.status_code}: {submit_r.text}",
+            file=sys.stderr,
+        )
         submit_r.raise_for_status()
     done = submit_r.json()
     if done.get("type") != "create_entry":
@@ -101,17 +104,17 @@ def create_local_calendar(base_url: str) -> str:
     # entity registry unwritten and the seed unusable.
     observed_calendars: list[str] = []
     for attempt in range(30):
-        states_r = requests.get(
-            f"{base_url}/api/states", timeout=5, headers=headers
-        )
+        states_r = requests.get(f"{base_url}/api/states", timeout=5, headers=headers)
         states_r.raise_for_status()
         states = states_r.json()
         observed_calendars = [
-            s["entity_id"] for s in states
+            s["entity_id"]
+            for s in states
             if s.get("entity_id", "").startswith("calendar.")
         ]
         local_cals = [
-            eid for eid in observed_calendars
+            eid
+            for eid in observed_calendars
             if "demo" not in eid
             and "calendar_" not in eid  # demo entities use this prefix
         ]
@@ -134,6 +137,7 @@ def wait_for_api(base_url: str, timeout_s: int = 90) -> None:
                 print(f"✓ HA API ready after {attempt + 1}s")
                 return
         except requests.exceptions.RequestException:
+            # API not up yet — expected while the container boots; retry next second.
             pass
         time.sleep(1)
     raise RuntimeError(f"HA API didn't become ready in {timeout_s}s")
@@ -198,6 +202,8 @@ def main() -> int:
             try:
                 _docker("stop", "-t", "5", container_name)
             except subprocess.CalledProcessError:
+                # Best-effort cleanup — container may already be gone; re-raise
+                # the original error below regardless.
                 pass
             raise
 

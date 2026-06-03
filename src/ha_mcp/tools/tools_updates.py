@@ -744,6 +744,9 @@ class UpdateTools:
                     "Verify API access permissions",
                 ],
             )
+            return (
+                None  # exception_to_structured_error always raises; explicit for CodeQL
+            )
 
 
 def register_update_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

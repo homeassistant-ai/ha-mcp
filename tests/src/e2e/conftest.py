@@ -133,7 +133,6 @@ def pytest_collection_modifyitems(config, items):
     del config
     haos = is_haos_backend_selected()
     inaddon = haos and is_haos_inaddon_mode()
-    external_haos = haos and not inaddon
     skip_haos = pytest.mark.skip(
         reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)"
     )
@@ -675,6 +674,7 @@ def _wait_for_ha_api_ready(
                 logger.info(f"🏠 Home Assistant API ready after {elapsed}s")
                 return True
         except _requests.exceptions.RequestException:
+            # Boot-phase polling: HA API not up yet — retry until timeout (#1266).
             pass
         time.sleep(1)
     return False
@@ -986,10 +986,10 @@ def _reset_ha_in_process_caches() -> None:
     attribute on the singleton without clearing the connection pool, since
     ``_client`` is not declared on the class.
     """
-    import ha_mcp.config
+    from ha_mcp import config
     from ha_mcp.client.websocket_client import websocket_manager
 
-    ha_mcp.config._settings = None
+    config._settings = None
     websocket_manager._clients.clear()
     websocket_manager._last_used.clear()
     websocket_manager._current_loop = None
@@ -1237,7 +1237,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 # "connection refused for 60s" from "endpoint returned
                 # 200 but state was 'unknown'".
                 logger.warning(
-                    "⚠️ HAOS sun.sun still not ready after %ds "
+                    "HAOS sun.sun still not ready after %ds "
                     "(last_status=%s, last_exc=%r) — template / connection "
                     "tests may race",
                     SUN_WAIT,
@@ -1269,7 +1269,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     if light_resp.status_code == 200:
                         elapsed = time.monotonic() - light_start
                         logger.info(
-                            "✅ HAOS light.bed_light is in state machine after %.1fs",
+                            "HAOS light.bed_light is in state machine after %.1fs",
                             elapsed,
                         )
                         break
@@ -1277,11 +1277,12 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     requests.exceptions.RequestException,
                     json.JSONDecodeError,
                 ):
+                    # Boot-phase polling: state machine not ready — retry (#1266).
                     pass
                 time.sleep(1)
             else:
                 logger.warning(
-                    "⚠️ HAOS light.bed_light still not in state machine after "
+                    "HAOS light.bed_light still not in state machine after "
                     "%ds (last_status=%s) — search / state tests may race",
                     LIGHT_WAIT,
                     last_light_status,

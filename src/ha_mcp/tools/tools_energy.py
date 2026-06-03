@@ -52,9 +52,7 @@ logger = logging.getLogger(__name__)
 # corresponding ``Literal`` alias so MCP-wire callers (Pydantic-validated)
 # get typo-rejection at the boundary; runtime guards in `_set_prefs` cover
 # the unit-test path that bypasses Pydantic.
-_PrefsKey = Literal[
-    "energy_sources", "device_consumption", "device_consumption_water"
-]
+_PrefsKey = Literal["energy_sources", "device_consumption", "device_consumption_water"]
 _PREFS_TOP_LEVEL_KEYS: tuple[_PrefsKey, ...] = (
     "energy_sources",
     "device_consumption",
@@ -622,6 +620,7 @@ class EnergyTools:
                     "Verify WebSocket connection is active",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     async def _dry_run(self, config: dict[str, Any]) -> dict[str, Any]:
         """Shape-check the proposed config and fetch current-state validate.
@@ -688,6 +687,7 @@ class EnergyTools:
                     "Verify config shape matches energy/get_prefs response",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     async def _set_prefs(
         self,
@@ -828,18 +828,12 @@ class EnergyTools:
                                 "mode": "set",
                                 "submitted_keys": sorted(submitted_keys),
                                 "hashed_keys": sorted(hashed_keys),
-                                "missing_in_hash": sorted(
-                                    submitted_keys - hashed_keys
-                                ),
-                                "extra_in_hash": sorted(
-                                    hashed_keys - submitted_keys
-                                ),
+                                "missing_in_hash": sorted(submitted_keys - hashed_keys),
+                                "extra_in_hash": sorted(hashed_keys - submitted_keys),
                             },
                             suggestions=[
-                                "Pass exactly one config_hash_per_key entry "
-                                "per top-level key in 'config'",
-                                "Use the str form of config_hash to lock "
-                                "the full prefs blob instead",
+                                "Pass exactly one config_hash_per_key entry per top-level key in 'config'",
+                                "Use the str form of config_hash to lock the full prefs blob instead",
                             ],
                         )
                     )
@@ -980,6 +974,7 @@ class EnergyTools:
                     "Re-read prefs and retry with a fresh config_hash",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     # ------------------------------------------------------------------
     # Convenience modes — atomic read-modify-write (no caller hash)
@@ -1138,13 +1133,13 @@ class EnergyTools:
                     suggestions=[
                         "Fix the listed errors and retry",
                         "solar/battery/gas need 'stat_energy_from'; grid needs "
-                        "only 'type' for the local check, but HA Core's voluptuous "
-                        "schema requires the full grid field set "
-                        "(cost_adjustment_day, stat_energy_to, stat_cost, "
-                        "entity_energy_price, number_energy_price, "
-                        "entity_energy_price_export, number_energy_price_export, "
-                        "stat_compensation) — pass them as None when unused or "
-                        "the post-save validate will surface them.",
+                        + "only 'type' for the local check, but HA Core's voluptuous "
+                        + "schema requires the full grid field set "
+                        + "(cost_adjustment_day, stat_energy_to, stat_cost, "
+                        + "entity_energy_price, number_energy_price, "
+                        + "entity_energy_price_export, number_energy_price_export, "
+                        + "stat_compensation) — pass them as None when unused or "
+                        + "the post-save validate will surface them.",
                     ],
                 )
             )
@@ -1426,6 +1421,8 @@ class EnergyTools:
                     "Verify WebSocket connection is active",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_energy_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

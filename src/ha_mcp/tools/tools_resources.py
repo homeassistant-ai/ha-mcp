@@ -237,6 +237,10 @@ class ResourceTools:
                     "Check that you have admin permissions",
                 ],
             )
+            # ``exception_to_structured_error`` always raises (NoReturn); this
+            # explicit raise makes the function's exit unambiguous (no implicit
+            # ``return None`` fall-through) and is never reached at runtime.
+            raise
 
     @tool(
         name="ha_config_set_dashboard_resource",
@@ -519,6 +523,10 @@ class ResourceTools:
                     "Check that you have admin permissions",
                 ],
             )
+            # ``exception_to_structured_error`` always raises (NoReturn); this
+            # explicit raise makes the function's exit unambiguous (no implicit
+            # ``return None`` fall-through) and is never reached at runtime.
+            raise
 
     async def _set_url_resource(
         self,
@@ -587,6 +595,10 @@ class ResourceTools:
                     "Verify the URL is correctly formatted",
                 ],
             )
+            # ``exception_to_structured_error`` always raises (NoReturn); this
+            # explicit raise makes the function's exit unambiguous (no implicit
+            # ``return None`` fall-through) and is never reached at runtime.
+            raise
 
     async def _upsert_resource(
         self,
@@ -729,6 +741,10 @@ class ResourceTools:
                     "Check that you have admin permissions",
                 ],
             )
+            # ``exception_to_structured_error`` always raises (NoReturn); this
+            # explicit raise makes the function's exit unambiguous (no implicit
+            # ``return None`` fall-through) and is never reached at runtime.
+            raise
 
 
 def register_resources_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

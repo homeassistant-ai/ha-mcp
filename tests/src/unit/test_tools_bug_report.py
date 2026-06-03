@@ -1211,7 +1211,12 @@ class TestExtractClientInfo:
         # If the context shape is unexpected (future MCP / FastMCP API churn),
         # we'd rather degrade silently than fail the bug report.
         class Boom:
-            def __getattr__(self, _name):
+            # Use a property (not __getattr__) so the raise is a normal
+            # attribute access, not a special-method protocol violation.
+            # _extract_client_info reads ``ctx.session`` first, so raising
+            # here drives it into the broad ``except Exception`` swallow path.
+            @property
+            def session(self):
                 raise RuntimeError("unexpected ctx shape")
 
         assert _extract_client_info(Boom()) == {}

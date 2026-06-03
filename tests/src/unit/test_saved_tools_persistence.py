@@ -17,34 +17,28 @@ import json
 from pathlib import Path
 
 import ha_mcp.tools.tools_code as tools_code
-from ha_mcp.tools.tools_code import (
-    _MAX_SAVED_TOOLS,
-    _SAVED_TOOLS_SCHEMA_VERSION,
-    _load_saved_tools,
-    _save_saved_tools,
-)
 
 
 class TestLoadSavedTools:
     def test_empty_path_returns_empty(self):
         """An empty path string disables persistence — return {}."""
-        assert _load_saved_tools("") == {}
+        assert tools_code._load_saved_tools("") == {}
 
     def test_missing_file_returns_empty(self, tmp_path: Path):
         """First-run case: the file doesn't exist yet."""
         path = tmp_path / "saved.json"
-        assert _load_saved_tools(str(path)) == {}
+        assert tools_code._load_saved_tools(str(path)) == {}
 
     def test_malformed_json_returns_empty(self, tmp_path: Path):
         """Corrupt JSON must not crash; just log and start empty."""
         path = tmp_path / "saved.json"
         path.write_text("{this is not json", encoding="utf-8")
-        assert _load_saved_tools(str(path)) == {}
+        assert tools_code._load_saved_tools(str(path)) == {}
 
     def test_top_level_not_dict_returns_empty(self, tmp_path: Path):
         path = tmp_path / "saved.json"
         path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
-        assert _load_saved_tools(str(path)) == {}
+        assert tools_code._load_saved_tools(str(path)) == {}
 
     def test_filters_invalid_name(self, tmp_path: Path):
         """Names that don't match _SAVE_NAME_PATTERN are dropped."""
@@ -63,7 +57,7 @@ class TestLoadSavedTools:
             ),
             encoding="utf-8",
         )
-        loaded = _load_saved_tools(str(path))
+        loaded = tools_code._load_saved_tools(str(path))
         assert set(loaded.keys()) == {"valid_name"}
 
     def test_filters_invalid_entry_shape(self, tmp_path: Path):
@@ -84,7 +78,7 @@ class TestLoadSavedTools:
             ),
             encoding="utf-8",
         )
-        loaded = _load_saved_tools(str(path))
+        loaded = tools_code._load_saved_tools(str(path))
         assert set(loaded.keys()) == {"valid"}
 
     def test_normalizes_missing_justification(self, tmp_path: Path):
@@ -102,7 +96,7 @@ class TestLoadSavedTools:
             ),
             encoding="utf-8",
         )
-        loaded = _load_saved_tools(str(path))
+        loaded = tools_code._load_saved_tools(str(path))
         assert loaded["tool_a"]["justification"] == ""
         assert loaded["tool_b"]["justification"] == ""
 
@@ -111,13 +105,13 @@ class TestLoadSavedTools:
         path = tmp_path / "saved.json"
         big = {
             f"tool_{i:04d}": {"code": "1", "justification": ""}
-            for i in range(_MAX_SAVED_TOOLS + 50)
+            for i in range(tools_code._MAX_SAVED_TOOLS + 50)
         }
         path.write_text(
             json.dumps({"version": 1, "saved_tools": big}), encoding="utf-8"
         )
-        loaded = _load_saved_tools(str(path))
-        assert len(loaded) == _MAX_SAVED_TOOLS
+        loaded = tools_code._load_saved_tools(str(path))
+        assert len(loaded) == tools_code._MAX_SAVED_TOOLS
 
 
 class TestSaveSavedTools:
@@ -125,7 +119,7 @@ class TestSaveSavedTools:
         """Empty path string disables persistence — should not write anything."""
         # Confirm by listing the dir before/after.
         before = sorted(p.name for p in tmp_path.iterdir())
-        _save_saved_tools("", {"foo": {"code": "1", "justification": ""}})
+        tools_code._save_saved_tools("", {"foo": {"code": "1", "justification": ""}})
         after = sorted(p.name for p in tmp_path.iterdir())
         assert before == after
 
@@ -133,38 +127,47 @@ class TestSaveSavedTools:
         """Payload includes schema version, timestamp, and tools dict."""
         path = tmp_path / "saved.json"
         tools = {"foo": {"code": "1+1", "justification": "test"}}
-        _save_saved_tools(str(path), tools)
+        tools_code._save_saved_tools(str(path), tools)
 
         assert path.exists()
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["version"] == _SAVED_TOOLS_SCHEMA_VERSION
+        assert payload["version"] == tools_code._SAVED_TOOLS_SCHEMA_VERSION
         assert "saved_at" in payload
         assert payload["saved_tools"] == tools
 
     def test_creates_parent_directory(self, tmp_path: Path):
         """Path with non-existent parent dir gets created."""
         path = tmp_path / "subdir" / "nested" / "saved.json"
-        _save_saved_tools(str(path), {"foo": {"code": "1", "justification": ""}})
+        tools_code._save_saved_tools(
+            str(path), {"foo": {"code": "1", "justification": ""}}
+        )
         assert path.exists()
 
     def test_roundtrip(self, tmp_path: Path):
         """save → load returns the same tools."""
         path = tmp_path / "saved.json"
         tools = {
-            "tool_a": {"code": "await api_get('/states')", "justification": "list states"},
+            "tool_a": {
+                "code": "await api_get('/states')",
+                "justification": "list states",
+            },
             "tool_b": {"code": "1 + 1", "justification": "math"},
         }
-        _save_saved_tools(str(path), tools)
-        loaded = _load_saved_tools(str(path))
+        tools_code._save_saved_tools(str(path), tools)
+        loaded = tools_code._load_saved_tools(str(path))
         assert loaded == tools
 
     def test_overwrites_existing_file_atomically(self, tmp_path: Path):
         """Second save replaces the first atomically (no .tmp leftover)."""
         path = tmp_path / "saved.json"
-        _save_saved_tools(str(path), {"v1": {"code": "1", "justification": ""}})
-        _save_saved_tools(str(path), {"v2": {"code": "2", "justification": ""}})
+        tools_code._save_saved_tools(
+            str(path), {"v1": {"code": "1", "justification": ""}}
+        )
+        tools_code._save_saved_tools(
+            str(path), {"v2": {"code": "2", "justification": ""}}
+        )
 
-        loaded = _load_saved_tools(str(path))
+        loaded = tools_code._load_saved_tools(str(path))
         assert set(loaded.keys()) == {"v2"}
 
         # No leftover .tmp files in the parent.
@@ -174,13 +177,21 @@ class TestSaveSavedTools:
     def test_returns_true_on_success(self, tmp_path: Path):
         """_save_saved_tools returns True when the write succeeded."""
         path = tmp_path / "saved.json"
-        assert _save_saved_tools(
-            str(path), {"foo": {"code": "1", "justification": ""}}
-        ) is True
+        assert (
+            tools_code._save_saved_tools(
+                str(path), {"foo": {"code": "1", "justification": ""}}
+            )
+            is True
+        )
 
     def test_returns_true_when_path_unset(self):
         """Empty path means persistence is disabled — that's not a failure."""
-        assert _save_saved_tools("", {"foo": {"code": "1", "justification": ""}}) is True
+        assert (
+            tools_code._save_saved_tools(
+                "", {"foo": {"code": "1", "justification": ""}}
+            )
+            is True
+        )
 
 
 class TestSchemaVersionGuard:
@@ -194,15 +205,13 @@ class TestSchemaVersionGuard:
         path.write_text(
             json.dumps(
                 {
-                    "version": _SAVED_TOOLS_SCHEMA_VERSION + 1,
-                    "saved_tools": {
-                        "future_tool": {"code": "1", "justification": ""}
-                    },
+                    "version": tools_code._SAVED_TOOLS_SCHEMA_VERSION + 1,
+                    "saved_tools": {"future_tool": {"code": "1", "justification": ""}},
                 }
             ),
             encoding="utf-8",
         )
-        assert _load_saved_tools(str(path)) == {}
+        assert tools_code._load_saved_tools(str(path)) == {}
 
     def test_unknown_version_sets_load_failed_flag(self, tmp_path: Path):
         """And persistence must be suppressed so we don't overwrite the
@@ -211,11 +220,11 @@ class TestSchemaVersionGuard:
         path.write_text(
             json.dumps({"version": 99, "saved_tools": {}}), encoding="utf-8"
         )
-        _load_saved_tools(str(path))
+        tools_code._load_saved_tools(str(path))
         try:
             assert tools_code._saved_tools_load_failed is True
             # _save_saved_tools refuses to write while the flag is set.
-            ok = _save_saved_tools(
+            ok = tools_code._save_saved_tools(
                 str(path), {"foo": {"code": "1", "justification": ""}}
             )
             assert ok is False
@@ -235,7 +244,7 @@ class TestSchemaVersionGuard:
             json.dumps({"saved_tools": {"x": {"code": "1"}}}), encoding="utf-8"
         )
         try:
-            assert _load_saved_tools(str(path)) == {}
+            assert tools_code._load_saved_tools(str(path)) == {}
             assert tools_code._saved_tools_load_failed is True
         finally:
             tools_code._saved_tools_load_failed = False
@@ -255,10 +264,15 @@ class TestLoadFailedFlag:
         try:
             path = tmp_path / "saved.json"
             path.write_text(
-                json.dumps({"version": _SAVED_TOOLS_SCHEMA_VERSION, "saved_tools": {}}),
+                json.dumps(
+                    {
+                        "version": tools_code._SAVED_TOOLS_SCHEMA_VERSION,
+                        "saved_tools": {},
+                    }
+                ),
                 encoding="utf-8",
             )
-            _load_saved_tools(str(path))
+            tools_code._load_saved_tools(str(path))
             assert tools_code._saved_tools_load_failed is False
         finally:
             tools_code._saved_tools_load_failed = False
@@ -270,7 +284,7 @@ class TestLoadFailedFlag:
         path = tmp_path / "saved.json"
         # Pre-populate so we can confirm it's NOT overwritten.
         original = {
-            "version": _SAVED_TOOLS_SCHEMA_VERSION,
+            "version": tools_code._SAVED_TOOLS_SCHEMA_VERSION,
             "saved_tools": {"keep_me": {"code": "1", "justification": ""}},
         }
         path.write_text(json.dumps(original), encoding="utf-8")
@@ -278,7 +292,7 @@ class TestLoadFailedFlag:
 
         tools_code._saved_tools_load_failed = True
         try:
-            ok = _save_saved_tools(
+            ok = tools_code._save_saved_tools(
                 str(path), {"different": {"code": "2", "justification": ""}}
             )
             assert ok is False
@@ -308,25 +322,25 @@ class TestHydrationRoundTrip:
                 "justification": "Bedtime",
             },
         }
-        assert _save_saved_tools(str(path), first) is True
+        assert tools_code._save_saved_tools(str(path), first) is True
 
         # Simulate a fresh process by clearing/reloading.
-        loaded = _load_saved_tools(str(path))
+        loaded = tools_code._load_saved_tools(str(path))
         assert loaded == first
 
     def test_load_then_save_then_reload_with_modification(self, tmp_path: Path):
         """Realistic LLM lifecycle: load existing tools, add a new one,
         persist the merged set, and verify it survives the next load."""
         path = tmp_path / "saved.json"
-        _save_saved_tools(
+        tools_code._save_saved_tools(
             str(path),
             {"a": {"code": "1", "justification": "first"}},
         )
-        loaded = _load_saved_tools(str(path))
+        loaded = tools_code._load_saved_tools(str(path))
         loaded["b"] = {"code": "2", "justification": "added later"}
-        _save_saved_tools(str(path), loaded)
+        tools_code._save_saved_tools(str(path), loaded)
 
-        roundtrip = _load_saved_tools(str(path))
+        roundtrip = tools_code._load_saved_tools(str(path))
         assert set(roundtrip.keys()) == {"a", "b"}
         assert roundtrip["b"]["justification"] == "added later"
 
@@ -350,17 +364,17 @@ class TestSaveCapEnforcement:
         path = tmp_path / "saved.json"
         big = {
             f"tool_{i:04d}": {"code": "1", "justification": ""}
-            for i in range(_MAX_SAVED_TOOLS + 200)
+            for i in range(tools_code._MAX_SAVED_TOOLS + 200)
         }
         path.write_text(
             json.dumps(
-                {"version": _SAVED_TOOLS_SCHEMA_VERSION, "saved_tools": big}
+                {"version": tools_code._SAVED_TOOLS_SCHEMA_VERSION, "saved_tools": big}
             ),
             encoding="utf-8",
         )
-        loaded = _load_saved_tools(str(path))
-        assert len(loaded) == _MAX_SAVED_TOOLS, (
-            f"Load must cap at {_MAX_SAVED_TOOLS}, got {len(loaded)}"
+        loaded = tools_code._load_saved_tools(str(path))
+        assert len(loaded) == tools_code._MAX_SAVED_TOOLS, (
+            f"Load must cap at {tools_code._MAX_SAVED_TOOLS}, got {len(loaded)}"
         )
 
     def test_save_does_not_self_cap(self, tmp_path: Path):
@@ -375,10 +389,10 @@ class TestSaveCapEnforcement:
         path = tmp_path / "saved.json"
         oversized = {
             f"tool_{i:04d}": {"code": "1", "justification": ""}
-            for i in range(_MAX_SAVED_TOOLS + 5)
+            for i in range(tools_code._MAX_SAVED_TOOLS + 5)
         }
-        assert _save_saved_tools(str(path), oversized) is True
+        assert tools_code._save_saved_tools(str(path), oversized) is True
         # The on-disk file has all of them; the load-side cap then
         # truncates back to _MAX_SAVED_TOOLS as covered above.
         roundtrip = json.loads(path.read_text(encoding="utf-8"))
-        assert len(roundtrip["saved_tools"]) == _MAX_SAVED_TOOLS + 5
+        assert len(roundtrip["saved_tools"]) == tools_code._MAX_SAVED_TOOLS + 5

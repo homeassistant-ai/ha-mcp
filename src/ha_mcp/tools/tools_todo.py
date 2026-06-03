@@ -203,6 +203,8 @@ class TodoTools:
             exception_to_structured_error(
                 e, context=context or None, suggestions=suggestions
             )
+            raise  # unreachable: exception_to_structured_error always raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_set_todo_item",
@@ -408,6 +410,7 @@ class TodoTools:
                     "Some todo lists may not support description or due dates",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
 
     async def _update_item(
         self,
@@ -470,6 +473,7 @@ class TodoTools:
                     "Some todo lists may not support all update operations",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
 
     @staticmethod
     def _build_update_service_data(
@@ -627,6 +631,7 @@ class TodoTools:
                     "Make sure the item hasn't already been removed",
                 ],
             )
+            raise  # unreachable: exception_to_structured_error always raises
 
 
 def register_todo_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

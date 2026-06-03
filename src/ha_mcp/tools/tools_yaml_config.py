@@ -383,6 +383,8 @@ class YamlConfigTools:
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
             raise_tool_error(error)
+            return None  # raise_tool_error always raises; explicit for CodeQL
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_yaml_config_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

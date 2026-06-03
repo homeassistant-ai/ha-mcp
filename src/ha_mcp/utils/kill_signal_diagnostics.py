@@ -126,7 +126,9 @@ assert _Siginfo.si_uid.offset == 20, (
 )
 
 
-_SignalHandler = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.POINTER(_Siginfo), ctypes.c_void_p)
+_SignalHandler = ctypes.CFUNCTYPE(
+    None, ctypes.c_int, ctypes.POINTER(_Siginfo), ctypes.c_void_p
+)
 
 
 class _Sigaction(ctypes.Structure):
@@ -152,7 +154,15 @@ def read_proc_status_summary() -> dict[str, str]:
     Empty dict on non-Linux or unreadable status — callers don't need
     to special-case missing data.
     """
-    fields = {"VmRSS", "VmHWM", "VmPeak", "Threads", "State", "oom_score", "oom_score_adj"}
+    fields = {
+        "VmRSS",
+        "VmHWM",
+        "VmPeak",
+        "Threads",
+        "State",
+        "oom_score",
+        "oom_score_adj",
+    }
     out: dict[str, str] = {}
     try:
         with open("/proc/self/status", "rb") as f:
@@ -210,7 +220,11 @@ def format_diagnostic_block(
     proc_status: dict[str, str],
 ) -> str:
     """Compose the multi-line log block written when a signal is caught."""
-    sig_name = signal.Signals(signum).name if signum in signal.Signals.__members__.values() else str(signum)
+    sig_name = (
+        signal.Signals(signum).name
+        if signum in signal.Signals.__members__.values()
+        else str(signum)
+    )
     code_name = _SI_CODE_NAMES.get(si_code, f"SI_UNKNOWN({si_code})")
 
     # si_pid == 0 from the kernel means the sender was outside our PID
@@ -243,7 +257,15 @@ def format_diagnostic_block(
     if proc_status:
         lines.extend(
             f"  {key}: {proc_status[key]}"
-            for key in ("State", "VmRSS", "VmHWM", "VmPeak", "Threads", "oom_score", "oom_score_adj")
+            for key in (
+                "State",
+                "VmRSS",
+                "VmHWM",
+                "VmPeak",
+                "Threads",
+                "oom_score",
+                "oom_score_adj",
+            )
             if key in proc_status
         )
     else:
@@ -268,6 +290,8 @@ def _emit_block_safely(block: str) -> None:
     try:
         os.write(2, payload)
     except OSError:
+        # Best-effort diagnostics write from a signal context: if stderr is
+        # closed/full there is no async-signal-safe fallback, so swallow it.
         pass
 
 
@@ -282,6 +306,8 @@ def _restore_default_and_reraise(signum: int) -> None:
         try:
             _libc.signal(int(signum), _SIG_DFL_PTR)
         except OSError:
+            # Best-effort disposition reset: even if it fails we still fall
+            # through to os.kill below to terminate the process.
             pass
     os.kill(os.getpid(), signum)
 
@@ -335,6 +361,8 @@ def _make_handler() -> Any:
                     ),
                 )
             except OSError:
+                # Last-resort error reporting already failed; nothing safe
+                # left to do in a signal handler, so swallow and proceed.
                 pass
 
         _chain_or_reraise(signum)
@@ -372,12 +400,18 @@ def install_kill_signal_diagnostics() -> bool:
     try:
         libc_path = ctypes.util.find_library("c")
         if libc_path is None:
-            logger.warning("advanced_debug_logging: libc not found; skipping signal handler install")
+            logger.warning(
+                "advanced_debug_logging: libc not found; skipping signal handler install"
+            )
             return False
 
         libc = ctypes.CDLL(libc_path, use_errno=True)
         libc.sigaction.restype = ctypes.c_int
-        libc.sigaction.argtypes = [ctypes.c_int, ctypes.POINTER(_Sigaction), ctypes.POINTER(_Sigaction)]
+        libc.sigaction.argtypes = [
+            ctypes.c_int,
+            ctypes.POINTER(_Sigaction),
+            ctypes.POINTER(_Sigaction),
+        ]
         # signal(int, sighandler_t) — used by the handler itself to
         # restore SIG_DFL via the AS-safe libc entry point.
         libc.signal.restype = ctypes.c_void_p

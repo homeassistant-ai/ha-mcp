@@ -3372,6 +3372,10 @@ class HelperConfigTools:
                     "Use ha_search_entities(domain_filter='input_*') as alternative",
                 ],
             )
+            return (
+                None  # exception_to_structured_error always raises; explicit for CodeQL
+            )
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_config_set_helper",

@@ -145,6 +145,8 @@ class LabelTools:
                     "Verify WebSocket connection is active",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_config_set_label",
@@ -280,6 +282,8 @@ class LabelTools:
                     "For updates, verify the label_id exists using ha_config_get_label()",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_config_remove_label",
@@ -369,6 +373,8 @@ class LabelTools:
                     "Verify the label_id exists using ha_config_get_label()",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_label_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

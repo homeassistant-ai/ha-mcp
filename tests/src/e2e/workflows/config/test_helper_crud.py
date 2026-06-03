@@ -1531,7 +1531,6 @@ class TestTagCRUD:
         )
 
         create_data = assert_mcp_success(create_result, "Create tag")
-        entity_id = get_entity_id_from_response(create_data, "tag")
         # Tag may not return entity_id in same format
         tag_id = create_data.get("data", {}).get("id") or test_tag_id
         cleanup_tracker.track("tag", tag_id)

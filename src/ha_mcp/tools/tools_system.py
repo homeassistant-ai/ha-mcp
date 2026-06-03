@@ -170,6 +170,7 @@ class SystemTools:
                 }
 
             exception_to_structured_error(e)
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_reload_core",
@@ -303,6 +304,7 @@ class SystemTools:
                     "Check Home Assistant logs for details",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_get_system_health",
@@ -631,6 +633,7 @@ class SystemTools:
                     "Try ha_get_overview() for basic system information",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
         finally:
             await self._safe_disconnect(ws_client)
 
@@ -649,6 +652,8 @@ class SystemTools:
         try:
             await ws_client.disconnect()
         except Exception:
+            # Best-effort cleanup: a disconnect failure on an already-closing
+            # socket is not actionable and must not mask the real result.
             pass
 
     async def _fetch_health_info(self) -> tuple[Any, dict[str, Any]]:

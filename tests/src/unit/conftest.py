@@ -43,6 +43,7 @@ def _unit_test_default_auto_backup_off():
 
         _reset_global_settings()
     except ImportError:
+        # ha_mcp not importable in this test run; nothing to reset.
         pass
     yield
     if previous is None:

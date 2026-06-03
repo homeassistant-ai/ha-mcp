@@ -208,6 +208,7 @@ class HacsTools:
                     "For action='info', pass a valid repository_id (numeric ID or 'owner/repo')",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
 
     @tool(
         name="ha_manage_hacs",
@@ -296,6 +297,7 @@ class HacsTools:
                     "For action='add_repository', use 'owner/repo' format and a matching category",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
 
     # --- Private action handlers ------------------------------------------
     # The public tools above are thin dispatchers; each handler raises a
@@ -933,3 +935,4 @@ async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str
             ],
         )
     )
+    return None  # unreachable: raise_tool_error always raises

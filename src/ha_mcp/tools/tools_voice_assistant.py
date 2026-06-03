@@ -90,11 +90,13 @@ class VoiceAssistantTools:
 
         if not result.get("success"):
             error_msg = websocket_error_message(result.get("error", "Operation failed"))
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to {operation} Assist pipeline: {error_msg}",
-                context={"pipeline_id": pipeline_id, "operation": operation},
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to {operation} Assist pipeline: {error_msg}",
+                    context={"pipeline_id": pipeline_id, "operation": operation},
+                )
+            )
 
         return result.get("result")
 
@@ -111,20 +113,24 @@ class VoiceAssistantTools:
         )
         if not isinstance(pipeline, dict):
             if pipeline_id is None:
-                raise_tool_error(create_error_response(
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "No preferred Assist pipeline is configured",
+                        context={"pipeline_id": pipeline_id, "details": pipeline},
+                        suggestions=[
+                            "Call ha_manage_pipeline(action='list') to find pipeline IDs.",
+                            "Pass base_pipeline_id explicitly when creating a pipeline.",
+                        ],
+                    )
+                )
+            raise_tool_error(
+                create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    "No preferred Assist pipeline is configured",
+                    "Unexpected Assist pipeline response",
                     context={"pipeline_id": pipeline_id, "details": pipeline},
-                    suggestions=[
-                        "Call ha_manage_pipeline(action='list') to find pipeline IDs.",
-                        "Pass base_pipeline_id explicitly when creating a pipeline.",
-                    ],
-                ))
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Unexpected Assist pipeline response",
-                context={"pipeline_id": pipeline_id, "details": pipeline},
-            ))
+                )
+            )
         return pipeline
 
     @staticmethod
@@ -160,15 +166,17 @@ class VoiceAssistantTools:
         }
         for field, value in values.items():
             if value == "" and field not in _NULLABLE_PIPELINE_FIELDS:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"{field} cannot be an empty string",
-                    context={"field": field},
-                    suggestions=[
-                        f"Omit {field} to keep the existing or cloned value.",
-                        f"Pass a non-empty value for {field}.",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"{field} cannot be an empty string",
+                        context={"field": field},
+                        suggestions=[
+                            f"Omit {field} to keep the existing or cloned value.",
+                            f"Pass a non-empty value for {field}.",
+                        ],
+                    )
+                )
         return {
             field: _normalize_pipeline_value(field, value)
             for field, value in values.items()
@@ -200,12 +208,16 @@ class VoiceAssistantTools:
             }
 
         if pipeline_id is None:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "action='get' requires pipeline_id",
-                context={"action": action},
-                suggestions=["Call ha_manage_pipeline(action='list') first to find pipeline IDs."],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "action='get' requires pipeline_id",
+                    context={"action": action},
+                    suggestions=[
+                        "Call ha_manage_pipeline(action='list') first to find pipeline IDs."
+                    ],
+                )
+            )
 
         data = await self._send_pipeline_message(
             {"type": "assist_pipeline/pipeline/get", "pipeline_id": pipeline_id},
@@ -227,12 +239,16 @@ class VoiceAssistantTools:
     async def _set_preferred_pipeline(self, pipeline_id: str | None) -> dict[str, Any]:
         """Set the preferred Assist pipeline."""
         if pipeline_id is None:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "action='set_preferred' requires pipeline_id",
-                context={"action": "set_preferred"},
-                suggestions=["Call ha_manage_pipeline(action='list') first to find pipeline IDs."],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "action='set_preferred' requires pipeline_id",
+                    context={"action": "set_preferred"},
+                    suggestions=[
+                        "Call ha_manage_pipeline(action='list') first to find pipeline IDs."
+                    ],
+                )
+            )
 
         await self._send_pipeline_message(
             {
@@ -262,34 +278,42 @@ class VoiceAssistantTools:
         if action == "create" and (
             updates.get("name") is None or updates.get("conversation_engine") is None
         ):
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "action='create' requires name and conversation_engine",
-                context={"action": action},
-                suggestions=[
-                    "Provide name and conversation_engine.",
-                    "Use ha_manage_pipeline(action='list') to inspect current pipeline values.",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "action='create' requires name and conversation_engine",
+                    context={"action": action},
+                    suggestions=[
+                        "Provide name and conversation_engine.",
+                        "Use ha_manage_pipeline(action='list') to inspect current pipeline values.",
+                    ],
+                )
+            )
 
         if action == "update" and pipeline_id is None:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_MISSING_PARAMETER,
-                "action='update' requires pipeline_id",
-                context={"action": action},
-                suggestions=["Call ha_manage_pipeline(action='list') first to find pipeline IDs."],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_MISSING_PARAMETER,
+                    "action='update' requires pipeline_id",
+                    context={"action": action},
+                    suggestions=[
+                        "Call ha_manage_pipeline(action='list') first to find pipeline IDs."
+                    ],
+                )
+            )
 
         if not updates and not make_preferred:
-            raise_tool_error(create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "No Assist pipeline changes requested",
-                context={"action": action, "pipeline_id": pipeline_id},
-                suggestions=[
-                    "Pass at least one pipeline field to update.",
-                    "Use action='set_preferred' to only change the preferred pipeline.",
-                ],
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "No Assist pipeline changes requested",
+                    context={"action": action, "pipeline_id": pipeline_id},
+                    suggestions=[
+                        "Pass at least one pipeline field to update.",
+                        "Use action='set_preferred' to only change the preferred pipeline.",
+                    ],
+                )
+            )
 
         source_pipeline_id = pipeline_id if action == "update" else base_pipeline_id
         pipeline = await self._get_pipeline_for_write(source_pipeline_id)
@@ -309,15 +333,17 @@ class VoiceAssistantTools:
             pipeline_id=pipeline_id,
         )
         if not isinstance(result_pipeline, dict):
-            raise_tool_error(create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Unexpected Assist pipeline write response",
-                context={
-                    "action": action,
-                    "pipeline_id": pipeline_id,
-                    "details": result_pipeline,
-                },
-            ))
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Unexpected Assist pipeline write response",
+                    context={
+                        "action": action,
+                        "pipeline_id": pipeline_id,
+                        "details": result_pipeline,
+                    },
+                )
+            )
 
         result_pipeline_id = str(result_pipeline.get("id", pipeline_id))
         preferred_changed = False
@@ -432,15 +458,23 @@ class VoiceAssistantTools:
         ] = None,
         tts_voice: Annotated[
             str | None,
-            Field(description="Text-to-speech voice. Pass empty string to clear.", default=None),
+            Field(
+                description="Text-to-speech voice. Pass empty string to clear.",
+                default=None,
+            ),
         ] = None,
         wake_word_entity: Annotated[
             str | None,
-            Field(description="Wake-word entity ID. Pass empty string to clear.", default=None),
+            Field(
+                description="Wake-word entity ID. Pass empty string to clear.",
+                default=None,
+            ),
         ] = None,
         wake_word_id: Annotated[
             str | None,
-            Field(description="Wake-word ID. Pass empty string to clear.", default=None),
+            Field(
+                description="Wake-word ID. Pass empty string to clear.", default=None
+            ),
         ] = None,
         prefer_local_intents: Annotated[
             bool | None,
@@ -542,9 +576,12 @@ class VoiceAssistantTools:
                     "Use ha_search_entities(domain_filter='conversation') to find conversation agent IDs",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @staticmethod
-    def _get_entity_exposure(entity_id: str, exposed_entities: dict[str, Any]) -> dict[str, Any]:
+    def _get_entity_exposure(
+        entity_id: str, exposed_entities: dict[str, Any]
+    ) -> dict[str, Any]:
         """Build response for a specific entity's exposure settings."""
         entity_settings = exposed_entities.get(entity_id, {})
         is_exposed = any(entity_settings.get(asst) for asst in KNOWN_ASSISTANTS)
@@ -552,8 +589,7 @@ class VoiceAssistantTools:
             "success": True,
             "entity_id": entity_id,
             "exposed_to": {
-                asst: entity_settings.get(asst, False)
-                for asst in KNOWN_ASSISTANTS
+                asst: entity_settings.get(asst, False) for asst in KNOWN_ASSISTANTS
             },
             "is_exposed_anywhere": is_exposed,
             "has_custom_settings": entity_id in exposed_entities,
@@ -565,7 +601,9 @@ class VoiceAssistantTools:
         }
 
     @staticmethod
-    def _list_exposures(exposed_entities: dict[str, Any], assistant: str | None) -> dict[str, Any]:
+    def _list_exposures(
+        exposed_entities: dict[str, Any], assistant: str | None
+    ) -> dict[str, Any]:
         """Build response listing all exposed entities with optional filter."""
         filtered = exposed_entities
         if assistant:
@@ -591,9 +629,7 @@ class VoiceAssistantTools:
             "count": len(filtered),
             "total_entities_with_settings": len(exposed_entities),
             "summary": (
-                summary
-                if not assistant
-                else {assistant: summary.get(assistant, 0)}
+                summary if not assistant else {assistant: summary.get(assistant, 0)}
             ),
             "filters_applied": filters_applied,
         }
@@ -601,7 +637,11 @@ class VoiceAssistantTools:
     @tool(
         name="ha_get_entity_exposure",
         tags={"Entity Registry"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Entity Exposure"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Entity Exposure",
+        },
     )
     @log_tool_usage
     async def ha_get_entity_exposure(
@@ -649,15 +689,20 @@ class VoiceAssistantTools:
         """
         try:
             if assistant and assistant not in KNOWN_ASSISTANTS:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid assistant: {assistant}",
-                    context={"assistant": assistant, "valid_assistants": KNOWN_ASSISTANTS},
-                    suggestions=[
-                        f"Valid assistants are: {', '.join(KNOWN_ASSISTANTS)}",
-                        "Check the assistant parameter spelling",
-                    ],
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid assistant: {assistant}",
+                        context={
+                            "assistant": assistant,
+                            "valid_assistants": KNOWN_ASSISTANTS,
+                        },
+                        suggestions=[
+                            f"Valid assistants are: {', '.join(KNOWN_ASSISTANTS)}",
+                            "Check the assistant parameter spelling",
+                        ],
+                    )
+                )
 
             message: dict[str, Any] = {"type": "homeassistant/expose_entity/list"}
 
@@ -670,11 +715,13 @@ class VoiceAssistantTools:
                     if isinstance(error, dict)
                     else str(error)
                 )
-                raise_tool_error(create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to get exposure settings: {error_msg}",
-                    context={"entity_id": entity_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Failed to get exposure settings: {error_msg}",
+                        context={"entity_id": entity_id},
+                    )
+                )
 
             exposed_entities = result.get("result", {}).get("exposed_entities", {})
 
@@ -688,6 +735,7 @@ class VoiceAssistantTools:
         except Exception as e:
             logger.error(f"Error getting entity exposure: {e}")
             exception_to_structured_error(e, context={"entity_id": entity_id})
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

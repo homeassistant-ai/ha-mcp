@@ -57,7 +57,9 @@ class TestBlueprintManagement:
                 assert "path" in first_blueprint, "Blueprint should have 'path'"
                 assert "domain" in first_blueprint, "Blueprint should have 'domain'"
                 assert "name" in first_blueprint, "Blueprint should have 'name'"
-                logger.info(f"First blueprint: {first_blueprint.get('name')} ({first_blueprint.get('path')})")
+                logger.info(
+                    f"First blueprint: {first_blueprint.get('name')} ({first_blueprint.get('path')})"
+                )
 
             logger.info("ha_get_blueprint (list mode) for automation domain succeeded")
 
@@ -103,7 +105,9 @@ class TestBlueprintManagement:
             )
 
             # Verify error response includes valid domains
-            assert "valid_domains" in result, "Error response should include valid domains"
+            assert "valid_domains" in result, (
+                "Error response should include valid domains"
+            )
             logger.info("ha_get_blueprint properly rejects invalid domain")
 
     async def test_get_blueprint_details(self, mcp_client):
@@ -141,14 +145,18 @@ class TestBlueprintManagement:
             assert "path" in detail_result, "Response should contain 'path'"
             assert "domain" in detail_result, "Response should contain 'domain'"
             assert "name" in detail_result, "Response should contain 'name'"
-            assert detail_result["path"] == first_blueprint_path, "Path should match requested path"
+            assert detail_result["path"] == first_blueprint_path, (
+                "Path should match requested path"
+            )
 
             logger.info(f"Blueprint details retrieved: {detail_result.get('name')}")
 
             # Check for metadata if available
             if "metadata" in detail_result:
                 meta = detail_result["metadata"]
-                logger.info(f"  Description: {(meta.get('description') or 'N/A')[:100]}...")
+                logger.info(
+                    f"  Description: {(meta.get('description') or 'N/A')[:100]}..."
+                )
                 logger.info(f"  Author: {meta.get('author') or 'N/A'}")
 
             # Check for inputs if available
@@ -176,7 +184,10 @@ class TestBlueprintManagement:
             # Try to get a non-existent blueprint
             result = await mcp.call_tool_failure(
                 "ha_get_blueprint",
-                {"path": "nonexistent/blueprint_a2_e2e_xyz_404.yaml", "domain": "automation"},
+                {
+                    "path": "nonexistent/blueprint_a2_e2e_xyz_404.yaml",
+                    "domain": "automation",
+                },
                 expected_error="not found",
             )
 
@@ -204,7 +215,9 @@ class TestBlueprintManagement:
                 expected_error="Invalid domain",
             )
 
-            assert "valid_domains" in result, "Error response should include valid domains"
+            assert "valid_domains" in result, (
+                "Error response should include valid domains"
+            )
             logger.info("ha_get_blueprint properly rejects invalid domain")
 
     async def test_import_blueprint_invalid_url(self, mcp_client):
@@ -243,11 +256,15 @@ class TestBlueprintManagement:
             )
 
             # Should fail with appropriate error (suggestions nested under "error")
-            assert "suggestions" in result.get("error", {}), "Error response should include suggestions"
+            assert "suggestions" in result.get("error", {}), (
+                "Error response should include suggestions"
+            )
             logger.info("ha_import_blueprint properly handles non-existent URL")
 
     @pytest.mark.slow
-    async def test_import_blueprint_saves_to_disk(self, mcp_client, local_blueprint_server):
+    async def test_import_blueprint_saves_to_disk(
+        self, mcp_client, local_blueprint_server
+    ):
         """
         Test: Import blueprint actually saves to disk (issue #685)
 
@@ -280,14 +297,19 @@ class TestBlueprintManagement:
             if result.get("success"):
                 # Import succeeded - verify metadata is populated
                 imported = result.get("imported_blueprint", {})
-                assert imported.get("path", "").endswith(".yaml"), \
+                assert imported.get("path", "").endswith(".yaml"), (
                     f"Blueprint path should end with .yaml, got: {imported.get('path')}"
-                assert imported.get("domain") in ("automation", "script"), \
+                )
+                assert imported.get("domain") in ("automation", "script"), (
                     f"Blueprint domain should be automation or script, got: {imported.get('domain')}"
+                )
                 assert imported.get("name"), "Blueprint name should not be empty"
-                assert imported["path"] not in before_paths, \
+                assert imported["path"] not in before_paths, (
                     f"Blueprint {imported['path']} should not have existed before import"
-                logger.info(f"Blueprint imported: {imported.get('name')} at {imported.get('path')}")
+                )
+                logger.info(
+                    f"Blueprint imported: {imported.get('name')} at {imported.get('path')}"
+                )
 
                 # Verify it appears in the blueprint list
                 after = await mcp.call_tool_success(
@@ -295,14 +317,16 @@ class TestBlueprintManagement:
                     {"domain": imported.get("domain", "automation")},
                 )
                 after_paths = [bp["path"] for bp in after.get("blueprints", [])]
-                assert imported["path"] in after_paths, \
+                assert imported["path"] in after_paths, (
                     f"Imported blueprint {imported['path']} should appear in blueprint list"
+                )
                 logger.info("Blueprint appears in list after import")
             else:
                 # Only acceptable failure is "already exists"
                 error_msg = extract_error_message(result)
-                assert "already exists" in error_msg.lower(), \
+                assert "already exists" in error_msg.lower(), (
                     f"Expected 'already exists' error, got: {result}"
+                )
                 logger.info("Blueprint already existed (prior test run), still valid")
 
             logger.info("ha_import_blueprint save-to-disk test completed")
@@ -359,7 +383,9 @@ async def test_blueprint_discovery_workflow(mcp_client):
                 inputs = detail_result["inputs"]
                 logger.info(f"Blueprint requires {len(inputs)} inputs:")
                 for input_name, input_config in list(inputs.items())[:3]:
-                    logger.info(f"  - {input_name}: {(input_config.get('description') or 'No description')[:50]}")
+                    logger.info(
+                        f"  - {input_name}: {(input_config.get('description') or 'No description')[:50]}"
+                    )
         else:
             logger.info("Step 3: Skipped (no blueprints available)")
 
@@ -456,12 +482,18 @@ async def test_blueprint_automation_lifecycle(mcp_client):
             error_msg = str(create_result.get("error", {}).get("message", ""))
             # If error is about missing blueprint inputs, our validation passed! HA rejected it.
             if "Missing input" in error_msg or "input" in error_msg.lower():
-                logger.info("✅ Our validation passed (config reached HA), HA rejected due to missing blueprint inputs as expected")
-                logger.info("✅ Blueprint automation lifecycle test completed (validation works)")
+                logger.info(
+                    "✅ Our validation passed (config reached HA), HA rejected due to missing blueprint inputs as expected"
+                )
+                logger.info(
+                    "✅ Blueprint automation lifecycle test completed (validation works)"
+                )
                 return
             # If error is about missing trigger/action, our fix didn't work
             if "trigger" in error_msg.lower() or "action" in error_msg.lower():
-                raise AssertionError(f"Our validation failed - still requiring trigger/action: {error_msg}")
+                raise AssertionError(
+                    f"Our validation failed - still requiring trigger/action: {error_msg}"
+                )
             # Some other error
             raise AssertionError(f"Unexpected error: {create_result}")
 
@@ -473,12 +505,14 @@ async def test_blueprint_automation_lifecycle(mcp_client):
         # If we got here, the automation was created successfully
         # Step 4: Wait for automation to be registered, then verify no trigger/action fields
         config = await wait_for_automation(mcp_client, automation_id)
-        assert config is not None, f"Automation {automation_id} not found after creation"
+        assert config is not None, (
+            f"Automation {automation_id} not found after creation"
+        )
         assert "use_blueprint" in config, "Config should have use_blueprint"
         logger.info("✅ Blueprint automation config verified")
 
         # Step 5: Clean up
-        delete_result = await mcp.call_tool_success(
+        await mcp.call_tool_success(
             "ha_config_remove_automation",
             {"identifier": automation_id},
         )
@@ -535,18 +569,24 @@ async def test_blueprint_automation_with_empty_arrays(mcp_client):
             error_msg = str(create_result.get("error", {}).get("message", ""))
             # If error is about missing blueprint inputs, our validation passed!
             if "Missing input" in error_msg or "input" in error_msg.lower():
-                logger.info("✅ Empty arrays were stripped (passed our validation, failed HA blueprint validation as expected)")
+                logger.info(
+                    "✅ Empty arrays were stripped (passed our validation, failed HA blueprint validation as expected)"
+                )
                 logger.info("✅ Empty arrays test completed")
                 return
             # If error is about missing trigger/action, our fix didn't work
             if "trigger" in error_msg.lower() or "action" in error_msg.lower():
-                raise AssertionError(f"Empty arrays not stripped - validation failed: {error_msg}")
+                raise AssertionError(
+                    f"Empty arrays not stripped - validation failed: {error_msg}"
+                )
             # Some other error
             raise AssertionError(f"Unexpected error: {create_result}")
 
         # If somehow it succeeded (unlikely with empty inputs)
         automation_id = create_result.get("entity_id") or create_result.get("id")
-        logger.info(f"✅ Created blueprint automation with empty arrays: {automation_id}")
+        logger.info(
+            f"✅ Created blueprint automation with empty arrays: {automation_id}"
+        )
 
         # Clean up
         await mcp.call_tool_success(

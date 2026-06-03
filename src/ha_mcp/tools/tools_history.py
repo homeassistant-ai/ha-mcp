@@ -411,6 +411,9 @@ class HistoryTools:
                     "Ensure recorder component is enabled",
                 ]
             exception_to_structured_error(e, suggestions=suggestions)
+            return (
+                None  # exception_to_structured_error always raises; explicit for CodeQL
+            )
 
 
 def register_history_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

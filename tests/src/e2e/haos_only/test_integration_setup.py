@@ -43,12 +43,6 @@ LOG = logging.getLogger(__name__)
 pytestmark = [pytest.mark.haos_only]
 
 
-# Node-RED's HA integration historically registered under the ``nodered``
-# domain (no underscore); some addon versions use ``node_red``. Accept either
-# so the test is robust across addon-version drift.
-_NODE_RED_DOMAIN_CANDIDATES: tuple[str, ...] = ("nodered", "node_red")
-
-
 def _find_entry_for_domain(
     entries: list[dict[str, Any]], domain: str
 ) -> dict[str, Any] | None:

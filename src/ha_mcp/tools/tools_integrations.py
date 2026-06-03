@@ -664,6 +664,7 @@ class IntegrationTools:
                     "Ensure your token has sufficient permissions",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
 
     async def _get_single_entry(
         self,
@@ -735,6 +736,7 @@ class IntegrationTools:
                     "config entries",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
 
     async def _fetch_config_subentries(self, entry_id: str) -> list[dict[str, Any]]:
         """Fetch config subentries for a detailed entry response."""
@@ -1112,6 +1114,7 @@ class IntegrationTools:
         except Exception as e:
             logger.error(f"Failed to set integration enabled: {e}")
             exception_to_structured_error(e, context={"entry_id": entry_id})
+            return None  # unreachable: exception_to_structured_error raises
 
     @tool(
         name="ha_remove_helpers_integrations",
@@ -1429,6 +1432,8 @@ class IntegrationTools:
                     "see all config entries",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     # === Path 2: FLOW helper delete via entity_id → entry_id lookup ===
     async def _delete_flow_helper(
@@ -1668,9 +1673,10 @@ class IntegrationTools:
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify the target exists using ha_search_entities() "
-                    "or ha_get_integration()",
+                    + "or ha_get_integration()",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
 
     async def _delete_config_subentry(
         self, entry_id: str, subentry_id: str
@@ -1950,10 +1956,10 @@ class IntegrationTools:
                             ),
                             suggestions=[
                                 "Re-enable the entity via "
-                                "ha_set_entity(enabled=True), then retry "
-                                "deletion.",
+                                + "ha_set_entity(enabled=True), then retry "
+                                + "deletion.",
                                 "Or inspect the entity registry entry "
-                                "directly to confirm unique_id presence.",
+                                + "directly to confirm unique_id presence.",
                             ],
                             context={
                                 "target": target,
@@ -2050,6 +2056,8 @@ class IntegrationTools:
                     "Ensure helper is not used by automations or scripts",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error raises
+        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 def register_integration_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

@@ -25,6 +25,7 @@ PROXY_ADDON_DIR = "homeassistant-addon-webhook-proxy"
 # Helper: import start.py from the addon directory
 # ---------------------------------------------------------------------------
 
+
 def _import_start():
     """Import the webhook proxy start.py as a module."""
     start_path = os.path.join(PROXY_ADDON_DIR, "start.py")
@@ -37,6 +38,7 @@ def _import_start():
 # ---------------------------------------------------------------------------
 # Helper: import mcp_proxy/__init__.py with homeassistant imports stubbed
 # ---------------------------------------------------------------------------
+
 
 class _FakeConfigEntryError(Exception):
     pass
@@ -80,6 +82,7 @@ def _install_runtime_stubs():
     # construction. Use the real package if available, otherwise minimal stub.
     try:
         import yarl as _real_yarl
+
         yarl_mod = _real_yarl
     except ImportError:
         yarl_mod = types.ModuleType("yarl")
@@ -98,6 +101,7 @@ def _install_runtime_stubs():
                 if not self._extra:
                     return self._url
                 from urllib.parse import urlencode
+
                 sep = "&" if "?" in self._url else "?"
                 return f"{self._url}{sep}{urlencode(self._extra)}"
 
@@ -114,43 +118,40 @@ def _install_runtime_stubs():
     ha_components_repairs.RepairsFlow = type("RepairsFlow", (), {})
     ha_data_entry_flow = types.ModuleType("homeassistant.data_entry_flow")
     ha_data_entry_flow.FlowResult = dict
-    ha_helpers_issue_registry = types.ModuleType(
-        "homeassistant.helpers.issue_registry"
-    )
-    ha_helpers_issue_registry.async_create_issue = MagicMock(
-        name="async_create_issue"
-    )
-    ha_helpers_issue_registry.async_delete_issue = MagicMock(
-        name="async_delete_issue"
-    )
+    ha_helpers_issue_registry = types.ModuleType("homeassistant.helpers.issue_registry")
+    ha_helpers_issue_registry.async_create_issue = MagicMock(name="async_create_issue")
+    ha_helpers_issue_registry.async_delete_issue = MagicMock(name="async_delete_issue")
 
     class _IssueSeverity:
         ERROR = "error"
         WARNING = "warning"
         CRITICAL = "critical"
+
     ha_helpers_issue_registry.IssueSeverity = _IssueSeverity
 
     voluptuous_mod = types.ModuleType("voluptuous")
     voluptuous_mod.Schema = MagicMock(name="Schema")
 
-    sys.modules.update({
-        "homeassistant": ha,
-        "homeassistant.components": ha_components,
-        "homeassistant.components.webhook": ha_webhook,
-        "homeassistant.components.http": ha_components_http,
-        "homeassistant.components.repairs": ha_components_repairs,
-        "homeassistant.config_entries": ha_config_entries,
-        "homeassistant.core": ha_core,
-        "homeassistant.helpers": ha_helpers,
-        "homeassistant.helpers.typing": ha_helpers_typing,
-        "homeassistant.helpers.issue_registry": ha_helpers_issue_registry,
-        "homeassistant.exceptions": ha_exceptions,
-        "homeassistant.data_entry_flow": ha_data_entry_flow,
-        "aiohttp": aiohttp_mod,
-        "aiohttp.web": aiohttp_web,
-        "yarl": yarl_mod,
-        "voluptuous": voluptuous_mod,
-    })
+    sys.modules.update(
+        {
+            "homeassistant": ha,
+            "homeassistant.components": ha_components,
+            "homeassistant.components.webhook": ha_webhook,
+            "homeassistant.components.http": ha_components_http,
+            "homeassistant.components.repairs": ha_components_repairs,
+            "homeassistant.config_entries": ha_config_entries,
+            "homeassistant.core": ha_core,
+            "homeassistant.helpers": ha_helpers,
+            "homeassistant.helpers.typing": ha_helpers_typing,
+            "homeassistant.helpers.issue_registry": ha_helpers_issue_registry,
+            "homeassistant.exceptions": ha_exceptions,
+            "homeassistant.data_entry_flow": ha_data_entry_flow,
+            "aiohttp": aiohttp_mod,
+            "aiohttp.web": aiohttp_web,
+            "yarl": yarl_mod,
+            "voluptuous": voluptuous_mod,
+        }
+    )
 
 
 def _import_mcp_proxy(preload_oauth=None):
@@ -168,9 +169,8 @@ def _import_mcp_proxy(preload_oauth=None):
     spec = importlib.util.spec_from_file_location(
         "mcp_proxy_init",
         init_path,
-        submodule_search_locations=[
-            os.path.join(PROXY_ADDON_DIR, "mcp_proxy")
-        ])
+        submodule_search_locations=[os.path.join(PROXY_ADDON_DIR, "mcp_proxy")],
+    )
     mod = importlib.util.module_from_spec(spec)
     sys.modules["mcp_proxy_init"] = mod
     if preload_oauth is not None:
@@ -307,6 +307,7 @@ class TestWebhookProxyStructure:
     def test_start_script_syntax(self):
         """Verify start.py is valid Python."""
         import ast
+
         with open(f"{PROXY_ADDON_DIR}/start.py") as f:
             ast.parse(f.read())
 
@@ -324,10 +325,12 @@ class TestAddonDiscovery:
 
         def mock_supervisor_get(path):
             if path == "/addons":
-                return {"addons": [
-                    {"slug": "ha_mcp"},
-                    {"slug": "ha_mcp_dev"},
-                ]}
+                return {
+                    "addons": [
+                        {"slug": "ha_mcp"},
+                        {"slug": "ha_mcp_dev"},
+                    ]
+                }
             if path == "/addons/ha_mcp/info":
                 return {
                     "state": "started",
@@ -394,10 +397,12 @@ class TestAddonDiscovery:
 
         def mock_supervisor_get(path):
             if path == "/addons":
-                return {"addons": [
-                    {"slug": "xyz999_ha_mcp"},
-                    {"slug": "xyz999_ha_mcp_dev"},
-                ]}
+                return {
+                    "addons": [
+                        {"slug": "xyz999_ha_mcp"},
+                        {"slug": "xyz999_ha_mcp_dev"},
+                    ]
+                }
             if path == "/addons/xyz999_ha_mcp/info":
                 return {
                     "state": "started",
@@ -423,10 +428,12 @@ class TestAddonDiscovery:
 
         def mock_supervisor_get(path):
             if path == "/addons":
-                return {"addons": [
-                    {"slug": "ha_mcp"},
-                    {"slug": "ha_mcp_dev"},
-                ]}
+                return {
+                    "addons": [
+                        {"slug": "ha_mcp"},
+                        {"slug": "ha_mcp_dev"},
+                    ]
+                }
             if path == "/addons/ha_mcp/info":
                 return {"state": "stopped", "ip_address": "172.30.33.1", "options": {}}
             if path == "/addons/ha_mcp_dev/info":
@@ -870,7 +877,6 @@ class TestTargetUrlValidation:
 
 
 class TestSetupEntrySurfaceFailures:
-
     @pytest.fixture
     def mod(self):
         return _import_mcp_proxy()
@@ -895,7 +901,8 @@ class TestSetupEntrySurfaceFailures:
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register") as mock_register,
             patch.object(mod.aiohttp, "ClientSession") as mock_session,
-            pytest.raises(_FakeConfigEntryError) as exc_info):
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         assert "Invalid target_url" in str(exc_info.value)
@@ -914,7 +921,8 @@ class TestSetupEntrySurfaceFailures:
             caplog.at_level("ERROR"),
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
-            pytest.raises(_FakeConfigEntryError)):
+            pytest.raises(_FakeConfigEntryError),
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         assert "validation failed" in caplog.text
@@ -927,7 +935,8 @@ class TestSetupEntrySurfaceFailures:
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register") as mock_register,
             patch.object(mod.aiohttp, "ClientSession") as mock_session,
-            pytest.raises(_FakeConfigEntryError) as exc_info):
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         assert "Missing target_url" in str(exc_info.value)
@@ -943,7 +952,8 @@ class TestSetupEntrySurfaceFailures:
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register") as mock_register,
             patch.object(mod.aiohttp, "ClientSession") as mock_session,
-            pytest.raises(_FakeConfigEntryError)):
+            pytest.raises(_FakeConfigEntryError),
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         mock_register.assert_not_called()
@@ -951,7 +961,8 @@ class TestSetupEntrySurfaceFailures:
 
     @pytest.mark.parametrize(
         "register_error",
-        [RuntimeError("boom"), ValueError("duplicate webhook"), KeyError("not loaded")])
+        [RuntimeError("boom"), ValueError("duplicate webhook"), KeyError("not loaded")],
+    )
     async def test_register_failure_closes_session_and_raises(
         self, mod, hass, register_error
     ):
@@ -971,7 +982,8 @@ class TestSetupEntrySurfaceFailures:
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register", side_effect=register_error),
             patch.object(mod.aiohttp, "ClientSession", side_effect=make_session),
-            pytest.raises(_FakeConfigEntryError) as exc_info):
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         assert "Failed to register webhook endpoint" in str(exc_info.value)
@@ -986,7 +998,8 @@ class TestSetupEntrySurfaceFailures:
         hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         with (
             patch.object(mod, "async_register") as mock_register,
-            pytest.raises(_FakeConfigEntryError) as exc_info):
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         assert "Failed to read" in str(exc_info.value)
@@ -1000,7 +1013,8 @@ class TestSetupEntrySurfaceFailures:
         hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         with (
             patch.object(mod, "async_register") as mock_register,
-            pytest.raises(_FakeConfigEntryError) as exc_info):
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         assert "Failed to read" in str(exc_info.value)
@@ -1015,7 +1029,8 @@ class TestSetupEntrySurfaceFailures:
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register") as mock_register,
-            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock())):
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
             result = await mod.async_setup_entry(hass, MagicMock())
 
         assert result is True
@@ -1108,7 +1123,8 @@ class TestOAuthOffPreservesBehavior:
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
-            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock())):
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         assert "oauth" not in hass.data[mod.DOMAIN]
@@ -1132,7 +1148,8 @@ class TestOAuthOffPreservesBehavior:
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
-            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock())):
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         # The submodule name follows from the parent's package name
@@ -1154,7 +1171,8 @@ class TestOAuthOffPreservesBehavior:
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
-            pytest.raises(_FakeConfigEntryError) as exc_info):
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         assert "client_id and/or client_secret is blank" in str(exc_info.value)
@@ -1198,7 +1216,9 @@ class TestOAuthProvider:
             hass=hass,
             client_id="client-id-1234567890",
             client_secret="client-secret-very-secret",
-            webhook_id="mcp_webhook_id_xxx", signing_key=b"\x00" * 32)
+            webhook_id="mcp_webhook_id_xxx",
+            signing_key=b"\x00" * 32,
+        )
 
     def test_issues_and_validates_access_token(self, provider):
         token = provider.issue_access_token()
@@ -1244,7 +1264,8 @@ class TestOAuthProvider:
             client_id="cid-1234567890ABCDEF",
             client_secret="sec",
             webhook_id="wh",
-            signing_key=b"\x00" * 32)
+            signing_key=b"\x00" * 32,
+        )
         token = provider.issue_access_token()
         future = int(time.time()) + oauth.ACCESS_TOKEN_TTL + 60
         with patch.object(oauth.time, "time", return_value=future):
@@ -1272,14 +1293,10 @@ class TestOAuthProvider:
         )
 
     def test_authenticate_client_rejects_wrong_id(self, provider):
-        assert not provider.authenticate_client(
-            "wrong", "client-secret-very-secret"
-        )
+        assert not provider.authenticate_client("wrong", "client-secret-very-secret")
 
     def test_authenticate_client_rejects_wrong_secret(self, provider):
-        assert not provider.authenticate_client(
-            "client-id-1234567890", "wrong"
-        )
+        assert not provider.authenticate_client("client-id-1234567890", "wrong")
 
     def test_authenticate_client_rejects_blanks(self, provider):
         assert not provider.authenticate_client("", "")
@@ -1315,25 +1332,43 @@ class TestOAuthProvider:
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
         hass = MagicMock()
         provider1 = oauth.OAuthProvider(
-            hass=hass, client_id="id-aaaaaaaaaaaaaaaaa", client_secret="secret",
-            webhook_id="wh", signing_key=b"\x00" * 32)
+            hass=hass,
+            client_id="id-aaaaaaaaaaaaaaaaa",
+            client_secret="secret",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
         token = provider1.issue_access_token()
         # New provider with a different client_id (admin rotated) — token
         # signed for the old client_id must be rejected.
         provider2 = oauth.OAuthProvider(
-            hass=hass, client_id="id-bbbbbbbbbbbbbbbbb", client_secret="secret",
-            webhook_id="wh", signing_key=b"\x00" * 32)
+            hass=hass,
+            client_id="id-bbbbbbbbbbbbbbbbb",
+            client_secret="secret",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
         assert provider2.validate_access_token(token) is False
 
     def test_signing_key_persists_across_provider_instances(self, tmp_path):
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
         hass = MagicMock()
         provider1 = oauth.OAuthProvider(
-            hass=hass, client_id="cid-1234567890ABCDEF", client_secret="sec", webhook_id="wh", signing_key=b"\x00" * 32)
+            hass=hass,
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
         token = provider1.issue_access_token()
         # New provider on the same disk → same signing key → token still valid
         provider2 = oauth.OAuthProvider(
-            hass=hass, client_id="cid-1234567890ABCDEF", client_secret="sec", webhook_id="wh", signing_key=b"\x00" * 32)
+            hass=hass,
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
         assert provider2.validate_access_token(token) is True
 
 
@@ -1376,7 +1411,8 @@ class TestOAuthSetupEntry:
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
-            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock())):
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         provider = hass.data[mod.DOMAIN]["oauth"]
@@ -1422,8 +1458,12 @@ class TestOAuthWebhookHandler:
     async def test_returns_401_on_missing_bearer(self, setup):
         mod, oauth = setup
         provider = oauth.OAuthProvider(
-            hass=MagicMock(), client_id="cid-1234567890ABCDEF",
-            client_secret="sec", webhook_id="wh", signing_key=b"\x00" * 32)
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
         hass = self._make_hass(mod, provider)
         request = self._make_request(None)
         request.headers["Host"] = "example.nabu.casa"
@@ -1442,8 +1482,12 @@ class TestOAuthWebhookHandler:
     async def test_returns_401_on_invalid_bearer(self, setup):
         mod, oauth = setup
         provider = oauth.OAuthProvider(
-            hass=MagicMock(), client_id="cid-1234567890ABCDEF",
-            client_secret="sec", webhook_id="wh", signing_key=b"\x00" * 32)
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
         hass = self._make_hass(mod, provider)
         request = self._make_request("Bearer not.a.valid.token")
         request.headers["Host"] = "example.nabu.casa"
@@ -1458,8 +1502,12 @@ class TestOAuthWebhookHandler:
     async def test_passes_through_with_valid_bearer(self, setup):
         mod, oauth = setup
         provider = oauth.OAuthProvider(
-            hass=MagicMock(), client_id="cid-1234567890ABCDEF",
-            client_secret="sec", webhook_id="wh", signing_key=b"\x00" * 32)
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
         token = provider.issue_access_token()
         hass = self._make_hass(mod, provider)
         request = self._make_request(f"Bearer {token}")
@@ -1516,8 +1564,9 @@ class TestResolveOAuthCreds:
         assert sec1 == sec2
 
     def test_user_value_overrides_persisted(self, start, tmp_path):
-        # First call generates and persists
-        gen_cid, gen_sec = start._resolve_oauth_creds(tmp_path, "", "")
+        # First call generates and persists (return value intentionally unused;
+        # this call's side effect is writing oauth_creds.json to disk).
+        start._resolve_oauth_creds(tmp_path, "", "")
         # Second call with user-supplied values uses those
         cid, sec = start._resolve_oauth_creds(
             tmp_path, "user-id-1234567890123", "user-secret"
@@ -1529,9 +1578,7 @@ class TestResolveOAuthCreds:
         assert stored["client_id"] == "user-id-1234567890123"
         assert stored["client_secret"] == "user-secret"
 
-    def test_partial_override_picks_persisted_for_blank_field(
-        self, start, tmp_path
-    ):
+    def test_partial_override_picks_persisted_for_blank_field(self, start, tmp_path):
         # Generate and persist baseline
         gen_cid, gen_sec = start._resolve_oauth_creds(tmp_path, "", "")
         # User rotates only the secret, leaves client_id blank
@@ -1566,6 +1613,7 @@ class TestStartOAuthValidation:
             if arg == "/data":
                 return options_dir
             return Path(arg)
+
         return path_factory
 
     def _run_main_with_options(self, tmp_path, **opts):
@@ -1579,7 +1627,8 @@ class TestStartOAuthValidation:
             tmp_path,
             enable_oauth=True,
             oauth_client_id="too-short",
-            oauth_client_secret="some-secret-here-with-length")
+            oauth_client_secret="some-secret-here-with-length",
+        )
         assert rc == 1
         assert "OAuth Client ID is too short" in capsys.readouterr().err
 
@@ -1601,16 +1650,12 @@ class TestRegenerateOAuthCreds:
         start._regenerate_oauth_creds(tmp_path)
         assert not creds_file.exists()
 
-    def test_regenerate_is_idempotent_when_file_missing(
-        self, start, tmp_path
-    ):
+    def test_regenerate_is_idempotent_when_file_missing(self, start, tmp_path):
         # Should not raise even though the file isn't there
         start._regenerate_oauth_creds(tmp_path)
         assert not (tmp_path / "oauth_creds.json").exists()
 
-    def test_regenerate_followed_by_resolve_yields_new_values(
-        self, start, tmp_path
-    ):
+    def test_regenerate_followed_by_resolve_yields_new_values(self, start, tmp_path):
         creds_file = tmp_path / "oauth_creds.json"
         creds_file.write_text(
             '{"client_id": "old-id-1234567890", "client_secret": "old-sec"}'
@@ -1622,9 +1667,7 @@ class TestRegenerateOAuthCreds:
         assert cid.startswith("hamcp-")
         assert len(sec) >= 32
 
-    def test_clear_regenerate_toggle_posts_options_with_false(
-        self, start
-    ):
+    def test_clear_regenerate_toggle_posts_options_with_false(self, start):
         captured = {}
 
         def fake_post(path, data):
@@ -1650,9 +1693,7 @@ class TestRegenerateOAuthCreds:
             }
         }
 
-    def test_clear_regenerate_toggle_returns_false_on_supervisor_error(
-        self, start
-    ):
+    def test_clear_regenerate_toggle_returns_false_on_supervisor_error(self, start):
         with patch.object(start, "_supervisor_post", return_value=False):
             ok = start._clear_regenerate_toggle({"regenerate_oauth_creds": True})
         assert ok is False
@@ -1693,9 +1734,7 @@ class TestStartInstallIntegration:
         dst_parent = tmp_path / "dst-parent"
         dst_parent.mkdir()
         (dst_parent / "mcp_proxy").mkdir()
-        (dst_parent / "mcp_proxy" / "manifest.json").write_text(
-            '{"version": "1.0.2"}'
-        )
+        (dst_parent / "mcp_proxy" / "manifest.json").write_text('{"version": "1.0.2"}')
 
         def path_factory(arg):
             if arg == "/opt/mcp_proxy":
@@ -1739,9 +1778,7 @@ class TestStartInstallIntegration:
         assert first_install is False
         assert version_changed is False
 
-    def test_corrupt_dst_manifest_does_not_trigger_version_changed(
-        self, tmp_path
-    ):
+    def test_corrupt_dst_manifest_does_not_trigger_version_changed(self, tmp_path):
         """A corrupt destination manifest should NOT report version_changed
         — that's reserved for genuine version differences. The integration
         files are still copied (to repair the install) but the user isn't
@@ -1795,17 +1832,14 @@ def _provider_for_view_tests(tmp_path, public_base_url=None):
         client_secret="client-secret-very-secret",
         webhook_id="mcp_webhook_id_aaaa",
         signing_key=b"\x00" * 32,
-        public_base_url=public_base_url)
+        public_base_url=public_base_url,
+    )
     return oauth, provider
 
 
 def _make_view_request(
-    *,
-    headers=None,
-    query=None,
-    method="GET",
-    post_data=None,
-    scheme="https"):
+    *, headers=None, query=None, method="GET", post_data=None, scheme="https"
+):
     """Mock a starlette/aiohttp-style web.Request with the bits the views read."""
     req = MagicMock()
     req.headers = headers or {}
@@ -1850,9 +1884,7 @@ class TestBuildBaseUrl:
         assert result == "https://real.example"
 
     def test_falls_back_to_host_header(self, oauth):
-        request = _make_view_request(
-            headers={"Host": "host.example"}, scheme="https"
-        )
+        request = _make_view_request(headers={"Host": "host.example"}, scheme="https")
         result = oauth._build_base_url(request, None)
         assert result == "https://host.example"
 
@@ -1948,9 +1980,7 @@ class TestAuthorizeViewGet:
 
     async def test_rejects_short_code_challenge(self, setup):
         oauth, provider, view = setup
-        request = _make_view_request(
-            query=self._good_query(code_challenge="too-short")
-        )
+        request = _make_view_request(query=self._good_query(code_challenge="too-short"))
         resp = await view.get(request)
         assert resp.status == 400
         assert "code_challenge" in resp.text
@@ -2015,9 +2045,7 @@ class TestAuthorizeViewGet:
         try to XSS the consent page. The page must HTML-escape it."""
         oauth, provider, view = setup
         evil = "https://evil.example/?<script>alert(1)</script>"
-        request = _make_view_request(
-            query=self._good_query(redirect_uri=evil)
-        )
+        request = _make_view_request(query=self._good_query(redirect_uri=evil))
         with patch.object(oauth.web, "Response") as resp_ctor:
             await view.get(request)
         html = resp_ctor.call_args.kwargs.get("text", "")
@@ -2059,9 +2087,7 @@ class TestAuthorizeViewPost:
 
     async def test_approve_issues_code_and_redirects(self, setup):
         oauth, provider, view = setup
-        request = _make_view_request(
-            method="POST", post_data=self._good_form()
-        )
+        request = _make_view_request(method="POST", post_data=self._good_form())
         resp = await view.post(request)
         assert resp.status == 302
         loc = resp.headers["Location"]
@@ -2074,7 +2100,8 @@ class TestAuthorizeViewPost:
         oauth, provider, view = setup
         request = _make_view_request(
             method="POST",
-            post_data=self._good_form(client_id="attacker-substituted-id"))
+            post_data=self._good_form(client_id="attacker-substituted-id"),
+        )
         resp = await view.post(request)
         assert resp.status == 400
         assert "client_id" in resp.text
@@ -2083,7 +2110,8 @@ class TestAuthorizeViewPost:
         oauth, provider, view = setup
         request = _make_view_request(
             method="POST",
-            post_data=self._good_form(redirect_uri="http://evil.example/"))
+            post_data=self._good_form(redirect_uri="http://evil.example/"),
+        )
         resp = await view.post(request)
         assert resp.status == 400
 
@@ -2106,9 +2134,8 @@ class TestTokenView:
     @staticmethod
     def _basic_header(client_id, client_secret):
         import base64 as _b64
-        token = _b64.b64encode(
-            f"{client_id}:{client_secret}".encode()
-        ).decode("ascii")
+
+        token = _b64.b64encode(f"{client_id}:{client_secret}".encode()).decode("ascii")
         return f"Basic {token}"
 
     async def test_invalid_client_via_basic_returns_401(self, setup):
@@ -2116,7 +2143,8 @@ class TestTokenView:
         request = _make_view_request(
             method="POST",
             headers={"Authorization": self._basic_header("wrong", "pw")},
-            post_data={"grant_type": "authorization_code"})
+            post_data={"grant_type": "authorization_code"},
+        )
 
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
@@ -2125,9 +2153,10 @@ class TestTokenView:
         body = resp_ctor.call_args.args[0]
         assert body == {"error": "invalid_client"}
         assert kwargs.get("status") == 401
-        assert kwargs.get("headers", {}).get(
-            "WWW-Authenticate"
-        ) == 'Basic realm="MCP Proxy OAuth"'
+        assert (
+            kwargs.get("headers", {}).get("WWW-Authenticate")
+            == 'Basic realm="MCP Proxy OAuth"'
+        )
 
     async def test_invalid_client_via_form_returns_401(self, setup):
         oauth, provider, view = setup
@@ -2137,7 +2166,8 @@ class TestTokenView:
                 "grant_type": "authorization_code",
                 "client_id": "wrong",
                 "client_secret": "pw",
-            })
+            },
+        )
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
@@ -2152,7 +2182,8 @@ class TestTokenView:
                     "client-id-1234567890ABCDEF", "client-secret-very-secret"
                 )
             },
-            post_data={"grant_type": "client_credentials"})
+            post_data={"grant_type": "client_credentials"},
+        )
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
@@ -2169,7 +2200,8 @@ class TestTokenView:
                     "client-id-1234567890ABCDEF", "client-secret-very-secret"
                 )
             },
-            post_data={"grant_type": "authorization_code"})
+            post_data={"grant_type": "authorization_code"},
+        )
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
@@ -2179,9 +2211,8 @@ class TestTokenView:
         oauth, provider, view = setup
         verifier = "abcdefghij" * 5  # 50 chars, passes RFC 7636 length check
         import hashlib
-        challenge = oauth._b64url_encode(
-            hashlib.sha256(verifier.encode()).digest()
-        )
+
+        challenge = oauth._b64url_encode(hashlib.sha256(verifier.encode()).digest())
         code = provider.issue_code("https://claude.ai/cb", challenge)
 
         request = _make_view_request(
@@ -2196,7 +2227,8 @@ class TestTokenView:
                 "code": code,
                 "redirect_uri": "https://claude.ai/cb",
                 "code_verifier": verifier,
-            })
+            },
+        )
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
 
@@ -2223,7 +2255,8 @@ class TestTokenView:
             post_data={
                 "grant_type": "refresh_token",
                 "refresh_token": refresh,
-            })
+            },
+        )
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
 
@@ -2244,7 +2277,8 @@ class TestTokenView:
             post_data={
                 "grant_type": "refresh_token",
                 "refresh_token": "garbage.token",
-            })
+            },
+        )
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
@@ -2270,20 +2304,14 @@ class TestPkceLengthEnforcement:
     def test_rejects_long_verifier(self, provider):
         challenge = "X" * 43
         code = provider.issue_code("https://claude.ai/cb", challenge)
-        assert (
-            provider.consume_code(
-                code, "https://claude.ai/cb", "X" * 129
-            )
-            is False
-        )
+        assert provider.consume_code(code, "https://claude.ai/cb", "X" * 129) is False
 
     def test_rejects_verifier_with_disallowed_chars(self, provider):
         challenge = "X" * 43
         code = provider.issue_code("https://claude.ai/cb", challenge)
         bad_verifier = "a" * 42 + " "  # 43 chars but space is not in unreserved set
         assert (
-            provider.consume_code(code, "https://claude.ai/cb", bad_verifier)
-            is False
+            provider.consume_code(code, "https://claude.ai/cb", bad_verifier) is False
         )
 
 
@@ -2371,7 +2399,8 @@ class TestRedirectUriValidation:
             ("", False),
             ("https://claude.ai/cb#fragment", False),
             ("not-a-url", False),
-        ])
+        ],
+    )
     def test_validates_redirect_uri(self, oauth, uri, expected):
         assert oauth._is_valid_redirect_uri(uri) is expected
 
@@ -2392,7 +2421,8 @@ class TestOAuthProviderConstructorValidation:
                 client_id="",
                 client_secret="secret",
                 webhook_id="wh",
-                signing_key=b"\x00" * 32)
+                signing_key=b"\x00" * 32,
+            )
 
     def test_rejects_short_client_id(self, oauth):
         with pytest.raises(ValueError, match="client_id"):
@@ -2401,7 +2431,8 @@ class TestOAuthProviderConstructorValidation:
                 client_id="too-short",
                 client_secret="secret",
                 webhook_id="wh",
-                signing_key=b"\x00" * 32)
+                signing_key=b"\x00" * 32,
+            )
 
     def test_rejects_blank_client_secret(self, oauth):
         with pytest.raises(ValueError, match="client_secret"):
@@ -2410,7 +2441,8 @@ class TestOAuthProviderConstructorValidation:
                 client_id="client-id-1234567890ABCDEF",
                 client_secret="",
                 webhook_id="wh",
-                signing_key=b"\x00" * 32)
+                signing_key=b"\x00" * 32,
+            )
 
     def test_rejects_short_signing_key(self, oauth):
         with pytest.raises(ValueError, match="signing_key"):
@@ -2419,7 +2451,8 @@ class TestOAuthProviderConstructorValidation:
                 client_id="client-id-1234567890ABCDEF",
                 client_secret="secret",
                 webhook_id="wh",
-                signing_key=b"too-short")
+                signing_key=b"too-short",
+            )
 
 
 class TestRepairsModule:
@@ -2429,13 +2462,9 @@ class TestRepairsModule:
     @pytest.fixture
     def repairs(self, tmp_path):
         _install_runtime_stubs()
-        repairs_path = os.path.join(
-            PROXY_ADDON_DIR, "mcp_proxy", "repairs.py"
-        )
+        repairs_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "repairs.py")
         sys.modules.pop("mcp_proxy_repairs", None)
-        spec = importlib.util.spec_from_file_location(
-            "mcp_proxy_repairs", repairs_path
-        )
+        spec = importlib.util.spec_from_file_location("mcp_proxy_repairs", repairs_path)
         mod = importlib.util.module_from_spec(spec)
         sys.modules["mcp_proxy_repairs"] = mod
         spec.loader.exec_module(mod)
@@ -2462,12 +2491,14 @@ class TestRepairsModule:
 
     def test_maybe_create_issue_no_op_when_marker_missing(self, repairs):
         from homeassistant.helpers import issue_registry
+
         hass = MagicMock()
         repairs.maybe_create_issue(hass, "mcp_proxy")
         issue_registry.async_create_issue.assert_not_called()
 
     def test_maybe_create_issue_fires_when_marker_present(self, repairs):
         from homeassistant.helpers import issue_registry
+
         issue_registry.async_create_issue.reset_mock()
         repairs.RESTART_MARKER_FILE.write_text("test")
         hass = MagicMock()
@@ -2481,6 +2512,7 @@ class TestRepairsModule:
 
     def test_clear_issue_deletes_marker_and_calls_delete_issue(self, repairs):
         from homeassistant.helpers import issue_registry
+
         issue_registry.async_delete_issue.reset_mock()
         repairs.RESTART_MARKER_FILE.write_text("test")
         hass = MagicMock()
@@ -2501,22 +2533,16 @@ class TestRepairsFlowSubmit:
     @pytest.fixture
     def repairs(self, tmp_path):
         _install_runtime_stubs()
-        repairs_path = os.path.join(
-            PROXY_ADDON_DIR, "mcp_proxy", "repairs.py"
-        )
+        repairs_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "repairs.py")
         sys.modules.pop("mcp_proxy_repairs", None)
-        spec = importlib.util.spec_from_file_location(
-            "mcp_proxy_repairs", repairs_path
-        )
+        spec = importlib.util.spec_from_file_location("mcp_proxy_repairs", repairs_path)
         mod = importlib.util.module_from_spec(spec)
         sys.modules["mcp_proxy_repairs"] = mod
         spec.loader.exec_module(mod)
         mod.RESTART_MARKER_FILE = tmp_path / ".mcp_proxy_oauth_restart_required"
         return mod
 
-    async def test_confirm_with_input_calls_restart_and_clears_marker(
-        self, repairs
-    ):
+    async def test_confirm_with_input_calls_restart_and_clears_marker(self, repairs):
         repairs.RESTART_MARKER_FILE.write_text("test")
         flow = repairs.OAuthRestartRepairFlow()
         hass = MagicMock()
@@ -2527,9 +2553,7 @@ class TestRepairsFlowSubmit:
 
         hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         flow.hass = hass
-        flow.async_create_entry = MagicMock(
-            return_value={"type": "create_entry"}
-        )
+        flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
 
         await flow.async_step_confirm({})
 
@@ -2541,7 +2565,7 @@ class TestRepairsFlowSubmit:
     async def test_confirm_without_input_shows_form(self, repairs):
         flow = repairs.OAuthRestartRepairFlow()
         flow.async_show_form = MagicMock(return_value={"type": "form"})
-        result = await flow.async_step_confirm(None)
+        await flow.async_step_confirm(None)
         flow.async_show_form.assert_called_once()
         assert flow.async_show_form.call_args.kwargs["step_id"] == "confirm"
 
@@ -2553,20 +2577,14 @@ class TestStringsJSONIssueKeys:
     localized text."""
 
     def test_issue_translation_keys_match_repair_flow(self):
-        with open(
-            f"{PROXY_ADDON_DIR}/mcp_proxy/strings.json"
-        ) as f:
+        with open(f"{PROXY_ADDON_DIR}/mcp_proxy/strings.json") as f:
             strings = json.load(f)
 
         assert "oauth_restart_required" in strings.get("issues", {})
         issue = strings["issues"]["oauth_restart_required"]
         assert issue.get("title")
 
-        confirm = (
-            issue.get("fix_flow", {})
-            .get("step", {})
-            .get("confirm", {})
-        )
+        confirm = issue.get("fix_flow", {}).get("step", {}).get("confirm", {})
         assert confirm.get("title")
         assert confirm.get("description")
 
@@ -2582,9 +2600,7 @@ class TestProbeOAuthActive:
     def start(self):
         return _import_start()
 
-    def test_probe_returns_true_when_metadata_endpoint_returns_json(
-        self, start
-    ):
+    def test_probe_returns_true_when_metadata_endpoint_returns_json(self, start):
         with (
             patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
             patch.object(
@@ -2613,9 +2629,7 @@ class TestProbeOAuthActive:
         ):
             assert start._probe_oauth_active() is False
 
-    def test_probe_returns_false_when_authorization_servers_missing(
-        self, start
-    ):
+    def test_probe_returns_false_when_authorization_servers_missing(self, start):
         # A different endpoint accidentally exists at the same URL
         with (
             patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
@@ -2681,7 +2695,8 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
-            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock())):
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
             await mod.async_setup_entry(hass, MagicMock())
 
         registered_urls = {
@@ -2719,7 +2734,4 @@ class TestUnauthorizedResponseShape:
         ww = kwargs["headers"]["WWW-Authenticate"]
         # Pinned base means evil.example is NOT in the metadata URL
         assert "evil.example" not in ww
-        assert (
-            "https://legit.example/api/mcp_proxy/oauth/protected-resource"
-            in ww
-        )
+        assert "https://legit.example/api/mcp_proxy/oauth/protected-resource" in ww

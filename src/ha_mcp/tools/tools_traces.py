@@ -176,12 +176,14 @@ class TraceTools:
             elif automation_id.startswith("script."):
                 domain = "script"
             else:
-                raise_tool_error(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid entity_id format: {automation_id}",
-                    details="Entity ID must start with 'automation.' or 'script.'",
-                    context={"automation_id": automation_id},
-                ))
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid entity_id format: {automation_id}",
+                        details="Entity ID must start with 'automation.' or 'script.'",
+                        context={"automation_id": automation_id},
+                    )
+                )
 
             # Extract the object_id (part after the domain) as fallback
             object_id = automation_id.split(".", 1)[1]
@@ -205,11 +207,14 @@ class TraceTools:
                 verify_ssl=self._client.verify_ssl,
             )
             if error or ws_client is None:
-                raise_tool_error(error or create_error_response(
-                    ErrorCode.CONNECTION_FAILED,
-                    "Failed to connect to Home Assistant WebSocket",
-                    context={"automation_id": automation_id},
-                ))
+                raise_tool_error(
+                    error
+                    or create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        "Failed to connect to Home Assistant WebSocket",
+                        context={"automation_id": automation_id},
+                    )
+                )
 
             try:
                 # Home Assistant stores traces by unique_id, not entity_id.
@@ -238,19 +243,24 @@ class TraceTools:
                         err_ctx: dict[str, str] = {"automation_id": automation_id}
                         if run_id:
                             err_ctx["run_id"] = run_id
-                        raise_tool_error(create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            result.get("error", "Failed to retrieve trace"),
-                            context=err_ctx,
-                        ))
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                result.get("error", "Failed to retrieve trace"),
+                                context=err_ctx,
+                            )
+                        )
 
                     trace_data = result.get("result", {})
                     await safe_progress(
                         ctx, progress=3, total=3, message="formatting trace"
                     )
                     return _format_detailed_trace(
-                        automation_id, run_id, trace_data,
-                        deduplicate=deduplicate, detailed=detailed,
+                        automation_id,
+                        run_id,
+                        trace_data,
+                        deduplicate=deduplicate,
+                        detailed=detailed,
                         sections=sections,
                     )
                 else:
@@ -262,11 +272,13 @@ class TraceTools:
                     )
 
                     if not result.get("success"):
-                        raise_tool_error(create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            result.get("error", "Failed to list traces"),
-                            context={"automation_id": automation_id},
-                        ))
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.SERVICE_CALL_FAILED,
+                                result.get("error", "Failed to list traces"),
+                                context={"automation_id": automation_id},
+                            )
+                        )
 
                     traces_data = result.get("result", [])
 
@@ -323,6 +335,9 @@ class TraceTools:
                     "Ensure Home Assistant connection is working",
                 ],
             )
+            return (
+                None  # exception_to_structured_error always raises; explicit for CodeQL
+            )
 
 
 def register_trace_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
@@ -358,9 +373,7 @@ async def _resolve_trace_item_id(
         if result.get("success") and result.get("result"):
             unique_id = result["result"].get("unique_id")
             if unique_id:
-                logger.debug(
-                    f"Resolved {entity_id} to unique_id: {unique_id}"
-                )
+                logger.debug(f"Resolved {entity_id} to unique_id: {unique_id}")
                 return str(unique_id)
 
         # Fallback to object_id if no unique_id found
@@ -513,7 +526,7 @@ def _format_trace_list(
         start = max(end - limit, 0)
         window = list(reversed(traces[start:end])) if end > 0 else []
     else:
-        window = traces[offset:offset + limit]
+        window = traces[offset : offset + limit]
 
     formatted_traces = []
     for trace in window:
@@ -560,8 +573,12 @@ def _format_trace_list(
 
 
 def _format_detailed_trace(
-    automation_id: str, run_id: str, trace: dict[str, Any],
-    *, deduplicate: bool = True, detailed: bool = False,
+    automation_id: str,
+    run_id: str,
+    trace: dict[str, Any],
+    *,
+    deduplicate: bool = True,
+    detailed: bool = False,
     sections: str | None = None,
 ) -> dict[str, Any]:
     """Format detailed trace for AI consumption."""
@@ -597,7 +614,8 @@ def _format_detailed_trace(
             elif path == "condition" or path.startswith("condition/"):
                 conditions.append(step_info)
             elif (
-                path == "action" or path.startswith("action/")
+                path == "action"
+                or path.startswith("action/")
                 or path.startswith("sequence/")
                 or (domain == "script" and (path.split("/")[0].isdigit()))
             ):
@@ -655,7 +673,14 @@ def _format_detailed_trace(
         requested = {s.strip().lower() for s in sections.split(",")}
         keep_keys = {section_key_map[s] for s in requested if s in section_key_map}
         # Always keep metadata keys
-        keep_keys |= {"success", "automation_id", "run_id", "timestamp", "state", "script_execution"}
+        keep_keys |= {
+            "success",
+            "automation_id",
+            "run_id",
+            "timestamp",
+            "state",
+            "script_execution",
+        }
         result = {k: v for k, v in result.items() if k in keep_keys}
 
     return result
@@ -678,9 +703,13 @@ def _populate_trigger_info(
             "description": trigger_vars.get("description"),
         }
         if "to_state" in trigger_vars:
-            result["trigger"]["to_state"] = trigger_vars.get("to_state", {}).get("state")
+            result["trigger"]["to_state"] = trigger_vars.get("to_state", {}).get(
+                "state"
+            )
         if "from_state" in trigger_vars:
-            result["trigger"]["from_state"] = trigger_vars.get("from_state", {}).get("state")
+            result["trigger"]["from_state"] = trigger_vars.get("from_state", {}).get(
+                "state"
+            )
         if "entity_id" in trigger_vars:
             result["trigger"]["entity_id"] = trigger_vars["entity_id"]
 
@@ -738,7 +767,9 @@ def _populate_action_trace(
             if useful_vars:
                 if deduplicate:
                     try:
-                        fingerprint = json.dumps(useful_vars, sort_keys=True, default=str)
+                        fingerprint = json.dumps(
+                            useful_vars, sort_keys=True, default=str
+                        )
                     except (TypeError, ValueError):
                         fingerprint = str(useful_vars)
 

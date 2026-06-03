@@ -203,6 +203,9 @@ class ServiceDiscoveryTools:
                     "Try with a specific domain filter",
                 ],
             )
+            return (
+                None  # exception_to_structured_error always raises; explicit for CodeQL
+            )
 
 
 def register_services_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
