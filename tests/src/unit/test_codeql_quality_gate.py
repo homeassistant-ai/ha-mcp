@@ -116,16 +116,15 @@ def test_vendored_paths_are_ignored(tmp_path: Path) -> None:
     assert [f[0] for f in findings] == ["src/a.py"]
 
 
-def test_parser_diagnostic_rule_is_ignored(tmp_path: Path) -> None:
+def test_syntax_errors_are_not_suppressed(tmp_path: Path) -> None:
+    """py/syntax-error is no longer blanket-ignored; any parse failure gates."""
     path = _write_sarif(
         tmp_path,
-        [
-            _result("py/syntax-error", "tests/src/e2e/conftest.py", 1, "tsg-python"),
-            _result("py/empty-except", "src/a.py", 1, "real"),
-        ],
+        [_result("py/syntax-error", "tests/src/e2e/conftest.py", 1, "invalid syntax")],
     )
-    findings = gate.load_findings(path)
-    assert [f[2] for f in findings] == ["py/empty-except"]
+    findings, suppressed = gate.classify(path)
+    assert len(findings) == 1
+    assert not suppressed
 
 
 def test_allowlisted_finding_is_suppressed_not_gated(tmp_path: Path) -> None:

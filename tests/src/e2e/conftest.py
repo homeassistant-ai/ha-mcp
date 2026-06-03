@@ -1236,7 +1236,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 # "connection refused for 60s" from "endpoint returned
                 # 200 but state was 'unknown'".
                 logger.warning(
-                    "⚠️ HAOS sun.sun still not ready after %ds "
+                    "HAOS sun.sun still not ready after %ds "
                     "(last_status=%s, last_exc=%r) — template / connection "
                     "tests may race",
                     SUN_WAIT,
@@ -1268,7 +1268,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                     if light_resp.status_code == 200:
                         elapsed = time.monotonic() - light_start
                         logger.info(
-                            "✅ HAOS light.bed_light is in state machine after %.1fs",
+                            "HAOS light.bed_light is in state machine after %.1fs",
                             elapsed,
                         )
                         break
@@ -1280,7 +1280,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
                 time.sleep(1)
             else:
                 logger.warning(
-                    "⚠️ HAOS light.bed_light still not in state machine after "
+                    "HAOS light.bed_light still not in state machine after "
                     "%ds (last_status=%s) — search / state tests may race",
                     LIGHT_WAIT,
                     last_light_status,

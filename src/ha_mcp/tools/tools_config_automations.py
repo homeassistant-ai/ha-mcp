@@ -926,7 +926,8 @@ class AutomationConfigTools:
             # automation_id omitted when all three fallbacks are falsy —
             # the create path is unguarded by validate_identifier_not_empty,
             # and surfacing automation_id=None would lie about resolvability.
-            # HA's upsert contract makes this branch unreachable in practice.
+            # Defensive: HA's upsert normally returns a usable id, so this
+            # fallback rarely triggers.
             **({"automation_id": automation_id} if automation_id else {}),
             **_strip_redundant_identifier_echo(result),
         }

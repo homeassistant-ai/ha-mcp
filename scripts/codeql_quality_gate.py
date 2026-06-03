@@ -29,18 +29,13 @@ from typing import Any
 # (see ``extend-exclude`` in pyproject.toml). Keep this in sync with that list.
 PATHS_IGNORE: tuple[str, ...] = ("tests/initial_test_state/",)
 
-# Rules dropped before gating. ``py/syntax-error`` here is not a real syntax
-# error: it is a ``tsg-python`` parser diagnostic that CodeQL's code-quality
-# engine emits when it cannot parse a (valid Python 3) construct such as a
-# percent-format string. It is a tool limitation, not a code-quality finding,
-# and cannot be fixed in our source.
-RULES_IGNORE: frozenset[str] = frozenset({"py/syntax-error"})
-
 # Per-finding allowlist for verified false positives and intentional patterns
 # that cannot be cleared without breaking or contorting correct code. Each entry
 # is (rule_id, path_fragment, message_substring, reason). A finding is suppressed
 # only when all three of rule/path/message match — keep this list tight and the
-# reason current. Suppressed findings are reported (not silently dropped).
+# reason current. Suppressed findings are reported (not silently dropped). Scope
+# every entry to a specific file + message signature so a genuinely new finding
+# of the same rule elsewhere still fails the gate.
 ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
     (
         "py/unused-global-variable",
@@ -49,13 +44,6 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "Cross-invocation use: set True on the first signal, read on the next to "
         "force-exit. CodeQL's single-pass dead-store analysis misses the "
         "second-signal read, so the assignment looks dead.",
-    ),
-    (
-        "py/unused-global-variable",
-        "src/ha_mcp/tools/util_helpers.py",
-        "_SKILL_GUIDE_MANDATORYBPS_HINT",
-        "Used cross-module in server.py; CodeQL's unused-global check is "
-        "module-local and does not count the importing site.",
     ),
     (
         "py/unused-import",
@@ -121,8 +109,8 @@ def classify(
 
     ``gating_findings`` are (file, line, rule_id, message) tuples the gate fails
     on. ``suppressed`` are (file, line, rule_id, message, reason) tuples dropped
-    by the allowlist (reported, never silent). Vendored paths and the
-    parser-diagnostic rule are dropped entirely.
+    by the allowlist (reported, never silent). Findings under vendored
+    ``PATHS_IGNORE`` prefixes are dropped entirely.
     """
     data = json.loads(sarif_path.read_text(encoding="utf-8"))
     findings: list[tuple[str, int, str, str]] = []
@@ -130,8 +118,6 @@ def classify(
     for run in data.get("runs", []):
         for result in run.get("results", []):
             rule_id = _rule_id(result, run)
-            if rule_id in RULES_IGNORE:
-                continue
             file, line = _location(result)
             if any(file.startswith(prefix) for prefix in PATHS_IGNORE):
                 continue
