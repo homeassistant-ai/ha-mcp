@@ -67,11 +67,11 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "return_harvest": [],
     },
     {
-        "tool": "ha_search_entities",
-        "docstring": ("tools/tools_search.py", "ha_search_entities"),
+        "tool": "ha_search",
+        "docstring": ("tools/tools_search.py", "ha_search"),
         "var_harvest": [
-            ("tools/tools_search.py", "ha_search_entities", "result"),
-            ("tools/tools_search.py", "ha_search_entities", "response"),
+            ("tools/tools_search.py", "ha_search", "result"),
+            ("tools/tools_search.py", "ha_search", "response"),
         ],
         "return_harvest": [
             ("tools/tools_search.py", "_exact_match_search"),
@@ -86,7 +86,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "marker_harvest": [
             (
                 "tools/tools_search.py",
-                "ha_search_entities",
+                "ha_search",
                 frozenset({"success", "results", "query"}),
             ),
             (

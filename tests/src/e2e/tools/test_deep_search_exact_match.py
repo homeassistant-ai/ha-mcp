@@ -44,7 +44,7 @@ async def test_deep_search_exact_match_default(mcp_client):
         # Wait for automation to be findable with exact match
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": "exact_match_test_unique_abc123",
                 "search_types": ["automation"],
@@ -59,7 +59,7 @@ async def test_deep_search_exact_match_default(mcp_client):
 
         # Now search for something that would fuzzy-match but not exact-match
         result_no_match = await mcp_client.call_tool(
-            "ha_deep_search",
+            "ha_search",
             {
                 "query": "exact_match_test_unique_xyz999",
                 "search_types": ["automation"],
@@ -111,7 +111,7 @@ async def test_deep_search_fuzzy_match_opt_in(mcp_client):
         # Wait for automation to be registered
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": "fuzzy_test_temperature",
                 "search_types": ["automation"],
@@ -166,7 +166,7 @@ async def test_deep_search_dashboard_type(mcp_client):
     try:
         # Search for the marker string in dashboards
         result = await mcp_client.call_tool(
-            "ha_deep_search",
+            "ha_search",
             {
                 "query": "deep_search_dashboard_marker_xyz789",
                 "search_types": ["dashboard"],
@@ -202,7 +202,7 @@ async def test_deep_search_dashboard_not_in_default(mcp_client):
     logger.info("Testing that dashboard search is opt-in")
 
     result = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {"query": "anything", "limit": 5},
     )
     data = assert_mcp_success(result, "Default deep search")
@@ -220,7 +220,7 @@ async def test_search_entities_exact_match_default(mcp_client):
     logger.info("Testing ha_search_entities with exact_match=True (default)")
 
     result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"query": "light", "limit": 5},
     )
     data_raw = assert_mcp_success(result, "Exact match search")

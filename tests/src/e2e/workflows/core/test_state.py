@@ -46,7 +46,9 @@ async def test_get_state_known_entity(mcp_client):
     assert "metadata" in data, f"Missing metadata: {data}"
 
     logger.info(f"Sun state: {state_data['state']}")
-    logger.info(f"Sun attributes: elevation={attrs.get('elevation')}, azimuth={attrs.get('azimuth')}")
+    logger.info(
+        f"Sun attributes: elevation={attrs.get('elevation')}, azimuth={attrs.get('azimuth')}"
+    )
 
 
 @pytest.mark.asyncio
@@ -120,7 +122,7 @@ async def test_get_state_sensor_with_numeric_value(mcp_client):
 
     # Search for a sensor to test
     search_result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"domain_filter": "sensor", "limit": 5},
     )
 
@@ -174,7 +176,7 @@ async def test_get_state_automation_entity(mcp_client):
 
     seed_entity = "automation.e2e_seed_automation"
     search_result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"domain_filter": "automation", "limit": 25},
     )
 
@@ -229,7 +231,7 @@ async def test_get_state_binary_sensor(mcp_client):
 
     # Search for a binary sensor
     search_result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"domain_filter": "binary_sensor", "limit": 5},
     )
 

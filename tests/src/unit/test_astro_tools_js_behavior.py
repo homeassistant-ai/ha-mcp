@@ -166,7 +166,7 @@ SAMPLE_CARDS: list[dict[str, str]] = [
         "tool-size": "800",
     },
     {
-        "tool-name": "ha_search_entities",
+        "tool-name": "ha_search",
         "tool-title": "Search entities",
         "tool-desc": "fuzzy search across entities",
         "tool-category": "Entities",
@@ -203,7 +203,7 @@ class TestSearchAndFilter:
         assert "hidden" in _card_class(result.dom, "ha_get_state").split(), (
             "ha_get_state should be hidden when query='service'"
         )
-        assert "hidden" in _card_class(result.dom, "ha_search_entities").split(), (
+        assert "hidden" in _card_class(result.dom, "ha_search").split(), (
             "ha_search_entities (no 'service' in metadata) should be hidden"
         )
         assert "hidden" not in _card_class(result.dom, "ha_call_service").split(), (
@@ -247,7 +247,7 @@ class TestSearchAndFilter:
         )
         _assert_clean_init(result)
         assert "hidden" in _card_class(result.dom, "ha_get_state").split()
-        assert "hidden" in _card_class(result.dom, "ha_search_entities").split()
+        assert "hidden" in _card_class(result.dom, "ha_search").split()
         assert "hidden" not in _card_class(result.dom, "ha_call_service").split()
 
     def test_category_chip_toggles_via_bind_multi_toggle(
@@ -290,7 +290,7 @@ class TestSearchAndFilter:
         assert m2 and set(m2.group(1).split(",")) == {
             "ha_get_state",
             "ha_call_service",
-            "ha_search_entities",
+            "ha_search",
         }, f"all cards should be visible after toggle-off; got {m2 and m2.group(1)!r}"
 
     def test_size_filter_chip_narrows_by_size_bucket(self, tools_script: str) -> None:
@@ -309,7 +309,7 @@ class TestSearchAndFilter:
         _assert_clean_init(result)
         visible = [
             t
-            for t in ("ha_get_state", "ha_call_service", "ha_search_entities")
+            for t in ("ha_get_state", "ha_call_service", "ha_search")
             if "hidden" not in _card_class(result.dom, t).split()
         ]
         # Production threshold: size > 2000 = large, > 1000 = medium,

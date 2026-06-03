@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 async def test_entity_id(mcp_client) -> str:
     """Find a single suitable entity for testing."""
     search_result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"query": "light", "domain_filter": "light", "limit": 1},
     )
     search_data = parse_mcp_result(search_result)

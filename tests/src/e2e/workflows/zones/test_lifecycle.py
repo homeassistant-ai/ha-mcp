@@ -475,7 +475,7 @@ async def test_zone_search_discovery(mcp_client):
         # Search for zone entities
         try:
             search_data = await mcp.call_tool_success(
-                "ha_search_entities",
+                "ha_search",
                 {"query": "zone", "domain_filter": "zone", "limit": 10},
             )
 

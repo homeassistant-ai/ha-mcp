@@ -34,6 +34,46 @@ from .util_helpers import (
 
 logger = logging.getLogger(__name__)
 
+# Configuration-body buckets the merged ``ha_search`` orchestrator collects
+# from ``ha_deep_search``. ``dashboards`` is opt-in (excluded from the default
+# response shape) — the orchestrator's pre-populated defaults intentionally
+# omit it; this tuple is the canonical "all five" list used by the bucket-copy
+# and metadata-shadow logic.
+_CONFIG_BUCKETS: tuple[str, ...] = (
+    "automations",
+    "scripts",
+    "scenes",
+    "helpers",
+    "dashboards",
+)
+
+
+def _merge_payload_metadata(
+    response: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    skip_keys: tuple[str, ...],
+) -> None:
+    """Shallow-merge non-conflicting metadata from a sub-helper payload into the
+    orchestrator response.
+
+    ``warnings`` accumulates across both branches — both ``ha_search_entities``
+    and ``ha_deep_search`` emit warnings (legacy fields, score caps, area
+    fallbacks, dashboard opt-in skips, ...) and shadow-protecting the second
+    branch would silently drop half the user-facing diagnostics. Other keys
+    use first-wins shadow-protect so orchestrator-owned fields (``success``,
+    ``query``, ``search_types``, ...) survive payload echoes.
+    """
+    for key, value in payload.items():
+        if key in skip_keys:
+            continue
+        if key == "warnings" and isinstance(value, list):
+            response.setdefault("warnings", []).extend(value)
+            continue
+        if key in response:
+            continue
+        response[key] = value
+
 
 def _build_pagination_metadata(
     total_matches: int, offset: int, limit: int, results: list[dict[str, Any]]
@@ -178,10 +218,297 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Search Entities",
+            "title": "Search",
         },
     )
     @log_tool_usage
+    async def ha_search(
+        query: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "What to search for (entity name fragment, free-text "
+                    "config term, entity_id). Searches BOTH the entity "
+                    "registry (entity_ids, friendly names, areas) AND "
+                    "configuration bodies (automation triggers/actions, "
+                    "script sequences, scene contents, helper bodies, "
+                    "dashboard cards) in one call. Use this for any "
+                    "find-something-in-HA question — entity OR config. "
+                    "Omit `query` to enumerate by `domain_filter` and/or "
+                    "`area_filter` alone (registry-listing mode); "
+                    "configuration-body search is skipped in that mode "
+                    "because there is no term to match against."
+                ),
+            ),
+        ] = None,
+        domain_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Narrow entity-registry results to a single domain "
+                    "(e.g. 'light', 'sensor'). Does not affect configuration "
+                    "search."
+                ),
+            ),
+        ] = None,
+        area_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Narrow entity-registry results to an area (id or name). "
+                    "Does not affect configuration search."
+                ),
+            ),
+        ] = None,
+        search_types: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Configuration types to include in body search: "
+                    "'automation', 'script', 'scene', 'helper', 'dashboard'. "
+                    "Default = automation+script+scene+helper. Pass as list "
+                    "or JSON-array string."
+                ),
+            ),
+        ] = None,
+        limit: Annotated[
+            int,
+            Field(
+                default=10,
+                ge=1,
+                description=(
+                    "Maximum results per surface (entities, configs). Default: 10."
+                ),
+            ),
+        ] = 10,
+        offset: Annotated[
+            int,
+            Field(
+                default=0,
+                ge=0,
+                description="Number of results to skip for pagination.",
+            ),
+        ] = 0,
+        exact_match: Annotated[
+            bool,
+            Field(
+                default=True,
+                description=(
+                    "Exact substring matching (default). Set False for "
+                    "fuzzy matching when the query may have typos."
+                ),
+            ),
+        ] = True,
+        include_hidden: Annotated[
+            bool,
+            Field(
+                default=True,
+                description=(
+                    "Include hidden entities in registry results (with a "
+                    "score penalty so they sort below visible matches). "
+                    "Set False to exclude entirely."
+                ),
+            ),
+        ] = True,
+        include_config: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Include full configuration bodies in body-search "
+                    "results. Default: False (summary only)."
+                ),
+            ),
+        ] = False,
+        group_by_domain: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Group entity-registry results by domain (entity-side only). "
+                    "Adds a `by_domain` map to the response."
+                ),
+            ),
+        ] = False,
+        per_domain_limit: Annotated[
+            int | None,
+            Field(
+                default=None,
+                description=(
+                    "When `group_by_domain=True`, cap entity-registry results "
+                    "per domain to this number. Ignored otherwise."
+                ),
+            ),
+        ] = None,
+        state_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Filter entity-registry results to a specific state "
+                    '(e.g. "on", "off", "unavailable"). Case-insensitive.'
+                ),
+            ),
+        ] = None,
+        result_fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project each entity-registry record to only the specified "
+                    'keys (e.g. ["entity_id", "state"]). None = full records.'
+                ),
+            ),
+        ] = None,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        """Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
+
+        Searches two surfaces in parallel and returns tagged results:
+          - **entities**: matches from the entity registry (entity_id,
+            friendly name, area). Use `domain_filter` and/or `area_filter` to
+            list/narrow. Omit `query` to enumerate entities by domain/area.
+          - **automations / scripts / scenes / helpers / dashboards**: matches
+            *inside* configuration definitions — triggers, actions, sequences,
+            scene entity-sets, helper bodies, dashboard cards. Use `query`
+            with config-body terms; filter with `search_types`.
+
+        Body search only runs when `query` is non-empty (there is nothing to
+        match on otherwise). Registry search runs whenever `query`,
+        `domain_filter`, or `area_filter` is set. The filters narrow within
+        each surface but never disable a surface that has inputs.
+
+        Use this whenever you need to find something in HA — without needing
+        to decide between entity-name search vs config-body search up front.
+
+        Examples:
+            - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
+            - List all calendars: ha_search(domain_filter="calendar")
+            - Find a light by name: ha_search("kitchen", domain_filter="light")
+            - Which automations use an entity: ha_search("light.bed_light")
+            - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
+        """
+        parsed_search_types = parse_string_list_param(search_types, "search_types")
+
+        # Normalise query once. The two surfaces have different eligibility:
+        # registry runs whenever a query OR a filter is set (it supports
+        # listing by domain/area without a query); deep_search needs a non-
+        # empty query string (no term → nothing to match against).
+        query_text = (query or "").strip()
+        registry_eligible = bool(query_text or domain_filter or area_filter)
+        body_eligible = bool(query_text)
+
+        if not registry_eligible and not body_eligible:
+            raise_tool_error(
+                create_validation_error(
+                    "ha_search requires a non-empty query, or one of "
+                    "domain_filter / area_filter to enumerate.",
+                    parameter="query",
+                )
+            )
+
+        registry_callable_kwargs: dict[str, Any] = {
+            "query": query_text or None,
+            "domain_filter": domain_filter,
+            "area_filter": area_filter,
+            "limit": limit,
+            "offset": offset,
+            "exact_match": exact_match,
+            "include_hidden": include_hidden,
+            "group_by_domain": group_by_domain,
+            "per_domain_limit": per_domain_limit,
+            "state_filter": state_filter,
+            "result_fields": result_fields,
+        }
+
+        tasks: list[Any] = []
+        labels: list[str] = []
+        if registry_eligible:
+            tasks.append(ha_search_entities(**registry_callable_kwargs))
+            labels.append("entities")
+        if body_eligible:
+            tasks.append(
+                ha_deep_search(
+                    query=query_text,
+                    search_types=parsed_search_types,
+                    limit=limit,
+                    offset=offset,
+                    include_config=include_config,
+                    exact_match=exact_match,
+                    ctx=ctx,
+                )
+            )
+            labels.append("configs")
+
+        try:
+            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        except ToolError:
+            raise
+
+        response: dict[str, Any] = {
+            "success": True,
+            "query": query,
+            "entities": [],
+            "entity_total_matches": 0,
+            "automations": [],
+            "scripts": [],
+            "scenes": [],
+            "helpers": [],
+            "search_types": parsed_search_types
+            or ["automation", "script", "scene", "helper"],
+            "config_total_matches": 0,
+        }
+        partial = False
+        errors: list[dict[str, str]] = []
+        for label, outcome in zip(labels, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                partial = True
+                errors.append({"surface": label, "error": str(outcome)})
+                logger.warning("ha_search %s branch failed: %r", label, outcome)
+                continue
+            # ha_search_entities wraps its payload via add_timezone_metadata
+            # into {"data": {...}, "metadata": {...}}; ha_deep_search returns
+            # the search dict directly. Unwrap once so downstream reads see
+            # the same shape regardless of which helper produced it.
+            payload = (
+                outcome["data"]
+                if isinstance(outcome, dict) and "data" in outcome
+                else outcome
+            )
+            if label == "entities":
+                response["entities"] = payload.get("results", [])
+                response["entity_total_matches"] = payload.get("total_matches", 0)
+                _merge_payload_metadata(
+                    response, payload, skip_keys=("results", "total_matches")
+                )
+            elif label == "configs":
+                for bucket in _CONFIG_BUCKETS:
+                    if bucket in payload:
+                        response[bucket] = payload[bucket]
+                response["config_total_matches"] = payload.get("total_matches", 0)
+                _merge_payload_metadata(
+                    response,
+                    payload,
+                    skip_keys=(*_CONFIG_BUCKETS, "total_matches"),
+                )
+
+        # ``count`` mirrors the previous ha_search_entities semantics: items
+        # returned in this response (post-pagination), not total matches across
+        # the corpus. Total matches live in entity_total_matches +
+        # config_total_matches.
+        response["count"] = len(response["entities"]) + sum(
+            len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
+        )
+        if partial:
+            response["partial"] = True
+            response["errors"] = errors
+
+        return response
+
     async def ha_search_entities(
         query: Annotated[
             str | None,
@@ -1398,15 +1725,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         return projected
 
-    @mcp.tool(
-        tags={"Search & Discovery"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Deep Search",
-        },
-    )
-    @log_tool_usage
     async def ha_deep_search(
         query: str,
         search_types: Annotated[

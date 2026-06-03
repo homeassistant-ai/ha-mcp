@@ -28,7 +28,7 @@ class TestAutomationTraces:
     async def _find_test_light_entity(self, mcp_client) -> str:
         """Find a suitable light entity for testing."""
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "light", "domain_filter": "light", "limit": 20},
         )
 
@@ -83,9 +83,7 @@ class TestAutomationTraces:
         create_data = parse_mcp_result(create_result)
 
         # Track for cleanup
-        automation_id = create_data.get("entity_id") or create_data.get(
-            "automation_id"
-        )
+        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
         if automation_id:
             cleanup_tracker.track("automation", automation_id)
         logger.info(f"Created automation: {automation_id}")
@@ -118,7 +116,7 @@ class TestAutomationTraces:
             check_automation_traces,
             timeout=15,
             poll_interval=0.5,
-            condition_name="automation trace to be recorded"
+            condition_name="automation trace to be recorded",
         )
 
         # Skip test if traces don't appear (timing issue, not a failure)
@@ -175,16 +173,26 @@ class TestAutomationTraces:
 
             # Verify detailed content structure (Deep verification)
             # This ensures we correctly parsed the flat structure (trigger/0, action/0)
-            assert "trigger" in detailed_data, "Detailed trace should contain trigger info"
-            assert "action_trace" in detailed_data, "Detailed trace should contain action_trace"
-            assert isinstance(detailed_data["action_trace"], list), "action_trace should be a list"
-            assert len(detailed_data["action_trace"]) > 0, "action_trace should not be empty"
+            assert "trigger" in detailed_data, (
+                "Detailed trace should contain trigger info"
+            )
+            assert "action_trace" in detailed_data, (
+                "Detailed trace should contain action_trace"
+            )
+            assert isinstance(detailed_data["action_trace"], list), (
+                "action_trace should be a list"
+            )
+            assert len(detailed_data["action_trace"]) > 0, (
+                "action_trace should not be empty"
+            )
 
             # Check for path property to ensure flat structure parsing worked
             first_action = detailed_data["action_trace"][0]
             assert "path" in first_action, "Action trace element should contain 'path'"
 
-            logger.info(f"Detailed trace verified: Found {len(detailed_data['action_trace'])} actions")
+            logger.info(
+                f"Detailed trace verified: Found {len(detailed_data['action_trace'])} actions"
+            )
 
     async def test_empty_traces_with_diagnostics(
         self, mcp_client, cleanup_tracker, test_data_factory
@@ -216,9 +224,7 @@ class TestAutomationTraces:
         assert_mcp_success(create_result)
         create_data = parse_mcp_result(create_result)
 
-        automation_id = create_data.get("entity_id") or create_data.get(
-            "automation_id"
-        )
+        automation_id = create_data.get("entity_id") or create_data.get("automation_id")
         if automation_id:
             cleanup_tracker.track("automation", automation_id)
 
@@ -313,7 +319,7 @@ class TestAutomationTraces:
             check_traces,
             timeout=15,  # Increased timeout for ARM compatibility
             poll_interval=0.5,
-            condition_name="script trace to be recorded"
+            condition_name="script trace to be recorded",
         )
 
         # Skip test if traces don't appear (timing issue, not a failure)
@@ -339,6 +345,7 @@ class TestAutomationTraces:
         assert trace_count > 0, (
             f"Expected at least 1 trace after running script, got {trace_count}"
         )
+
 
 @pytest.mark.automation
 class TestGetAutomationTracesNegativeInputs:

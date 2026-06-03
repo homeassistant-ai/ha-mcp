@@ -27,14 +27,14 @@ async def test_fuzzy_search_multi_word_non_adjacent(mcp_client):
     """
     # Search for "light kitchen" with fuzzy matching
     result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"query": "light kitchen", "exact_match": False, "limit": 10},
     )
     raw_data = assert_mcp_success(result, "Multi-word fuzzy search")
     data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
-    results = data.get("results", [])
+    results = data.get("entities", [])
     # BM25 should return results where both terms appear (tokenized matching)
     # even if "light kitchen" is not a contiguous substring. The test HA
     # instance always has light entities, so a tokenized match must find at
@@ -53,7 +53,7 @@ async def test_fuzzy_search_multi_word_non_adjacent(mcp_client):
 async def test_fuzzy_search_reduces_noise(mcp_client):
     """BM25 returns fewer false positives than SequenceMatcher for unrelated queries."""
     result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {
             "query": "xyznonexistent",
             "exact_match": False,
@@ -64,7 +64,7 @@ async def test_fuzzy_search_reduces_noise(mcp_client):
     data = raw_data.get("data", raw_data)
 
     assert data.get("success") is True
-    total = data.get("total_matches", 0)
+    total = data.get("entity_total_matches", 0)
     # BM25 should return 0 for a completely unrelated query
     # (SequenceMatcher would have returned many false positives from partial character matches)
     assert total == 0, (
@@ -77,19 +77,19 @@ async def test_fuzzy_search_reduces_noise(mcp_client):
 async def test_fuzzy_search_underscore_space_equivalence(mcp_client):
     """Queries with underscores and spaces should return the same results."""
     result_underscore = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"query": "input_boolean", "exact_match": False, "limit": 20},
     )
     result_space = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"query": "input boolean", "exact_match": False, "limit": 20},
     )
 
     data_u = assert_mcp_success(result_underscore, "Underscore query").get("data", {})
     data_s = assert_mcp_success(result_space, "Space query").get("data", {})
 
-    total_u = data_u.get("total_matches", 0)
-    total_s = data_s.get("total_matches", 0)
+    total_u = data_u.get("entity_total_matches", 0)
+    total_s = data_s.get("entity_total_matches", 0)
 
     # With BM25 unified tokenization, both should return the same count
     assert total_u == total_s, (
@@ -133,7 +133,7 @@ async def test_deep_search_fuzzy_multi_word(mcp_client):
         # Search for "dryer override" — terms exist in config but not adjacent
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": "dryer override",
                 "search_types": ["automation"],
@@ -152,7 +152,7 @@ async def test_deep_search_fuzzy_multi_word(mcp_client):
 
         # Verify exact_match=True does NOT find it (contiguous substring required)
         exact_result = await mcp_client.call_tool(
-            "ha_deep_search",
+            "ha_search",
             {
                 "query": "dryer override",
                 "search_types": ["automation"],
@@ -209,7 +209,7 @@ async def test_deep_search_exact_match_still_works(mcp_client):
     try:
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": "bm25_exact_test_sensor",
                 "search_types": ["automation"],
@@ -224,8 +224,7 @@ async def test_deep_search_exact_match_still_works(mcp_client):
         assert len(automations) > 0, "Exact match should find the test automation"
 
         found = any(
-            "BM25 Exact Match Test" in a.get("friendly_name", "")
-            for a in automations
+            "BM25 Exact Match Test" in a.get("friendly_name", "") for a in automations
         )
         assert found, "Should find the specific test automation by exact match"
 

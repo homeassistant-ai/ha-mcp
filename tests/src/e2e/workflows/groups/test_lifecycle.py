@@ -464,7 +464,9 @@ class TestGroupLifecycle:
 
             # Verify all groups exist
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
-            object_ids_in_list = [g.get("object_id") for g in list_data.get("groups", [])]
+            object_ids_in_list = [
+                g.get("object_id") for g in list_data.get("groups", [])
+            ]
 
             for object_id in created_object_ids:
                 assert object_id in object_ids_in_list, (
@@ -493,7 +495,9 @@ class TestGroupLifecycle:
 
             # Verify all deleted
             list_data = await mcp.call_tool_success("ha_config_list_groups", {})
-            object_ids_in_list = [g.get("object_id") for g in list_data.get("groups", [])]
+            object_ids_in_list = [
+                g.get("object_id") for g in list_data.get("groups", [])
+            ]
 
             for object_id in created_object_ids:
                 assert object_id not in object_ids_in_list, (
@@ -514,7 +518,7 @@ async def test_group_search_discovery(mcp_client):
         # Search for group entities
         try:
             search_data = await mcp.call_tool_success(
-                "ha_search_entities",
+                "ha_search",
                 {"query": "group", "domain_filter": "group", "limit": 10},
             )
 

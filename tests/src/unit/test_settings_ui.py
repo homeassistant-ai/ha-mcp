@@ -2109,7 +2109,7 @@ class TestSaveToolsResponseShape:
 
         resp = await post_handler(
             self._make_request(
-                {"states": {"ha_get_state": "pinned", "ha_search_entities": "disabled"}}
+                {"states": {"ha_get_state": "pinned", "ha_search": "disabled"}}
             )
         )
 
@@ -2120,7 +2120,7 @@ class TestSaveToolsResponseShape:
         assert body["restart_required"] is True
         assert body["applied"] == {
             "ha_get_state": "pinned",
-            "ha_search_entities": "disabled",
+            "ha_search": "disabled",
         }
         # The retired count fields must not leak through.
         assert "disabled" not in body

@@ -369,7 +369,7 @@ class TestRemoveHelpersIntegrations:
         assert "my_button" in err["error"]["message"]
         # Pin the diagnostic-hint wording (same rationale as Path 3).
         assert "May indicate" in err["error"]["message"]
-        assert "ha_search_entities" in err["error"]["message"]
+        assert "ha_search" in err["error"]["message"]
         assert "already_deleted" not in json.dumps(err)
 
     async def test_simple_path_404_on_state_check_raises_entity_not_found(
@@ -410,7 +410,7 @@ class TestRemoveHelpersIntegrations:
         # Same diagnostic hint as the state-gone branch — both sub-paths
         # of Path 1 confirmed-absent route to the same raise.
         assert "May indicate" in err["error"]["message"]
-        assert "ha_search_entities" in err["error"]["message"]
+        assert "ha_search" in err["error"]["message"]
         assert "already_deleted" not in json.dumps(err)
 
     async def test_simple_path_non_404_apierror_propagates(self, tools, mock_client):
@@ -661,7 +661,7 @@ class TestRemoveHelpersIntegrations:
         assert "template.ghost" in err["error"]["message"]
         # Pin the diagnostic-hint wording (same rationale as Path 1).
         assert "May indicate" in err["error"]["message"]
-        assert "ha_search_entities" in err["error"]["message"]
+        assert "ha_search" in err["error"]["message"]
         assert "already_deleted" not in json.dumps(err)
 
     async def test_flow_path_lookup_failed_maps_to_websocket_disconnected(

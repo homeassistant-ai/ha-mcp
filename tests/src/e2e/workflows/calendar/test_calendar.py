@@ -34,7 +34,7 @@ class TestCalendarEvents:
     async def _find_calendar_entity(self, mcp_client) -> str | None:
         """Find an available calendar entity for testing."""
         result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "calendar", "domain_filter": "calendar", "limit": 10},
         )
         data = parse_mcp_result(result)
@@ -181,7 +181,7 @@ class TestCalendarEventLifecycle:
     async def _find_writable_calendar(self, mcp_client) -> str | None:
         """Find a calendar that supports event creation."""
         result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "calendar", "domain_filter": "calendar", "limit": 10},
         )
         data = parse_mcp_result(result)

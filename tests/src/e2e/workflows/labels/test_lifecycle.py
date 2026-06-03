@@ -33,7 +33,7 @@ class TestLabelLifecycle:
         """
         # Search for light entities (common and safe to modify)
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "light", "domain_filter": "light", "limit": 10},
         )
 

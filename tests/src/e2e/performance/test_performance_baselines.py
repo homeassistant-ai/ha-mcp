@@ -121,7 +121,7 @@ async def test_search_entities_performance(mcp_client, perf_metrics):
     # Test with a common search query
     results = await run_performance_iterations(
         mcp_client,
-        tool_name="ha_search_entities",
+        tool_name="ha_search",
         params={"query": "light", "limit": 20},
         iterations=5,
         warmup=1,
@@ -132,7 +132,7 @@ async def test_search_entities_performance(mcp_client, perf_metrics):
 
     logger.info(f"ha_search_entities: avg={avg_ms:.2f}ms, p95={p95_ms:.2f}ms")
 
-    baseline = PERFORMANCE_BASELINES["ha_search_entities"]
+    baseline = PERFORMANCE_BASELINES["ha_search"]
     assert avg_ms <= baseline.target_ms, (
         f"ha_search_entities average ({avg_ms:.2f}ms) exceeds target ({baseline.target_ms}ms)"
     )
@@ -150,7 +150,7 @@ async def test_search_entities_domain_filter_performance(mcp_client, perf_metric
 
     results = await run_performance_iterations(
         mcp_client,
-        tool_name="ha_search_entities",
+        tool_name="ha_search",
         params={"domain_filter": "light", "limit": 50},
         iterations=5,
         warmup=1,
@@ -164,7 +164,7 @@ async def test_search_entities_domain_filter_performance(mcp_client, perf_metric
     )
 
     # Use same baseline - domain filtering shouldn't add significant overhead
-    baseline = PERFORMANCE_BASELINES["ha_search_entities"]
+    baseline = PERFORMANCE_BASELINES["ha_search"]
     assert avg_ms <= baseline.target_ms, (
         f"ha_search_entities with domain filter average ({avg_ms:.2f}ms) "
         f"exceeds target ({baseline.target_ms}ms)"
@@ -183,7 +183,7 @@ async def test_deep_search_performance(mcp_client, perf_metrics):
 
     results = await run_performance_iterations(
         mcp_client,
-        tool_name="ha_deep_search",
+        tool_name="ha_search",
         params={"query": "light", "limit": 10},
         iterations=3,
         warmup=1,
@@ -194,7 +194,7 @@ async def test_deep_search_performance(mcp_client, perf_metrics):
 
     logger.info(f"ha_deep_search: avg={avg_ms:.2f}ms, p95={p95_ms:.2f}ms")
 
-    baseline = PERFORMANCE_BASELINES["ha_deep_search"]
+    baseline = PERFORMANCE_BASELINES["ha_search"]
     assert avg_ms <= baseline.target_ms, (
         f"ha_deep_search average ({avg_ms:.2f}ms) exceeds target ({baseline.target_ms}ms)"
     )
@@ -314,7 +314,7 @@ async def test_concurrent_operations_performance(mcp_client, perf_metrics):
         import time
 
         start = time.perf_counter()
-        await mcp_client.call_tool("ha_search_entities", {"query": query, "limit": 5})
+        await mcp_client.call_tool("ha_search", {"query": query, "limit": 5})
         return (time.perf_counter() - start) * 1000
 
     # Run 5 concurrent searches
@@ -335,7 +335,7 @@ async def test_concurrent_operations_performance(mcp_client, perf_metrics):
     # Main assertion: verify all operations completed successfully (implicitly done above)
     # Total time should show some parallelism benefit (not 5x serial time)
     # Use a generous threshold for CI environments which can be slow
-    baseline = PERFORMANCE_BASELINES["ha_search_entities"]
+    baseline = PERFORMANCE_BASELINES["ha_search"]
     # Allow up to 5x target (very generous for CI environments)
     max_allowed_ms = baseline.target_ms * 5
     assert max_individual <= max_allowed_ms, (
@@ -367,9 +367,9 @@ async def test_performance_report_generation(mcp_client):
     operations = [
         ("ha_get_overview", {"detail_level": "full"}),
         ("ha_get_overview", {"detail_level": "minimal"}),
-        ("ha_search_entities", {"query": "light", "limit": 10}),
-        ("ha_search_entities", {"domain_filter": "sensor", "limit": 20}),
-        ("ha_deep_search", {"query": "light", "limit": 5}),
+        ("ha_search", {"query": "light", "limit": 10}),
+        ("ha_search", {"domain_filter": "sensor", "limit": 20}),
+        ("ha_search", {"query": "light", "limit": 5}),
         ("ha_get_state", {"entity_id": "sun.sun"}),
     ]
 

@@ -1,0 +1,61 @@
+id: c01
+title: "Enumerate entities of a domain in a specific area (search_entities-only territory)"
+category: entity
+weight: 3
+description: >
+  Confusion-pair story for #1175 BAT. The user asks for entities of a given
+  domain in a given area — a pure entity-registry query. Right pick is
+  ha_search_entities (variant: ha_search) with domain_filter + area_filter.
+  ha_deep_search would search config bodies and return nothing useful here
+  (sensors that exist are not necessarily referenced in any automation),
+  so picking deep_search is the wrong tool. Pairs with s14 (deep_search-
+  only territory) to form a flip-flop-detecting pair: on the baseline, the
+  agent must choose correctly between the two; on the variant (merged
+  ha_search), one tool spans both surfaces and the choice disappears.
+
+  Right-pick rationale from docstrings: ha_search_entities is documented
+  as the entity-registry path ("Search for entities (lights, sensors,
+  switches, etc.) by name, domain, or area"); ha_deep_search is documented
+  as the config-body path ("not for finding entity IDs ... use
+  ha_search_entities instead"). The story's prompt is "list sensor
+  entities in the bathroom" — purely "what entities exist", not "what
+  configurations contain something".
+
+tags:
+  - search
+  - entities
+  - area_filter
+  - confusion_pair_1175
+
+setup: []
+  # Read-only — no writes against the target HA instance.
+
+prompt: >
+  Which sensor entities do I have configured in the Badezimmer area? Just
+  list them with their entity IDs and friendly names — no automations, no
+  history, just the available sensor entities in that area.
+
+teardown: []
+
+verify:
+  questions:
+    - "Did the agent return a list of sensor entities scoped to the Badezimmer area?"
+    - "Did the agent avoid retrieving automations or histories (out of scope)?"
+  ha_checks:
+    - type: response_contains
+      value: "sensor."
+    - type: response_contains
+      value: "Badezimmer"
+
+expected:
+  tools_should_use:
+    - ha_search_entities
+  description: >
+    Agent should call ha_search_entities (or, on the variant arm, ha_search)
+    with domain_filter='sensor' and area_filter='Badezimmer' (or equivalent
+    case/locale variant). ha_deep_search is the WRONG pick here — it
+    searches configuration bodies (automations/scripts/scenes/helpers),
+    which does not answer "which sensor entities exist in this area";
+    that's a registry-list question. Picking ha_deep_search counts as a
+    wrong-tool mis-pick for this story. A flip-flop (one then the other)
+    is also a mis-pick on the baseline arm.

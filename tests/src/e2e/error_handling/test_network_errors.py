@@ -143,14 +143,14 @@ class TestErrorHandling:
         # Try to call light.turn_on without entity_id (if lights exist)
         search_result = await self._safe_tool_call(
             mcp_client,
-            "ha_search_entities",
+            "ha_search",
             {"query": "light", "domain_filter": "light", "limit": 1},
         )
 
         search_data = parse_mcp_result(search_result)
         if search_data.get("data", {}).get("success") and search_data.get(
             "data", {}
-        ).get("results"):
+        ).get("entities"):
             # Call service without entity_id to test parameter validation
             missing_params_result = await self._safe_tool_call(
                 mcp_client,
@@ -183,12 +183,12 @@ class TestErrorHandling:
         # 1. EMPTY QUERY: Search with empty string
         logger.info("🔳 Testing empty query...")
         empty_result = await self._safe_tool_call(
-            mcp_client, "ha_search_entities", {"query": "", "limit": 5}
+            mcp_client, "ha_search", {"query": "", "limit": 5}
         )
 
         empty_data = parse_mcp_result(empty_result)
         if empty_data.get("data", {}).get("success"):
-            results = empty_data.get("data", {}).get("results", [])
+            results = empty_data.get("data", {}).get("entities", [])
             logger.info(f"  ✅ Empty query returned {len(results)} results")
         else:
             logger.info(
@@ -199,12 +199,12 @@ class TestErrorHandling:
         logger.info("📏 Testing very long query...")
         long_query = "a" * 1000  # 1000 character query
         long_result = await self._safe_tool_call(
-            mcp_client, "ha_search_entities", {"query": long_query, "limit": 5}
+            mcp_client, "ha_search", {"query": long_query, "limit": 5}
         )
 
         long_data = parse_mcp_result(long_result)
         if long_data.get("data", {}).get("success"):
-            results = long_data.get("data", {}).get("results", [])
+            results = long_data.get("data", {}).get("entities", [])
             logger.info(
                 f"  ✅ Long query handled gracefully, returned {len(results)} results"
             )
@@ -225,7 +225,7 @@ class TestErrorHandling:
 
         for query in special_queries:
             special_result = await self._safe_tool_call(
-                mcp_client, "ha_search_entities", {"query": query, "limit": 5}
+                mcp_client, "ha_search", {"query": query, "limit": 5}
             )
 
             special_data = parse_mcp_result(special_result)
@@ -240,12 +240,12 @@ class TestErrorHandling:
 
         for limit in extreme_limits:
             limit_result = await self._safe_tool_call(
-                mcp_client, "ha_search_entities", {"query": "light", "limit": limit}
+                mcp_client, "ha_search", {"query": "light", "limit": limit}
             )
 
             limit_data = parse_mcp_result(limit_result)
             if limit_data.get("data", {}).get("success"):
-                results = limit_data.get("data", {}).get("results", [])
+                results = limit_data.get("data", {}).get("entities", [])
                 logger.info(f"  Limit {limit}: returned {len(results)} results")
             else:
                 logger.info(
@@ -330,7 +330,7 @@ class TestErrorHandling:
         # Get one valid entity
         search_result = await self._safe_tool_call(
             mcp_client,
-            "ha_search_entities",
+            "ha_search",
             {"query": "light", "domain_filter": "light", "limit": 1},
         )
 
@@ -338,8 +338,8 @@ class TestErrorHandling:
         valid_entities = []
         if search_data.get("data", {}).get("success") and search_data.get(
             "data", {}
-        ).get("results"):
-            valid_entities = [search_data["data"]["results"][0]["entity_id"]]
+        ).get("entities"):
+            valid_entities = [search_data["data"]["entities"][0]["entity_id"]]
 
         mixed_entities = valid_entities + ["nonexistent.entity", "invalid.test"]
 
@@ -557,18 +557,18 @@ class TestErrorHandling:
         # Get some test entities
         search_result = await self._safe_tool_call(
             mcp_client,
-            "ha_search_entities",
+            "ha_search",
             {"query": "light", "domain_filter": "light", "limit": 3},
         )
 
         search_data = parse_mcp_result(search_result)
         if not search_data.get("data", {}).get("success") or not search_data.get(
             "data", {}
-        ).get("results"):
+        ).get("entities"):
             logger.warning("⚠️ No entities found for concurrent operation test")
             return
 
-        entities = search_data["data"]["results"][:3]
+        entities = search_data["data"]["entities"][:3]
 
         # 1. CONCURRENT INDIVIDUAL OPERATIONS: Multiple simultaneous service calls
         logger.info("🔄 Testing concurrent individual operations...")

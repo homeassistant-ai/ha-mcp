@@ -382,7 +382,7 @@ async def test_service_discovery_integration(mcp_client):
 
     # Step 2: Find a light entity to test with
     search_result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"query": "light", "domain_filter": "light", "limit": 1},
     )
     search_data = parse_mcp_result(search_result)

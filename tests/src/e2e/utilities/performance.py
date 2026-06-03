@@ -77,17 +77,11 @@ PERFORMANCE_BASELINES: dict[str, PerformanceBaseline] = {
         warning_threshold_ms=400,
         description="System overview (minimal mode)",
     ),
-    "ha_search_entities": PerformanceBaseline(
-        tool_name="ha_search_entities",
-        target_ms=300,
-        warning_threshold_ms=240,
-        description="Entity search with fuzzy matching",
-    ),
-    "ha_deep_search": PerformanceBaseline(
-        tool_name="ha_deep_search",
+    "ha_search": PerformanceBaseline(
+        tool_name="ha_search",
         target_ms=2000,
         warning_threshold_ms=1600,
-        description="Deep search across automations/scripts/helpers",
+        description="Merged entity + deep search (slower bound; runs both in parallel)",
     ),
     "ha_call_service": PerformanceBaseline(
         tool_name="ha_call_service",
@@ -163,7 +157,8 @@ class PerformanceMetrics:
                 "min_ms": min(durations),
                 "max_ms": max(durations),
                 "avg_ms": sum(durations) / len(durations),
-                "success_rate": sum(1 for r in op_results if r.success) / len(op_results),
+                "success_rate": sum(1 for r in op_results if r.success)
+                / len(op_results),
             }
 
             # Add baseline comparison if available
@@ -273,10 +268,12 @@ def timed_operation(
     """
 
     def decorator(
-        func: Callable[P, Awaitable[R]]
+        func: Callable[P, Awaitable[R]],
     ) -> Callable[P, Awaitable[tuple[R, PerformanceResult]]]:
         @wraps(func)
-        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> tuple[R, PerformanceResult]:
+        async def wrapper(
+            *args: P.args, **kwargs: P.kwargs
+        ) -> tuple[R, PerformanceResult]:
             op_name = operation_name or func.__name__
             target_metrics = metrics or _session_metrics
 
@@ -336,9 +333,7 @@ def assert_within_target(
         if baseline:
             target_ms = baseline.target_ms
         else:
-            raise ValueError(
-                f"No target specified and no baseline found for '{name}'"
-            )
+            raise ValueError(f"No target specified and no baseline found for '{name}'")
 
     if perf_result.duration_ms > target_ms:
         raise AssertionError(
@@ -363,9 +358,7 @@ def assert_performance_regression(
     allowed_ms = baseline_ms * (1 + tolerance_percent / 100)
 
     if current.duration_ms > allowed_ms:
-        regression_percent = (
-            (current.duration_ms - baseline_ms) / baseline_ms
-        ) * 100
+        regression_percent = ((current.duration_ms - baseline_ms) / baseline_ms) * 100
         raise AssertionError(
             f"Performance regression detected for {current.operation}: "
             f"{current.duration_ms:.2f}ms vs baseline {baseline_ms:.2f}ms "

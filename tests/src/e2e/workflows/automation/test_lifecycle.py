@@ -45,7 +45,7 @@ class TestAutomationLifecycle:
         """
         # Search for binary sensor entities
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "binary_sensor", "domain_filter": "binary_sensor", "limit": 20},
         )
 
@@ -772,7 +772,7 @@ async def test_automation_search_and_discovery(mcp_client):
 
     # Search for existing automations
     search_result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"query": "automation", "domain_filter": "automation", "limit": 10},
     )
 
@@ -806,7 +806,7 @@ async def test_automation_search_and_discovery(mcp_client):
     search_patterns = ["morning", "light", "security"]
     for pattern in search_patterns:
         pattern_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": pattern, "domain_filter": "automation", "limit": 5},
         )
 
@@ -841,7 +841,7 @@ async def test_automation_with_choose_block(mcp_client):
 
     search_data = await wait_for_tool_result(
         mcp_client,
-        tool_name="ha_search_entities",
+        tool_name="ha_search",
         arguments={"query": "light", "domain_filter": "light", "limit": 5},
         predicate=_has_light,
         timeout=15,
@@ -1132,7 +1132,7 @@ async def _find_test_light_entity(mcp_client) -> str:
     Shared helper used by multiple test classes in this module.
     """
     search_result = await mcp_client.call_tool(
-        "ha_search_entities",
+        "ha_search",
         {"query": "light", "domain_filter": "light", "limit": 20},
     )
     search_data = parse_mcp_result(search_result)

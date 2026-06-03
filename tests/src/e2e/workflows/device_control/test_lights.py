@@ -206,14 +206,14 @@ class TestDeviceControl:
 
         # 1. Find multiple light entities for testing
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "light", "domain_filter": "light", "limit": 5},
         )
 
         search_data = assert_mcp_success(search_result, "search for lights")
         data = search_data.get("data", {})
 
-        light_entities = [entity["entity_id"] for entity in data.get("results", [])]
+        light_entities = [entity["entity_id"] for entity in data.get("entities", [])]
         if len(light_entities) < 2:
             pytest.skip("Need at least 2 light entities for bulk control test")
 
@@ -277,8 +277,8 @@ class TestDeviceControl:
         )
 
         # Log individual operation results for debugging
-        if "results" in actual_data:
-            for i, result in enumerate(actual_data["results"]):
+        if "entities" in actual_data:
+            for i, result in enumerate(actual_data["entities"]):
                 if isinstance(result, dict):
                     entity_id = result.get("entity_id", "unknown")
                     status = "success" if result.get("command_sent") else "failed"
@@ -293,8 +293,8 @@ class TestDeviceControl:
                 "failed_commands": failed_commands,
                 "operation_ids": len(operation_ids),
                 "results": (
-                    actual_data.get("results", [])[:3]
-                    if "results" in actual_data
+                    actual_data.get("entities", [])[:3]
+                    if "entities" in actual_data
                     else "No results field"
                 ),
             }
@@ -361,7 +361,7 @@ class TestDeviceControl:
 
         # Find climate entities
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "climate", "domain_filter": "climate", "limit": 3},
         )
 
@@ -370,20 +370,20 @@ class TestDeviceControl:
                 search_result, "search for climate entities"
             )
             data = search_data.get("data", {})
-            if not data.get("results"):
+            if not data.get("entities"):
                 pytest.skip("No climate entities available for testing")
         except AssertionError:
             pytest.skip("Could not search for climate entities")
 
         # Try to find climate.hvac specifically, fallback to first available
         climate_entity = None
-        for entity in data["results"]:
+        for entity in data["entities"]:
             if entity.get("entity_id") == "climate.hvac":
                 climate_entity = "climate.hvac"
                 break
 
         if not climate_entity:
-            climate_entity = data["results"][0]["entity_id"]
+            climate_entity = data["entities"][0]["entity_id"]
         logger.info(f"🌡️ Testing with climate entity: {climate_entity}")
 
         # Get initial state
@@ -450,19 +450,19 @@ class TestDeviceControl:
 
         # Find cover entities
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "cover", "domain_filter": "cover", "limit": 3},
         )
 
         try:
             search_data = assert_mcp_success(search_result, "search for cover entities")
             data = search_data.get("data", {})
-            if not data.get("results"):
+            if not data.get("entities"):
                 pytest.skip("No cover entities available for testing")
         except AssertionError:
             pytest.skip("Could not search for cover entities")
 
-        cover_entity = data["results"][0]["entity_id"]
+        cover_entity = data["entities"][0]["entity_id"]
         logger.info(f"🏠 Testing with cover entity: {cover_entity}")
 
         # Test open cover - use safe_call_tool to handle ToolError
@@ -477,7 +477,6 @@ class TestDeviceControl:
             pytest.xfail(f"Cover service not available: {open_result.get('error')}")
 
         logger.info("✅ Cover open command executed")
-
 
         # Test set position (if supported)
         position_result = await safe_call_tool(
@@ -495,7 +494,6 @@ class TestDeviceControl:
             logger.info("✅ Cover position setting executed")
         else:
             logger.info("ℹ️ Cover does not support position setting")
-
 
         # Test close cover
         close_result = await safe_call_tool(
@@ -523,27 +521,27 @@ async def test_universal_device_controls(mcp_client: Client) -> None:
 
     # Find a switch entity for testing
     search_result = await mcp_client.call_tool(
-        "ha_search_entities", {"query": "switch", "domain_filter": "switch", "limit": 3}
+        "ha_search", {"query": "switch", "domain_filter": "switch", "limit": 3}
     )
 
     try:
         search_data = assert_mcp_success(search_result, "search for switch entities")
         data = search_data.get("data", {})
-        if not data.get("results"):
+        if not data.get("entities"):
             # Fallback to light entities
             search_result = await mcp_client.call_tool(
-                "ha_search_entities",
+                "ha_search",
                 {"query": "light", "domain_filter": "light", "limit": 1},
             )
             search_data = assert_mcp_success(search_result, "search for light entities")
             data = search_data.get("data", {})
 
-        if not data.get("results"):
+        if not data.get("entities"):
             pytest.skip("No entities available for universal control testing")
     except AssertionError:
         pytest.skip("Could not search for entities")
 
-    test_entity = data["results"][0]["entity_id"]
+    test_entity = data["entities"][0]["entity_id"]
     logger.info(f"🎯 Testing universal controls with: {test_entity}")
 
     # Test universal toggle
@@ -555,7 +553,6 @@ async def test_universal_device_controls(mcp_client: Client) -> None:
     assert_mcp_success(toggle_result, "universal toggle")
     logger.info("✅ Universal toggle executed")
 
-
     # Test universal turn_on
     on_result = await mcp_client.call_tool(
         "ha_call_service",
@@ -564,7 +561,6 @@ async def test_universal_device_controls(mcp_client: Client) -> None:
 
     assert_mcp_success(on_result, "universal turn_on")
     logger.info("✅ Universal turn_on executed")
-
 
     # Test universal turn_off
     off_result = await mcp_client.call_tool(
@@ -604,7 +600,7 @@ async def test_device_state_monitoring(mcp_client: Client) -> None:
         logger.info(f"🔍 Testing state monitoring for {entity_type} entities...")
 
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": entity_type, "domain_filter": entity_type, "limit": 2},
         )
 
@@ -613,12 +609,12 @@ async def test_device_state_monitoring(mcp_client: Client) -> None:
                 search_result, f"search for {entity_type} entities"
             )
             data = search_data.get("data", {})
-            if not data.get("results"):
+            if not data.get("entities"):
                 logger.info(f"ℹ️ No {entity_type} entities found for testing")
                 continue
 
             # Inspect first entity of this type
-            entity_id = data["results"][0]["entity_id"]
+            entity_id = data["entities"][0]["entity_id"]
             state_result = await mcp_client.call_tool(
                 "ha_get_state", {"entity_id": entity_id}
             )

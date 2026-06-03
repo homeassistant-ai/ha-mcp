@@ -238,28 +238,44 @@ def _extract_model(session_file: str | None, agent: str) -> str | None:
 
 def _extract_tool_calls(session_file: str | None, agent: str) -> int | None:
     """Count tool calls from an agent session file."""
+    seq = _extract_tool_sequence(session_file, agent)
+    return None if seq is None else len(seq)
+
+
+def _extract_tool_sequence(session_file: str | None, agent: str) -> list[str] | None:
+    """Extract the ordered tool-call sequence (names only) from a session file.
+
+    Used by the BAT to count flip-flops and identify pick patterns on the
+    native ``claude``/``gemini`` paths (the openai path produces this via
+    ``openai_agent.tool_trace_sink`` directly in the test_phase result).
+    """
     if not session_file or not Path(session_file).exists():
         return None
 
     try:
         if agent == "gemini":
             data = json.loads(Path(session_file).read_text())
-            count = 0
+            seq: list[str] = []
             for msg in data.get("messages", []):
-                count += len(msg.get("toolCalls", []))
-            return count
+                for call in msg.get("toolCalls", []):
+                    name = call.get("name") or call.get("toolName")
+                    if name:
+                        seq.append(name)
+            return seq
 
         if agent == "claude":
-            count = 0
+            seq = []
             for line in Path(session_file).read_text().splitlines():
                 entry = json.loads(line)
                 if entry.get("type") == "assistant":
                     for block in entry.get("message", {}).get("content", []):
                         if block.get("type") == "tool_use":
-                            count += 1
-            return count
+                            name = block.get("name")
+                            if name:
+                                seq.append(name)
+            return seq
     except Exception as exc:
-        logger.warning(f"  Tool call extraction failed: {exc}")
+        logger.warning(f"  Tool sequence extraction failed: {exc}")
         return None
 
     return None
@@ -750,9 +766,14 @@ def append_result(
     if cost_usd is not None:
         record["cost_usd"] = cost_usd
 
-    # Extract tool call count from session file if not in summary
-    if record["tool_calls"] is None:
-        record["tool_calls"] = _extract_tool_calls(session_file, agent)
+    # Extract tool call count from session file if not in summary.
+    # Always extract the ordered sequence too — flip-flop count is the BAT's
+    # primary native-path metric (openai path emits the sequence directly).
+    seq = _extract_tool_sequence(session_file, agent)
+    if record["tool_calls"] is None and seq is not None:
+        record["tool_calls"] = len(seq)
+    if seq:
+        record["tool_sequence"] = seq
 
     # Extract token usage: from phase summary (openai) or session file (claude/gemini)
     tokens = _extract_tokens(session_file, agent)
@@ -783,16 +804,23 @@ def append_result(
     if tokens_first_input is not None:
         record["tokens_first_input"] = tokens_first_input
 
-    # Always include agent response so passing runs are inspectable too.
-    # verify_results and tool_trace only on failure to keep records compact.
+    # Always include agent_response so passing runs are inspectable.
     agent_response = test_phase.get("output", "")
     if agent_response:
         record["agent_response"] = agent_response
+
+    # Always include tool_trace (openai path: ordered name+args from
+    # tool_trace_sink) — the BAT's primary signal for tool-pick analysis,
+    # not just for failure debug.
+    tool_trace = test_phase.get("tool_trace")
+    if tool_trace:
+        record["tool_trace"] = tool_trace
+
+    # verify_results stays failure-only — too verbose for the BAT result
+    # file otherwise, and verify_results.passed is already captured in
+    # record["passed"].
     if verify_results is not None and not all(r["passed"] for r in verify_results):
         record["verify_results"] = verify_results
-        tool_trace = test_phase.get("tool_trace")
-        if tool_trace:
-            record["tool_trace"] = tool_trace
 
     results_file.parent.mkdir(parents=True, exist_ok=True)
     with open(results_file, "a") as f:

@@ -152,7 +152,7 @@ async def verify_script_exists_and_registered(
 
             # Method 3: Try to search for the script entity
             search_result = await mcp_client.call_tool(
-                "ha_search_entities",
+                "ha_search",
                 {"query": script_id, "domain_filter": "script", "limit": 5},
             )
             search_data = enhanced_parse_mcp_result(search_result)
@@ -1075,7 +1075,7 @@ async def test_script_search_and_discovery(mcp_client):
         # Search for existing scripts with enhanced error handling
         try:
             search_data = await mcp.call_tool_success(
-                "ha_search_entities",
+                "ha_search",
                 {"query": "script", "domain_filter": "script", "limit": 10},
             )
 
@@ -1122,7 +1122,7 @@ async def test_script_search_and_discovery(mcp_client):
 
                     # Test search with more specific criteria
                     specific_search_data = await mcp.call_tool_success(
-                        "ha_search_entities",
+                        "ha_search",
                         {
                             "query": script_id[:5],  # First 5 chars of script ID
                             "domain_filter": "script",

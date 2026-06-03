@@ -131,20 +131,20 @@ class TestHaSearchEntitiesFieldsProjection:
     @pytest.fixture
     def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
         register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_search_entities"]
+        return self.registered_tools["ha_search"]
 
     @pytest.mark.asyncio
     async def test_fields_none_returns_full_response(self, search_tool):
         result = await search_tool(query="kitchen")
         data = result["data"]
         assert "success" in data
-        assert "results" in data
+        assert "entities" in data
 
     @pytest.mark.asyncio
     async def test_fields_single_key_projects_correctly(self, search_tool):
         result = await search_tool(query="kitchen", fields=["results"])
         data = result["data"]
-        assert "results" in data
+        assert "entities" in data
         assert "success" in data
         assert "total_matches" not in data
 
@@ -256,12 +256,12 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         register_search_tools(
             mock_mcp, mock_client, smart_tools=mock_smart_tools_populated
         )
-        return self.registered_tools["ha_search_entities"]
+        return self.registered_tools["ha_search"]
 
     @pytest.fixture
     def search_tool_empty(self, mock_mcp, mock_client, mock_smart_tools_empty):
         register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools_empty)
-        return self.registered_tools["ha_search_entities"]
+        return self.registered_tools["ha_search"]
 
     @pytest.mark.asyncio
     async def test_area_plus_query_branch_projects(self, search_tool_populated):
@@ -271,7 +271,7 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         )
         data = result["data"]
         # Only ``results`` (+ always-retained ``success``) should remain.
-        assert "results" in data
+        assert "entities" in data
         assert "success" in data
         assert "total_matches" not in data
         assert "search_type" not in data
@@ -284,7 +284,7 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         """fields=None on area+query returns the full response (sanity check)."""
         result = await search_tool_populated(query="kitchen", area_filter="kitchen")
         data = result["data"]
-        assert "results" in data
+        assert "entities" in data
         assert "search_type" in data
         assert data["search_type"] == "area_filtered_query"
 
@@ -293,7 +293,7 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         """area-only populated branch (line 581) honours fields= projection."""
         result = await search_tool_populated(area_filter="kitchen", fields=["results"])
         data = result["data"]
-        assert "results" in data
+        assert "entities" in data
         assert "success" in data
         assert "area_names" not in data
         assert "search_type" not in data
@@ -305,7 +305,7 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         """fields=None on area-only returns the full response (sanity check)."""
         result = await search_tool_populated(area_filter="kitchen")
         data = result["data"]
-        assert "results" in data
+        assert "entities" in data
         assert "search_type" in data
         assert data["search_type"] == "area_only"
         assert "area_names" in data
@@ -329,7 +329,7 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         """fields=None on the empty-area branch returns the full response."""
         result = await search_tool_empty(area_filter="nonexistent")
         data = result["data"]
-        assert "results" in data
+        assert "entities" in data
         assert data["results"] == []
         assert "message" in data
 
@@ -342,7 +342,7 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         """
         result = await search_tool_populated(domain_filter="light", fields=["results"])
         data = result["data"]
-        assert "results" in data
+        assert "entities" in data
         assert "success" in data
         assert "note" not in data
         assert "search_type" not in data
@@ -354,7 +354,7 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         """fields=None on the domain-listing branch returns the full response."""
         result = await search_tool_populated(domain_filter="light")
         data = result["data"]
-        assert "results" in data
+        assert "entities" in data
         assert "search_type" in data
         assert data["search_type"] == "domain_listing"
         assert "note" in data
@@ -424,7 +424,7 @@ class _SearchToolFixture:
     @pytest.fixture
     def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
         register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_search_entities"]
+        return self.registered_tools["ha_search"]
 
 
 class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
@@ -455,7 +455,7 @@ class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
         )
         data = result["data"]
         # Results still present; no by_domain grouping
-        assert "results" in data
+        assert "entities" in data
         assert "by_domain" not in data
 
     @pytest.mark.asyncio
@@ -538,7 +538,7 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
         result = await search_tool(query="light", result_fields=["entity_id"])
         data = result["data"]
         assert "success" in data
-        assert "total_matches" in data
+        assert "entity_total_matches" in data
         assert "count" in data
 
     @pytest.mark.asyncio
@@ -635,7 +635,7 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
             "state_filter_note must survive fields= projection"
         )
         # Projected keys present
-        assert "total_matches" in data
-        assert "results" in data
+        assert "entity_total_matches" in data
+        assert "entities" in data
         # Non-requested keys absent (count was not in fields=)
         assert "count" not in data

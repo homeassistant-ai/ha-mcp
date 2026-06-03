@@ -362,10 +362,10 @@ class TestCodeModeCallTool:
         # the shape is {"data": {"success": True, "results": [...]}, "metadata": {...}}.
         # Unwrap the "data" layer first, then access "results".
         code = (
-            'result = await call_tool("ha_search_entities", '
+            'result = await call_tool("ha_search", '
             '{"query": "light", "limit": 5})\n'
             'data = result.get("data", result)\n'
-            'results = data.get("results", [])\n'
+            'results = data.get("entities", [])\n'
             '{"found": len(results) > 0, "count": len(results)}'
         )
         data = await safe_call_tool(

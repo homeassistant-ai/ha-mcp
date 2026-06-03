@@ -266,7 +266,7 @@ class TestBugReportTool:
             mock_get_logs.return_value = [
                 {
                     "timestamp": "2024-12-01T10:00:00",
-                    "tool_name": "ha_search_entities",
+                    "tool_name": "ha_search",
                     "success": True,
                     "execution_time_ms": 150,
                 },

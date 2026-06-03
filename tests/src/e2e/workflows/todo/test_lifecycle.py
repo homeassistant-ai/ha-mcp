@@ -570,7 +570,7 @@ async def test_todo_search_discovery(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
         # Search for todo entities
         search_result = await mcp.call_tool_success(
-            "ha_search_entities",
+            "ha_search",
             {"query": "todo", "domain_filter": "todo", "limit": 10},
         )
 

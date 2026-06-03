@@ -288,7 +288,7 @@ class TestCallService:
 
         # Search for a scene
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"domain_filter": "scene", "limit": 5},
         )
         search_data = parse_mcp_result(search_result)
