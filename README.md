@@ -239,7 +239,9 @@ These tools also require feature flags: `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (fi
 
 To add manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**.
 
-After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA MCP Tools**.
+After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **Home Assistant MCP Server Custom Component**.
+
+On **Home Assistant OS / Supervised**, the integration offers to add the add-on repository and install and start the **Home Assistant MCP Server** add-on for you — no need to add the add-on repository by hand. On **Container / Core** installs (no Supervisor) there is no add-on; run the server via Docker or pip and the integration just sets up the file/YAML services.
 
 ### Install manually
 
