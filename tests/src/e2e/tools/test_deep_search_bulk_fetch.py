@@ -1,5 +1,5 @@
 """
-E2E tests for the ha_deep_search 3-tier bulk fetch strategy.
+E2E tests for the ha_search 3-tier bulk fetch strategy.
 
 Validates that the bulk config fetching logic (REST bulk -> WebSocket bulk ->
 time-budgeted individual) works correctly and returns accurate search results

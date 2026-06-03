@@ -396,7 +396,7 @@ class TestSceneLifecycle:
     async def test_deep_search_to_get_scene_round_trip_on_renamed_scene(
         self, mcp_client, cleanup_tracker
     ):
-        """R7 blocker 17/21 end-to-end: ``ha_deep_search`` returns the
+        """R7 blocker 17/21 end-to-end: ``ha_search`` returns the
         storage key as ``scene_id`` (not the entity-id slug) for a
         renamed scene, and ``ha_config_get_scene`` lands on the same
         scene without relying on the resolver remap.
@@ -439,7 +439,7 @@ class TestSceneLifecycle:
         registered = await _wait_for_scene_registered(mcp_client, scene_id)
         assert registered, f"Scene {scene_id} not registered after create"
 
-        # 2. ha_deep_search by friendly_name fragment.
+        # 2. ha_search by friendly_name fragment.
         search_data = await safe_call_tool(
             mcp_client,
             "ha_search",

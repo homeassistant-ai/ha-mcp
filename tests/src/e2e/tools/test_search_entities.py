@@ -1,5 +1,5 @@
 """
-Tests for ha_search_entities tool - entity search with fuzzy matching and domain filtering.
+Tests for ha_search tool - entity search with fuzzy matching and domain filtering.
 
 Includes regression test for issue #158: empty query with domain_filter should list all
 entities of that domain, not return empty results.
@@ -39,7 +39,7 @@ async def test_search_entities_empty_query_with_domain_filter(mcp_client):
     """
     Test that empty query with domain_filter returns all entities of that domain.
 
-    Regression test for issue #158: ha_search_entities returns empty results
+    Regression test for issue #158: ha_search returns empty results
     with domain_filter='calendar' and query=''.
     """
     logger.info("Testing empty query with domain_filter (issue #158)")
@@ -513,7 +513,7 @@ async def test_search_entities_offset_pagination(mcp_client):
 
 @pytest.mark.asyncio
 class TestSearchEntitiesLimitValidation:
-    """Negative-input tests for ha_search_entities limit parameter.
+    """Negative-input tests for ha_search limit parameter.
 
     Covers two invalid-limit paths added by the fix in tools_search.py:
     coerce_int_param(limit, "limit", default=10, min_value=1).
@@ -522,7 +522,7 @@ class TestSearchEntitiesLimitValidation:
     """
 
     async def test_negative_limit_rejected(self, mcp_client) -> None:
-        """ha_search_entities with limit=-1 returns an error (success=False).
+        """ha_search with limit=-1 returns an error (success=False).
 
         Before fix: results[0:-1] silently dropped the last entity, success=True.
         After fix: Field(ge=1) schema validation rejects limit=-1.
@@ -540,7 +540,7 @@ class TestSearchEntitiesLimitValidation:
         )
 
     async def test_zero_limit_rejected(self, mcp_client) -> None:
-        """ha_search_entities with limit=0 returns an error (success=False).
+        """ha_search with limit=0 returns an error (success=False).
 
         Before fix: results[0:0] returns empty list, success=True, count=0.
         After fix: Field(ge=1) schema validation rejects limit=0.
@@ -614,7 +614,7 @@ async def area_with_mixed_domains(mcp_client):
     )
 
     # Wait until both entities are visible under this area in the registries
-    # consulted by ha_search_entities (helper creation + area assignment is
+    # consulted by ha_search (helper creation + area assignment is
     # eventually-consistent across the entity / device / area registries).
     await wait_for_tool_result(
         mcp_client,
@@ -995,7 +995,7 @@ async def test_area_filter_fuzzy_multi_area_with_query(
 
 
 # ============================================================================
-# Issue #1170: ha_search_entities triage findings — regression tests
+# Issue #1170: ha_search triage findings — regression tests
 # ============================================================================
 # Each test below locks in one of the 10 behaviors triaged in #1170.
 # All would fail against master HEAD prior to the fix-PR.
@@ -1012,8 +1012,8 @@ async def test_domain_filter_uppercase_normalized_issue_1170(mcp_client):
     upper = await mcp_client.call_tool(
         "ha_search", {"domain_filter": "Light", "limit": 50}
     )
-    lower_data = assert_mcp_success(lower, "domain_filter=light").get("data", {})
-    upper_data = assert_mcp_success(upper, "domain_filter=Light").get("data", {})
+    lower_data = assert_mcp_success(lower, "domain_filter=light")
+    upper_data = assert_mcp_success(upper, "domain_filter=Light")
     assert lower_data.get("entity_total_matches", 0) > 0, (
         f"baseline: lowercase should return results: {lower_data}"
     )
@@ -1050,8 +1050,8 @@ async def test_domain_filter_whitespace_normalized_issue_1170(mcp_client, padded
     padded_call = await mcp_client.call_tool(
         "ha_search", {"domain_filter": padded, "limit": 50}
     )
-    canon_data = assert_mcp_success(canonical, "canonical").get("data", {})
-    padded_data = assert_mcp_success(padded_call, f"padded={padded!r}").get("data", {})
+    canon_data = assert_mcp_success(canonical, "canonical")
+    padded_data = assert_mcp_success(padded_call, f"padded={padded!r}")
     assert canon_data["entity_total_matches"] > 0, (
         f"baseline canonical should return results: {canon_data}"
     )
@@ -1143,7 +1143,7 @@ async def test_area_only_results_have_score_and_match_type_issue_1170(
     res = await mcp_client.call_tool(
         "ha_search", {"area_filter": fixture["area_id"], "limit": 50}
     )
-    data = assert_mcp_success(res, "area_only shape").get("data", {})
+    data = assert_mcp_success(res, "area_only shape")
     assert data["search_type"] == "area_only"
     assert data["entities"], "fixture should yield at least one result"
     for r in data["entities"]:
@@ -1172,7 +1172,7 @@ async def test_area_filtered_query_no_per_result_area_filter_issue_1170(
             "limit": 50,
         },
     )
-    data = assert_mcp_success(res, "area_filtered_query shape").get("data", {})
+    data = assert_mcp_success(res, "area_filtered_query shape")
     assert data["search_type"] == "area_filtered_query"
     assert data.get("area_filter") == fixture["area_id"], (
         f"top-level area_filter should still echo: {data}"
@@ -1195,7 +1195,7 @@ async def test_fuzzy_rejects_low_coverage_garbage_issue_1170(mcp_client):
         "ha_search",
         {"query": "xyz_irrelevant_garbage", "exact_match": False, "limit": 5},
     )
-    data = assert_mcp_success(res, "garbage query").get("data", {})
+    data = assert_mcp_success(res, "garbage query")
     assert data["entity_total_matches"] == 0, (
         f"low-coverage garbage query must be rejected: {data}"
     )
@@ -1227,7 +1227,7 @@ async def test_result_shape_consistent_across_branches(mcp_client):
     ]
     for params, expected_type in calls:
         res = await mcp_client.call_tool("ha_search", params)
-        data = assert_mcp_success(res, f"shape check {expected_type}").get("data", {})
+        data = assert_mcp_success(res, f"shape check {expected_type}")
         assert data["search_type"] == expected_type, (
             f"unexpected search_type for {params}: {data}"
         )
@@ -1278,7 +1278,7 @@ async def test_area_filter_with_domain_filter_zero_overlap_has_message(
         "ha_search",
         {"area_filter": "kitchen", "domain_filter": "zone", "limit": 5},
     )
-    data = assert_mcp_success(res, "area+domain zero-overlap").get("data", {})
+    data = assert_mcp_success(res, "area+domain zero-overlap")
     assert data["entity_total_matches"] == 0, (
         f"setup: area+domain combination should be empty: {data}"
     )
@@ -1362,7 +1362,7 @@ async def test_exact_area_id_short_circuits_fuzzy_aggregation(
     res = await mcp_client.call_tool(
         "ha_search", {"area_filter": target_area_id, "limit": 50}
     )
-    data = assert_mcp_success(res, "exact area_id resolution").get("data", {})
+    data = assert_mcp_success(res, "exact area_id resolution")
     entity_ids = {r["entity_id"] for r in data["entities"]}
     assert target_helper in entity_ids, f"target area's helper missing: {data}"
     assert sibling_helper not in entity_ids, (
@@ -1386,7 +1386,7 @@ async def test_area_only_aggregates_all_matched_areas_issue_1170(
         "ha_search",
         {"area_filter": f"bedroom_{fixture['suffix']}", "limit": 50},
     )
-    data = assert_mcp_success(res, "two-area aggregation").get("data", {})
+    data = assert_mcp_success(res, "two-area aggregation")
     assert data["search_type"] == "area_only"
     # New plural field carries every matched area. The seeded `Bedroom`
     # area also matches the `bedroom_<suffix>` prefix at partial_ratio
@@ -1416,7 +1416,7 @@ async def test_area_only_aggregates_all_matched_areas_issue_1170(
         "ha_search",
         {"area_filter": f"bedroom_{fixture['suffix']}", "limit": 50},
     )
-    data2 = assert_mcp_success(res2, "two-area aggregation rerun").get("data", {})
+    data2 = assert_mcp_success(res2, "two-area aggregation rerun")
     assert data["area_names"] == data2["area_names"], (
         f"area_names ordering must be deterministic across calls: "
         f"{data['area_names']!r} vs {data2['area_names']!r}"
@@ -1460,7 +1460,7 @@ async def test_search_concat_token_elision_issue_1170(mcp_client):
         "ha_search",
         {"query": "bedlight", "exact_match": False, "limit": 10},
     )
-    data = assert_mcp_success(res, "concat-token elision").get("data", {})
+    data = assert_mcp_success(res, "concat-token elision")
     entity_ids = [r["entity_id"] for r in data.get("entities", [])]
     # `light.bed_light` is part of the initial_test_state seed.
     assert "light.bed_light" in entity_ids, (
@@ -1536,7 +1536,7 @@ async def test_area_filter_resolves_by_area_alias_issue_1170(
     res = await mcp_client.call_tool(
         "ha_search", {"area_filter": fixture["alias"], "limit": 10}
     )
-    data = assert_mcp_success(res, "search by area alias").get("data", {})
+    data = assert_mcp_success(res, "search by area alias")
     assert data["search_type"] == "area_only"
     entity_ids = [r["entity_id"] for r in data["entities"]]
     assert fixture["entity_id"] in entity_ids, (
@@ -1553,7 +1553,7 @@ async def test_search_finds_entity_by_alias_issue_1170(mcp_client, helper_with_a
         "ha_search",
         {"query": fixture["alias"], "exact_match": False, "limit": 5},
     )
-    data = assert_mcp_success(res, "search by alias").get("data", {})
+    data = assert_mcp_success(res, "search by alias")
     entity_ids = [r["entity_id"] for r in data["entities"]]
     assert fixture["entity_id"] in entity_ids, (
         f"alias query did not surface target entity: {data}"
@@ -1603,7 +1603,7 @@ async def test_search_includes_hidden_with_penalty_by_default_issue_1170(
         "ha_search",
         {"query": fixture["distinctive"], "exact_match": True, "limit": 5},
     )
-    data = assert_mcp_success(res, "default hidden included").get("data", {})
+    data = assert_mcp_success(res, "default hidden included")
     entity_ids = [r["entity_id"] for r in data["entities"]]
     assert fixture["entity_id"] in entity_ids, (
         f"hidden entity should be in default results (option c): {data}"
@@ -1635,7 +1635,7 @@ async def test_search_include_hidden_false_filters_issue_1170(
             "limit": 5,
         },
     )
-    data = assert_mcp_success(res, "include_hidden=False filters").get("data", {})
+    data = assert_mcp_success(res, "include_hidden=False filters")
     entity_ids = [r["entity_id"] for r in data["entities"]]
     assert fixture["entity_id"] not in entity_ids, (
         f"include_hidden=False should filter hidden entity: {data}"
@@ -1660,7 +1660,7 @@ async def test_search_fuzzy_mode_penalises_hidden_issue_1170(mcp_client, hidden_
             "limit": 5,
         },
     )
-    data = assert_mcp_success(res, "fuzzy mode hidden penalty").get("data", {})
+    data = assert_mcp_success(res, "fuzzy mode hidden penalty")
     entity_ids = [r["entity_id"] for r in data["entities"]]
     assert fixture["entity_id"] in entity_ids, (
         f"fuzzy mode should keep hidden entity (option c): {data}"
@@ -1681,7 +1681,7 @@ async def test_search_fuzzy_mode_penalises_hidden_issue_1170(mcp_client, hidden_
             "limit": 5,
         },
     )
-    data2 = assert_mcp_success(res2, "fuzzy include_hidden=False").get("data", {})
+    data2 = assert_mcp_success(res2, "fuzzy include_hidden=False")
     entity_ids2 = [r["entity_id"] for r in data2["entities"]]
     assert fixture["entity_id"] not in entity_ids2, (
         f"fuzzy + include_hidden=False should filter hidden: {data2}"
@@ -1732,7 +1732,7 @@ async def test_search_area_only_penalises_hidden_issue_1170(mcp_client):
         res = await mcp_client.call_tool(
             "ha_search", {"area_filter": area_id, "limit": 10}
         )
-        data = assert_mcp_success(res, "area_only default hidden").get("data", {})
+        data = assert_mcp_success(res, "area_only default hidden")
         entity_ids = [r["entity_id"] for r in data["entities"]]
         assert eid in entity_ids, (
             f"area_only branch should keep hidden entity (option c): {data}"
@@ -1848,7 +1848,7 @@ async def test_search_area_filtered_query_penalises_hidden_issue_1170(mcp_client
                 "limit": 20,
             },
         )
-        data = assert_mcp_success(res, "area+query hidden penalty").get("data", {})
+        data = assert_mcp_success(res, "area+query hidden penalty")
         ids = [r["entity_id"] for r in data["entities"]]
         # With the distinctive token hitting BM25 at score 100 in both
         # entity_id and friendly_name, both helpers must surface — the
@@ -1918,7 +1918,7 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
             "ha_search",
             {"domain_filter": "input_boolean", "limit": 200},
         )
-        data = assert_mcp_success(res, "domain_listing default").get("data", {})
+        data = assert_mcp_success(res, "domain_listing default")
         by_id = {r["entity_id"]: r for r in data["entities"]}
         assert h_eid in by_id, (
             f"hidden helper should appear in domain_listing default: {list(by_id)[:5]}"
@@ -1977,7 +1977,7 @@ async def test_area_only_total_matches_aggregates_issue_1170(
         "ha_search",
         {"area_filter": f"bedroom_{fixture['suffix']}", "limit": 50},
     )
-    data = assert_mcp_success(res, "multi-area total").get("data", {})
+    data = assert_mcp_success(res, "multi-area total")
     # Each fixture area has exactly 1 helper; total_matches must be
     # at least 2 (could be more if the seed Bedroom area also matched
     # the prefix and has assigned entities, but never less).
@@ -2068,7 +2068,7 @@ class TestSearchEntitiesSeededAreasIssue1170:
         res = await mcp_client.call_tool(
             "ha_search", {"area_filter": fixture["area_id"], "limit": 50}
         )
-        data = assert_mcp_success(res, "populated area").get("data", {})
+        data = assert_mcp_success(res, "populated area")
         entity_ids = {r["entity_id"] for r in data["entities"]}
         assert set(fixture["entity_ids"]).issubset(entity_ids), (
             f"all assigned entities should appear: missing "
@@ -2094,7 +2094,7 @@ class TestSearchEntitiesSeededAreasIssue1170:
                 "limit": 50,
             },
         )
-        data = assert_mcp_success(res, "area + query").get("data", {})
+        data = assert_mcp_success(res, "area + query")
         entity_ids = [r["entity_id"] for r in data["entities"]]
         assert "light.bed_light" in entity_ids
         assert "light.ceiling_lights" in entity_ids
@@ -2112,7 +2112,7 @@ class TestSearchEntitiesSeededAreasIssue1170:
         res = await mcp_client.call_tool(
             "ha_search", {"area_filter": fixture["area_id"], "limit": 2}
         )
-        data = assert_mcp_success(res, "limit=2 page 1").get("data", {})
+        data = assert_mcp_success(res, "limit=2 page 1")
         assert len(data["entities"]) == 2
         assert data["has_more"] is True
         assert data["next_offset"] == 2
@@ -2124,7 +2124,7 @@ class TestSearchEntitiesSeededAreasIssue1170:
                 "offset": 2,
             },
         )
-        data2 = assert_mcp_success(res2, "offset=2").get("data", {})
+        data2 = assert_mcp_success(res2, "offset=2")
         assert len(data2["entities"]) >= 2, (
             f"page 2 should have at least the remaining entities: {data2}"
         )

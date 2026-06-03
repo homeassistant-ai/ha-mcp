@@ -1879,7 +1879,7 @@ class TestPythonTransformIdNoneRebind:
 
 class TestSmartSearchSceneIdFallbackPaths:
     """R7 blockers 17/21 — three-tier resolution of ``scene_id`` in
-    ``ha_deep_search`` results: (1) ``scene_config["id"]``, (2) registry-
+    ``ha_search`` results: (1) ``scene_config["id"]``, (2) registry-
     derived map, (3) entity-id slug + WARNING.
 
     The R6 fix only covered tier 1 (alias-hit path); the empty-dict

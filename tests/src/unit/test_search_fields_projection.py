@@ -87,7 +87,7 @@ class TestProjectFields:
 
 
 class TestHaSearchEntitiesFieldsProjection:
-    """Tool-level tests for fields= projection in ha_search_entities."""
+    """Tool-level tests for fields= projection in ha_search."""
 
     @pytest.fixture
     def mock_mcp(self):
@@ -389,7 +389,7 @@ _MULTI_ENTITY_STATES = [
 
 
 class _SearchToolFixture:
-    """Shared fixture mixin for ha_search_entities tests."""
+    """Shared fixture mixin for ha_search tests."""
 
     @pytest.fixture
     def mock_mcp(self):

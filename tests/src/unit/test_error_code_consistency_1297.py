@@ -4,7 +4,7 @@ Label / category / device / zone not-found maps to ``RESOURCE_NOT_FOUND``,
 not ``ENTITY_NOT_FOUND``. These are registry metadata (labels, categories)
 or their own non-entity registries (devices, zones), all looked up by
 registry-internal id rather than entity_id. An agent branching on
-``error.code == "ENTITY_NOT_FOUND"`` retries via ``ha_search_entities()``,
+``error.code == "ENTITY_NOT_FOUND"`` retries via ``ha_search()``,
 which doesn't list any of them — wrong-tool spiral. (Callers here supply
 explicit suggestions, so the ``ENTITY_NOT_FOUND`` *default* suggestion
 table in ``errors.py:129-133`` doesn't surface; the agent-side
@@ -77,7 +77,7 @@ class TestLabelGetMissingReturnsResourceNotFound:
         assert error_data["error"]["code"] == "RESOURCE_NOT_FOUND", (
             "Labels are registry metadata, not entities — must classify as "
             "RESOURCE_NOT_FOUND so agents route to ha_config_get_label() "
-            "instead of ha_search_entities()."
+            "instead of ha_search()."
         )
         # The list-tool recovery suggestion (already pre-#1297) must survive.
         assert any(
@@ -556,7 +556,7 @@ class TestGetAutomationMissingSurfacesAvailableIds:
             "automation.evening_routine",
         ]
         assert any(
-            "ha_search_entities(domain_filter='automation')" in s
+            "ha_search(domain_filter='automation')" in s
             for s in _all_suggestions(error_data["error"])
         )
 
@@ -637,7 +637,7 @@ class TestGetScriptMissingSurfacesAvailableIds:
             "evening_routine",
         ]
         assert any(
-            "ha_search_entities(domain_filter='script')" in s
+            "ha_search(domain_filter='script')" in s
             for s in _all_suggestions(error_data["error"])
         )
 
@@ -661,7 +661,7 @@ class TestGetScriptAcceptsEntityIdForm:
     prefix so the entity_id form (``script.foo``) and the bare storage key
     (``foo``) both route to the same REST call. Closes the wrong-tool spiral
     where ``_raise_script_not_found`` suggests
-    ``ha_search_entities(domain_filter='script')`` which returns entity_ids
+    ``ha_search(domain_filter='script')`` which returns entity_ids
     — feeding that output back into a bare-only GET would re-fail at the
     same site that #1297 closes (KP13 #1397 fourth-pass).
     """
@@ -800,7 +800,7 @@ class TestSetRemoveScriptAcceptEntityIdForm:
     """Regression: ``ha_config_set_script`` and ``ha_config_remove_script``
     strip a leading ``script.`` prefix at the function head, mirroring
     ``ha_config_get_script`` (KP13 #1397 fifth-pass). Closes the wrong-tool
-    spiral where ``ha_search_entities(domain_filter='script')`` returns
+    spiral where ``ha_search(domain_filter='script')`` returns
     entity_ids that would otherwise produce phantom ``script.script.foo``
     storage keys on upsert / ``script.script.foo`` watcher targets on remove.
     """
@@ -958,7 +958,7 @@ class TestSetAutomationMissingSurfacesAvailableIds:
             "automation.evening_routine",
         ]
         assert any(
-            "ha_search_entities(domain_filter='automation')" in s
+            "ha_search(domain_filter='automation')" in s
             for s in _all_suggestions(error_data["error"])
         )
 
@@ -1059,7 +1059,7 @@ class TestSetScriptMissingSurfacesAvailableIds:
             "evening_routine",
         ]
         assert any(
-            "ha_search_entities(domain_filter='script')" in s
+            "ha_search(domain_filter='script')" in s
             for s in _all_suggestions(error_data["error"])
         )
 

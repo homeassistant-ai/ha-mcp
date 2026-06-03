@@ -1086,7 +1086,7 @@ class TestSweepWarningsShape:
     emit-site. Content-level coverage already lives in the per-tool
     unit/e2e test files cited:**
 
-    - ``tools_search.py``: ``ha_deep_search`` fallback path. The tool
+    - ``tools_search.py``: ``ha_search`` fallback path. The tool
       calls ``await client.<state-source>`` before the fuzzy/exact
       branch; trivial ``MagicMock()`` clients trip the
       ``"MagicMock can't be used in 'await' expression"`` error before

@@ -204,7 +204,7 @@ class TestSearchAndFilter:
             "ha_get_state should be hidden when query='service'"
         )
         assert "hidden" in _card_class(result.dom, "ha_search").split(), (
-            "ha_search_entities (no 'service' in metadata) should be hidden"
+            "ha_search (no 'service' in metadata) should be hidden"
         )
         assert "hidden" not in _card_class(result.dom, "ha_call_service").split(), (
             "ha_call_service should be visible for query='service'"

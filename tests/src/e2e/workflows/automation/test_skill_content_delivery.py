@@ -42,7 +42,7 @@ class TestSkillContentDelivery:
             {"query": "light", "domain_filter": "light", "limit": 5},
         )
         data = parse_mcp_result(search)
-        results = data.get("data", {}).get("results") or data.get("results", [])
+        results = data.get("entities", [])
         assert results, "no light entities found in test HA instance"
         return results[0]["entity_id"]
 

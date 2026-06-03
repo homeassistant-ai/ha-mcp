@@ -1,5 +1,5 @@
 """
-Tests for ha_deep_search tool - searches within automation/script/helper configs.
+Tests for ha_search tool - searches within automation/script/helper configs.
 """
 
 import logging
@@ -714,7 +714,7 @@ async def test_deep_search_default_surfaces_created_scene(mcp_client):
 async def test_deep_search_invalid_params_returns_error(
     mcp_client, params, description
 ):
-    """Test that ha_deep_search rejects invalid limit and offset values.
+    """Test that ha_search rejects invalid limit and offset values.
 
     Before the fix, invalid values caused silent data corruption:
     limit=-1 dropped the last result (tagged_results[0:-1]), limit=0 returned

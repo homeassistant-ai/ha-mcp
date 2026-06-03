@@ -385,6 +385,22 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Use this whenever you need to find something in HA — without needing
         to decide between entity-name search vs config-body search up front.
 
+        When NOT to use:
+          - To fetch the state of a known entity_id: use `ha_get_state` (cheaper,
+            no search overhead).
+          - To inspect a specific automation/script/scene config by id: use the
+            matching `ha_config_get_*` tool.
+          - To list installed add-ons: use `ha_get_addon`.
+
+        Caveats:
+          - Both surfaces fan out in parallel; response carries `partial: True`
+            plus an `errors[]` array tagged by surface ("entities" / "configs")
+            when one branch fails. Empty `entities`/`automations`/... combined
+            with `partial: True` means "search failed", not "no results".
+          - `count` is items in this response (post-pagination), not total
+            matches across the corpus. Use `entity_total_matches` +
+            `config_total_matches` for the totals.
+
         Examples:
             - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
             - List all calendars: ha_search(domain_filter="calendar")
@@ -444,10 +460,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
             labels.append("configs")
 
-        try:
-            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-        except ToolError:
-            raise
+        # ``return_exceptions=True`` captures sub-task exceptions; the gather
+        # call itself only raises if the orchestrator's own coroutine is
+        # cancelled before the tasks complete.
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
         response: dict[str, Any] = {
             "success": True,
@@ -465,7 +481,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         partial = False
         errors: list[dict[str, str]] = []
         for label, outcome in zip(labels, outcomes, strict=True):
-            if isinstance(outcome, BaseException):
+            # Propagate non-Exception BaseException (CancelledError, SystemExit,
+            # KeyboardInterrupt, GeneratorExit) so callers — timeouts, structured
+            # concurrency, signal handlers — can react cleanly.
+            if isinstance(outcome, BaseException) and not isinstance(
+                outcome, Exception
+            ):
+                raise outcome
+            if isinstance(outcome, Exception):
                 partial = True
                 errors.append({"surface": label, "error": str(outcome)})
                 logger.warning("ha_search %s branch failed: %r", label, outcome)

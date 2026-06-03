@@ -6,8 +6,7 @@ They measure response times and assert they meet the defined targets.
 
 Baseline targets (from issue #264):
 - ha_get_overview: < 500ms minimal, < 1000ms full
-- ha_search_entities: < 300ms
-- ha_deep_search: < 2000ms
+- ha_search: < 2000ms (slower bound: orchestrator runs both entity + config branches in parallel)
 - ha_call_service: < 200ms
 
 Usage:
@@ -112,11 +111,11 @@ async def test_get_overview_minimal_performance(mcp_client, perf_metrics):
 @pytest.mark.performance
 async def test_search_entities_performance(mcp_client, perf_metrics):
     """
-    Test ha_search_entities tool meets performance target.
+    Test ha_search tool meets performance target.
 
     Target: < 300ms
     """
-    logger.info("Testing ha_search_entities performance")
+    logger.info("Testing ha_search performance")
 
     # Test with a common search query
     results = await run_performance_iterations(
@@ -130,11 +129,11 @@ async def test_search_entities_performance(mcp_client, perf_metrics):
     avg_ms = sum(r.duration_ms for r in results) / len(results)
     p95_ms = calculate_percentile(results, 95)
 
-    logger.info(f"ha_search_entities: avg={avg_ms:.2f}ms, p95={p95_ms:.2f}ms")
+    logger.info(f"ha_search: avg={avg_ms:.2f}ms, p95={p95_ms:.2f}ms")
 
     baseline = PERFORMANCE_BASELINES["ha_search"]
     assert avg_ms <= baseline.target_ms, (
-        f"ha_search_entities average ({avg_ms:.2f}ms) exceeds target ({baseline.target_ms}ms)"
+        f"ha_search average ({avg_ms:.2f}ms) exceeds target ({baseline.target_ms}ms)"
     )
 
 
@@ -142,11 +141,11 @@ async def test_search_entities_performance(mcp_client, perf_metrics):
 @pytest.mark.performance
 async def test_search_entities_domain_filter_performance(mcp_client, perf_metrics):
     """
-    Test ha_search_entities with domain filter performance.
+    Test ha_search with domain filter performance.
 
     Domain filtering should not significantly impact performance.
     """
-    logger.info("Testing ha_search_entities with domain filter performance")
+    logger.info("Testing ha_search with domain filter performance")
 
     results = await run_performance_iterations(
         mcp_client,
@@ -159,14 +158,12 @@ async def test_search_entities_domain_filter_performance(mcp_client, perf_metric
     avg_ms = sum(r.duration_ms for r in results) / len(results)
     p95_ms = calculate_percentile(results, 95)
 
-    logger.info(
-        f"ha_search_entities (domain filter): avg={avg_ms:.2f}ms, p95={p95_ms:.2f}ms"
-    )
+    logger.info(f"ha_search (domain filter): avg={avg_ms:.2f}ms, p95={p95_ms:.2f}ms")
 
     # Use same baseline - domain filtering shouldn't add significant overhead
     baseline = PERFORMANCE_BASELINES["ha_search"]
     assert avg_ms <= baseline.target_ms, (
-        f"ha_search_entities with domain filter average ({avg_ms:.2f}ms) "
+        f"ha_search with domain filter average ({avg_ms:.2f}ms) "
         f"exceeds target ({baseline.target_ms}ms)"
     )
 
@@ -175,11 +172,11 @@ async def test_search_entities_domain_filter_performance(mcp_client, perf_metric
 @pytest.mark.performance
 async def test_deep_search_performance(mcp_client, perf_metrics):
     """
-    Test ha_deep_search tool meets performance target.
+    Test ha_search tool meets performance target.
 
     Target: < 2000ms (this searches across automations, scripts, and helpers)
     """
-    logger.info("Testing ha_deep_search performance")
+    logger.info("Testing ha_search performance")
 
     results = await run_performance_iterations(
         mcp_client,
@@ -192,11 +189,11 @@ async def test_deep_search_performance(mcp_client, perf_metrics):
     avg_ms = sum(r.duration_ms for r in results) / len(results)
     p95_ms = calculate_percentile(results, 95)
 
-    logger.info(f"ha_deep_search: avg={avg_ms:.2f}ms, p95={p95_ms:.2f}ms")
+    logger.info(f"ha_search: avg={avg_ms:.2f}ms, p95={p95_ms:.2f}ms")
 
     baseline = PERFORMANCE_BASELINES["ha_search"]
     assert avg_ms <= baseline.target_ms, (
-        f"ha_deep_search average ({avg_ms:.2f}ms) exceeds target ({baseline.target_ms}ms)"
+        f"ha_search average ({avg_ms:.2f}ms) exceeds target ({baseline.target_ms}ms)"
     )
 
 

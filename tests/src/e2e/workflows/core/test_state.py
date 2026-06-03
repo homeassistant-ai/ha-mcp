@@ -188,7 +188,7 @@ async def test_get_state_automation_entity(mcp_client):
     else:
         results = search_data.get("results", [])
 
-    assert results, "No automation entities returned by ha_search_entities"
+    assert results, "No automation entities returned by ha_search"
     automation_entity_ids = [r.get("entity_id") for r in results]
     assert seed_entity in automation_entity_ids, (
         f"Expected seeded {seed_entity} in search results, got "

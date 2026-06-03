@@ -88,7 +88,7 @@ logger = logging.getLogger(__name__)
 # ha_call_read_tool proxy when tool search is on. Keep these lists in
 # sync where it matters and divergent where it matters — don't merge them.
 MANDATORY_TOOLS: set[str] = {
-    "ha_search_entities",
+    "ha_search",
     "ha_get_overview",
     "ha_get_state",
     "ha_report_issue",

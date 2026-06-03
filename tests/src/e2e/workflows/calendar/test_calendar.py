@@ -8,7 +8,7 @@ Tests the calendar event management tools:
 
 Note: These tests require calendar integrations to be configured in Home Assistant.
 The tests are designed to work with the demo integration's calendar or local calendar.
-Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities.
+Use ha_search(query='calendar', domain_filter='calendar') to find calendar entities.
 """
 
 import logging

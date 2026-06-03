@@ -1,5 +1,5 @@
 """
-E2E tests for ha_deep_search exact_match parameter and dashboard search type.
+E2E tests for ha_search exact_match parameter and dashboard search type.
 
 Tests the features added to address issue #801:
 - exact_match=True (default) uses substring matching
@@ -216,8 +216,8 @@ async def test_deep_search_dashboard_not_in_default(mcp_client):
 
 @pytest.mark.asyncio
 async def test_search_entities_exact_match_default(mcp_client):
-    """Test that ha_search_entities uses exact match by default."""
-    logger.info("Testing ha_search_entities with exact_match=True (default)")
+    """Test that ha_search uses exact match by default."""
+    logger.info("Testing ha_search with exact_match=True (default)")
 
     result = await mcp_client.call_tool(
         "ha_search",

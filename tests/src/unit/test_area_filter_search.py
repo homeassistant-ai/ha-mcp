@@ -3,7 +3,7 @@
 Tests that get_entities_by_area uses HA registries for accurate area resolution
 instead of fuzzy-matching on friendly names, which caused false positives.
 
-Bug: ha_search_entities(area_filter="salon") returned entities from unrelated
+Bug: ha_search(area_filter="salon") returned entities from unrelated
 areas because the old implementation used fuzzy matching on entity friendly
 names instead of consulting the entity/device/area registries.
 """
@@ -87,7 +87,11 @@ def two_area_setup():
         # light.salon_lamp directly assigned to salon area
         {"entity_id": "light.salon_lamp", "area_id": "salon", "device_id": None},
         # climate.abc assigned to area via device (no direct area_id)
-        {"entity_id": "climate.abc", "area_id": None, "device_id": "device_abc_thermostat"},
+        {
+            "entity_id": "climate.abc",
+            "area_id": None,
+            "device_id": "device_abc_thermostat",
+        },
         # sensor has no area at all
         {"entity_id": "sensor.outdoor_temp", "area_id": None, "device_id": None},
     ]
@@ -236,9 +240,21 @@ class TestAreaMatchingLogic:
             },
         ]
         entity_registry = [
-            {"entity_id": "light.living_light", "area_id": "living_room", "device_id": None},
-            {"entity_id": "light.bedroom_light", "area_id": "bedroom_main", "device_id": None},
-            {"entity_id": "light.kitchen_light", "area_id": "kitchen", "device_id": None},
+            {
+                "entity_id": "light.living_light",
+                "area_id": "living_room",
+                "device_id": None,
+            },
+            {
+                "entity_id": "light.bedroom_light",
+                "area_id": "bedroom_main",
+                "device_id": None,
+            },
+            {
+                "entity_id": "light.kitchen_light",
+                "area_id": "kitchen",
+                "device_id": None,
+            },
         ]
         return {
             "areas": areas,
@@ -280,7 +296,9 @@ class TestAreaMatchingLogic:
         assert "kitchen" in result["areas"]
 
     @pytest.mark.asyncio
-    async def test_no_matching_area_returns_empty_with_suggestions(self, multi_area_setup):
+    async def test_no_matching_area_returns_empty_with_suggestions(
+        self, multi_area_setup
+    ):
         """Non-matching area returns empty results with available areas."""
         client = MockClientWithRegistries(
             entities=multi_area_setup["entities"],
@@ -310,9 +328,21 @@ class TestAreaFilterGroupByDomain:
         """Results are correctly grouped by domain when requested."""
         areas = [{"area_id": "salon", "name": "Salon"}]
         entities = [
-            {"entity_id": "light.salon_light", "attributes": {"friendly_name": "Salon Light"}, "state": "on"},
-            {"entity_id": "switch.salon_switch", "attributes": {"friendly_name": "Salon Switch"}, "state": "off"},
-            {"entity_id": "sensor.salon_temp", "attributes": {"friendly_name": "Salon Temperature"}, "state": "21"},
+            {
+                "entity_id": "light.salon_light",
+                "attributes": {"friendly_name": "Salon Light"},
+                "state": "on",
+            },
+            {
+                "entity_id": "switch.salon_switch",
+                "attributes": {"friendly_name": "Salon Switch"},
+                "state": "off",
+            },
+            {
+                "entity_id": "sensor.salon_temp",
+                "attributes": {"friendly_name": "Salon Temperature"},
+                "state": "21",
+            },
         ]
         entity_registry = [
             {"entity_id": "light.salon_light", "area_id": "salon", "device_id": None},
@@ -341,8 +371,16 @@ class TestAreaFilterGroupByDomain:
         """Results are a flat list when group_by_domain=False."""
         areas = [{"area_id": "salon", "name": "Salon"}]
         entities = [
-            {"entity_id": "light.salon_light", "attributes": {"friendly_name": "Salon Light"}, "state": "on"},
-            {"entity_id": "switch.salon_switch", "attributes": {"friendly_name": "Salon Switch"}, "state": "off"},
+            {
+                "entity_id": "light.salon_light",
+                "attributes": {"friendly_name": "Salon Light"},
+                "state": "on",
+            },
+            {
+                "entity_id": "switch.salon_switch",
+                "attributes": {"friendly_name": "Salon Switch"},
+                "state": "off",
+            },
         ]
         entity_registry = [
             {"entity_id": "light.salon_light", "area_id": "salon", "device_id": None},
@@ -375,11 +413,19 @@ class TestEntityDirectAreaOverride:
             {"area_id": "bedroom", "name": "Bedroom"},
         ]
         entities = [
-            {"entity_id": "sensor.device_temp", "attributes": {"friendly_name": "Device Temp"}, "state": "22"},
+            {
+                "entity_id": "sensor.device_temp",
+                "attributes": {"friendly_name": "Device Temp"},
+                "state": "22",
+            },
         ]
         # Entity is directly assigned to salon, but device is in bedroom
         entity_registry = [
-            {"entity_id": "sensor.device_temp", "area_id": "salon", "device_id": "device_1"},
+            {
+                "entity_id": "sensor.device_temp",
+                "area_id": "salon",
+                "device_id": "device_1",
+            },
         ]
         device_registry = [
             {"id": "device_1", "area_id": "bedroom"},
@@ -412,7 +458,11 @@ class TestRegistryFailureGracefulDegradation:
 
             async def get_states(self):
                 return [
-                    {"entity_id": "light.test", "attributes": {"friendly_name": "Test"}, "state": "on"},
+                    {
+                        "entity_id": "light.test",
+                        "attributes": {"friendly_name": "Test"},
+                        "state": "on",
+                    },
                 ]
 
             async def get_config(self):

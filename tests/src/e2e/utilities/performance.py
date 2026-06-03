@@ -6,8 +6,8 @@ for measuring and validating performance of MCP tool operations.
 
 Baseline targets (from issue #264):
 - ha_get_overview: < 500ms minimal, < 1000ms full
-- ha_search_entities: < 300ms
-- ha_deep_search: < 2000ms
+- ha_search: < 300ms
+- ha_search: < 2000ms
 - ha_call_service: < 200ms
 """
 

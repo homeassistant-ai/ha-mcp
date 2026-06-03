@@ -77,7 +77,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
             ("tools/tools_search.py", "_exact_match_search"),
             ("tools/smart_search/_entities.py", "smart_entity_search"),
         ],
-        # ha_search_entities composes the projectable dict under many
+        # ha_search composes the projectable dict under many
         # local names (``area_search_data``, ``empty_area_data``,
         # ``domain_listing``...) and ``smart_entity_search`` assembles
         # ``response = {...}`` before mutating + returning. Catch both

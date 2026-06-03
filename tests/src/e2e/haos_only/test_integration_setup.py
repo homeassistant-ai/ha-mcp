@@ -254,7 +254,7 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
             assert cleanup.get("success"), (
                 f"Teardown of local_calendar entry {entry_id} failed; "
                 f"the qcow2 will leak this entry across the session and "
-                f"subsequent ha_search_entities calls will slow over time. "
+                f"subsequent ha_search calls will slow over time. "
                 f"Result: {cleanup}"
             )
 

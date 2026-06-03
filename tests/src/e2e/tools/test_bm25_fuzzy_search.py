@@ -5,7 +5,7 @@ Tests that BM25 scoring improves search quality for:
 - Multi-word queries where terms exist but are not adjacent (the "dryer override" case)
 - Underscore/space equivalence in tokenization
 - Noise reduction (returning 0 instead of hundreds of false positives)
-- ha_deep_search fuzzy path with config dict scoring
+- ha_search fuzzy path with config dict scoring
 """
 
 import logging

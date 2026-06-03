@@ -64,7 +64,7 @@ def _assert_progress_call(
 
 
 # ---------------------------------------------------------------------------
-# smart_search.deep_search (the engine behind ha_deep_search)
+# smart_search.deep_search (the engine behind ha_search)
 # ---------------------------------------------------------------------------
 
 

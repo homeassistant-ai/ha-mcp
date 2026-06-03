@@ -1,4 +1,4 @@
-"""Unit tests for ``ha_deep_search`` coverage of UI-created flow-based
+"""Unit tests for ``ha_search`` coverage of UI-created flow-based
 helpers (template, group, utility_meter, derivative, ...).
 
 Issue #1457: deep_search previously hard-coded the helper list to
