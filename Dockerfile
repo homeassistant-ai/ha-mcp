@@ -5,7 +5,7 @@
 # Base images pinned by digest - Renovate will create PRs for updates
 
 # --- Build stage: install dependencies with uv ---
-FROM ghcr.io/astral-sh/uv:0.11.16-python3.13-trixie-slim@sha256:d57fc364ed714127c162a01b316bfb7b9a3fd09d97c665781a5607acaa35d254 AS builder
+FROM ghcr.io/astral-sh/uv:0.11.18-python3.13-trixie-slim@sha256:09fdd532aaaca60cf5159276003139650585cf7612193a84dfbc2f0d3c4b7ce8 AS builder
 
 WORKDIR /app
 
