@@ -484,7 +484,7 @@ jobs:
             const THRESHOLD = usingKeywords ? 1.0 : 60;
             const candidates = scored
               .sort((a, b) => b.score - a.score)
-              .slice(0, 6)
+              .slice(0, 3)
               .filter(x => x.score >= THRESHOLD);
 
             if (candidates.length === 0) {
@@ -495,7 +495,7 @@ jobs:
 
             const formatted = candidates.map(c =>
               '#' + c.issue.number + ' [' + c.issue.state + ']: ' + c.issue.title + '\n' +
-              cleanBody(c.issue.body).substring(0, 3500)
+              cleanBody(c.issue.body).substring(0, 600)
             ).join('\n\n---\n\n');
 
             core.info('BM25 found ' + candidates.length + ' candidates: ' + candidates.map(c => '#' + c.issue.number).join(', '));
@@ -551,7 +551,6 @@ jobs:
           ISSUE_AUTHOR_COMMENTS: ${{ steps.issue_data.outputs.author_comments }}
           BM25_CANDIDATES: ${{ steps.bm25.outputs.candidates }}
           CHANGELOG_CONTEXT: ${{ steps.changelogs.outputs.changelog_context }}
-          TOOL_LIST: ${{ steps.tool_list.outputs.tools }}
           EXTRACTED_KEYWORDS: ${{ steps.keywords.outputs.response }}
         with:
           script: |
@@ -562,7 +561,6 @@ jobs:
             const authorComments = process.env.ISSUE_AUTHOR_COMMENTS || '';
             const bm25Candidates = process.env.BM25_CANDIDATES || '';
             const changelog = process.env.CHANGELOG_CONTEXT || 'No changelog available.';
-            const toolList = process.env.TOOL_LIST || '';
 
             // Keep section headers (### ...) so the model can see structure and assess completeness.
             // Only strip _No response_ placeholders and collapse blank runs.
@@ -571,7 +569,7 @@ jobs:
               .replace(/\n{3,}/g, '\n\n')
               .trim();
 
-            const issueBody = cleanBody(rawBody).substring(0, 16000);
+            const issueBody = cleanBody(rawBody).substring(0, 5000);
 
             // Parse extracted keywords for context (show top-5 by weight in prompt)
             let keywordSummary = '';
@@ -591,10 +589,6 @@ jobs:
 
             const duplicateSection = bm25Candidates
               ? `\n## Possible Duplicate Candidates (BM25 pre-filtered)\nCheck each candidate — mark DUPLICATE only if high confidence.\n\n${bm25Candidates}\n`
-              : '';
-
-            const toolSection = toolList
-              ? `\n## Available ha-mcp Tools (for priority/size assessment)\n${toolList}\n`
               : '';
 
             const jsonSchema = '{"completeness":"complete|incomplete","classification":"bug|enhancement|question|invalid",'
@@ -630,7 +624,6 @@ jobs:
               issueBody,
               authorSection,
               duplicateSection,
-              toolSection,
               '## Recent Release Context (for regression detection)',
               changelog,
               '',
