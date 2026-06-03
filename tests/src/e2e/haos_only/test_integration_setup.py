@@ -263,3 +263,36 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
                 f"subsequent ha_search_entities calls will slow over time. "
                 f"Result: {cleanup}"
             )
+
+
+async def test_ha_mcp_tools_config_flow_loads_on_supervisor(ha_client: Any) -> None:
+    """The ha_mcp_tools bootstrap config flow imports and runs on real HA OS.
+
+    Starting the flow forces ``custom_components/ha_mcp_tools/config_flow.py``
+    (and its imports) to load and execute inside a real Supervised Home
+    Assistant process — coverage that neither the testcontainer tier nor the
+    seeded-entry setup path provides (the qcow2 seeds the config entry directly
+    in ``.storage`` and never drives the flow).
+
+    The integration is single-instance, so where it is already configured the
+    flow aborts with ``already_configured``; if it is not yet configured it
+    reaches the Supervisor-aware add-on step (proving ``is_hassio`` routing
+    works on a real Supervisor). Either outcome proves the flow loaded. The flow
+    is left un-submitted, so no add-on is installed and no duplicate entry is
+    created.
+    """
+    flow_init = await ha_client.start_config_flow("ha_mcp_tools")
+    flow_type = flow_init.get("type")
+    assert flow_type in ("abort", "form", "menu"), (
+        f"ha_mcp_tools config flow did not load cleanly on HA OS: {flow_init}"
+    )
+    if flow_type == "abort":
+        assert flow_init.get("reason") == "already_configured", (
+            f"Unexpected abort reason from ha_mcp_tools config flow: {flow_init}"
+        )
+    else:
+        LOG.info(
+            "ha_mcp_tools config flow reached step %r on Supervisor (left "
+            "un-submitted)",
+            flow_init.get("step_id"),
+        )
