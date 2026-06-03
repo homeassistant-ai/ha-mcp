@@ -181,7 +181,11 @@ def main(argv: list[str]) -> int:
         print(f"SARIF file not found: {sarif_path}", file=sys.stderr)
         return 2
 
-    findings, suppressed = classify(sarif_path)
+    try:
+        findings, suppressed = classify(sarif_path)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"Could not read SARIF file {sarif_path}: {e}", file=sys.stderr)
+        return 2
     report = render(findings)
     if suppressed:
         lines = [f"\nSuppressed (allowlisted false positives): {len(suppressed)}"]

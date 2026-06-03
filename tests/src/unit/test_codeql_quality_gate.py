@@ -169,5 +169,113 @@ def test_allowlist_requires_all_three_of_rule_path_message(tmp_path: Path) -> No
     assert not suppressed
 
 
+def test_allowlist_wrong_rule_is_not_suppressed(tmp_path: Path) -> None:
+    """Right path + right symbol but a different rule must still gate."""
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/empty-except",  # not the allowlisted rule for this symbol
+                "src/ha_mcp/__main__.py",
+                580,
+                "The global variable '_shutdown_in_progress' is not used.",
+            ),
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert len(findings) == 1
+    assert not suppressed
+
+
+def test_allowlist_wrong_path_is_not_suppressed(tmp_path: Path) -> None:
+    """Right rule + right symbol but a different file must still gate."""
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/unused-global-variable",
+                "src/ha_mcp/tools/somewhere_else.py",
+                10,
+                "The global variable '_shutdown_in_progress' is not used.",
+            ),
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert len(findings) == 1
+    assert not suppressed
+
+
+def test_result_without_location_still_gates(tmp_path: Path) -> None:
+    """A result with no physical location is kept with a placeholder file/line."""
+    sarif = {
+        "runs": [
+            {
+                "tool": {"driver": {"name": "CodeQL"}},
+                "results": [{"ruleId": "py/no-loc", "message": {"text": "x"}}],
+            }
+        ]
+    }
+    path = tmp_path / "q.sarif"
+    path.write_text(json.dumps(sarif), encoding="utf-8")
+    findings = gate.load_findings(path)
+    assert findings == [("<no-location>", 0, "py/no-loc", "x")]
+
+
+def test_missing_region_and_message_default_cleanly(tmp_path: Path) -> None:
+    """Absent region.startLine and message text fall back to 0 / empty string."""
+    sarif = {
+        "runs": [
+            {
+                "tool": {"driver": {"name": "CodeQL"}},
+                "results": [
+                    {
+                        "ruleId": "py/x",
+                        "locations": [
+                            {"physicalLocation": {"artifactLocation": {"uri": "a.py"}}}
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    path = tmp_path / "q.sarif"
+    path.write_text(json.dumps(sarif), encoding="utf-8")
+    findings = gate.load_findings(path)
+    assert findings == [("a.py", 0, "py/x", "")]
+
+
+def test_malformed_sarif_returns_exit_2(tmp_path: Path) -> None:
+    path = tmp_path / "bad.sarif"
+    path.write_text("{not valid json", encoding="utf-8")
+    assert gate.main(["prog", str(path)]) == 2
+
+
+def test_suppressed_findings_are_reported_to_stdout(tmp_path: Path, capsys) -> None:
+    """Allowlisted findings must be printed, never silently dropped."""
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "py/unused-import",
+                "packaging/binary/pyinstaller_hooks/runtime_hook.py",
+                7,
+                "Import of 'idna' is not used.",
+            ),
+        ],
+    )
+    assert gate.main(["prog", str(path)]) == 0  # only a suppressed finding
+    out = capsys.readouterr().out
+    assert "Suppressed (allowlisted false positives): 1" in out
+    assert "py/unused-import" in out
+
+
+def test_github_step_summary_is_written(tmp_path: Path, monkeypatch) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    path = _write_sarif(tmp_path, [_result("py/x", "src/a.py", 1, "boom")])
+    gate.main(["prog", str(path)])
+    assert "CodeQL Code Quality" in summary.read_text(encoding="utf-8")
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
