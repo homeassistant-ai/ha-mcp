@@ -8,11 +8,14 @@ from pathlib import Path
 import pytest
 from uat.openai_agent import ContextWindowExceededError
 from uat.stories.run_story import (
+    CONSECUTIVE_TIMEOUT_ABORT,
     _compute_passed,
     _extract_model,
     _run_completed,
     _run_test_prompt_inline,
+    _stories_after,
     _suite_exit_code,
+    _update_timeout_streak,
     append_abort_marker,
     append_result,
 )
@@ -333,17 +336,90 @@ async def test_backend_connection_error_propagates(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_backend_timeout_propagates_as_connection_error(monkeypatch):
-    """APITimeoutError (an APIConnectionError subclass) propagates the same way.
+async def test_backend_timeout_is_per_story_failure_not_fatal(monkeypatch):
+    """APITimeoutError is a per-story FAIL, not a suite-fatal propagation.
 
-    The loop catches APIConnectionError, so a timeout must be catchable as one.
+    A timeout can happen on a slow-but-alive local backend (a long or
+    degenerate-loop generation), so unlike a refused connection it must NOT
+    abort the whole suite. It returns a failure summary marked completed=False
+    (so a state-based verify can't mask it) and error="timeout" (so the loop
+    can count consecutive timeouts toward an abort). APITimeoutError subclasses
+    APIConnectionError, so this also guards the except ordering in the inline
+    path: a regression there would re-raise and this test would error.
     """
     import httpx
     import openai
 
     req = httpx.Request("POST", "http://x/v1/chat/completions")
-    with pytest.raises(openai.APIConnectionError):
-        await _run_inline_with_raise(monkeypatch, openai.APITimeoutError(request=req))
+    rc, summary = await _run_inline_with_raise(
+        monkeypatch, openai.APITimeoutError(request=req)
+    )
+    assert rc == 1
+    test_phase = summary["agents"]["openai"]["test"]
+    assert test_phase["completed"] is False
+    assert test_phase["error"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_timeout_story_scores_as_fail(monkeypatch):
+    """A timed-out story is FAIL even if ha_checks pass on stale state.
+
+    The timeout marks completed=False, and _compute_passed's completed guard
+    fails it before the verify results are consulted, same anti-masking path
+    as a context-overflow crash.
+    """
+    import httpx
+    import openai
+
+    req = httpx.Request("POST", "http://x/v1/chat/completions")
+    _rc, summary = await _run_inline_with_raise(
+        monkeypatch, openai.APITimeoutError(request=req)
+    )
+    test_phase = summary["agents"]["openai"]["test"]
+    passed = _compute_passed(
+        exit_code=1,
+        tool_calls=None,
+        verify_results=[{"passed": True}],
+        completed=_run_completed(test_phase, summary, 1),
+    )
+    assert passed is False
+
+
+def test_consecutive_timeouts_reach_abort_threshold():
+    """Back-to-back timeouts accumulate until the abort threshold is hit."""
+    streak = 0
+    for _ in range(CONSECUTIVE_TIMEOUT_ABORT - 1):
+        streak = _update_timeout_streak(streak, was_timeout=True)
+        assert streak < CONSECUTIVE_TIMEOUT_ABORT  # still below: keep running
+    streak = _update_timeout_streak(streak, was_timeout=True)
+    assert streak >= CONSECUTIVE_TIMEOUT_ABORT  # threshold reached -> abort
+
+
+def test_non_timeout_story_resets_timeout_streak():
+    """A non-timeout story clears the streak so isolated timeouts never abort.
+
+    Without the reset, timeouts scattered across a long run would eventually sum
+    to the threshold and abort a live backend. A single timeout staying below
+    the threshold also encodes the design invariant that one timeout is not
+    suite-fatal (threshold >= 2).
+    """
+    assert _update_timeout_streak(CONSECUTIVE_TIMEOUT_ABORT - 1, was_timeout=False) == 0
+    assert _update_timeout_streak(0, was_timeout=True) < CONSECUTIVE_TIMEOUT_ABORT
+
+
+def test_timeout_abort_skips_only_stories_after_current():
+    """The consecutive-timeout abort skips stories AFTER the current one.
+
+    The timed-out story at story_index was already recorded as a per-story fail,
+    so it must NOT appear in the skip list (off-by-one here would double-count it
+    as both failed and skipped, corrupting pass-rate accounting). Contrast the
+    connection-error path, which skips from story_index itself.
+    """
+    filtered = [(Path(f"s{i}.yaml"), {"id": f"s0{i}"}) for i in range(1, 6)]
+    # Abort triggered while handling index 1 (story s02): skip s03, s04, s05.
+    assert _stories_after(filtered, 1) == ["s03", "s04", "s05"]
+    # Abort on the last story leaves nothing to skip.
+    assert _stories_after(filtered, len(filtered) - 1) == []
 
 
 def _row(passed: bool) -> tuple:
