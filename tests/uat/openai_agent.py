@@ -47,6 +47,58 @@ def _strip_pydantic_url(text: str) -> str:
     return _PYDANTIC_URL_LINE.sub("", text)
 
 
+# llama-server reports a context overflow as HTTP 400 with type
+# ``exceed_context_size_error`` and a message like:
+#   request (27220 tokens) exceeds the available context size (24576 tokens)
+_CTX_OVERFLOW_RE = re.compile(
+    r"request \((\d+) tokens?\) exceeds the available context size \((\d+) tokens?\)"
+)
+
+
+class ContextWindowExceededError(RuntimeError):
+    """Raised when the accumulated conversation overflows the backend's context.
+
+    Carries the requested prompt size and the backend context limit (either may
+    be ``None`` if the marker matched but the numbers couldn't be parsed). The
+    inline path surfaces this as a hard failure so a verification-based PASS
+    can't mask an agent that crashed mid-run.
+    """
+
+    def __init__(self, requested_tokens: int | None, context_size: int | None) -> None:
+        self.requested_tokens = requested_tokens
+        self.context_size = context_size
+        detail = (
+            f"request ({requested_tokens} tokens) exceeds context size "
+            f"({context_size} tokens)"
+            if requested_tokens is not None and context_size is not None
+            else "context window exceeded"
+        )
+        super().__init__(detail)
+
+
+def _parse_context_overflow(
+    exc: openai.BadRequestError,
+) -> tuple[int | None, int | None] | None:
+    """Return (requested_tokens, context_size) if ``exc`` is a context overflow.
+
+    Matches llama-server's ``exceed_context_size_error`` type or its
+    "exceeds the available context size" message on the stringified exception
+    (version-robust vs. structured fields). Returns ``None`` when the error is
+    some other 400, or ``(None, None)`` when the marker is present but the token
+    counts can't be parsed.
+    """
+    text = str(getattr(exc, "message", "") or "") + " " + str(exc)
+    if (
+        "exceed_context_size_error" not in text
+        and "exceeds the available context size" not in text
+    ):
+        return None
+    match = _CTX_OVERFLOW_RE.search(text)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return None, None
+
+
 logger = logging.getLogger("uat.openai_agent")
 
 
@@ -194,7 +246,14 @@ async def tool_call_loop(
             # model kept reasoning despite this request, so a no-op is visible.
             kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
 
-        response = await client.chat.completions.create(**kwargs)
+        try:
+            response = await client.chat.completions.create(**kwargs)
+        except openai.BadRequestError as e:
+            overflow = _parse_context_overflow(e)
+            if overflow is not None:
+                requested, ctx = overflow
+                raise ContextWindowExceededError(requested, ctx) from e
+            raise
         num_turns += 1
 
         # Accumulate running token totals; also capture first-turn prompt size as

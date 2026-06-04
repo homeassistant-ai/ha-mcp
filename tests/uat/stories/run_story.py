@@ -413,7 +413,12 @@ async def _run_test_prompt_inline(
     """
     import traceback
 
-    from uat.openai_agent import DEFAULT_MAX_TOKENS, run_scenario_inline
+    import openai
+    from uat.openai_agent import (
+        DEFAULT_MAX_TOKENS,
+        ContextWindowExceededError,
+        run_scenario_inline,
+    )
 
     tool_trace: list[str] = []
     start = time.monotonic()
@@ -428,6 +433,29 @@ async def _run_test_prompt_inline(
             tool_trace_sink=tool_trace,
             openai_tools=openai_tools,
         )
+    except ContextWindowExceededError as e:
+        # The conversation overflowed the backend context. Surface it as a
+        # distinct hard failure so a verification-based PASS can't mask a run
+        # that crashed mid-conversation (the entity may already exist from an
+        # earlier turn). See _compute_passed's completed guard.
+        logger.error(f"  [{agent_name}] context window exceeded: {e}")
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return 1, _inline_failure_summary(
+            agent_name,
+            error_msg="context_window_exceeded",
+            duration_ms=duration_ms,
+            tool_trace=tool_trace,
+            context_overflow={
+                "requested_tokens": e.requested_tokens,
+                "context_size": e.context_size,
+            },
+        )
+    except openai.APIConnectionError:
+        # The LLM backend is unreachable after the SDK exhausted its own
+        # retries (covers APITimeoutError). This is suite-fatal, not a per-story
+        # failure: propagate so the story loop aborts instead of swallowing it
+        # into a FAIL summary and then timing out on every remaining story.
+        raise
     except Exception as e:
         logger.exception(f"  [{agent_name}] inline run failed")
         tb = traceback.format_exc()
@@ -489,6 +517,7 @@ def _inline_failure_summary(
     traceback_text: str | None = None,
     duration_ms: int = 0,
     tool_trace: list[str] | None = None,
+    context_overflow: dict | None = None,
 ) -> dict:
     """Build a summary dict for a failed inline run (matches make_summary shape)."""
     test_phase: dict = {
@@ -499,6 +528,8 @@ def _inline_failure_summary(
         "error": error_msg,
         "tool_trace": tool_trace or [],
     }
+    if context_overflow is not None:
+        test_phase["context_overflow"] = context_overflow
     return {
         "agents": {
             agent_name: {
@@ -580,23 +611,54 @@ def get_git_info() -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # Pass/fail determination
 # ---------------------------------------------------------------------------
+def _run_completed(test_phase: dict, summary: dict | None, exit_code: int) -> bool:
+    """Whether the agent run completed, as opposed to crashing mid-run.
+
+    Fail-closed: a subprocess agent that crashes produces unparseable stdout
+    (summary is None → empty test_phase), which must not count as completed
+    just because ha_checks pass on state left from an earlier turn. That is the
+    same masking class the inline ContextWindowExceededError path closes. Both
+    the inline and subprocess summary builders set ``completed`` explicitly, so
+    the fallback only fires when the summary is missing entirely.
+    """
+    return test_phase.get("completed", summary is not None and exit_code == 0)
+
+
 def _compute_passed(
     exit_code: int,
     tool_calls: int | None,
     verify_results: list[dict] | None,
+    completed: bool = True,
 ) -> bool:
     """Determine passed based on tool usage and verification results.
 
     Rules:
+    - Run did not complete (crashed mid-run, e.g. context overflow) → fail.
+      Checked first so a verification-based PASS can't mask a crashed agent
+      that happened to leave good HA state from an earlier turn.
     - Zero tool calls → fail (agent did nothing useful)
     - ha_checks present → all checks must pass
     - No checks → fall back to exit code
     """
+    if not completed:
+        return False
     if tool_calls == 0:
         return False
     if verify_results is not None:
         return all(r["passed"] for r in verify_results)
     return exit_code == 0
+
+
+def _suite_exit_code(all_results: list, backend_aborted: bool) -> int:
+    """Process exit code for a story run.
+
+    An aborted suite (the LLM backend went unreachable mid-run) is never a clean
+    pass, even if every story that did run passed, because it never ran to
+    completion. Otherwise nonzero iff any completed story run failed.
+    """
+    if backend_aborted:
+        return 1
+    return 1 if any(not passed for *_, passed in all_results) else 0
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +705,16 @@ def append_result(
     }
     if session_file:
         record["session_file"] = session_file
+
+    # Surface the failure-reason marker so reports can tell an incomplete run
+    # (e.g. context_window_exceeded, hit_iteration_limit) apart from a run that
+    # finished but failed its checks.
+    error = test_phase.get("error")
+    if error:
+        record["error"] = error
+    context_overflow = test_phase.get("context_overflow")
+    if context_overflow:
+        record["context_overflow"] = context_overflow
 
     # Cost from Claude's JSON output (direct, no session file needed)
     cost_usd = test_phase.get("cost_usd")
@@ -697,6 +769,41 @@ def append_result(
         f.write(json.dumps(record, separators=(",", ":")) + "\n")
 
 
+def append_abort_marker(
+    results_file: Path,
+    agent: str,
+    sha: str,
+    describe: str,
+    branch: str | None,
+    skipped_stories: list[str],
+    detail: str,
+) -> None:
+    """Append a run-level marker recording that the suite aborted early.
+
+    When the LLM backend goes unreachable the remaining stories are skipped
+    rather than recorded, so without this marker the results file would be
+    indistinguishable from a complete run that just happened to contain fewer
+    stories. A reader (or bat-story-eval) could fold a crashed run into a
+    baseline as a clean partial pass. The marker carries no ``story``/``passed``
+    keys, so it can't be miscounted as a per-story result; it exists so the
+    durable artifact is as self-describing as the nonzero exit code.
+    """
+    record = {
+        "sha": sha,
+        "version": describe,
+        "branch": branch,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "agent": agent,
+        "aborted": True,
+        "error": "backend_unreachable",
+        "detail": detail,
+        "skipped_stories": skipped_stories,
+    }
+    results_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(results_file, "a") as f:
+        f.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -733,6 +840,7 @@ async def run_stories(
 
     all_results: list[tuple[str, str, dict, int, dict | None, str | None, bool]] = []
     # Each entry: (agent, story_id, story, exit_code, summary, session_file, passed)
+    backend_aborted = False  # set if any agent aborted on an unreachable backend
 
     mcp_env_dict = parse_mcp_env(
         getattr(args, "mcp_env", None),
@@ -770,6 +878,7 @@ async def run_stories(
                 agent_stack.callback(_stop_container, ha)
 
             if use_inline:
+                import openai  # runtime ref for APIConnectionError in the story loop
                 from fastmcp import Client as _MCPClient
                 from uat.openai_agent import (
                     create_and_warm_openai_client,
@@ -843,7 +952,7 @@ async def run_stories(
                 inprocess_mcp_client(ha_url, ha_token)
             )
 
-            for _path, story in filtered:
+            for story_index, (_path, story) in enumerate(filtered):
                 sid = story["id"]
                 logger.info(f"\n{'=' * 60}")
                 logger.info(f"[{agent}] Story {sid}: {story['title']}")
@@ -870,16 +979,43 @@ async def run_stories(
                     ), (
                         "inline setup invariant: clients/model are populated when use_inline is True"
                     )
-                    rc, summary = await _run_test_prompt_inline(
-                        story["prompt"],
-                        agent_name=agent,
-                        openai_client=openai_client,
-                        mcp_client=inline_mcp_client,
-                        model=resolved_model,
-                        openai_tools=openai_tools,
-                        no_think=args.no_think,
-                        max_tokens=getattr(args, "max_tokens", None),
-                    )
+                    try:
+                        rc, summary = await _run_test_prompt_inline(
+                            story["prompt"],
+                            agent_name=agent,
+                            openai_client=openai_client,
+                            mcp_client=inline_mcp_client,
+                            model=resolved_model,
+                            openai_tools=openai_tools,
+                            no_think=args.no_think,
+                            max_tokens=getattr(args, "max_tokens", None),
+                        )
+                    except openai.APIConnectionError as e:
+                        # Backend unreachable after the SDK's retries. Abort this
+                        # agent's remaining stories rather than timing out on each.
+                        # Skipped stories are NOT recorded (they were never validly
+                        # tested), so the pass rate isn't corrupted by false fails.
+                        skipped = [s["id"] for _p, s in filtered[story_index:]]
+                        detail = f"{type(e).__name__}: {e}"
+                        logger.critical(
+                            f"[{agent}/{sid}] LLM backend unreachable "
+                            f"({detail}); aborting agent. "
+                            f"Skipped (not run): {', '.join(skipped)}"
+                        )
+                        # Record a run-level marker so the results file is as
+                        # self-describing as the nonzero exit code (the skipped
+                        # stories are otherwise absent, not recorded as fails).
+                        append_abort_marker(
+                            args.results_file,
+                            agent,
+                            sha,
+                            describe,
+                            args.branch,
+                            skipped,
+                            detail,
+                        )
+                        backend_aborted = True
+                        break
                 else:
                     rc, summary = _run_test_prompt(
                         story["prompt"],
@@ -943,6 +1079,7 @@ async def run_stories(
                     exit_code=rc,
                     tool_calls=agg.get("total_tool_calls"),
                     verify_results=verify_results,
+                    completed=_run_completed(test_phase, summary, rc),
                 )
                 all_results.append(
                     (agent, sid, story, rc, summary, session_file, passed)
@@ -983,11 +1120,16 @@ async def run_stories(
 
     failed = sum(1 for *_, passed in all_results if not passed)
     total = len(all_results)
-    if failed:
+    if backend_aborted:
+        logger.warning(
+            f"\nRun aborted: LLM backend became unreachable "
+            f"({failed}/{total} completed story runs failed before the abort)"
+        )
+    elif failed:
         logger.warning(f"\n{failed}/{total} story runs failed")
-        return 1
-    logger.info(f"\nAll {total} story runs passed")
-    return 0
+    else:
+        logger.info(f"\nAll {total} story runs passed")
+    return _suite_exit_code(all_results, backend_aborted)
 
 
 def main() -> None:

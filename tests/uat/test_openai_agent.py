@@ -789,3 +789,96 @@ class TestDetectQuantization:
         self._patch_client(monkeypatch, raise_status=True)
         result = await openai_agent.detect_quantization("http://h/v1", "m")
         assert result is None
+
+
+def _bad_request(message: str) -> openai.BadRequestError:  # noqa: F821
+    """Build a real ``openai.BadRequestError`` carrying ``message``."""
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "http://test/v1/chat/completions")
+    response = httpx.Response(400, request=request)
+    return openai.BadRequestError(
+        message,
+        response=response,
+        body={"error": {"type": "exceed_context_size_error"}},
+    )
+
+
+class TestParseContextOverflow:
+    """Test detection/parsing of llama-server context-overflow 400s."""
+
+    def test_extracts_requested_and_context_tokens(self):
+        err = _bad_request(
+            "request (27220 tokens) exceeds the available context size (24576 tokens)"
+        )
+        assert openai_agent._parse_context_overflow(err) == (27220, 24576)
+
+    def test_none_for_unrelated_bad_request(self):
+        err = _bad_request("invalid 'temperature': must be <= 2")
+        assert openai_agent._parse_context_overflow(err) is None
+
+    def test_marker_without_numbers_returns_none_pair(self):
+        """Marker present but no parseable counts → (None, None), still an overflow."""
+        err = _bad_request("exceed_context_size_error: too long")
+        assert openai_agent._parse_context_overflow(err) == (None, None)
+
+    def test_extracts_from_sdk_wire_format(self):
+        """The SDK stringifies as ``Error code: 400 - {body-dict}``; parse survives it.
+
+        Exercises the real on-the-wire shape (regex embedded in a dict repr,
+        plus the ``exceed_context_size_error`` type marker) rather than a clean
+        pre-extracted message.
+        """
+        err = _bad_request(
+            "Error code: 400 - {'error': {'message': 'request (27220 tokens) "
+            "exceeds the available context size (24576 tokens)', "
+            "'type': 'exceed_context_size_error'}}"
+        )
+        assert openai_agent._parse_context_overflow(err) == (27220, 24576)
+
+
+class TestContextOverflowInLoop:
+    """Test that the tool-call loop surfaces context overflow distinctly."""
+
+    @pytest.mark.asyncio
+    async def test_overflow_raises_context_window_exceeded(self):
+        """A context-overflow 400 becomes ContextWindowExceededError with counts."""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=_bad_request(
+                "request (27220 tokens) exceeds the available context size "
+                "(24576 tokens)"
+            )
+        )
+
+        with pytest.raises(openai_agent.ContextWindowExceededError) as exc_info:
+            await openai_agent.tool_call_loop(
+                client=mock_client,
+                model="qwen3.6",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[],
+                mcp_client=AsyncMock(),
+            )
+
+        assert exc_info.value.requested_tokens == 27220
+        assert exc_info.value.context_size == 24576
+
+    @pytest.mark.asyncio
+    async def test_unrelated_bad_request_propagates(self):
+        """A non-overflow 400 is re-raised unchanged, not mislabeled as overflow."""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=_bad_request("invalid 'temperature': must be <= 2")
+        )
+
+        import openai
+
+        with pytest.raises(openai.BadRequestError):
+            await openai_agent.tool_call_loop(
+                client=mock_client,
+                model="qwen3.6",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[],
+                mcp_client=AsyncMock(),
+            )
