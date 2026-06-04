@@ -367,7 +367,7 @@ class AutomationConfigTools:
                 suggestions=[
                     "Pass an automation entity_id (e.g. 'automation.morning_routine')",
                     "Or pass the unique_id of an existing automation",
-                    "Use ha_search_entities(domain_filter='automation') to list automations",
+                    "Use ha_search(domain_filter='automation') to list automations",
                 ],
             )
             normalized_config, config_hash = await self._get_automation_config_internal(
@@ -398,7 +398,7 @@ class AutomationConfigTools:
                 e,
                 context={"identifier": identifier, "action": "get"},
                 suggestions=[
-                    "Verify automation exists using ha_search_entities(domain_filter='automation')",
+                    "Verify automation exists using ha_search(domain_filter='automation')",
                     "Check Home Assistant connection",
                     "Use ha_get_skill_guide for help",
                 ],
@@ -644,11 +644,11 @@ class AutomationConfigTools:
 
         TROUBLESHOOTING:
         - Use ha_get_state() to verify entity_ids exist
-        - Use ha_search_entities() to find correct entity_ids
+        - Use ha_search() to find correct entity_ids
         - IF you must use Jinja2 and have no native alternative, test it first with
           ha_eval_template() before embedding it in the automation config — catches
           syntax errors and unresolved entity_ids before they fail silently at runtime
-        - Use ha_search_entities(domain_filter='automation') to find existing automations
+        - Use ha_search(domain_filter='automation') to find existing automations
         """
         bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
@@ -752,7 +752,7 @@ class AutomationConfigTools:
                 "Check automation configuration format",
                 "Ensure required fields: alias, trigger, action",
                 "Use entity_id format: automation.morning_routine or unique_id",
-                "Use ha_search_entities(domain_filter='automation') to find automations",
+                "Use ha_search(domain_filter='automation') to find automations",
                 "Use ha_get_skill_guide for automation examples",
             ]
             if isinstance(e, HomeAssistantAPIError):
@@ -805,7 +805,7 @@ class AutomationConfigTools:
                     "identifier is required for python_transform",
                     suggestions=[
                         "Provide the automation entity_id or unique_id",
-                        "Use ha_search_entities(domain_filter='automation') to find automations",
+                        "Use ha_search(domain_filter='automation') to find automations",
                     ],
                     context={"action": "python_transform", "identifier": identifier},
                 )
@@ -1011,7 +1011,7 @@ class AutomationConfigTools:
                     "available_automation_ids": available_ids,
                 },
                 suggestions=[
-                    "Use ha_search_entities(domain_filter='automation') to find existing automations"
+                    "Use ha_search(domain_filter='automation') to find existing automations"
                 ],
             )
         )
@@ -1269,7 +1269,7 @@ class AutomationConfigTools:
                 identifier,
                 "identifier",
                 suggestions=[
-                    "Use ha_search_entities(domain_filter='automation') to find existing automations"
+                    "Use ha_search(domain_filter='automation') to find existing automations"
                 ],
                 context={"operation": "remove_automation"},
             )
@@ -1314,7 +1314,7 @@ class AutomationConfigTools:
                 e,
                 context={"identifier": identifier, "action": "delete"},
                 suggestions=[
-                    "Verify automation exists using ha_search_entities(domain_filter='automation')",
+                    "Verify automation exists using ha_search(domain_filter='automation')",
                     "Use entity_id format: automation.morning_routine or unique_id",
                     "Check Home Assistant connection",
                 ],

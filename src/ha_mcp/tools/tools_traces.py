@@ -493,7 +493,7 @@ async def _gather_diagnostics(
         logger.debug(f"Error getting entity state for diagnostics: {e}")
         diagnostics["suggestion"] = (
             f"Could not find {automation_id}. "
-            "Verify the entity_id is correct using ha_search_entities()."
+            "Verify the entity_id is correct using ha_search()."
         )
 
     return diagnostics

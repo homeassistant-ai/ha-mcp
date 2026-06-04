@@ -3334,8 +3334,7 @@ class HelperConfigTools:
         **NOTE:** This only returns storage-based helpers (created via UI/API), not YAML-defined helpers.
 
         Flow-based types (template / group / utility_meter / derivative / etc.)
-        cannot be listed via this tool — use ``ha_search_entities`` or
-        ``ha_deep_search`` for those.
+        cannot be listed via this tool — use ``ha_search`` for those.
 
         For detailed helper documentation, use ha_get_skill_guide.
         """
@@ -3369,7 +3368,7 @@ class HelperConfigTools:
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
-                    "Use ha_search_entities(domain_filter='input_*') as alternative",
+                    "Use ha_search(domain_filter='input_*') as alternative",
                 ],
             )
             return (

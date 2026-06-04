@@ -136,7 +136,7 @@ class ConfigScriptTools:
             # parity with ``ha_config_get_automation`` (mechanism differs:
             # automations resolve via state lookup; scripts strip the
             # prefix). ``_raise_script_not_found`` suggests
-            # ``ha_search_entities(domain_filter='script')`` which returns
+            # ``ha_search(domain_filter='script')`` which returns
             # entity_ids; without this strip, feeding that output back into
             # the GET tool fails and reseeds the wrong-tool spiral that
             # #1297 closes.
@@ -151,7 +151,7 @@ class ConfigScriptTools:
                 "script_id",
                 suggestions=[
                     "Pass a script identifier (e.g. 'morning_routine')",
-                    "Use ha_search_entities(domain_filter='script') to list scripts",
+                    "Use ha_search(domain_filter='script') to list scripts",
                 ],
             )
             config_result = await self._fetch_script_config_envelope(script_id)
@@ -196,7 +196,7 @@ class ConfigScriptTools:
                 e,
                 context={"script_id": script_id},
                 suggestions=[
-                    "Verify script_id exists using ha_search_entities(domain_filter='script')",
+                    "Verify script_id exists using ha_search(domain_filter='script')",
                     "Check Home Assistant connection",
                     "Use ha_get_skill_guide for help",
                 ],
@@ -252,7 +252,7 @@ class ConfigScriptTools:
                     "available_script_ids": available_ids,
                 },
                 suggestions=[
-                    "Use ha_search_entities(domain_filter='script') to find existing scripts"
+                    "Use ha_search(domain_filter='script') to find existing scripts"
                 ],
             )
         )
@@ -591,7 +591,7 @@ class ConfigScriptTools:
             # ``ha_config_get_script("foo")``. Behavioral parity with
             # ``ha_config_get_script`` so an agent that received an
             # entity_id (``script.foo``) from
-            # ``ha_search_entities(domain_filter='script')`` can update it
+            # ``ha_search(domain_filter='script')`` can update it
             # without a manual prefix-strip step.
             script_id = script_id.removeprefix("script.")
             # ``script_id`` is required (always non-None). Reject empty/
@@ -605,7 +605,7 @@ class ConfigScriptTools:
                 "script_id",
                 suggestions=[
                     "Pass a script identifier (e.g. 'morning_routine')",
-                    "Use ha_search_entities(domain_filter='script') to list scripts",
+                    "Use ha_search(domain_filter='script') to list scripts",
                 ],
                 context={"action": "set"},
             )
@@ -804,7 +804,7 @@ class ConfigScriptTools:
                 "For blueprint scripts, use ha_get_blueprint(domain='script') to list available blueprints",
                 "Validate sequence actions syntax for regular scripts",
                 "Check entity_ids exist if using service calls",
-                "Use ha_search_entities(domain_filter='script') to find scripts",
+                "Use ha_search(domain_filter='script') to find scripts",
                 "Use ha_get_skill_guide for help",
             ]
             if bp_warnings:
@@ -883,7 +883,7 @@ class ConfigScriptTools:
                 script_id,
                 "script_id",
                 suggestions=[
-                    "Use ha_search_entities(domain_filter='script') to find existing script_ids"
+                    "Use ha_search(domain_filter='script') to find existing script_ids"
                 ],
                 context={"operation": "remove_script"},
             )
@@ -913,7 +913,7 @@ class ConfigScriptTools:
                 e,
                 context={"script_id": script_id},
                 suggestions=[
-                    "Verify script_id exists using ha_search_entities(domain_filter='script')",
+                    "Verify script_id exists using ha_search(domain_filter='script')",
                     "Check if script is being used by automations",
                     "Use ha_get_skill_guide for help",
                 ],

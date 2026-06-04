@@ -143,7 +143,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         if scene_id in slug_to_storage_id:
             return slug_to_storage_id[scene_id]
         logger.warning(
-            "ha_deep_search scene result fell back to entity-id slug for "
+            "ha_search scene result fell back to entity-id slug for "
             "scene_id=%r -- neither bulk config nor registry walk produced a "
             "storage key. ``ha_config_get_scene`` will rely on its resolver "
             "remap to land on the right scene.",

@@ -573,7 +573,7 @@ class VoiceAssistantTools:
                 suggestions=[
                     "Check Home Assistant connection",
                     "Use ha_manage_pipeline(action='list') to inspect existing pipeline values",
-                    "Use ha_search_entities(domain_filter='conversation') to find conversation agent IDs",
+                    "Use ha_search(domain_filter='conversation') to find conversation agent IDs",
                 ],
             )
             return None  # unreachable: exception_to_structured_error always raises
