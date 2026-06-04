@@ -63,6 +63,17 @@ DEFAULT_RESULTS_FILE = REPO_ROOT / "local" / "uat-results.jsonl"
 # stories. Claude and Gemini are external CLIs and take the subprocess path.
 INLINE_AGENTS: frozenset[str] = frozenset({"openai"})
 
+# A single request timeout is a per-story failure (the backend may be alive but
+# slow). This many *consecutive* timeouts means the backend is effectively gone
+# (unresponsive, or dropping packets so connects time out rather than refuse),
+# so the suite aborts rather than timing out on every remaining story.
+CONSECUTIVE_TIMEOUT_ABORT = 2
+
+# test_phase["error"] marker for a request timeout. Shared by the producer (the
+# inline timeout handler) and the consumer (the story loop's streak counter) so
+# the two can't drift apart and silently disable the consecutive-timeout abort.
+TIMEOUT_ERROR_MARKER = "timeout"
+
 # Add paths for imports
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(TESTS_DIR))
@@ -450,11 +461,29 @@ async def _run_test_prompt_inline(
                 "context_size": e.context_size,
             },
         )
+    except openai.APITimeoutError as e:
+        # A request timed out, but the backend may well be alive: a slow or
+        # degenerate-loop generation on a local model can outrun even a generous
+        # per-request timeout. Treat it as a per-story failure, NOT suite-fatal.
+        # completed=False (via _inline_failure_summary) so a state-based verify
+        # can't mask it. The story loop aborts only after several *consecutive*
+        # timeouts (a genuinely unresponsive or packet-dropping backend, whose
+        # connect attempts surface as timeouts rather than refusals). Must be
+        # caught before APIConnectionError; APITimeoutError subclasses it.
+        logger.warning(f"  [{agent_name}] request timed out: {e}")
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return 1, _inline_failure_summary(
+            agent_name,
+            error_msg=TIMEOUT_ERROR_MARKER,
+            duration_ms=duration_ms,
+            tool_trace=tool_trace,
+        )
     except openai.APIConnectionError:
-        # The LLM backend is unreachable after the SDK exhausted its own
-        # retries (covers APITimeoutError). This is suite-fatal, not a per-story
-        # failure: propagate so the story loop aborts instead of swallowing it
-        # into a FAIL summary and then timing out on every remaining story.
+        # The LLM backend is unreachable after the SDK exhausted its own retries:
+        # a refused or reset connection, NOT a timeout (handled above). This is
+        # suite-fatal, not a per-story failure: propagate so the story loop
+        # aborts instead of swallowing it into a FAIL summary and then failing on
+        # every remaining story.
         raise
     except Exception as e:
         logger.exception(f"  [{agent_name}] inline run failed")
@@ -804,6 +833,50 @@ def append_abort_marker(
         f.write(json.dumps(record, separators=(",", ":")) + "\n")
 
 
+def _update_timeout_streak(consecutive: int, *, was_timeout: bool) -> int:
+    """Running count of consecutive per-story request timeouts.
+
+    A timeout increments the streak; any non-timeout story resets it to 0. The
+    caller aborts the agent once the streak reaches ``CONSECUTIVE_TIMEOUT_ABORT``
+    (the backend has stopped responding, vs one slow story on a live backend).
+    """
+    return consecutive + 1 if was_timeout else 0
+
+
+def _stories_after(filtered: list[tuple[Path, dict]], story_index: int) -> list[str]:
+    """Story ids after ``story_index``: the skip list for the consecutive-timeout
+    abort. The timed-out story at ``story_index`` was already recorded as a
+    per-story failure, so only later stories are skipped. Contrast the
+    connection-error path, which skips from ``story_index`` itself because that
+    story never validly ran.
+    """
+    return [s["id"] for _p, s in filtered[story_index + 1 :]]
+
+
+def _record_backend_abort(
+    results_file: Path,
+    agent: str,
+    sid: str,
+    skipped_stories: list[str],
+    detail: str,
+    *,
+    sha: str,
+    describe: str,
+    branch: str | None,
+) -> None:
+    """Log and record an early suite abort. Shared by the connection-error path
+    (a refused/reset connection) and the consecutive-timeout path (a backend
+    that has stopped responding). ``skipped_stories`` are NOT recorded as
+    per-story rows, so the pass rate isn't corrupted by false fails."""
+    logger.critical(
+        f"[{agent}/{sid}] LLM backend unreachable ({detail}); aborting agent. "
+        f"Skipped (not run): {', '.join(skipped_stories) if skipped_stories else '(none)'}"
+    )
+    append_abort_marker(
+        results_file, agent, sha, describe, branch, skipped_stories, detail
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -952,6 +1025,10 @@ async def run_stories(
                 inprocess_mcp_client(ha_url, ha_token)
             )
 
+            # Consecutive per-story timeouts; reset by any non-timeout story.
+            # Hitting CONSECUTIVE_TIMEOUT_ABORT aborts the agent (backend gone).
+            consecutive_timeouts = 0
+
             for story_index, (_path, story) in enumerate(filtered):
                 sid = story["id"]
                 logger.info(f"\n{'=' * 60}")
@@ -991,28 +1068,20 @@ async def run_stories(
                             max_tokens=getattr(args, "max_tokens", None),
                         )
                     except openai.APIConnectionError as e:
-                        # Backend unreachable after the SDK's retries. Abort this
-                        # agent's remaining stories rather than timing out on each.
-                        # Skipped stories are NOT recorded (they were never validly
-                        # tested), so the pass rate isn't corrupted by false fails.
-                        skipped = [s["id"] for _p, s in filtered[story_index:]]
-                        detail = f"{type(e).__name__}: {e}"
-                        logger.critical(
-                            f"[{agent}/{sid}] LLM backend unreachable "
-                            f"({detail}); aborting agent. "
-                            f"Skipped (not run): {', '.join(skipped)}"
-                        )
-                        # Record a run-level marker so the results file is as
-                        # self-describing as the nonzero exit code (the skipped
-                        # stories are otherwise absent, not recorded as fails).
-                        append_abort_marker(
+                        # A refused/reset connection (NOT a timeout; those are
+                        # handled per-story inside _run_test_prompt_inline). The
+                        # backend is gone, so abort this agent's remaining stories
+                        # rather than failing each one in turn. The current story
+                        # never validly ran, so it is skipped too (not recorded).
+                        _record_backend_abort(
                             args.results_file,
                             agent,
-                            sha,
-                            describe,
-                            args.branch,
-                            skipped,
-                            detail,
+                            sid,
+                            [s["id"] for _p, s in filtered[story_index:]],
+                            f"{type(e).__name__}: {e}",
+                            sha=sha,
+                            describe=describe,
+                            branch=args.branch,
                         )
                         backend_aborted = True
                         break
@@ -1103,6 +1172,30 @@ async def run_stories(
 
                 if session_file:
                     logger.info(f"[{agent}/{sid}] Session file: {session_file}")
+
+                # A request timeout is recorded above as a per-story failure, but
+                # several in a row mean the backend has stopped responding: abort
+                # rather than time out on every remaining story. Unlike the
+                # connection-error path (which skips the current story, never
+                # validly run), the timed-out story here WAS recorded, so only
+                # the stories after it are skipped.
+                consecutive_timeouts = _update_timeout_streak(
+                    consecutive_timeouts,
+                    was_timeout=test_phase.get("error") == TIMEOUT_ERROR_MARKER,
+                )
+                if consecutive_timeouts >= CONSECUTIVE_TIMEOUT_ABORT:
+                    _record_backend_abort(
+                        args.results_file,
+                        agent,
+                        sid,
+                        _stories_after(filtered, story_index),
+                        f"{consecutive_timeouts} consecutive request timeouts",
+                        sha=sha,
+                        describe=describe,
+                        branch=args.branch,
+                    )
+                    backend_aborted = True
+                    break
 
     # Summary
     logger.info(f"\n{'=' * 60}")

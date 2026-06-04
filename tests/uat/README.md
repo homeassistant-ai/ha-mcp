@@ -97,7 +97,7 @@ echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --agents opena
 | `--ha-url` | (start container) | Use existing HA instance |
 | `--ha-token` | test token | HA long-lived access token |
 | `--branch` | (local code) | Git branch/tag for ha-mcp |
-| `--timeout` | 120 | Timeout per phase in seconds |
+| `--timeout` | 300 | Timeout per phase in seconds |
 | `--base-url` | — | OpenAI-compatible API base URL (required for `openai` agent) |
 | `--api-key` | `no-key` | API key for OpenAI-compatible endpoint |
 | `--model` | (auto-detect) | Model name (auto-detected from `/v1/models` for openai) |

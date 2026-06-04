@@ -32,7 +32,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from uat._logging import configure_cli_logging
 
 DEFAULT_API_KEY = "no-key"
-DEFAULT_TIMEOUT = 120
+# Per-request timeout. Sized for slow local backends: a full DEFAULT_MAX_TOKENS
+# generation on a small quantized model plus prefill on a large tool context can
+# run several minutes, so a tight timeout would fail legitimate long turns. A
+# single timed-out turn is no longer suite-fatal (see _run_test_prompt_inline's
+# APITimeoutError handling), so erring high is cheap.
+DEFAULT_TIMEOUT = 600
+# Retries are for transient blips; retrying a slow local generation just re-runs
+# the same slow work, so one retry is plenty and keeps a timed-out turn's worst
+# case at 2x timeout rather than 3x.
+DEFAULT_MAX_RETRIES = 1
 DEFAULT_MAX_TOKENS = 8192
 MAX_TOOL_LOOP_ITERATIONS = 20
 
@@ -502,7 +511,12 @@ async def create_and_warm_openai_client(
     30-120s while the model is copied in). ``quantization`` is best-effort
     (``None`` when the backend doesn't expose it). Raises on failure.
     """
-    client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
+    client = openai.AsyncOpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        timeout=timeout,
+        max_retries=DEFAULT_MAX_RETRIES,
+    )
     resolved_model = model or await detect_model(client)
     quantization = await detect_quantization(base_url, resolved_model)
     suffix = f" ({quantization})" if quantization else ""
