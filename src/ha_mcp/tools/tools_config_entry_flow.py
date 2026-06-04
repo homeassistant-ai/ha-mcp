@@ -714,6 +714,8 @@ async def set_config_subentry(
 
     Presence of ``subentry_id`` is the discriminator: omitted creates a new
     subentry, provided reconfigures that existing subentry.
+    ``show_advanced_options`` is a no-op on HA 2026.6+ and kept only for older
+    HA versions pending removal before HA 2027.6.
     """
     flow_result = await client.start_config_subentry_flow(
         entry_id,

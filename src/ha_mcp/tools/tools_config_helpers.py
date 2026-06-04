@@ -3480,8 +3480,9 @@ class HelperConfigTools:
             bool,
             Field(
                 description=(
-                    "When helper_type='config_subentry', ask Home Assistant "
-                    "to expose advanced flow options."
+                    "When helper_type='config_subentry', ask older Home "
+                    "Assistant versions to expose advanced flow options. No-op "
+                    "on HA 2026.6+; pending removal before HA 2027.6."
                 ),
                 default=False,
             ),
