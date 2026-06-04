@@ -757,7 +757,7 @@
   {
     "name": "ha_config_list_dashboard_resources",
     "title": "List Dashboard Resources",
-    "description": "List all Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns all registered resources. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the content\ninstead of the full encoded URL to save tokens.\n\nArgs:\n    include_content: If True, includes full decoded content for inline\n        resources in \"_content\" field. Default False (150-char preview only).\n\nResource types:\n- module: ES6 JavaScript modules (modern custom cards)\n- js: Legacy JavaScript files\n- css: CSS stylesheets\n\nEach resource has a unique ID for update/delete operations.\n\nEXAMPLES:\n- List all resources: ha_config_list_dashboard_resources()\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n\nNote: Requires advanced mode to be enabled in Home Assistant for resource\nmanagement through the UI, but API access works regardless.",
+    "description": "List all Lovelace dashboard resources (custom cards, themes, CSS/JS).\n\nReturns all registered resources. For inline resources (created with\nha_config_set_dashboard_resource(content=...)), shows a preview of the content\ninstead of the full encoded URL to save tokens.\n\nArgs:\n    include_content: If True, includes full decoded content for inline\n        resources in \"_content\" field. Default False (150-char preview only).\n\nResource types:\n- module: ES6 JavaScript modules (modern custom cards)\n- js: Legacy JavaScript files\n- css: CSS stylesheets\n\nEach resource has a unique ID for update/delete operations.\n\nEXAMPLES:\n- List all resources: ha_config_list_dashboard_resources()\n- List with full content: ha_config_list_dashboard_resources(include_content=True)\n\nNote: Home Assistant 2026.6+ exposes resource management in the UI by\ndefault, and API access works regardless of UI availability.",
     "inputSchema": {
       "properties": {
         "include_content": {
@@ -1531,7 +1531,7 @@
           "default": null
         },
         "show_advanced_options": {
-          "type": "Annotated[bool, Field(description=\"When helper_type='config_subentry', ask Home Assistant to expose advanced flow options.\", default=False)]",
+          "type": "Annotated[bool, Field(description=\"When helper_type='config_subentry', ask older Home Assistant versions to expose advanced flow options. No-op on HA 2026.6+; pending removal before HA 2027.6.\", default=False)]",
           "default": false
         },
         "icon": {
@@ -1945,7 +1945,7 @@
           "default": null
         },
         "show_advanced_options": {
-          "type": "Annotated[bool, Field(description='When include_subentry_schema=True, ask Home Assistant to expose advanced flow options.', default=False)]",
+          "type": "Annotated[bool, Field(description='When include_subentry_schema=True, ask older Home Assistant versions to expose advanced flow options. No-op on HA 2026.6+; pending removal before HA 2027.6.', default=False)]",
           "default": false
         },
         "exact_match": {
