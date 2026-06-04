@@ -417,8 +417,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         query_text = (query or "").strip()
         domain_filter_text = (domain_filter or "").strip()
         area_filter_text = (area_filter or "").strip()
-        registry_eligible = bool(
-            query_text or domain_filter_text or area_filter_text
+        # ``search_types`` lists config-surface types only (automation, script,
+        # scene, helper, blueprint, dashboard). When the caller pins it, they
+        # are asking for config-only — skip the entity branch.
+        explicit_config_only = parsed_search_types is not None
+        registry_eligible = (
+            bool(query_text or domain_filter_text or area_filter_text)
+            and not explicit_config_only
         )
         body_eligible = bool(query_text)
 
