@@ -380,7 +380,7 @@ async def test_bulk_fetch_completes_within_timeout(
         f"the 30s MCP timeout. Bulk fetch may not be working."
     )
 
-    total = data.get("total_matches", 0)
+    total = data.get("config_total_matches", 0)
     logger.info(
         f"Deep search completed in {elapsed:.1f}s, found {total} matches "
         f"across {_AUTOMATION_COUNT} automations + {_SCRIPT_COUNT} scripts"
@@ -474,9 +474,9 @@ async def test_deep_search_pagination_basic(mcp_client, bulk_automations):
     assert page1.get("next_offset") == 3, (
         f"next_offset should be 3, got {page1.get('next_offset')}"
     )
-    total = page1.get("total_matches", 0)
+    total = page1.get("config_total_matches", 0)
     assert total >= _AUTOMATION_COUNT, (
-        f"total_matches should be >= {_AUTOMATION_COUNT}, got {total}"
+        f"config_total_matches should be >= {_AUTOMATION_COUNT}, got {total}"
     )
 
     # Second page: limit=3, offset=3
@@ -494,9 +494,9 @@ async def test_deep_search_pagination_basic(mcp_client, bulk_automations):
     assert page2.get("count") == 3, (
         f"Expected 3 results on page 2, got {page2.get('count')}"
     )
-    # total_matches should be the same across pages
-    assert page2.get("total_matches") == total, (
-        "total_matches should be consistent across pages"
+    # config_total_matches should be the same across pages
+    assert page2.get("config_total_matches") == total, (
+        "config_total_matches should be consistent across pages"
     )
 
     # Verify no overlap between pages
@@ -528,7 +528,7 @@ async def test_deep_search_pagination_last_page(mcp_client, bulk_automations):
         },
     )
     all_data = assert_mcp_success(result_all, "Get total count")
-    total = all_data.get("total_matches", 0)
+    total = all_data.get("config_total_matches", 0)
 
     # Request with offset past all results
     result_past = await mcp_client.call_tool(

@@ -25,13 +25,11 @@ async def test_search_entities_basic_query(mcp_client):
         "ha_search",
         {"query": "light", "limit": 5},
     )
-    raw_data = assert_mcp_success(result, "Basic entity search")
-    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Basic entity search")
 
     assert data.get("success") is True
     assert "entities" in data
-    logger.info(f"Found {data.get('total_matches', 0)} matches for 'light'")
+    logger.info(f"Found {data.get('entity_total_matches', 0)} matches for 'light'")
 
 
 @pytest.mark.asyncio
@@ -49,9 +47,7 @@ async def test_search_entities_empty_query_with_domain_filter(mcp_client):
         "ha_search",
         {"query": "", "domain_filter": "light", "limit": 50},
     )
-    raw_data = assert_mcp_success(result, "Empty query with domain_filter=light")
-    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Empty query with domain_filter=light")
 
     assert data.get("success") is True
     assert data.get("search_type") == "domain_listing", (
@@ -84,9 +80,7 @@ async def test_search_entities_whitespace_query_with_domain_filter(mcp_client):
         "ha_search",
         {"query": "   ", "domain_filter": "light", "limit": 50},
     )
-    raw_data = assert_mcp_success(result, "Whitespace query with domain_filter")
-    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Whitespace query with domain_filter")
 
     assert data.get("success") is True
     assert data.get("search_type") == "domain_listing"
@@ -139,8 +133,7 @@ async def test_search_entities_area_filter_only(mcp_client):
         "ha_search",
         {"area_filter": "kitchen", "limit": 10},
     )
-    raw_data = assert_mcp_success(result, "area_filter alone")
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "area_filter alone")
 
     assert data.get("success") is True
     assert data.get("search_type") == "area_only", (
@@ -148,7 +141,7 @@ async def test_search_entities_area_filter_only(mcp_client):
     )
 
     logger.info(
-        f"area_filter='kitchen' returned {data.get('total_matches', 0)} matches"
+        f"area_filter='kitchen' returned {data.get('entity_total_matches', 0)} matches"
     )
 
 
@@ -161,9 +154,7 @@ async def test_search_entities_domain_filter_with_query(mcp_client):
         "ha_search",
         {"query": "bed", "domain_filter": "light", "limit": 10, "exact_match": False},
     )
-    raw_data = assert_mcp_success(result, "Domain filter with query")
-    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Domain filter with query")
 
     assert data.get("success") is True
     # With exact_match=False, it should use fuzzy search
@@ -176,7 +167,7 @@ async def test_search_entities_domain_filter_with_query(mcp_client):
             f"Entity {entity_id} should be in light domain"
         )
 
-    logger.info(f"Found {len(data.get('results', []))} lights matching 'bed'")
+    logger.info(f"Found {len(data.get('entities', []))} lights matching 'bed'")
 
 
 @pytest.mark.asyncio
@@ -188,9 +179,7 @@ async def test_search_entities_group_by_domain(mcp_client):
         "ha_search",
         {"domain_filter": "light", "group_by_domain": True, "limit": 50},
     )
-    raw_data = assert_mcp_success(result, "Group by domain")
-    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Group by domain")
 
     assert data.get("success") is True
     assert "by_domain" in data
@@ -212,9 +201,7 @@ async def test_search_entities_nonexistent_domain(mcp_client):
         "ha_search",
         {"domain_filter": "nonexistent_domain_xyz", "limit": 10},
     )
-    raw_data = assert_mcp_success(result, "Nonexistent domain")
-    # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Nonexistent domain")
 
     assert data.get("success") is True
     assert data.get("entity_total_matches") == 0
@@ -279,9 +266,7 @@ async def test_search_entities_multiple_domains(mcp_client):
             "ha_search",
             {"domain_filter": domain, "limit": 100},
         )
-        raw_data = parse_mcp_result(result)
-        # Tool returns {"data": {...}, "metadata": {...}} structure via add_timezone_metadata
-        data = raw_data.get("data", raw_data)
+        data = parse_mcp_result(result)
 
         if data.get("success"):
             count = len(data.get("entities", []))
@@ -319,8 +304,7 @@ async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
         "ha_search",
         {"query": "light", "limit": 5, "exact_match": False},
     )
-    raw_data = assert_mcp_success(result, "Fuzzy search success")
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Fuzzy search success")
 
     assert data.get("success") is True
     assert data.get("search_type") == "fuzzy_search"
@@ -348,8 +332,7 @@ async def test_search_entities_response_structure_issue_214(mcp_client):
         "ha_search",
         {"query": "light", "limit": 5},
     )
-    raw_data = assert_mcp_success(result, "Response structure check")
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Response structure check")
 
     # Verify required fields
     assert "success" in data, "Response must include 'success' field"
@@ -389,8 +372,7 @@ async def test_search_entities_fallback_fields_when_present(mcp_client):
         "ha_search",
         {"query": "light", "limit": 5},
     )
-    raw_data = assert_mcp_success(result, "Fallback field types")
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Fallback field types")
 
     # If warnings are present, they should be a list of strings
     if data.get("warnings"):
@@ -422,8 +404,7 @@ async def test_search_entities_pagination_metadata(mcp_client):
         "ha_search",
         {"query": "sensor", "limit": 3},
     )
-    raw_data = assert_mcp_success(result, "Search with small limit")
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Search with small limit")
 
     # Verify pagination fields exist
     assert "has_more" in data, "Response must include has_more field"

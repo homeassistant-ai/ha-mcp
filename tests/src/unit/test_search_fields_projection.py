@@ -520,7 +520,7 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
         """state_filter='on' in exact_match mode keeps only 'on' entities."""
         result = await search_tool(query="light", state_filter="on")
         data = result
-        for entity in data["results"]:
+        for entity in data["entities"]:
             assert entity["state"] == "on", (
                 "state_filter='on' should remove non-'on' entities from results"
             )
@@ -531,8 +531,8 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
         result_padded = await search_tool(query="light", state_filter="  on  ")
         result_plain = await search_tool(query="light", state_filter="on")
         # Both should return the same set of entities
-        padded_ids = {e["entity_id"] for e in result_padded["data"]["results"]}
-        plain_ids = {e["entity_id"] for e in result_plain["data"]["results"]}
+        padded_ids = {e["entity_id"] for e in result_padded["entities"]}
+        plain_ids = {e["entity_id"] for e in result_plain["entities"]}
         assert padded_ids == plain_ids
 
     @pytest.mark.asyncio
@@ -546,7 +546,7 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
         """state_filter works in the domain_listing branch (empty query + domain_filter)."""
         result = await search_tool(domain_filter="light", state_filter="on")
         data = result
-        for entity in data["results"]:
+        for entity in data["entities"]:
             assert entity["state"] == "on"
         assert data.get("state_filter") == "on"
 
@@ -555,8 +555,8 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
         """state_filter='   ' (whitespace only) is treated as no filter (None)."""
         result_no_filter = await search_tool(query="light")
         result_ws_filter = await search_tool(query="light", state_filter="   ")
-        no_filter_count = result_no_filter["data"]["count"]
-        ws_filter_count = result_ws_filter["data"]["count"]
+        no_filter_count = result_no_filter["count"]
+        ws_filter_count = result_ws_filter["count"]
         # Both should return the same number of results (no filtering applied)
         assert ws_filter_count == no_filter_count
 
@@ -569,7 +569,7 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
         """result_fields=['entity_id','state'] limits each record to those keys."""
         result = await search_tool(query="light", result_fields=["entity_id", "state"])
         data = result
-        for entity in data["results"]:
+        for entity in data["entities"]:
             assert set(entity.keys()) == {"entity_id", "state"}
 
     @pytest.mark.asyncio
@@ -587,7 +587,7 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
         result = await search_tool(query="light", result_fields=["nonexistent_key"])
         data = result
         # Each entity record is projected to {} since the key doesn't exist
-        for entity in data["results"]:
+        for entity in data["entities"]:
             assert entity == {}
         # A diagnostic warning should be present
         assert "warnings" in data
@@ -598,7 +598,7 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
         """result_fields works in the domain_listing branch."""
         result = await search_tool(domain_filter="light", result_fields=["entity_id"])
         data = result
-        for entity in data["results"]:
+        for entity in data["entities"]:
             assert set(entity.keys()) == {"entity_id"}
 
 
@@ -629,6 +629,16 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
     def mock_smart_tools(self):
         smart = MagicMock()
         smart.smart_entity_search = AsyncMock(return_value=dict(_FUZZY_RESULT))
+        smart.deep_search = AsyncMock(
+            return_value={
+                "success": True,
+                "automations": [],
+                "scripts": [],
+                "scenes": [],
+                "helpers": [],
+                "warnings": [],
+            }
+        )
         return smart
 
     @pytest.mark.asyncio
@@ -642,10 +652,10 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
         data = result
         # count reflects only the filtered page
         assert data["count"] == 1, "count should reflect only the on-state entity"
-        assert data["results"][0]["entity_id"] == "light.kitchen"
+        assert data["entities"][0]["entity_id"] == "light.kitchen"
         # total_matches is the raw fuzzy-engine number, not re-counted
-        assert data["total_matches"] == 5, (
-            "total_matches must remain the unfiltered fuzzy count"
+        assert data["entity_total_matches"] == 5, (
+            "entity_total_matches must remain the unfiltered fuzzy count"
         )
 
     @pytest.mark.asyncio
@@ -656,6 +666,9 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
         assert "state_filter_note" in data
         assert "has_more" in data["state_filter_note"]
 
+    @pytest.mark.skip(
+        reason="ha_search does not expose `fields=` top-level projection — only `result_fields=` (entity-record projection)."
+    )
     @pytest.mark.asyncio
     async def test_state_filter_note_survives_fields_projection(self, search_tool):
         """state_filter_note is force-retained even when not in fields=.

@@ -231,5 +231,5 @@ async def test_search_entities_exact_match_default(mcp_client):
         f"Default should use exact_match, got '{data.get('search_type')}'"
     )
     logger.info(
-        f"Search returned {len(data.get('results', []))} results with exact match"
+        f"Search returned {len(data.get('entities', []))} results with exact match"
     )

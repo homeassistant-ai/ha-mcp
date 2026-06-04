@@ -227,9 +227,7 @@ class TestErrorHandling:
             )
 
             special_data = parse_mcp_result(special_result)
-            status = (
-                "succeeded" if special_data.get("success") else "failed"
-            )
+            status = "succeeded" if special_data.get("success") else "failed"
             logger.info(f"  Query '{query}': {status}")
 
         # 4. EXTREME LIMITS: Test boundary limit values
@@ -558,9 +556,7 @@ class TestErrorHandling:
         )
 
         search_data = parse_mcp_result(search_result)
-        if not search_data.get("success") or not search_data.get(
-            "entities"
-        ):
+        if not search_data.get("success") or not search_data.get("entities"):
             logger.warning("⚠️ No entities found for concurrent operation test")
             return
 
