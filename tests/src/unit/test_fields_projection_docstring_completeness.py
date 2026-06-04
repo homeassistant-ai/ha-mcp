@@ -67,41 +67,6 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "return_harvest": [],
     },
     {
-        "tool": "ha_search",
-        "docstring": ("tools/tools_search.py", "ha_search"),
-        "var_harvest": [
-            ("tools/tools_search.py", "ha_search", "result"),
-            ("tools/tools_search.py", "ha_search", "response"),
-        ],
-        "return_harvest": [
-            ("tools/tools_search.py", "_exact_match_search"),
-            ("tools/smart_search/_entities.py", "smart_entity_search"),
-        ],
-        # ha_search composes the projectable dict under many
-        # local names (``area_search_data``, ``empty_area_data``,
-        # ``domain_listing``...) and ``smart_entity_search`` assembles
-        # ``response = {...}`` before mutating + returning. Catch both
-        # by harvesting from any dict literal whose keys include a
-        # response-shape marker.
-        "marker_harvest": [
-            (
-                "tools/tools_search.py",
-                "ha_search",
-                frozenset({"success", "results", "query"}),
-            ),
-            (
-                "tools/smart_search/_entities.py",
-                "smart_entity_search",
-                frozenset({"success", "results", "query", "matches"}),
-            ),
-        ],
-        # `matches` is the internal name smart_entity_search uses; the
-        # wrapper renames it to `results` via `result.pop("matches")`
-        # before the response reaches the caller, so it's never
-        # user-visible despite the AST harvest finding it.
-        "exclude_internal": frozenset({"matches"}),
-    },
-    {
         # ha_get_state's ``fields=`` projects HA's native entity-record
         # schema (entity_id, state, attributes, ...) — keys come from HA's
         # API, not from code we own, so AST harvest finds nothing. Instead

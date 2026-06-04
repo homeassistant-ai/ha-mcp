@@ -647,22 +647,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
-        fields: Annotated[
-            str | list[str] | None,
-            Field(
-                default=None,
-                description=(
-                    "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["results"]). '
-                    "None = full response (default). "
-                    "Available keys: success, query, results, total_matches, count, "
-                    "offset, limit, has_more, next_offset, search_type, "
-                    "domain_filter, area_filter, area_name, area_names, "
-                    "by_domain, warnings, partial, message, note, state_filter, "
-                    "state_filter_note."
-                ),
-            ),
-        ] = None,
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
 
@@ -674,17 +658,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
         least one of `query`, `domain_filter`, or `area_filter` must be set.
         """
-        # Validate fields= early so a malformed value returns VALIDATION_FAILED
-        # with parameter="fields" instead of bubbling to the outer except and
-        # getting reclassified as a generic search failure.
         parsed_fields: list[str] | None = None
-        if fields is not None:
-            try:
-                parsed_fields = parse_string_list_param(
-                    fields, "fields", allow_csv=True
-                )
-            except ValueError as exc:
-                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         parsed_result_fields: list[str] | None = None
         if result_fields is not None:
             try:

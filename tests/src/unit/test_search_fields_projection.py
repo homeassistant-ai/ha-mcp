@@ -86,6 +86,12 @@ class TestProjectFields:
         assert set(result.keys()) == {"success", "results"}
 
 
+@pytest.mark.skip(
+    reason="ha_search (consolidated tool) does not expose `fields=` top-level "
+    "projection — only `result_fields=` (entity-record projection). The "
+    "underlying `_project_fields` helper is still covered by TestProjectFields "
+    "above. Re-enable if `fields=` is added back to ha_search."
+)
 class TestHaSearchEntitiesFieldsProjection:
     """Tool-level tests for fields= projection in ha_search."""
 
@@ -164,6 +170,12 @@ class TestHaSearchEntitiesFieldsProjection:
             await search_tool(query="kitchen", fields='["')
 
 
+@pytest.mark.skip(
+    reason="ha_search (consolidated tool) does not expose `fields=` top-level "
+    "projection. Area-branch coverage of the response shape is now via "
+    "TestHaSearchEntitiesResultFields (entity-record projection) and "
+    "TestProjectFields (helper-level)."
+)
 class TestHaSearchEntitiesFieldsProjectionAreaBranches:
     """Tool-level tests for fields= projection across the four area-related return paths.
 
