@@ -104,7 +104,7 @@ def ha_container():
         os.environ["HOMEASSISTANT_URL"] = url
         os.environ["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
 
-        wait_for_ha_ready(url, TEST_TOKEN, log=logger.info)
+        wait_for_ha_ready(url, TEST_TOKEN)
 
         yield {"url": url, "token": TEST_TOKEN, "port": port}
 
