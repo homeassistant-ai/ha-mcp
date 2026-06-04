@@ -184,8 +184,8 @@ class ResourceTools:
         - List all resources: ha_config_list_dashboard_resources()
         - List with full content: ha_config_list_dashboard_resources(include_content=True)
 
-        Note: Requires advanced mode to be enabled in Home Assistant for resource
-        management through the UI, but API access works regardless.
+        Note: Home Assistant 2026.6+ exposes resource management in the UI by
+        default, and API access works regardless of UI availability.
         """
         try:
             result = await self._client.send_websocket_message(

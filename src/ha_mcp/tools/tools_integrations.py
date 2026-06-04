@@ -370,8 +370,9 @@ class IntegrationTools:
             bool,
             Field(
                 description=(
-                    "When include_subentry_schema=True, ask Home Assistant to "
-                    "expose advanced flow options."
+                    "When include_subentry_schema=True, ask older Home Assistant "
+                    "versions to expose advanced flow options. No-op on HA "
+                    "2026.6+; pending removal before HA 2027.6."
                 ),
                 default=False,
             ),
