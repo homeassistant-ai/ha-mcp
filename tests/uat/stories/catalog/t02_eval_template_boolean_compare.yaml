@@ -1,0 +1,56 @@
+id: t02
+title: "Boolean compare across two entities (eval_template under-use probe)"
+category: template
+weight: 3
+description: >
+  User asks a boolean question that combines two entity states. The canonical
+  pick is `ha_eval_template` with a Jinja boolean expression. The under-use
+  failure mode: the agent calls `ha_get_state` twice and resolves the boolean
+  in-prose. Part of issue #1175 item 2 BAT (eval_template usage measurement).
+
+tags:
+  - template
+  - eval_template
+  - eval_template_bat
+
+setup:
+  - tool: ha_config_set_helper
+    args:
+      helper_type: input_number
+      name: "bat t02 alpha"
+      initial: 10
+      min: 0
+      max: 100
+      step: 1
+  - tool: ha_config_set_helper
+    args:
+      helper_type: input_number
+      name: "bat t02 beta"
+      initial: 5
+      min: 0
+      max: 100
+      step: 1
+
+prompt: >
+  Is `input_number.bat_t02_alpha` currently greater than
+  `input_number.bat_t02_beta`?
+
+teardown: []
+
+verify:
+  questions:
+    - "Did the agent answer yes/true (alpha=10 > beta=5)?"
+    - "Did the agent call a template-rendering tool to evaluate the comparison?"
+  ha_checks:
+    - type: response_matches
+      pattern: '(?i)\b(yes|true|greater)\b'
+
+expected:
+  tools_should_use:
+    - ha_eval_template
+  description: >
+    Canonical fit for `ha_eval_template` with
+    `{{ states('input_number.bat_t02_alpha')|float >
+    states('input_number.bat_t02_beta')|float }}`. Under-use classification:
+    agent calls `ha_get_state` ×2 and answers without invoking the template
+    tool.

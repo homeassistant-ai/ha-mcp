@@ -1,0 +1,54 @@
+id: t03
+title: "Count entities matching a state filter (eval_template under-use probe)"
+category: template
+weight: 3
+description: >
+  User asks "how many of X are currently in state Y" — a canonical Jinja
+  `selectattr` filter use. The under-use failure mode: the agent calls
+  `ha_search_entities` to list, then iterates / filters in prose. Part of
+  issue #1175 item 2 BAT (eval_template usage measurement).
+
+tags:
+  - template
+  - eval_template
+  - eval_template_bat
+
+setup:
+  - tool: ha_config_set_helper
+    args:
+      helper_type: input_boolean
+      name: "bat t03 alpha"
+      initial: true
+  - tool: ha_config_set_helper
+    args:
+      helper_type: input_boolean
+      name: "bat t03 beta"
+      initial: true
+  - tool: ha_config_set_helper
+    args:
+      helper_type: input_boolean
+      name: "bat t03 gamma"
+      initial: false
+
+prompt: >
+  How many of my `input_boolean.bat_t03_*` toggles are currently on?
+
+teardown: []
+
+verify:
+  questions:
+    - "Did the agent answer 2 (two are on, one is off)?"
+    - "Did the agent use a template selectattr filter, or list + count manually?"
+  ha_checks:
+    - type: response_contains
+      value: "2"
+
+expected:
+  tools_should_use:
+    - ha_eval_template
+  description: >
+    Canonical fit for `ha_eval_template` with
+    `{{ states.input_boolean | selectattr('entity_id','match','input_boolean.bat_t03_.*')
+    | selectattr('state','eq','on') | list | count }}`. Under-use
+    classification: agent calls `ha_search_entities` and counts the "on"
+    results manually.

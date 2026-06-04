@@ -1,0 +1,40 @@
+id: t05
+title: "Explicit 'test this template' request (eval_template control case)"
+category: template
+weight: 3
+description: >
+  User uses the explicit verb "test" with a Jinja template. This is the
+  canonical, unambiguous use of `ha_eval_template` — the BAT's control case
+  for the under-use measurement: if the agent does not pick the tool here,
+  the under-use is severe. Part of issue #1175 item 2 BAT.
+
+tags:
+  - template
+  - eval_template
+  - eval_template_bat
+  - control_case
+
+setup: []
+
+prompt: >
+  Test this template before I put it in an automation condition:
+  `{{ states('sun.sun') == 'below_horizon' }}`
+
+teardown: []
+
+verify:
+  questions:
+    - "Did the agent render the template (returning either 'True' or 'False' based on current sun state)?"
+    - "Did the agent answer with 'true' or 'false' rather than describing the template in prose?"
+  ha_checks:
+    - type: response_matches
+      pattern: '(?i)\b(true|false)\b'
+
+expected:
+  tools_should_use:
+    - ha_eval_template
+  description: >
+    The explicit verb "test" + a literal Jinja expression makes
+    `ha_eval_template` the only correct pick. If the agent picks anything
+    else (or nothing), under-use is severe. This story is the control case
+    for the BAT's headline metric.

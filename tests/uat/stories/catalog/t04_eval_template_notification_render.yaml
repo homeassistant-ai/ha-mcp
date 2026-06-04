@@ -1,0 +1,56 @@
+id: t04
+title: "Render a notification template ahead of automation use (eval_template under-use probe)"
+category: template
+weight: 3
+description: >
+  User wants to preview what a notification body will look like before
+  embedding it in an automation. Canonical fit for `ha_eval_template` (the
+  tool exists precisely for "test this template before I commit it to a
+  config"). The under-use failure mode: the agent describes what the
+  template would do without actually rendering it, or rewrites the template
+  speculatively. Part of issue #1175 item 2 BAT.
+
+  Caveat: `trigger.*` / `this.*` / loop-vars render as undefined outside
+  automation runtime context. A good response acknowledges this and renders
+  the `now()` / `states(...)` parts that DO have context. See KP13's
+  research note on issue #1175 (comment 4597070298) for the runtime-context
+  edge case.
+
+tags:
+  - template
+  - eval_template
+  - eval_template_bat
+
+setup:
+  - tool: ha_config_set_helper
+    args:
+      helper_type: input_boolean
+      name: "bat t04 door"
+      initial: true
+
+prompt: >
+  Before I put this in an automation, what does this notification template
+  render to right now?
+  `Door {{ trigger.entity_id | default('input_boolean.bat_t04_door') }} is
+  {{ states('input_boolean.bat_t04_door') }} as of {{ now().strftime('%H:%M') }}`
+
+teardown: []
+
+verify:
+  questions:
+    - "Did the agent render the template (showing the door is 'on' and a current time)?"
+    - "Did the agent note that `trigger.*` falls back to the default outside automation runtime?"
+  ha_checks:
+    - type: response_contains
+      value: "input_boolean.bat_t04_door"
+    - type: response_contains
+      value: "on"
+
+expected:
+  tools_should_use:
+    - ha_eval_template
+  description: >
+    The user explicitly asks "what does this render to" — canonical
+    `ha_eval_template` call. Under-use classification: agent describes the
+    template in prose, or calls `ha_get_state` and reconstructs the rendered
+    string by hand.

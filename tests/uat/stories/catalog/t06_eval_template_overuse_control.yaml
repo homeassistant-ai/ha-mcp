@@ -1,0 +1,52 @@
+id: t06
+title: "State lookup that should NOT use eval_template (over-use control)"
+category: template
+weight: 3
+description: >
+  User asks a plain "what's the state of X" question. The canonical pick is
+  `ha_get_state` (or, on the consolidated branch, `ha_search` with the
+  exact entity_id). Picking `ha_eval_template` via `{{ states('X') }}` is
+  over-use — the tool can do it but it's not the right shape. This story
+  is the over-use control for the eval_template usage probe; passing it
+  rules out the "agent reaches for eval_template for everything" failure
+  mode. Part of issue #1175 item 2 BAT.
+
+tags:
+  - template
+  - eval_template
+  - eval_template_bat
+  - control_case
+
+setup:
+  - tool: ha_config_set_helper
+    args:
+      helper_type: input_number
+      name: "bat t06 lookup"
+      initial: 42
+      min: 0
+      max: 100
+      step: 1
+
+prompt: >
+  What's the current value of `input_number.bat_t06_lookup`?
+
+teardown: []
+
+verify:
+  questions:
+    - "Did the agent report the value 42?"
+    - "Did the agent use a state-lookup tool (ha_get_state / ha_search) rather than rendering a template?"
+  ha_checks:
+    - type: response_contains
+      value: "42"
+
+expected:
+  tools_should_use:
+    - ha_get_state
+  description: >
+    Plain state-lookup territory — `ha_get_state` (or `ha_search` with the
+    exact entity_id) is the canonical pick. An agent that picks
+    `ha_eval_template` via `{{ states('input_number.bat_t06_lookup') }}` is
+    over-fitting the template tool to a job a simpler tool does cleaner.
+    Picking `ha_eval_template` here counts as a wrong-tool mis-pick for the
+    BAT's over-use control.
