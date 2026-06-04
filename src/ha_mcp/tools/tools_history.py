@@ -544,7 +544,7 @@ async def _fetch_history(
                 f"Failed to retrieve history: {error_msg}",
                 context={"entity_ids": entity_id_list},
                 suggestions=[
-                    "Verify entity IDs exist using ha_search_entities()",
+                    "Verify entity IDs exist using ha_search()",
                     "Check that entities are recorded (not excluded from recorder)",
                     "Ensure time range is within recorder retention period (~10 days)",
                 ],
@@ -711,7 +711,7 @@ async def _fetch_statistics(
                 context={"entity_ids": entity_id_list},
                 suggestions=[
                     "Verify entities have state_class attribute (measurement, total, total_increasing)",
-                    "Use ha_search_entities() to check entity attributes",
+                    "Use ha_search() to check entity attributes",
                     "Statistics are only available for entities that track numeric values",
                 ],
             )

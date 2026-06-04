@@ -1749,9 +1749,7 @@ async def test_search_area_only_penalises_hidden_issue_1170(mcp_client):
             "ha_search",
             {"area_filter": area_id, "include_hidden": False, "limit": 10},
         )
-        data2 = assert_mcp_success(res2, "area_only include_hidden=False").get(
-            "data", {}
-        )
+        data2 = assert_mcp_success(res2, "area_only include_hidden=False")
         entity_ids2 = [r["entity_id"] for r in data2["entities"]]
         assert eid not in entity_ids2, (
             f"include_hidden=False should filter hidden entity in area: {data2}"
@@ -1941,9 +1939,7 @@ async def test_search_domain_listing_penalises_hidden_issue_1170(mcp_client):
                 "limit": 200,
             },
         )
-        data2 = assert_mcp_success(res2, "domain_listing include_hidden=False").get(
-            "data", {}
-        )
+        data2 = assert_mcp_success(res2, "domain_listing include_hidden=False")
         ids2 = {r["entity_id"] for r in data2["entities"]}
         assert h_eid not in ids2, (
             f"include_hidden=False should filter in domain_listing: {ids2}"

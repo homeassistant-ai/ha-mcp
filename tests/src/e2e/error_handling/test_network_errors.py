@@ -148,9 +148,7 @@ class TestErrorHandling:
         )
 
         search_data = parse_mcp_result(search_result)
-        if search_data.get("data", {}).get("success") and search_data.get(
-            "data", {}
-        ).get("entities"):
+        if search_data.get("data", {}).get("success") and search_data.get("entities"):
             # Call service without entity_id to test parameter validation
             missing_params_result = await self._safe_tool_call(
                 mcp_client,
@@ -336,9 +334,7 @@ class TestErrorHandling:
 
         search_data = parse_mcp_result(search_result)
         valid_entities = []
-        if search_data.get("data", {}).get("success") and search_data.get(
-            "data", {}
-        ).get("entities"):
+        if search_data.get("data", {}).get("success") and search_data.get("entities"):
             valid_entities = [search_data["data"]["entities"][0]["entity_id"]]
 
         mixed_entities = valid_entities + ["nonexistent.entity", "invalid.test"]
@@ -563,8 +559,8 @@ class TestErrorHandling:
 
         search_data = parse_mcp_result(search_result)
         if not search_data.get("data", {}).get("success") or not search_data.get(
-            "data", {}
-        ).get("entities"):
+            "entities"
+        ):
             logger.warning("⚠️ No entities found for concurrent operation test")
             return
 

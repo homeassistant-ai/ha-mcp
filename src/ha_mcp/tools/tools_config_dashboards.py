@@ -1129,8 +1129,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         DISCOVERING ENTITY IDs FOR DASHBOARDS:
         Do NOT guess entity IDs - use these tools to find exact entity IDs:
         1. ha_get_overview(include_entity_id=True) - Get all entities organized by domain/area
-        2. ha_search_entities(query, domain_filter, area_filter) - Find specific entities
-        3. ha_deep_search(query) - Comprehensive search across entities, areas, automations
+        2. ha_search(query, domain_filter, area_filter, search_types) - Find entities and config-body references in one call
 
         If unsure about entity IDs, ALWAYS use one of these tools first.
 

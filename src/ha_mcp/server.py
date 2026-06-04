@@ -489,7 +489,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "integration statistics trend random filter tod "
             "generic_thermostat switch_as_x generic_hygrostat"
         ),
-        # Boost tools that compete with ha_deep_search for common queries
+        # Boost tools that compete with ha_search for common queries
         "ha_config_get_script": (
             "read inspect fetch view existing script config sequence "
             "actions get show detail"
@@ -608,7 +608,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "zone, person, tag. Flow-based helpers (template, group, "
             "utility_meter, derivative, statistics, trend, threshold, "
             "filter, switch_as_x, etc.) cannot be listed through this "
-            "tool — use ha_search_entities or ha_deep_search.\n\n"
+            "tool — use ha_search or ha_search.\n\n"
             "For per-type schemas and decision guidance, see "
             "ha_get_skill_guide."
         ),
@@ -656,7 +656,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "Execute a Home Assistant service to control entities or "
             "trigger automations. Calls `<domain>.<service>` "
             "(e.g., light.turn_on, climate.set_temperature). Use "
-            "ha_search_entities to find entity IDs and ha_get_state "
+            "ha_search to find entity IDs and ha_get_state "
             "to read current values before changing them.\n\n"
             "For service-parameter details and per-domain guidance, "
             "see ha_get_skill_guide."
