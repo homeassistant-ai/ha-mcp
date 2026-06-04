@@ -40,10 +40,7 @@ class TestCalendarEvents:
         data = parse_mcp_result(result)
 
         # Handle nested data structure
-        if "data" in data:
-            results = data.get("data", {}).get("results", [])
-        else:
-            results = data.get("results", [])
+        results = data.get("entities", [])
 
         if not results:
             return None
@@ -187,10 +184,7 @@ class TestCalendarEventLifecycle:
         data = parse_mcp_result(result)
 
         # Handle nested data structure
-        if "data" in data:
-            results = data.get("data", {}).get("results", [])
-        else:
-            results = data.get("results", [])
+        results = data.get("entities", [])
 
         if not results:
             return None

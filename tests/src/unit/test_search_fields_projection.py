@@ -132,7 +132,21 @@ class TestHaSearchEntitiesFieldsProjection:
 
     @pytest.fixture
     def mock_smart_tools(self):
-        return MagicMock()
+        smart_tools = MagicMock()
+        # ha_search orchestrator fans out to deep_search whenever ``query`` is
+        # set; mock it as an empty-config response so the merge logic doesn't
+        # see a non-awaitable MagicMock.
+        smart_tools.deep_search = AsyncMock(
+            return_value={
+                "success": True,
+                "automations": [],
+                "scripts": [],
+                "scenes": [],
+                "helpers": [],
+                "warnings": [],
+            }
+        )
+        return smart_tools
 
     @pytest.fixture
     def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
@@ -431,7 +445,21 @@ class _SearchToolFixture:
 
     @pytest.fixture
     def mock_smart_tools(self):
-        return MagicMock()
+        smart_tools = MagicMock()
+        # ha_search orchestrator fans out to deep_search whenever ``query`` is
+        # set; mock it as an empty-config response so the merge logic doesn't
+        # see a non-awaitable MagicMock.
+        smart_tools.deep_search = AsyncMock(
+            return_value={
+                "success": True,
+                "automations": [],
+                "scripts": [],
+                "scenes": [],
+                "helpers": [],
+                "warnings": [],
+            }
+        )
+        return smart_tools
 
     @pytest.fixture
     def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
@@ -451,7 +479,7 @@ class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
             per_domain_limit=1,
             limit=20,
         )
-        by_domain = result["data"].get("by_domain", {})
+        by_domain = result.get("by_domain", {})
         assert "light" in by_domain
         assert len(by_domain["light"]) <= 1, (
             "per_domain_limit=1 should cap each domain bucket to at most 1 entity"
@@ -465,7 +493,7 @@ class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
             group_by_domain=False,
             per_domain_limit=1,
         )
-        data = result["data"]
+        data = result
         # Results still present; no by_domain grouping
         assert "entities" in data
         assert "by_domain" not in data
@@ -479,7 +507,7 @@ class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
             per_domain_limit=1,
             limit=20,
         )
-        by_domain = result["data"].get("by_domain", {})
+        by_domain = result.get("by_domain", {})
         assert "light" in by_domain
         assert len(by_domain["light"]) <= 1
 
@@ -491,7 +519,7 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
     async def test_state_filter_exact_match_keeps_matching_entities(self, search_tool):
         """state_filter='on' in exact_match mode keeps only 'on' entities."""
         result = await search_tool(query="light", state_filter="on")
-        data = result["data"]
+        data = result
         for entity in data["results"]:
             assert entity["state"] == "on", (
                 "state_filter='on' should remove non-'on' entities from results"
@@ -511,13 +539,13 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
     async def test_state_filter_echoed_in_response(self, search_tool):
         """state_filter value (after strip) is echoed back in the data dict."""
         result = await search_tool(query="light", state_filter="on")
-        assert result["data"]["state_filter"] == "on"
+        assert result["state_filter"] == "on"
 
     @pytest.mark.asyncio
     async def test_state_filter_domain_listing_branch(self, search_tool):
         """state_filter works in the domain_listing branch (empty query + domain_filter)."""
         result = await search_tool(domain_filter="light", state_filter="on")
-        data = result["data"]
+        data = result
         for entity in data["results"]:
             assert entity["state"] == "on"
         assert data.get("state_filter") == "on"
@@ -540,7 +568,7 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
     async def test_result_fields_projects_entity_records(self, search_tool):
         """result_fields=['entity_id','state'] limits each record to those keys."""
         result = await search_tool(query="light", result_fields=["entity_id", "state"])
-        data = result["data"]
+        data = result
         for entity in data["results"]:
             assert set(entity.keys()) == {"entity_id", "state"}
 
@@ -548,7 +576,7 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
     async def test_result_fields_outer_response_keys_preserved(self, search_tool):
         """result_fields only projects inside results[]; top-level keys are unchanged."""
         result = await search_tool(query="light", result_fields=["entity_id"])
-        data = result["data"]
+        data = result
         assert "success" in data
         assert "entity_total_matches" in data
         assert "count" in data
@@ -557,7 +585,7 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
     async def test_result_fields_unknown_key_emits_warning(self, search_tool):
         """result_fields with only unknown keys emits a diagnostic warning."""
         result = await search_tool(query="light", result_fields=["nonexistent_key"])
-        data = result["data"]
+        data = result
         # Each entity record is projected to {} since the key doesn't exist
         for entity in data["results"]:
             assert entity == {}
@@ -569,7 +597,7 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
     async def test_result_fields_domain_listing_branch(self, search_tool):
         """result_fields works in the domain_listing branch."""
         result = await search_tool(domain_filter="light", result_fields=["entity_id"])
-        data = result["data"]
+        data = result
         for entity in data["results"]:
             assert set(entity.keys()) == {"entity_id"}
 
@@ -611,7 +639,7 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
         internally so total_matches cannot be recomputed after state filtering.
         """
         result = await search_tool(query="light", exact_match=False, state_filter="on")
-        data = result["data"]
+        data = result
         # count reflects only the filtered page
         assert data["count"] == 1, "count should reflect only the on-state entity"
         assert data["results"][0]["entity_id"] == "light.kitchen"
@@ -624,7 +652,7 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
     async def test_fuzzy_state_filter_note_present(self, search_tool):
         """state_filter_note appears in the response to explain the dual-count."""
         result = await search_tool(query="light", exact_match=False, state_filter="on")
-        data = result["data"]
+        data = result
         assert "state_filter_note" in data
         assert "has_more" in data["state_filter_note"]
 
@@ -641,7 +669,7 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
             state_filter="on",
             fields=["results", "total_matches"],
         )
-        data = result["data"]
+        data = result
         # state_filter_note must be force-retained even when not listed in fields=
         assert "state_filter_note" in data, (
             "state_filter_note must survive fields= projection"

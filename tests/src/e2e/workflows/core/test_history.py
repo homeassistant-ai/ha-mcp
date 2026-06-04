@@ -123,7 +123,7 @@ class TestGetHistory:
         search_data = parse_mcp_result(search_result)
 
         if "data" in search_data:
-            sensors = search_data.get("data", {}).get("results", [])
+            sensors = search_data.get("entities", [])
         else:
             sensors = search_data.get("results", [])
 
@@ -385,7 +385,7 @@ class TestGetHistoryStatisticsSource:
         search_data = parse_mcp_result(search_result)
 
         if "data" in search_data:
-            sensors = search_data.get("data", {}).get("results", [])
+            sensors = search_data.get("entities", [])
         else:
             sensors = search_data.get("results", [])
 
@@ -405,7 +405,7 @@ class TestGetHistoryStatisticsSource:
             )
             search_data = parse_mcp_result(search_result)
             if "data" in search_data:
-                sensors = search_data.get("data", {}).get("results", [])
+                sensors = search_data.get("entities", [])
             else:
                 sensors = search_data.get("results", [])
             if sensors:
@@ -464,7 +464,7 @@ class TestGetHistoryStatisticsSource:
         )
         search_data = parse_mcp_result(search_result)
         if "data" in search_data:
-            sensors = search_data.get("data", {}).get("results", [])
+            sensors = search_data.get("entities", [])
         else:
             sensors = search_data.get("results", [])
 
@@ -509,7 +509,7 @@ class TestGetHistoryStatisticsSource:
         )
         search_data = parse_mcp_result(search_result)
         if "data" in search_data:
-            sensors = search_data.get("data", {}).get("results", [])
+            sensors = search_data.get("entities", [])
         else:
             sensors = search_data.get("results", [])
 

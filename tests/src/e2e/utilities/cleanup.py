@@ -230,8 +230,8 @@ async def cleanup_test_entities_by_name(
 
             search_data = parse_mcp_result(search_result)
 
-            if search_data.get("success") and search_data.get("results"):
-                entities = search_data["results"]
+            if search_data.get("success") and search_data.get("entities"):
+                entities = search_data["entities"]
 
                 # Filter for test entities
                 test_entities = []

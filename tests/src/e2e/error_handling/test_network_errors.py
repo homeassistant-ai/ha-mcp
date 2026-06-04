@@ -148,7 +148,7 @@ class TestErrorHandling:
         )
 
         search_data = parse_mcp_result(search_result)
-        if search_data.get("data", {}).get("success") and search_data.get("entities"):
+        if search_data.get("success") and search_data.get("entities"):
             # Call service without entity_id to test parameter validation
             missing_params_result = await self._safe_tool_call(
                 mcp_client,
@@ -185,8 +185,8 @@ class TestErrorHandling:
         )
 
         empty_data = parse_mcp_result(empty_result)
-        if empty_data.get("data", {}).get("success"):
-            results = empty_data.get("data", {}).get("entities", [])
+        if empty_data.get("success"):
+            results = empty_data.get("entities", [])
             logger.info(f"  ✅ Empty query returned {len(results)} results")
         else:
             logger.info(
@@ -201,8 +201,8 @@ class TestErrorHandling:
         )
 
         long_data = parse_mcp_result(long_result)
-        if long_data.get("data", {}).get("success"):
-            results = long_data.get("data", {}).get("entities", [])
+        if long_data.get("success"):
+            results = long_data.get("entities", [])
             logger.info(
                 f"  ✅ Long query handled gracefully, returned {len(results)} results"
             )
@@ -228,7 +228,7 @@ class TestErrorHandling:
 
             special_data = parse_mcp_result(special_result)
             status = (
-                "succeeded" if special_data.get("data", {}).get("success") else "failed"
+                "succeeded" if special_data.get("success") else "failed"
             )
             logger.info(f"  Query '{query}': {status}")
 
@@ -242,8 +242,8 @@ class TestErrorHandling:
             )
 
             limit_data = parse_mcp_result(limit_result)
-            if limit_data.get("data", {}).get("success"):
-                results = limit_data.get("data", {}).get("entities", [])
+            if limit_data.get("success"):
+                results = limit_data.get("entities", [])
                 logger.info(f"  Limit {limit}: returned {len(results)} results")
             else:
                 logger.info(
@@ -334,8 +334,8 @@ class TestErrorHandling:
 
         search_data = parse_mcp_result(search_result)
         valid_entities = []
-        if search_data.get("data", {}).get("success") and search_data.get("entities"):
-            valid_entities = [search_data["data"]["entities"][0]["entity_id"]]
+        if search_data.get("success") and search_data.get("entities"):
+            valid_entities = [search_data["entities"][0]["entity_id"]]
 
         mixed_entities = valid_entities + ["nonexistent.entity", "invalid.test"]
 
@@ -558,13 +558,13 @@ class TestErrorHandling:
         )
 
         search_data = parse_mcp_result(search_result)
-        if not search_data.get("data", {}).get("success") or not search_data.get(
+        if not search_data.get("success") or not search_data.get(
             "entities"
         ):
             logger.warning("⚠️ No entities found for concurrent operation test")
             return
 
-        entities = search_data["data"]["entities"][:3]
+        entities = search_data["entities"][:3]
 
         # 1. CONCURRENT INDIVIDUAL OPERATIONS: Multiple simultaneous service calls
         logger.info("🔄 Testing concurrent individual operations...")

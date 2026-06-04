@@ -30,7 +30,7 @@ async def test_entity_id(mcp_client) -> str:
         {"query": "light", "domain_filter": "light", "limit": 1},
     )
     search_data = parse_mcp_result(search_result)
-    results = search_data.get("data", search_data).get("results", [])
+    results = search_data.get("entities", [])
     if not results:
         pytest.skip("No light entities available for testing")
     return results[0]["entity_id"]

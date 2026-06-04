@@ -161,10 +161,7 @@ class TestBulkControl:
         )
         search_data = parse_mcp_result(search_result)
 
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
+        results = search_data.get("entities", [])
 
         if len(results) < 2:
             pytest.skip("Need at least 2 lights for multi-entity bulk test")
@@ -261,7 +258,7 @@ class TestBulkControl:
         )
         light_data = parse_mcp_result(light_result)
         if "data" in light_data:
-            light_results = light_data.get("data", {}).get("results", [])
+            light_results = light_data.get("entities", [])
         else:
             light_results = light_data.get("results", [])
 
@@ -271,7 +268,7 @@ class TestBulkControl:
         )
         switch_data = parse_mcp_result(switch_result)
         if "data" in switch_data:
-            switch_results = switch_data.get("data", {}).get("results", [])
+            switch_results = switch_data.get("entities", [])
         else:
             switch_results = switch_data.get("results", [])
 
@@ -336,10 +333,7 @@ class TestBulkControl:
         )
         search_data = parse_mcp_result(search_result)
 
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
+        results = search_data.get("entities", [])
 
         if len(results) < 2:
             pytest.skip("Need at least 2 lights for parallel test")
@@ -371,10 +365,7 @@ class TestBulkControl:
         )
         search_data = parse_mcp_result(search_result)
 
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
+        results = search_data.get("entities", [])
 
         if len(results) < 2:
             pytest.skip("Need at least 2 lights for sequential test")

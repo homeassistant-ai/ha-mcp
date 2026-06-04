@@ -52,10 +52,7 @@ class TestAutomationLifecycle:
         search_data = parse_mcp_result(search_result)
 
         # Handle nested data structure
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
+        results = search_data.get("entities", [])
 
         if not results:
             # If no binary sensors, use a light entity as fallback
@@ -778,16 +775,8 @@ async def test_automation_search_and_discovery(mcp_client):
 
     search_data = parse_mcp_result(search_result)
 
-    # Handle different response formats
-    if "data" in search_data:
-        # Success is nested in data
-        data_section = search_data.get("data", {})
-        assert data_section.get("success"), f"Automation search failed: {search_data}"
-        results = data_section.get("results", [])
-    else:
-        # Success is at top level
-        assert search_data.get("success"), f"Automation search failed: {search_data}"
-        results = search_data.get("results", [])
+    assert search_data.get("success"), f"Automation search failed: {search_data}"
+    results = search_data.get("entities", [])
 
     logger.info(f"🔍 Found {len(results)} automations")
 
@@ -813,10 +802,7 @@ async def test_automation_search_and_discovery(mcp_client):
         pattern_data = parse_mcp_result(pattern_result)
 
         # Handle nested data structure if present
-        if "data" in pattern_data:
-            results = pattern_data.get("data", {}).get("results", [])
-        else:
-            results = pattern_data.get("results", [])
+        results = pattern_data.get("entities", [])
 
         logger.info(f"🔍 Pattern '{pattern}' search: {len(results)} results")
 
@@ -836,7 +822,7 @@ async def test_automation_with_choose_block(mcp_client):
 
     # Find a test light entity (poll — entities may not be loaded yet on slow runners)
     def _has_light(data: dict) -> bool:
-        results = data.get("data", data).get("results", [])
+        results = data.get("entities", [])
         return len(results) > 0
 
     search_data = await wait_for_tool_result(
@@ -847,7 +833,7 @@ async def test_automation_with_choose_block(mcp_client):
         timeout=15,
         description="light entities available",
     )
-    entities = search_data.get("data", search_data).get("results", [])
+    entities = search_data.get("entities", [])
     light_entity = entities[0]["entity_id"]
     logger.info(f"🔦 Using test light: {light_entity}")
 
@@ -1136,10 +1122,7 @@ async def _find_test_light_entity(mcp_client) -> str:
         {"query": "light", "domain_filter": "light", "limit": 20},
     )
     search_data = parse_mcp_result(search_result)
-    if "data" in search_data:
-        results = search_data.get("data", {}).get("results", [])
-    else:
-        results = search_data.get("results", [])
+    results = search_data.get("entities", [])
     if not results:
         pytest.skip("No light entities available for testing")
     for entity in results:

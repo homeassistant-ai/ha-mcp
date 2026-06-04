@@ -129,10 +129,7 @@ async def test_get_state_sensor_with_numeric_value(mcp_client):
     search_data = parse_mcp_result(search_result)
 
     # Get results from nested structure
-    if "data" in search_data:
-        results = search_data.get("data", {}).get("results", [])
-    else:
-        results = search_data.get("results", [])
+    results = search_data.get("entities", [])
 
     if not results:
         pytest.skip("No sensor entities available for testing")
@@ -183,10 +180,7 @@ async def test_get_state_automation_entity(mcp_client):
     search_data = parse_mcp_result(search_result)
 
     # Get results from nested structure
-    if "data" in search_data:
-        results = search_data.get("data", {}).get("results", [])
-    else:
-        results = search_data.get("results", [])
+    results = search_data.get("entities", [])
 
     assert results, "No automation entities returned by ha_search"
     automation_entity_ids = [r.get("entity_id") for r in results]
@@ -238,10 +232,7 @@ async def test_get_state_binary_sensor(mcp_client):
     search_data = parse_mcp_result(search_result)
 
     # Get results from nested structure
-    if "data" in search_data:
-        results = search_data.get("data", {}).get("results", [])
-    else:
-        results = search_data.get("results", [])
+    results = search_data.get("entities", [])
 
     if not results:
         pytest.skip("No binary_sensor entities available for testing")

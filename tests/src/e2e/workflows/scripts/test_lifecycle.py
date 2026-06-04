@@ -157,7 +157,7 @@ async def verify_script_exists_and_registered(
             )
             search_data = enhanced_parse_mcp_result(search_result)
             search_results = (
-                search_data.get("data", {}).get("results", [])
+                search_data.get("entities", [])
                 if search_data.get("success")
                 else []
             )

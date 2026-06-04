@@ -1988,12 +1988,11 @@ async def test_light_entity(mcp_client) -> str:
     # Parse search results
     search_data = parse_mcp_result(search_result)
 
-    data = search_data.get("data", {})
-    if not data.get("success") or not data.get("entities"):
+    if not search_data.get("success") or not search_data.get("entities"):
         pytest.skip("No light entities available for testing")
 
     # Find a light that's currently off (preferred for testing)
-    for entity in data["entities"]:
+    for entity in search_data["entities"]:
         entity_id = entity["entity_id"]
 
         # Get current state
@@ -2007,7 +2006,7 @@ async def test_light_entity(mcp_client) -> str:
             return entity_id
 
     # If no off lights, use the first available
-    entity_id = data["entities"][0]["entity_id"]
+    entity_id = search_data["entities"][0]["entity_id"]
     logger.info(f"🔍 Using test light: {entity_id} (may be on)")
     return entity_id
 
