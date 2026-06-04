@@ -415,7 +415,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # listing by domain/area without a query); deep_search needs a non-
         # empty query string (no term → nothing to match against).
         query_text = (query or "").strip()
-        registry_eligible = bool(query_text or domain_filter or area_filter)
+        domain_filter_text = (domain_filter or "").strip()
+        area_filter_text = (area_filter or "").strip()
+        registry_eligible = bool(
+            query_text or domain_filter_text or area_filter_text
+        )
         body_eligible = bool(query_text)
 
         if not registry_eligible and not body_eligible:
