@@ -519,9 +519,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             when one branch raises. Empty `entities`/`automations`/... combined
             with `partial: True` means "search failed", not "no results".
           - `partial: True` is ALSO set (with `partial_reason`) when the
-            config-body branch hits its per-call wall-clock budget and skips
-            unfetched configs — the result-count would otherwise look
-            complete (`has_more: false`) when it isn't.
+            config-body branch loses data on the per-type fetch paths —
+            either the per-id wall-clock budget exhausts and skips
+            unfetched configs, OR individual fetches raise exceptions
+            (caught at debug-level so they would otherwise be silent), OR
+            an `input_*` helper-type list fetch fails. Helpers run on every
+            default call, so silent per-type-list failures would otherwise
+            leave callers unable to tell a real zero-match from a partial
+            backend outage.
           - When the body branch is skipped by the entity-intent gate above,
             the response carries a `warnings[]` entry naming the skip
             reason; pass `search_types=[...]` to override.
