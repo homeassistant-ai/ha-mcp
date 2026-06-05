@@ -755,25 +755,26 @@ class AutomationConfigTools:
                 "Use ha_search_entities(domain_filter='automation') to find automations",
                 "Use ha_get_skill_guide for automation examples",
             ]
-            if "'service'" in error_text and "not allowed" in error_text:
-                suggestions.insert(
-                    0,
-                    "Use 'action:' not 'service:' for service calls in action steps "
-                    "(renamed in HA 2024.8).",
-                )
-            elif "unexpected keyword argument" in error_text.lower():
-                suggestions.insert(
-                    0,
-                    "An action step contains a field that belongs at the automation root "
-                    "(e.g. alias, trigger, condition). Each action step should only contain "
-                    "action/target/data/delay/choose/if/repeat/parallel keys.",
-                )
-            elif "'variables'" in error_text and "dictionary" in error_text:
-                suggestions.insert(
-                    0,
-                    "variables must be a dict mapping names to values, "
-                    'e.g. {"variables": {"my_var": 42}}',
-                )
+            if isinstance(e, HomeAssistantAPIError):
+                if "'service'" in error_text and "not allowed" in error_text:
+                    suggestions.insert(
+                        0,
+                        "Use 'action:' not 'service:' for service calls in action steps "
+                        "(renamed in HA 2024.8).",
+                    )
+                elif "unexpected keyword argument" in error_text.lower():
+                    suggestions.insert(
+                        0,
+                        "An action step contains a field that belongs at the automation root "
+                        "(e.g. alias, trigger, condition). Each action step should only contain "
+                        "action/target/data/delay/choose/if/repeat/parallel keys.",
+                    )
+                elif "'variables'" in error_text and "dictionary" in error_text:
+                    suggestions.insert(
+                        0,
+                        "variables must be a dict mapping names to values, "
+                        'e.g. {"variables": {"my_var": 42}}',
+                    )
             if bp_warnings:
                 suggestions.append(
                     "Config had best-practice issues that may be related: "
