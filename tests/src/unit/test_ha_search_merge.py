@@ -13,6 +13,7 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.smart_search._deep import DeepSearchMixin
 from ha_mcp.tools.tools_search import (
+    _compute_eligibility,
     _merge_payload_metadata,
     _validate_search_types,
 )
@@ -216,6 +217,106 @@ def test_partial_reason_empty_payload_does_not_overwrite() -> None:
     response: dict = {"partial_reason": "real reason"}
     _merge_payload_metadata(response, {"partial_reason": ""}, skip_keys=())
     assert response["partial_reason"] == "real reason"
+
+
+# Eligibility gate --------------------------------------------------------
+#
+# ``_compute_eligibility`` is the pure decision function for which sub-search
+# branches the orchestrator fans out to. These cells pin the 14 behaviorally-
+# distinct input combinations identified during the gate's design (BAT round
+# + scrutinize pass). Returns (registry_eligible, body_eligible,
+# body_skipped_by_intent_gate).
+
+
+def _gate(**kwargs):
+    """Shortcut: zero-fill unset string params + run _compute_eligibility."""
+    return _compute_eligibility(
+        query_text=kwargs.get("q", ""),
+        domain_filter_text=kwargs.get("dom", ""),
+        area_filter_text=kwargs.get("area", ""),
+        state_filter_text=kwargs.get("state", ""),
+        explicit_config_only=kwargs.get("pin", False),
+    )
+
+
+def test_gate_no_inputs_at_all() -> None:
+    """All-empty inputs: neither branch eligible; caller hits validation."""
+    assert _gate() == (False, False, False)
+
+
+def test_gate_query_only_runs_both_branches() -> None:
+    """Plain `ha_search("X")` — no filter, no pin — runs both surfaces."""
+    assert _gate(q="light.kitchen") == (True, True, False)
+
+
+def test_gate_domain_only_runs_entity_only() -> None:
+    """`ha_search(domain_filter="sensor")` — registry-list mode, no body."""
+    assert _gate(dom="sensor") == (True, False, False)
+
+
+def test_gate_area_only_runs_entity_only() -> None:
+    assert _gate(area="Living Room") == (True, False, False)
+
+
+def test_gate_state_only_is_rejected() -> None:
+    """``state_filter`` alone doesn't unlock registry (unchanged from
+    pre-NEW1 behavior); body has no query either. Caller hits validation."""
+    assert _gate(state="on") == (False, False, False)
+
+
+def test_gate_query_plus_domain_skips_body_NEW() -> None:
+    """The headline BAT-driven change: name-as-query + filter signals
+    entity-only intent, so body is skipped to avoid the wasteful deep
+    search. ``body_skipped_by_intent_gate`` flags the skip for warning
+    emission."""
+    assert _gate(q="bedroom motion", dom="binary_sensor") == (True, False, True)
+
+
+def test_gate_query_plus_area_skips_body_NEW() -> None:
+    assert _gate(q="tv", area="Living Room") == (True, False, True)
+
+
+def test_gate_query_plus_state_skips_body_NEW() -> None:
+    assert _gate(q="light", state="on") == (True, False, True)
+
+
+def test_gate_query_plus_pin_runs_config_only() -> None:
+    """Explicit ``search_types`` pin: entity branch skipped, body runs."""
+    assert _gate(q="light.kitchen", pin=True) == (False, True, False)
+
+
+def test_gate_pin_only_no_query_is_rejected() -> None:
+    """Pin + no query: nothing for body to match on (deep needs a term),
+    registry skipped by pin. Caller hits validation."""
+    assert _gate(pin=True) == (False, False, False)
+
+
+def test_gate_query_plus_filter_plus_pin_overrides_intent_gate() -> None:
+    """Explicit pin overrides the entity-intent gate — callers who want
+    config matches alongside a filter scope opt back in this way."""
+    assert _gate(q="temperature", dom="sensor", pin=True) == (False, True, False)
+
+
+def test_gate_filters_only_without_query_no_skip_flag() -> None:
+    """Filters set but no query: body never eligible (no term), so the
+    skip-flag should NOT fire (the skip is structural, not gate-driven)."""
+    assert _gate(dom="sensor", area="Living Room", state="on") == (True, False, False)
+
+
+def test_gate_all_filters_plus_query_skips_body_NEW() -> None:
+    """All three entity-intent signals set with a query: body skipped."""
+    assert _gate(q="kitchen", dom="light", area="Kitchen", state="on") == (
+        True,
+        False,
+        True,
+    )
+
+
+def test_gate_query_plus_all_filters_plus_pin_runs_body() -> None:
+    """Pin overrides all three filters."""
+    assert _gate(
+        q="kitchen", dom="light", area="Kitchen", state="on", pin=True
+    ) == (False, True, False)
 
 
 def test_empty_payload_is_noop() -> None:

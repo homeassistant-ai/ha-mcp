@@ -87,6 +87,51 @@ def _validate_search_types(parsed: list[str] | None) -> None:
         )
 
 
+def _compute_eligibility(
+    *,
+    query_text: str,
+    domain_filter_text: str,
+    area_filter_text: str,
+    state_filter_text: str,
+    explicit_config_only: bool,
+) -> tuple[bool, bool, bool]:
+    """Decide which sub-search branches the orchestrator should fan out to.
+
+    Returns ``(registry_eligible, body_eligible, body_skipped_by_intent_gate)``:
+
+    - ``registry_eligible``: the entity-registry branch runs whenever any of
+      ``query`` / ``domain_filter`` / ``area_filter`` is set, except when the
+      caller pinned config-only via an explicit ``search_types``.
+    - ``body_eligible``: the config-body branch runs only when a ``query``
+      term is set AND the caller's inputs do not signal entity-only intent.
+      "Entity-only intent" = any of ``domain_filter`` / ``area_filter`` /
+      ``state_filter`` is set; the caller is scoping to entities, so the
+      heavy config-body search would be wasted work (BAT-verified pattern).
+      The gate is overridden by an explicit ``search_types`` pin.
+    - ``body_skipped_by_intent_gate``: True when ``body_eligible`` was
+      flipped from True to False by the entity-intent rule (caller passed
+      ``query`` + entity-filter without explicit pin). The orchestrator
+      surfaces a warning in this case so callers can opt back in.
+    """
+    any_registry_input = bool(
+        query_text or domain_filter_text or area_filter_text
+    )
+    registry_eligible = any_registry_input and not explicit_config_only
+    entity_intent_signal = bool(
+        domain_filter_text or area_filter_text or state_filter_text
+    )
+    body_eligible_unguarded = bool(query_text)
+    body_eligible = body_eligible_unguarded and (
+        explicit_config_only or not entity_intent_signal
+    )
+    body_skipped_by_intent_gate = (
+        body_eligible_unguarded
+        and entity_intent_signal
+        and not explicit_config_only
+    )
+    return registry_eligible, body_eligible, body_skipped_by_intent_gate
+
+
 def _merge_payload_metadata(
     response: dict[str, Any],
     payload: dict[str, Any],
@@ -444,10 +489,19 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             scene entity-sets, helper bodies, dashboard cards. Use `query`
             with config-body terms; filter with `search_types`.
 
-        Body search only runs when `query` is non-empty (there is nothing to
-        match on otherwise). Registry search runs whenever `query`,
-        `domain_filter`, or `area_filter` is set. The filters narrow within
-        each surface but never disable a surface that has inputs.
+        Eligibility:
+          - Registry (entity) search runs whenever `query`, `domain_filter`,
+            or `area_filter` is set, except when `search_types` is explicitly
+            set (which pins to config-only).
+          - Config-body search runs only when `query` is non-empty AND the
+            caller's inputs do not signal entity-only intent — i.e. when
+            none of `domain_filter`/`area_filter`/`state_filter` is set, OR
+            when `search_types` is explicitly set as an override. The
+            "filter set ⇒ skip body" rule keeps name-based single-entity
+            lookups (e.g. `ha_search("bedroom motion", domain_filter=
+            "binary_sensor")`) off the expensive config-body backend; pass
+            `search_types=[...]` to opt back in (a warning surfaces in the
+            response when the gate fires so the skip is visible).
 
         Use this whenever you need to find something in HA — without needing
         to decide between entity-name search vs config-body search up front.
@@ -468,6 +522,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             config-body branch hits its per-call wall-clock budget and skips
             unfetched configs — the result-count would otherwise look
             complete (`has_more: false`) when it isn't.
+          - When the body branch is skipped by the entity-intent gate above,
+            the response carries a `warnings[]` entry naming the skip
+            reason; pass `search_types=[...]` to override.
           - `count` is items in this response (post-pagination), not total
             matches across the corpus. Use `entity_total_matches` +
             `config_total_matches` for the totals.
@@ -483,8 +540,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
             - List all calendars: ha_search(domain_filter="calendar")
             - Find a light by name: ha_search("kitchen", domain_filter="light")
-            - Which automations use an entity: ha_search("light.bed_light")
+            - Which automations use an entity (no filter, body included): ha_search("light.bed_light")
             - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
+            - Find automations referencing a sensor while scoped by domain (explicit pin opts back into body):
+              ha_search("temperature", domain_filter="sensor", search_types=["automation"])
         """
         try:
             parsed_search_types = parse_string_list_param(
@@ -496,22 +555,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
         _validate_search_types(parsed_search_types)
 
-        # Normalise query once. The two surfaces have different eligibility:
-        # registry runs whenever a query OR a filter is set (it supports
-        # listing by domain/area without a query); deep_search needs a non-
-        # empty query string (no term → nothing to match against).
+        # Normalise the caller-input strings once; the eligibility helper
+        # below is purely a function of normalized inputs so it stays
+        # unit-testable without an MCP fixture.
         query_text = (query or "").strip()
         domain_filter_text = (domain_filter or "").strip()
         area_filter_text = (area_filter or "").strip()
-        # ``search_types`` lists config-surface types only (automation, script,
-        # scene, helper, dashboard). When the caller pins it, they are asking
-        # for config-only — skip the entity branch.
+        state_filter_text = (state_filter or "").strip()
         explicit_config_only = parsed_search_types is not None
-        registry_eligible = (
-            bool(query_text or domain_filter_text or area_filter_text)
-            and not explicit_config_only
+        registry_eligible, body_eligible, body_skipped_by_intent_gate = (
+            _compute_eligibility(
+                query_text=query_text,
+                domain_filter_text=domain_filter_text,
+                area_filter_text=area_filter_text,
+                state_filter_text=state_filter_text,
+                explicit_config_only=explicit_config_only,
+            )
         )
-        body_eligible = bool(query_text)
 
         if not registry_eligible and not body_eligible:
             raise_tool_error(
@@ -573,12 +633,24 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             or ["automation", "script", "scene", "helper"],
             "config_total_matches": 0,
             # Pre-init the accumulating diagnostic keys so callers reading
-            # ``response["errors"]`` / ``response["partial"]`` get a typed
-            # default instead of ``KeyError`` on the no-error path, and so
-            # ``_merge_payload_metadata`` extends rather than first-wins.
+            # ``response["errors"]`` / ``response["partial"]`` / ``response
+            # ["warnings"]`` get a typed default instead of ``KeyError`` on
+            # the no-error path, and so ``_merge_payload_metadata`` extends
+            # rather than first-wins.
             "partial": False,
             "errors": [],
+            "warnings": [],
         }
+        if body_skipped_by_intent_gate:
+            # Surface the body-skip so a caller who actually wanted config
+            # matches alongside the entity scope can see why their request
+            # returned no automations / scripts / etc.
+            response["warnings"].append(
+                "config-body search skipped: domain_filter / area_filter / "
+                "state_filter signals entity-only intent; pass "
+                'search_types=["automation", ...] to include config matches '
+                "alongside entity results."
+            )
         partial = False
         errors: list[dict[str, str]] = []
         for label, outcome in zip(labels, outcomes, strict=True):
