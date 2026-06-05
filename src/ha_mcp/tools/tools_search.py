@@ -113,9 +113,7 @@ def _compute_eligibility(
       ``query`` + entity-filter without explicit pin). The orchestrator
       surfaces a warning in this case so callers can opt back in.
     """
-    any_registry_input = bool(
-        query_text or domain_filter_text or area_filter_text
-    )
+    any_registry_input = bool(query_text or domain_filter_text or area_filter_text)
     registry_eligible = any_registry_input and not explicit_config_only
     entity_intent_signal = bool(
         domain_filter_text or area_filter_text or state_filter_text
@@ -125,9 +123,7 @@ def _compute_eligibility(
         explicit_config_only or not entity_intent_signal
     )
     body_skipped_by_intent_gate = (
-        body_eligible_unguarded
-        and entity_intent_signal
-        and not explicit_config_only
+        body_eligible_unguarded and entity_intent_signal and not explicit_config_only
     )
     return registry_eligible, body_eligible, body_skipped_by_intent_gate
 
@@ -551,9 +547,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
               ha_search("temperature", domain_filter="sensor", search_types=["automation"])
         """
         try:
-            parsed_search_types = parse_string_list_param(
-                search_types, "search_types"
-            )
+            parsed_search_types = parse_string_list_param(search_types, "search_types")
         except ValueError as exc:
             raise_tool_error(
                 create_validation_error(str(exc), parameter="search_types")
@@ -2002,9 +1996,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         """
         # Parse search_types to handle JSON string input from MCP clients
         try:
-            parsed_search_types = parse_string_list_param(
-                search_types, "search_types"
-            )
+            parsed_search_types = parse_string_list_param(search_types, "search_types")
         except ValueError as exc:
             raise_tool_error(
                 create_validation_error(str(exc), parameter="search_types")

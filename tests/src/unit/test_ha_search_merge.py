@@ -104,9 +104,7 @@ def test_validate_search_types_empty_list_rejected() -> None:
 
 
 def test_validate_search_types_all_valid_passes() -> None:
-    _validate_search_types(
-        ["automation", "script", "scene", "helper", "dashboard"]
-    )
+    _validate_search_types(["automation", "script", "scene", "helper", "dashboard"])
 
 
 def test_validate_search_types_subset_passes() -> None:
@@ -127,9 +125,7 @@ def test_validate_search_types_mixed_valid_invalid_rejected() -> None:
         _validate_search_types(["automation", "frobnicate", "scene"])
     assert "frobnicate" in str(excinfo.value)
     # Valid types from the input shouldn't appear in the unknown list.
-    assert "['frobnicate']" in str(excinfo.value) or "frobnicate" in str(
-        excinfo.value
-    )
+    assert "['frobnicate']" in str(excinfo.value) or "frobnicate" in str(excinfo.value)
 
 
 def test_validate_search_types_blueprint_rejected() -> None:
@@ -314,9 +310,11 @@ def test_gate_all_filters_plus_query_skips_body_NEW() -> None:
 
 def test_gate_query_plus_all_filters_plus_pin_runs_body() -> None:
     """Pin overrides all three filters."""
-    assert _gate(
-        q="kitchen", dom="light", area="Kitchen", state="on", pin=True
-    ) == (False, True, False)
+    assert _gate(q="kitchen", dom="light", area="Kitchen", state="on", pin=True) == (
+        False,
+        True,
+        False,
+    )
 
 
 def test_empty_payload_is_noop() -> None:
@@ -412,6 +410,7 @@ def test_dual_surface_has_more_is_or_of_branches() -> None:
     flags. Previously covered only by an inline reimplementation inside
     the e2e pagination test; lifting it to unit level catches the
     synthesis logic regressing without a full e2e run."""
+
     # Mirrors tools_search.py: response["has_more"] =
     #     bool(response.get("entity_has_more")) or
     #     bool(response.get("config_has_more"))
@@ -459,9 +458,7 @@ def test_orchestrator_entity_branch_exception_partial_shape() -> None:
     # Entity branch raised — the orchestrator records the surface tag.
     entity_exception = RuntimeError("ws_connection_closed")
     partial = True
-    orchestrator_errors.append(
-        {"surface": "entities", "error": str(entity_exception)}
-    )
+    orchestrator_errors.append({"surface": "entities", "error": str(entity_exception)})
 
     # Config branch returned clean with its own diagnostic ``warnings`` —
     # the merge helper picks those up.
@@ -479,8 +476,14 @@ def test_orchestrator_entity_branch_exception_partial_shape() -> None:
         response,
         config_payload,
         skip_keys=(
-            "automations", "scripts", "scenes", "helpers", "dashboards",
-            "total_matches", "has_more", "next_offset",
+            "automations",
+            "scripts",
+            "scenes",
+            "helpers",
+            "dashboards",
+            "total_matches",
+            "has_more",
+            "next_offset",
         ),
     )
 
@@ -569,9 +572,7 @@ def test_budget_partial_flag_set_when_automation_individual_fetches_failed() -> 
     response can show ``total_matches=0`` while the backend was actually
     partially down."""
     response: dict = {"success": True}
-    DeepSearchMixin._apply_budget_partial_flag(
-        response, automation_failed=4
-    )
+    DeepSearchMixin._apply_budget_partial_flag(response, automation_failed=4)
     assert response["partial"] is True
     assert "Automation config fetch incomplete: 4 failed" in response["partial_reason"]
 
@@ -591,8 +592,9 @@ def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:
     response: dict = {"success": True}
     DeepSearchMixin._apply_budget_partial_flag(response, helper_failed=3)
     assert response["partial"] is True
-    assert "Helper list fetch incomplete: 3 input_* type(s) failed" in (
-        response["partial_reason"]
+    assert (
+        "Helper list fetch incomplete: 3 input_* type(s) failed"
+        in (response["partial_reason"])
     )
 
 
@@ -627,6 +629,7 @@ def test_budget_partial_flag_failures_append_to_existing_reason() -> None:
     assert response["partial"] is True
     assert response["partial_reason"].startswith("Scene config fetch incomplete")
     assert "Script config fetch incomplete: 3 failed" in response["partial_reason"]
-    assert "Helper list fetch incomplete: 1 input_* type(s) failed" in (
-        response["partial_reason"]
+    assert (
+        "Helper list fetch incomplete: 1 input_* type(s) failed"
+        in (response["partial_reason"])
     )

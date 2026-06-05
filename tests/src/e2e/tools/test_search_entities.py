@@ -486,44 +486,77 @@ async def test_ha_search_combined_surface_populated(mcp_client):
     regress to entity-only or config-only output on a query that the BAT
     runs against expecting both surfaces to fire.
 
-    "light" is the canonical broad query — the test HA fixture has light
-    entities and at least one automation/scene referencing "light" by name.
+    Creates a fixture automation referencing the test query so the config
+    branch deterministically has a match; without the fixture this test
+    depends on the test-container HA having pre-existing automations
+    matching the query term.
     """
-    result = await mcp_client.call_tool(
-        "ha_search",
-        {"query": "light", "limit": 5},
-    )
-    data = assert_mcp_success(result, "Combined-surface ha_search")
+    from ..utilities.wait_helpers import wait_for_tool_result
 
-    # Entity surface must be populated.
-    entities = data.get("entities", [])
-    assert len(entities) > 0, (
-        "Combined ha_search('light') should return at least one entity"
-    )
+    fixture_query = "combined_surface_fixture"
+    automation_config = {
+        "alias": "Combined Surface Fixture",
+        "trigger": [
+            {
+                "platform": "state",
+                "entity_id": f"sensor.{fixture_query}_sensor",
+            }
+        ],
+        "action": [
+            {
+                "action": "light.turn_on",
+                "target": {"entity_id": "light.bed_light"},
+            }
+        ],
+    }
 
-    # At least one config bucket must be populated. We don't pin WHICH
-    # bucket — the test HA fixture might have automations/scripts/scenes/
-    # helpers/dashboards in any combination — but the orchestrator must
-    # have fanned out and brought back something on the config surface
-    # when the term broadly matches.
-    config_buckets = ("automations", "scripts", "scenes", "helpers", "dashboards")
-    config_populated = sum(len(data.get(b, [])) for b in config_buckets)
-    assert config_populated > 0, (
-        f"Combined ha_search('light') should populate at least one config "
-        f"bucket; got: "
-        f"{ {b: len(data.get(b, [])) for b in config_buckets} }"
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_automation",
+        {"config": automation_config},
     )
+    assert_mcp_success(create_result, "Create combined-surface fixture automation")
 
-    # The combined response shape sanity-check: count = entities + buckets.
-    assert data["count"] == len(entities) + config_populated, (
-        f"count mismatch: {data['count']} vs entities({len(entities)}) + "
-        f"buckets({config_populated})"
-    )
+    try:
+        # Wait for the fixture automation to be searchable on the config
+        # branch before asserting combined-surface populated.
+        data = await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search",
+            arguments={"query": fixture_query, "limit": 5},
+            predicate=lambda d: len(d.get("automations", [])) > 0,
+            description="ha_search finds fixture automation on config branch",
+        )
 
-    logger.info(
-        f"Combined surface populated: {len(entities)} entities + "
-        f"{config_populated} config items"
-    )
+        # Entity surface: query is unique to the fixture, so entities may
+        # be empty (no entity_id matches "combined_surface_fixture"). The
+        # assertion that matters for S7(a) is that the orchestrator fanned
+        # out and the config branch returned the fixture match.
+        entities = data.get("entities", [])
+        config_buckets = ("automations", "scripts", "scenes", "helpers", "dashboards")
+        config_populated = sum(len(data.get(b, [])) for b in config_buckets)
+        assert config_populated > 0, (
+            f"Fixture automation should be found on config branch; got: "
+            f"{ {b: len(data.get(b, [])) for b in config_buckets} }"
+        )
+
+        # The combined response shape sanity-check: count = entities + buckets.
+        assert data["count"] == len(entities) + config_populated, (
+            f"count mismatch: {data['count']} vs entities({len(entities)}) + "
+            f"buckets({config_populated})"
+        )
+
+        logger.info(
+            f"Combined surface verified: {len(entities)} entities + "
+            f"{config_populated} config items"
+        )
+    finally:
+        try:
+            await mcp_client.call_tool(
+                "ha_config_remove_automation",
+                {"entity_id": "automation.combined_surface_fixture"},
+            )
+        except Exception as e:
+            logger.debug("Cleanup of combined-surface fixture failed: %s", e)
 
 
 @pytest.mark.asyncio
