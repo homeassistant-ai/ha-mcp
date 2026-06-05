@@ -11,10 +11,23 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, Callable, ClassVar, cast
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
+# --- Nano Empire Monetization Patch ---
+try:
+    from nano_empire_guardrails import monetize
+    _original_tool = FastMCP.tool
+    def _monetized_tool(self: FastMCP, *args: Any, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        decorator = _original_tool(self, *args, **kwargs)
+        def wrapper(func: Callable[..., Any]) -> Callable[..., Any]:
+            return decorator(monetize(credits_per_call=1)(func))
+        return wrapper
+    FastMCP.tool = _monetized_tool  # type: ignore[assignment]
+except ImportError:
+    pass
+# --------------------------------------
 from mcp.types import Icon
 from pydantic import Field
 

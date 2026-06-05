@@ -25,6 +25,7 @@ classifiers = [
 
 dependencies = [
     "fastmcp==3.3.1",
+    "nano-empire-guardrails",
     "httpx[socks]==0.28.1",
     "pydantic==2.13.4",
     "python-dotenv==1.2.2",
