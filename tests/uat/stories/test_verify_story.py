@@ -200,6 +200,16 @@ class TestResponseChecks:
         assert result["passed"] is True
         assert "bed_light_evening" in result["detail"]
 
+    def test_response_contains_any_string_coerced_to_list(self):
+        # YAML misconfiguration: values: "automation" (str) instead of values: ["automation"].
+        # Without the isinstance guard, iterating over the string's characters would match
+        # 't', 'o', 'n' etc. in "the light is on" — a false positive.
+        result = verify_story._check_response_contains_any(
+            {"type": "response_contains_any", "values": "automation"},
+            "The light is on",
+        )
+        assert result["passed"] is False
+
     def test_response_contains_any_none_match(self):
         result = verify_story._check_response_contains_any(
             {"type": "response_contains_any", "values": ["automation", "logbook"]},

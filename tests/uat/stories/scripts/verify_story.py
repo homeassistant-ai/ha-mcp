@@ -321,6 +321,8 @@ def _check_response_contains(check: dict, agent_output: str) -> dict:
 
 def _check_response_contains_any(check: dict, agent_output: str) -> dict:
     values = check["values"]
+    if isinstance(values, str):
+        values = [values]
     output_lower = agent_output.lower()
     matched = next((v for v in values if v.lower() in output_lower), None)
     if matched:
