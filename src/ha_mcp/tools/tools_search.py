@@ -870,7 +870,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
         least one of `query`, `domain_filter`, or `area_filter` must be set.
         """
-        parsed_fields: list[str] | None = None
         parsed_result_fields: list[str] | None = None
         if result_fields is not None:
             try:
@@ -1088,11 +1087,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             search_data.setdefault("warnings", []).append(_warn)
 
                     _r = await add_timezone_metadata(client, search_data)
-                    if parsed_fields is not None:
-                        _sfn = _r["data"].get("state_filter_note")
-                        _r["data"] = project_fields(_r["data"], parsed_fields)
-                        if _sfn is not None:
-                            _r["data"]["state_filter_note"] = _sfn
                     return _r
                 else:
                     # Just area filter, return area results with enhanced format
@@ -1225,11 +1219,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     _warn
                                 )
                         _r = await add_timezone_metadata(client, area_search_data)
-                        if parsed_fields is not None:
-                            _sfn = _r["data"].get("state_filter_note")
-                            _r["data"] = project_fields(_r["data"], parsed_fields)
-                            if _sfn is not None:
-                                _r["data"]["state_filter_note"] = _sfn
                         return _r
                     else:
                         # Empty match: still emit `area_names: []` so
@@ -1252,8 +1241,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if group_by_domain_bool:
                             empty_area_data["by_domain"] = {}
                         _r = await add_timezone_metadata(client, empty_area_data)
-                        if parsed_fields is not None:
-                            _r["data"] = project_fields(_r["data"], parsed_fields)
                         return _r
 
             # Regular entity search (no area filter)
@@ -1371,8 +1358,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
                     domain_list_data["by_domain"] = {domain_filter: domain_list_results}
                 _r = await add_timezone_metadata(client, domain_list_data)
-                if parsed_fields is not None:
-                    _r["data"] = project_fields(_r["data"], parsed_fields)
                 return _r
 
             # Search strategy depends on exact_match setting:
@@ -1526,14 +1511,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
             _r = await add_timezone_metadata(client, result)
-            if parsed_fields is not None:
-                # Force-retain state_filter_note alongside success — it
-                # explains has_more/total_matches semantics for fuzzy+state_filter
-                # and should survive a fields= projection so the caller isn't misled.
-                _sfn = _r["data"].get("state_filter_note")
-                _r["data"] = project_fields(_r["data"], parsed_fields)
-                if _sfn is not None:
-                    _r["data"]["state_filter_note"] = _sfn
             return _r
 
         except ToolError:
