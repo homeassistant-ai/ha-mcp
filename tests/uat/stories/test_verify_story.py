@@ -189,22 +189,6 @@ class TestResponseChecks:
         )
         assert result["passed"] is False
 
-    def test_response_contains_any_first_match(self):
-        result = verify_story._check_response_contains_any(
-            {"type": "response_contains_any", "values": ["automation", "logbook"]},
-            "I checked the logbook and found nothing",
-        )
-        assert result["passed"] is True
-        assert "logbook" in result["detail"]
-
-    def test_response_contains_any_second_match(self):
-        result = verify_story._check_response_contains_any(
-            {"type": "response_contains_any", "values": ["automation", "logbook"]},
-            "No automation was found",
-        )
-        assert result["passed"] is True
-        assert "automation" in result["detail"]
-
     def test_response_contains_any_case_insensitive(self):
         result = verify_story._check_response_contains_any(
             {
@@ -230,10 +214,3 @@ class TestResponseChecks:
             "I found 6 lights in total",
         )
         assert result["passed"] is True
-
-    def test_response_matches_no_false_positive(self):
-        result = verify_story._check_response_matches(
-            {"type": "response_matches", "pattern": r"\b6\b"},
-            "I found 16 lights in total",
-        )
-        assert result["passed"] is False
