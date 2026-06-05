@@ -92,11 +92,14 @@ def test_validate_search_types_none_passes() -> None:
     _validate_search_types(None)
 
 
-def test_validate_search_types_empty_list_passes() -> None:
-    """Empty list bypasses validation — semantics of [] are decided at the
-    orchestrator (see search-types-empty-list discussion); validation here
-    only rejects *unknown* values."""
-    _validate_search_types([])
+def test_validate_search_types_empty_list_rejected() -> None:
+    """Empty list (``search_types=[]``) is rejected: it would pin branch
+    eligibility to config-only while the response echoes the default
+    type list, a silent caller / runtime / response mismatch. Callers
+    wanting the default behavior should omit the parameter entirely."""
+    with pytest.raises(ToolError) as excinfo:
+        _validate_search_types([])
+    assert "non-empty" in str(excinfo.value)
 
 
 def test_validate_search_types_all_valid_passes() -> None:
@@ -135,6 +138,84 @@ def test_validate_search_types_blueprint_rejected() -> None:
     with pytest.raises(ToolError) as excinfo:
         _validate_search_types(["blueprint"])
     assert "blueprint" in str(excinfo.value)
+
+
+# Accumulating-arm merge semantics ----------------------------------------
+#
+# These pin the cross-branch accumulation of ``errors`` / ``partial`` /
+# ``partial_reason`` — the parent contract is that no branch's diagnostic
+# data is silently shadow-protected away by a later first-wins skip.
+
+
+def test_errors_accumulate_across_branches() -> None:
+    """Both branches' ``errors`` lists end up in the response — neither is
+    first-wins-shadowed."""
+    response: dict = {}
+    entity_payload = {"errors": [{"surface": "entity-internal", "code": "WS"}]}
+    config_payload = {"errors": [{"surface": "config-internal", "code": "BUDGET"}]}
+    _merge_payload_metadata(response, entity_payload, skip_keys=())
+    _merge_payload_metadata(response, config_payload, skip_keys=())
+    assert response["errors"] == [
+        {"surface": "entity-internal", "code": "WS"},
+        {"surface": "config-internal", "code": "BUDGET"},
+    ]
+
+
+def test_errors_response_side_non_list_replaced_with_payload() -> None:
+    """When ``response['errors']`` is somehow non-list (contract violation
+    upstream), the payload's list replaces it rather than crashing on
+    ``.extend``."""
+    response: dict = {"errors": "not-a-list"}
+    payload = {"errors": [{"surface": "x", "code": "Y"}]}
+    _merge_payload_metadata(response, payload, skip_keys=())
+    assert response["errors"] == [{"surface": "x", "code": "Y"}]
+
+
+def test_partial_or_accumulates_true_across_branches() -> None:
+    """If either branch is partial, the response is partial."""
+    response: dict = {}
+    _merge_payload_metadata(response, {"partial": False}, skip_keys=())
+    _merge_payload_metadata(response, {"partial": True}, skip_keys=())
+    assert response["partial"] is True
+
+
+def test_partial_or_keeps_true_when_second_branch_clean() -> None:
+    """Once partial=True is set, a subsequent partial=False payload does
+    not flip it back."""
+    response: dict = {}
+    _merge_payload_metadata(response, {"partial": True}, skip_keys=())
+    _merge_payload_metadata(response, {"partial": False}, skip_keys=())
+    assert response["partial"] is True
+
+
+def test_partial_reason_accumulates_across_branches_with_separator() -> None:
+    """Both branches' ``partial_reason`` strings end up in the response,
+    joined by a separator — neither is first-wins-shadowed."""
+    response: dict = {}
+    entity_payload = {"partial_reason": "entity: hidden-filter unavailable"}
+    config_payload = {"partial_reason": "config: budget exhausted, 5 skipped"}
+    _merge_payload_metadata(response, entity_payload, skip_keys=())
+    _merge_payload_metadata(response, config_payload, skip_keys=())
+    assert "entity: hidden-filter unavailable" in response["partial_reason"]
+    assert "config: budget exhausted, 5 skipped" in response["partial_reason"]
+    assert " ; " in response["partial_reason"]
+
+
+def test_partial_reason_dedups_identical_payload() -> None:
+    """A repeated reason string isn't appended a second time."""
+    response: dict = {"partial_reason": "duplicate-reason"}
+    _merge_payload_metadata(
+        response, {"partial_reason": "duplicate-reason"}, skip_keys=()
+    )
+    assert response["partial_reason"] == "duplicate-reason"
+
+
+def test_partial_reason_empty_payload_does_not_overwrite() -> None:
+    """An empty / falsy ``partial_reason`` from the payload doesn't replace
+    a real reason already in the response."""
+    response: dict = {"partial_reason": "real reason"}
+    _merge_payload_metadata(response, {"partial_reason": ""}, skip_keys=())
+    assert response["partial_reason"] == "real reason"
 
 
 def test_empty_payload_is_noop() -> None:

@@ -47,26 +47,35 @@ _CONFIG_BUCKETS: tuple[str, ...] = (
     "dashboards",
 )
 
-# ``search_types`` accepts singular type names; ``_CONFIG_BUCKETS`` uses the
-# plural response-key names. Keep both lists alongside so the relationship
-# is local — a new type needs both entries.
-_VALID_SEARCH_TYPES: frozenset[str] = frozenset(
-    {"automation", "script", "scene", "helper", "dashboard"}
-)
+# Derived from ``_CONFIG_BUCKETS``: every bucket entry is the plural
+# response-key (``automations`` etc.); the ``search_types`` token is the
+# singular (drop the trailing ``s``). Deriving keeps the two lists in
+# lockstep — adding a new bucket auto-extends the allowed set.
+_VALID_SEARCH_TYPES: frozenset[str] = frozenset(b[:-1] for b in _CONFIG_BUCKETS)
 
 
 def _validate_search_types(parsed: list[str] | None) -> None:
-    """Reject unknown ``search_types`` values with a structured validation error.
+    """Reject unknown or empty ``search_types`` values with a structured error.
 
     ``parse_string_list_param`` only verifies the *shape* (string / list /
     JSON-array); it does not check values against the known set, so a typo
     like ``search_types=["frobnicate"]`` would silently return zero matches
-    with no warning or partial flag. Centralised here so ``ha_search`` and
-    ``ha_deep_search`` share the contract — adding a new valid type needs
-    one change.
+    with no warning or partial flag. Also rejects empty list: ``[]`` pins
+    branch eligibility to config-only while the response echoes the default
+    type list — a silent caller / runtime / response mismatch. Centralised
+    here so ``ha_search`` and ``ha_deep_search`` share the contract — adding
+    a new valid type needs one change.
     """
     if parsed is None:
         return
+    if not parsed:
+        raise_tool_error(
+            create_validation_error(
+                "search_types must be non-empty if provided; omit the "
+                "parameter to use the default types.",
+                parameter="search_types",
+            )
+        )
     unknown = [t for t in parsed if t not in _VALID_SEARCH_TYPES]
     if unknown:
         raise_tool_error(
@@ -87,12 +96,13 @@ def _merge_payload_metadata(
     """Shallow-merge non-conflicting metadata from a sub-helper payload into the
     orchestrator response.
 
-    ``warnings`` accumulates across both branches — both ``ha_search_entities``
-    and ``ha_deep_search`` emit warnings (legacy fields, score caps, area
-    fallbacks, dashboard opt-in skips, ...) and shadow-protecting the second
-    branch would silently drop half the user-facing diagnostics. Other keys
-    use first-wins shadow-protect so orchestrator-owned fields (``success``,
-    ``query``, ``search_types``, ...) survive payload echoes.
+    Accumulating keys — extend / OR-merge across branches so neither side's
+    diagnostic data is silently dropped: ``warnings`` (list[str], extend),
+    ``errors`` (list[dict], extend), ``partial`` (bool, OR),
+    ``partial_reason`` (str, separator-concat with de-dup).
+
+    Other keys use first-wins shadow-protect so orchestrator-owned fields
+    (``success``, ``query``, ``search_types``, ...) survive payload echoes.
     """
     for key, value in payload.items():
         if key in skip_keys:
@@ -108,6 +118,24 @@ def _merge_payload_metadata(
                 # crash on ``.extend`` from ``setdefault`` returning the
                 # broken value.
                 response["warnings"] = list(value)
+            continue
+        if key == "errors" and isinstance(value, list):
+            current = response.get("errors")
+            if isinstance(current, list):
+                current.extend(value)
+            else:
+                response["errors"] = list(value)
+            continue
+        if key == "partial" and isinstance(value, bool):
+            response["partial"] = bool(response.get("partial")) or value
+            continue
+        if key == "partial_reason" and isinstance(value, str) and value:
+            current = response.get("partial_reason")
+            if isinstance(current, str) and current:
+                if value not in current:
+                    response["partial_reason"] = f"{current} ; {value}"
+            else:
+                response["partial_reason"] = value
             continue
         if key in response:
             continue
@@ -544,6 +572,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "search_types": parsed_search_types
             or ["automation", "script", "scene", "helper"],
             "config_total_matches": 0,
+            # Pre-init the accumulating diagnostic keys so callers reading
+            # ``response["errors"]`` / ``response["partial"]`` get a typed
+            # default instead of ``KeyError`` on the no-error path, and so
+            # ``_merge_payload_metadata`` extends rather than first-wins.
+            "partial": False,
+            "errors": [],
         }
         partial = False
         errors: list[dict[str, str]] = []
@@ -632,7 +666,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         if partial:
             response["partial"] = True
-            response["errors"] = errors
+            # Accumulate orchestrator-tagged surface errors after any
+            # payload-side errors already merged in — don't clobber.
+            response["errors"].extend(errors)
 
         return response
 
