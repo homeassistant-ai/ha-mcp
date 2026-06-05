@@ -109,18 +109,23 @@ class DeepSearchMixin(SceneSearchMixin):
                 "registry_failed": False,
             }
 
-            # Budget-skip counters for the Attempt-C path on automations/scripts.
-            # Non-zero means the per-id config fetch exhausted its wall-clock
-            # budget and some configs were never retrieved — surfaced as
-            # ``partial: True`` in the response so callers can detect capped
-            # results.
+            # Diagnostic counters for the Attempt-C path on automations/
+            # scripts and the input_* helper-type gather. Non-zero values
+            # surface as ``partial: True`` so callers can detect "incomplete
+            # zero" / "incomplete partial" results vs a true complete answer.
+            # ``_skipped`` = budget exhausted before fetch; ``_failed`` =
+            # fetch attempted but raised (caught at ``debug``-level).
             automation_skipped = 0
+            automation_failed = 0
             script_skipped = 0
+            script_failed = 0
+            helper_failed = 0
 
             if "automation" in search_types:
                 (
                     results["automations"],
                     automation_skipped,
+                    automation_failed,
                 ) = await self._deep_search_automations(
                     all_entities, automation_unique_id_map, query_lower, exact_match
                 )
@@ -136,6 +141,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 (
                     results["scripts"],
                     script_skipped,
+                    script_failed,
                 ) = await self._deep_search_scripts(
                     all_entities, query_lower, exact_match
                 )
@@ -166,7 +172,10 @@ class DeepSearchMixin(SceneSearchMixin):
                 )
 
             if "helper" in search_types:
-                results["helpers"] = await self._deep_search_helpers(
+                (
+                    results["helpers"],
+                    helper_failed,
+                ) = await self._deep_search_helpers(
                     query_lower, exact_match, semaphore, include_config
                 )
                 phase_done += 1
@@ -198,7 +207,10 @@ class DeepSearchMixin(SceneSearchMixin):
                 include_config,
                 scene_stats,
                 automation_skipped=automation_skipped,
+                automation_failed=automation_failed,
                 script_skipped=script_skipped,
+                script_failed=script_failed,
+                helper_failed=helper_failed,
             )
 
         except ToolError:
@@ -241,12 +253,16 @@ class DeepSearchMixin(SceneSearchMixin):
         automation_unique_id_map: dict[str, str],
         query_lower: str,
         exact_match: bool,
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int, int]:
         """Deep-search automations: 3-tier config fetch (REST bulk -> WS bulk -> individual).
 
-        Returns ``(matches, skipped_count)``. ``skipped_count`` is non-zero
-        only when bulk fetch fell back to the per-id Attempt-C path AND its
-        wall-clock budget exhausted before all configs were fetched; the
+        Returns ``(matches, skipped_count, failed_count)``. ``skipped_count``
+        is non-zero only when bulk fetch fell back to the per-id Attempt-C
+        path AND its wall-clock budget exhausted before all configs were
+        fetched. ``failed_count`` is non-zero when individual config fetches
+        raised exceptions (caught at ``debug``-level) — surfaced as
+        ``partial: True`` in the response so callers can distinguish
+        complete-zero from incomplete-zero. The
         skipped ids carry their score-without-config through the merge and
         fall below threshold silently. Surfaced as ``partial: True`` by the
         response builder so callers can detect capped-vs-complete results.
@@ -306,7 +322,11 @@ class DeepSearchMixin(SceneSearchMixin):
                     )
                     return (uid, None)
 
-            fetched_configs, _, skipped_count = await self._individual_fetch_budgeted(
+            (
+                fetched_configs,
+                failed_count,
+                skipped_count,
+            ) = await self._individual_fetch_budgeted(
                 uids_to_fetch,
                 _fetch_automation_config,
                 AUTOMATION_CONFIG_TIME_BUDGET,
@@ -314,6 +334,8 @@ class DeepSearchMixin(SceneSearchMixin):
                 "automations",
             )
             configs.update(fetched_configs)
+        else:
+            failed_count = 0
 
         # Phase 3: Score with whatever configs we have
         matches = [
@@ -329,17 +351,17 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
-        return matches, skipped_count
+        return matches, skipped_count, failed_count
 
     async def _deep_search_scripts(
         self,
         all_entities: list[dict[str, Any]],
         query_lower: str,
         exact_match: bool,
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int, int]:
         """Deep-search scripts: same 3-tier strategy as automations.
 
-        Returns ``(matches, skipped_count)``; ``skipped_count`` semantics
+        Returns ``(matches, skipped_count, failed_count)``; semantics
         identical to ``_deep_search_automations``.
         """
         script_entities = [
@@ -391,7 +413,11 @@ class DeepSearchMixin(SceneSearchMixin):
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
                     return (sid, None)
 
-            fetched_configs, _, skipped_count = await self._individual_fetch_budgeted(
+            (
+                fetched_configs,
+                failed_count,
+                skipped_count,
+            ) = await self._individual_fetch_budgeted(
                 sids_to_fetch,
                 _fetch_script_config,
                 SCRIPT_CONFIG_TIME_BUDGET,
@@ -399,6 +425,8 @@ class DeepSearchMixin(SceneSearchMixin):
                 "scripts",
             )
             configs.update(fetched_configs)
+        else:
+            failed_count = 0
 
         # Phase 3: Score scripts
         matches = [
@@ -415,7 +443,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
-        return matches, skipped_count
+        return matches, skipped_count, failed_count
 
     async def _search_helper_type(
         self,
@@ -477,8 +505,17 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool,
         semaphore: asyncio.Semaphore,
         include_config: bool,
-    ) -> list[dict[str, Any]]:
-        """Deep-search helpers: parallel input_* WS lists plus flow-based helpers."""
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Deep-search helpers: parallel input_* WS lists plus flow-based helpers.
+
+        Returns ``(results, failed_type_count)`` — ``failed_type_count`` is the
+        number of ``input_*`` helper-type list fetches that raised under the
+        ``return_exceptions=True`` gather. Flow-helper failures (line-level)
+        are tolerated inside ``_search_flow_helpers`` and don't surface here.
+        Helpers run on every default ``ha_search`` call, so silent failures
+        here mean the caller cannot tell "no helpers match" from "helper
+        backend partially down" — surfaced via ``partial: True``.
+        """
         helper_types = [
             "input_boolean",
             "input_number",
@@ -489,6 +526,7 @@ class DeepSearchMixin(SceneSearchMixin):
         ]
 
         results: list[dict[str, Any]] = []
+        failed_type_count = 0
         type_results = await asyncio.gather(
             *[
                 self._search_helper_type(ht, query_lower, exact_match, semaphore)
@@ -500,6 +538,7 @@ class DeepSearchMixin(SceneSearchMixin):
             if isinstance(result, list):
                 results.extend(result)
             elif isinstance(result, Exception):
+                failed_type_count += 1
                 logger.debug(f"Helper list fetch failed: {result}")
 
         # Flow-based helpers (template, group, utility_meter, derivative, ...)
@@ -516,7 +555,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 include_config=include_config,
             )
         )
-        return results
+        return results, failed_type_count
 
     async def _search_one_dashboard(
         self,
@@ -615,6 +654,9 @@ class DeepSearchMixin(SceneSearchMixin):
         *,
         automation_skipped: int = 0,
         script_skipped: int = 0,
+        automation_failed: int = 0,
+        script_failed: int = 0,
+        helper_failed: int = 0,
     ) -> dict[str, Any]:
         """Merge per-type results, sort by score, paginate, and assemble the response."""
         tagged_results: list[tuple[str, dict[str, Any]]] = []
@@ -669,6 +711,9 @@ class DeepSearchMixin(SceneSearchMixin):
             response,
             automation_skipped=automation_skipped,
             script_skipped=script_skipped,
+            automation_failed=automation_failed,
+            script_failed=script_failed,
+            helper_failed=helper_failed,
         )
         return response
 
@@ -678,13 +723,22 @@ class DeepSearchMixin(SceneSearchMixin):
         *,
         automation_skipped: int = 0,
         script_skipped: int = 0,
+        automation_failed: int = 0,
+        script_failed: int = 0,
+        helper_failed: int = 0,
     ) -> None:
-        """Set ``partial: True`` when the per-id Attempt-C config fetch hits its
-        wall-clock budget on automations or scripts.
+        """Set ``partial: True`` when the deep-search per-type fetch path lost
+        data — either the Attempt-C wall-clock budget exhausted
+        (``*_skipped``) or individual fetches raised exceptions (``*_failed``,
+        caught at ``debug``-level so they would otherwise be silent).
 
-        Distinct from ``_apply_scene_partial_flag`` (scene-specific signals)
-        and append-safe: the existing ``partial_reason`` (if any) is preserved
-        and the new reason is concatenated.
+        Mirrors ``_apply_scene_partial_flag`` 's "looks complete when it
+        isn't" coverage onto the automation/script/helper paths — helpers
+        in particular run on every default ``ha_search`` call, so silent
+        per-type-list failures would leave callers unable to tell a real
+        zero-match from a partial backend outage. Append-safe: the existing
+        ``partial_reason`` (if any) is preserved and the new reasons are
+        concatenated.
         """
         reasons: list[str] = []
         if automation_skipped:
@@ -693,11 +747,27 @@ class DeepSearchMixin(SceneSearchMixin):
                 "skipped (time budget — tune "
                 "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET to raise the budget)."
             )
+        if automation_failed:
+            reasons.append(
+                f"Automation config fetch incomplete: {automation_failed} "
+                "failed (per-id fetch raised; see server logs at debug level)."
+            )
         if script_skipped:
             reasons.append(
                 f"Script config fetch incomplete: {script_skipped} skipped "
                 "(time budget — tune HAMCP_SCRIPT_CONFIG_TIME_BUDGET to "
                 "raise the budget)."
+            )
+        if script_failed:
+            reasons.append(
+                f"Script config fetch incomplete: {script_failed} failed "
+                "(per-id fetch raised; see server logs at debug level)."
+            )
+        if helper_failed:
+            reasons.append(
+                f"Helper list fetch incomplete: {helper_failed} "
+                "input_* type(s) failed (per-type WS list raised; see server "
+                "logs at debug level)."
             )
         if not reasons:
             return

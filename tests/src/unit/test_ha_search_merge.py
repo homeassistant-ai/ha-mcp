@@ -464,3 +464,72 @@ def test_budget_partial_flag_noop_when_no_skips() -> None:
     )
     assert "partial" not in response
     assert "partial_reason" not in response
+
+
+def test_budget_partial_flag_set_when_automation_individual_fetches_failed() -> None:
+    """Per-id automation fetches that raise (caught at debug-level in
+    ``_fetch_automation_config``) surface as partial — without this the
+    response can show ``total_matches=0`` while the backend was actually
+    partially down."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_budget_partial_flag(
+        response, automation_failed=4
+    )
+    assert response["partial"] is True
+    assert "Automation config fetch incomplete: 4 failed" in response["partial_reason"]
+
+
+def test_budget_partial_flag_set_when_script_individual_fetches_failed() -> None:
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_budget_partial_flag(response, script_failed=2)
+    assert response["partial"] is True
+    assert "Script config fetch incomplete: 2 failed" in response["partial_reason"]
+
+
+def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:
+    """Helpers run on every default ha_search call; silent per-type-list
+    failures previously left callers unable to distinguish a clean
+    zero-helper-match from a partial backend outage. ``helper_failed``
+    closes that gap."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_budget_partial_flag(response, helper_failed=3)
+    assert response["partial"] is True
+    assert "Helper list fetch incomplete: 3 input_* type(s) failed" in (
+        response["partial_reason"]
+    )
+
+
+def test_budget_partial_flag_failed_and_skipped_combine() -> None:
+    """Mixed budget exhaustion + individual fetch failures concatenate
+    in ``partial_reason`` — caller sees both failure modes."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_budget_partial_flag(
+        response,
+        automation_skipped=5,
+        automation_failed=2,
+        helper_failed=1,
+    )
+    assert response["partial"] is True
+    reason = response["partial_reason"]
+    assert "Automation config fetch incomplete: 5 skipped" in reason
+    assert "Automation config fetch incomplete: 2 failed" in reason
+    assert "Helper list fetch incomplete: 1 input_* type(s) failed" in reason
+
+
+def test_budget_partial_flag_failures_append_to_existing_reason() -> None:
+    """Append-safe: an existing scene-stats ``partial_reason`` is preserved
+    and the new failure reasons are concatenated, not overwritten."""
+    response: dict = {
+        "success": True,
+        "partial": True,
+        "partial_reason": "Scene config fetch incomplete: 1 failed, 2 skipped.",
+    }
+    DeepSearchMixin._apply_budget_partial_flag(
+        response, script_failed=3, helper_failed=1
+    )
+    assert response["partial"] is True
+    assert response["partial_reason"].startswith("Scene config fetch incomplete")
+    assert "Script config fetch incomplete: 3 failed" in response["partial_reason"]
+    assert "Helper list fetch incomplete: 1 input_* type(s) failed" in (
+        response["partial_reason"]
+    )
