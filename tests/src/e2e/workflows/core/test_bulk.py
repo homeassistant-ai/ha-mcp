@@ -257,20 +257,14 @@ class TestBulkControl:
             {"domain_filter": "light", "limit": 2},
         )
         light_data = parse_mcp_result(light_result)
-        if "data" in light_data:
-            light_results = light_data.get("entities", [])
-        else:
-            light_results = light_data.get("results", [])
+        light_results = light_data.get("entities", [])
 
         switch_result = await mcp_client.call_tool(
             "ha_search",
             {"domain_filter": "switch", "limit": 2},
         )
         switch_data = parse_mcp_result(switch_result)
-        if "data" in switch_data:
-            switch_results = switch_data.get("entities", [])
-        else:
-            switch_results = switch_data.get("results", [])
+        switch_results = switch_data.get("entities", [])
 
         entities = []
         if light_results:

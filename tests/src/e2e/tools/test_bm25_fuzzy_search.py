@@ -45,7 +45,7 @@ async def test_fuzzy_search_multi_word_non_adjacent(mcp_client):
     )
     logger.info(
         f"Multi-word fuzzy search returned {len(results)} results "
-        f"(total_matches={data.get('total_matches', 0)})"
+        f"(entity_total_matches={data.get('entity_total_matches', 0)})"
     )
 
 
@@ -85,8 +85,8 @@ async def test_fuzzy_search_underscore_space_equivalence(mcp_client):
         {"query": "input boolean", "exact_match": False, "limit": 20},
     )
 
-    data_u = assert_mcp_success(result_underscore, "Underscore query").get("data", {})
-    data_s = assert_mcp_success(result_space, "Space query").get("data", {})
+    data_u = assert_mcp_success(result_underscore, "Underscore query")
+    data_s = assert_mcp_success(result_space, "Space query")
 
     total_u = data_u.get("entity_total_matches", 0)
     total_s = data_s.get("entity_total_matches", 0)

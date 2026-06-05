@@ -250,8 +250,7 @@ class TestUpdateManagement:
                     {"query": "update", "domain_filter": "update", "limit": 5},
                 )
 
-                search_data = search_result.get("data", search_result)
-                results = search_data.get("results", [])
+                results = search_result.get("entities", [])
 
                 if not results:
                     logger.info(

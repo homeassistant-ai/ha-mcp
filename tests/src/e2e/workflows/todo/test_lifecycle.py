@@ -575,8 +575,7 @@ async def test_todo_search_discovery(mcp_client):
         )
 
         # Check if any todo entities found
-        data = search_result.get("data", search_result)
-        results = data.get("results", [])
+        results = search_result.get("entities", [])
 
         logger.info(f"Found {len(results)} todo entities via search")
 

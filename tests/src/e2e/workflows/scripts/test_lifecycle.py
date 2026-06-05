@@ -1077,13 +1077,8 @@ async def test_script_search_and_discovery(mcp_client):
                 {"query": "script", "domain_filter": "script", "limit": 10},
             )
 
-            # Handle nested data structure
-            data = (
-                search_data.get("data", {}) if search_data.get("data") else search_data
-            )
-
-            if data.get("success") and data.get("results"):
-                results = data.get("results", [])
+            if search_data.get("success") and search_data.get("entities"):
+                results = search_data.get("entities", [])
                 logger.info(f"✅ Found {len(results)} existing scripts")
 
                 # Test getting configuration of first found script
@@ -1128,12 +1123,7 @@ async def test_script_search_and_discovery(mcp_client):
                         },
                     )
 
-                    specific_data = (
-                        specific_search_data.get("data", {})
-                        if specific_search_data.get("data")
-                        else specific_search_data
-                    )
-                    specific_results = specific_data.get("results", [])
+                    specific_results = specific_search_data.get("entities", [])
                     logger.info(
                         f"✅ Specific search found {len(specific_results)} matching scripts"
                     )

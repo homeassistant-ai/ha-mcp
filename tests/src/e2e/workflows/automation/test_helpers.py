@@ -995,19 +995,10 @@ async def test_helper_search_and_discovery(mcp_client):
         )
 
         search_data = parse_mcp_result(search_result)
-        # Handle different response formats - search might return data directly or nested
-        if "data" in search_data and "entities" in search_data["data"]:
-            data_section = search_data["data"]
-            assert data_section.get("success", True), (
-                f"Helper search failed for {domain}: {search_data}"
-            )
-            results = data_section.get("entities", [])
-        elif "entities" in search_data:
-            # Direct results format
-            results = search_data.get("entities", [])
-        else:
-            # Fallback - no results found
-            results = []
+        assert search_data.get("success", True), (
+            f"Helper search failed for {domain}: {search_data}"
+        )
+        results = search_data.get("entities", [])
         logger.info(f"🔍 Found {len(results)} {domain} helpers")
 
         # If helpers exist, verify their structure

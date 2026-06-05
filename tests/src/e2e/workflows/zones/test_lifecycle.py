@@ -479,12 +479,8 @@ async def test_zone_search_discovery(mcp_client):
                 {"query": "zone", "domain_filter": "zone", "limit": 10},
             )
 
-            data = (
-                search_data.get("data", {}) if search_data.get("data") else search_data
-            )
-
-            if data.get("success") and data.get("results"):
-                results = data.get("results", [])
+            if search_data.get("success") and search_data.get("entities"):
+                results = search_data.get("entities", [])
                 logger.info(f"Found {len(results)} zone entities via search")
 
                 for result in results:

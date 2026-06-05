@@ -122,10 +122,7 @@ class TestGetHistory:
         )
         search_data = parse_mcp_result(search_result)
 
-        if "data" in search_data:
-            sensors = search_data.get("entities", [])
-        else:
-            sensors = search_data.get("results", [])
+        sensors = search_data.get("entities", [])
 
         entities = ["sun.sun"]
         if sensors:
@@ -384,10 +381,7 @@ class TestGetHistoryStatisticsSource:
         )
         search_data = parse_mcp_result(search_result)
 
-        if "data" in search_data:
-            sensors = search_data.get("entities", [])
-        else:
-            sensors = search_data.get("results", [])
+        sensors = search_data.get("entities", [])
 
         # Try to find a numeric sensor
         test_sensor = None
@@ -404,10 +398,7 @@ class TestGetHistoryStatisticsSource:
                 {"domain_filter": "sensor", "limit": 5},
             )
             search_data = parse_mcp_result(search_result)
-            if "data" in search_data:
-                sensors = search_data.get("entities", [])
-            else:
-                sensors = search_data.get("results", [])
+            sensors = search_data.get("entities", [])
             if sensors:
                 test_sensor = sensors[0].get("entity_id")
 
@@ -463,10 +454,7 @@ class TestGetHistoryStatisticsSource:
             {"domain_filter": "sensor", "limit": 1},
         )
         search_data = parse_mcp_result(search_result)
-        if "data" in search_data:
-            sensors = search_data.get("entities", [])
-        else:
-            sensors = search_data.get("results", [])
+        sensors = search_data.get("entities", [])
 
         if not sensors:
             pytest.skip("No sensors available for test")
@@ -508,10 +496,7 @@ class TestGetHistoryStatisticsSource:
             {"domain_filter": "sensor", "limit": 1},
         )
         search_data = parse_mcp_result(search_result)
-        if "data" in search_data:
-            sensors = search_data.get("entities", [])
-        else:
-            sensors = search_data.get("results", [])
+        sensors = search_data.get("entities", [])
 
         if not sensors:
             pytest.skip("No sensors available for test")

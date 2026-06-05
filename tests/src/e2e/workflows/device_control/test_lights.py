@@ -211,7 +211,7 @@ class TestDeviceControl:
         )
 
         search_data = assert_mcp_success(search_result, "search for lights")
-        data = search_data.get("data", {})
+        data = search_data
 
         light_entities = [entity["entity_id"] for entity in data.get("entities", [])]
         if len(light_entities) < 2:
@@ -369,7 +369,7 @@ class TestDeviceControl:
             search_data = assert_mcp_success(
                 search_result, "search for climate entities"
             )
-            data = search_data.get("data", {})
+            data = search_data
             if not data.get("entities"):
                 pytest.skip("No climate entities available for testing")
         except AssertionError:
@@ -456,7 +456,7 @@ class TestDeviceControl:
 
         try:
             search_data = assert_mcp_success(search_result, "search for cover entities")
-            data = search_data.get("data", {})
+            data = search_data
             if not data.get("entities"):
                 pytest.skip("No cover entities available for testing")
         except AssertionError:
@@ -526,7 +526,7 @@ async def test_universal_device_controls(mcp_client: Client) -> None:
 
     try:
         search_data = assert_mcp_success(search_result, "search for switch entities")
-        data = search_data.get("data", {})
+        data = search_data
         if not data.get("entities"):
             # Fallback to light entities
             search_result = await mcp_client.call_tool(
@@ -534,7 +534,7 @@ async def test_universal_device_controls(mcp_client: Client) -> None:
                 {"query": "light", "domain_filter": "light", "limit": 1},
             )
             search_data = assert_mcp_success(search_result, "search for light entities")
-            data = search_data.get("data", {})
+            data = search_data
 
         if not data.get("entities"):
             pytest.skip("No entities available for universal control testing")
@@ -608,7 +608,7 @@ async def test_device_state_monitoring(mcp_client: Client) -> None:
             search_data = assert_mcp_success(
                 search_result, f"search for {entity_type} entities"
             )
-            data = search_data.get("data", {})
+            data = search_data
             if not data.get("entities"):
                 logger.info(f"ℹ️ No {entity_type} entities found for testing")
                 continue
