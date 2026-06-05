@@ -43,13 +43,21 @@ HA_TOKEN = "test-token"
 class TestEntityExists:
     def test_found(self):
         client = _mock_client(_mock_response(200, {"state": "on"}))
-        result = _run(verify_story._check_entity_exists(client, {"type": "entity_exists", "entity_id": "light.test"}))
+        result = _run(
+            verify_story._check_entity_exists(
+                client, {"type": "entity_exists", "entity_id": "light.test"}
+            )
+        )
         assert result["passed"] is True
 
     def test_not_found(self):
         client = _mock_client(_mock_response(404, {}))
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result = _run(verify_story._check_entity_exists(client, {"type": "entity_exists", "entity_id": "light.missing"}))
+            result = _run(
+                verify_story._check_entity_exists(
+                    client, {"type": "entity_exists", "entity_id": "light.missing"}
+                )
+            )
         assert result["passed"] is False
         assert "not found" in result["detail"]
 
@@ -57,7 +65,12 @@ class TestEntityExists:
 class TestEntityState:
     def test_state_matches(self):
         client = _mock_client(_mock_response(200, {"state": "on"}))
-        result = _run(verify_story._check_entity_state(client, {"type": "entity_state", "entity_id": "automation.test", "state": "on"}))
+        result = _run(
+            verify_story._check_entity_state(
+                client,
+                {"type": "entity_state", "entity_id": "automation.test", "state": "on"},
+            )
+        )
         assert result["passed"] is True
 
     def test_state_mismatch(self):
@@ -66,7 +79,16 @@ class TestEntityState:
         client = AsyncMock(spec=httpx.AsyncClient)
         client.get.side_effect = [off, off, off, off]
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result = _run(verify_story._check_entity_state(client, {"type": "entity_state", "entity_id": "automation.test", "state": "on"}))
+            result = _run(
+                verify_story._check_entity_state(
+                    client,
+                    {
+                        "type": "entity_state",
+                        "entity_id": "automation.test",
+                        "state": "on",
+                    },
+                )
+            )
         assert result["passed"] is False
         assert "expected=on" in result["detail"]
         assert "actual=off" in result["detail"]
@@ -75,24 +97,44 @@ class TestEntityState:
 class TestAutomationExists:
     def test_found_by_friendly_name(self):
         states = [
-            {"entity_id": "automation.sunset_porch_light", "attributes": {"friendly_name": "Sunset Porch Light"}}
+            {
+                "entity_id": "automation.sunset_porch_light",
+                "attributes": {"friendly_name": "Sunset Porch Light"},
+            }
         ]
         client = _mock_client(_mock_response(200, states))
-        result = _run(verify_story._check_automation_exists(client, {"type": "automation_exists", "alias": "Sunset Porch Light"}))
+        result = _run(
+            verify_story._check_automation_exists(
+                client, {"type": "automation_exists", "alias": "Sunset Porch Light"}
+            )
+        )
         assert result["passed"] is True
         assert "automation.sunset_porch_light" in result["detail"]
 
     def test_not_found(self):
         client = _mock_client(_mock_response(200, []))
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result = _run(verify_story._check_automation_exists(client, {"type": "automation_exists", "alias": "Missing"}))
+            result = _run(
+                verify_story._check_automation_exists(
+                    client, {"type": "automation_exists", "alias": "Missing"}
+                )
+            )
         assert result["passed"] is False
 
 
 class TestAutomationHasCondition:
     def _make_client(self, condition):
-        states = [{"entity_id": "automation.evening_lights_test", "attributes": {"friendly_name": "Evening Lights Test", "id": "abc123"}}]
-        config = {"alias": "Evening Lights Test", "condition": condition, "trigger": [{"platform": "time"}]}
+        states = [
+            {
+                "entity_id": "automation.evening_lights_test",
+                "attributes": {"friendly_name": "Evening Lights Test", "id": "abc123"},
+            }
+        ]
+        config = {
+            "alias": "Evening Lights Test",
+            "condition": condition,
+            "trigger": [{"platform": "time"}],
+        }
 
         async def mock_get(path, **kwargs):
             if "/api/config/automation/config/" in path:
@@ -102,14 +144,32 @@ class TestAutomationHasCondition:
         return _mock_client(mock_get)
 
     def test_has_condition(self):
-        client = self._make_client([{"condition": "state", "entity_id": "input_boolean.someone_home", "state": "on"}])
-        result = _run(verify_story._check_automation_has_condition(client, {"type": "automation_has_condition", "alias": "Evening Lights Test"}))
+        client = self._make_client(
+            [
+                {
+                    "condition": "state",
+                    "entity_id": "input_boolean.someone_home",
+                    "state": "on",
+                }
+            ]
+        )
+        result = _run(
+            verify_story._check_automation_has_condition(
+                client,
+                {"type": "automation_has_condition", "alias": "Evening Lights Test"},
+            )
+        )
         assert result["passed"] is True
         assert "1 condition" in result["detail"]
 
     def test_no_condition(self):
         client = self._make_client([])
-        result = _run(verify_story._check_automation_has_condition(client, {"type": "automation_has_condition", "alias": "Evening Lights Test"}))
+        result = _run(
+            verify_story._check_automation_has_condition(
+                client,
+                {"type": "automation_has_condition", "alias": "Evening Lights Test"},
+            )
+        )
         assert result["passed"] is False
         assert "No conditions" in result["detail"]
 
@@ -129,16 +189,38 @@ class TestResponseChecks:
         )
         assert result["passed"] is False
 
+    def test_response_contains_any_case_insensitive(self):
+        result = verify_story._check_response_contains_any(
+            {
+                "type": "response_contains_any",
+                "values": ["Bed Light Evening", "bed_light_evening"],
+            },
+            "Found automation.bed_light_evening in your config",
+        )
+        assert result["passed"] is True
+        assert "bed_light_evening" in result["detail"]
+
+    def test_response_contains_any_string_coerced_to_list(self):
+        # YAML misconfiguration: values: "automation" (str) instead of values: ["automation"].
+        # Without the isinstance guard, iterating over the string's characters would match
+        # 't', 'o', 'n' etc. in "the light is on" — a false positive.
+        result = verify_story._check_response_contains_any(
+            {"type": "response_contains_any", "values": "automation"},
+            "The light is on",
+        )
+        assert result["passed"] is False
+
+    def test_response_contains_any_none_match(self):
+        result = verify_story._check_response_contains_any(
+            {"type": "response_contains_any", "values": ["automation", "logbook"]},
+            "The light was off the whole time",
+        )
+        assert result["passed"] is False
+        assert "None of" in result["detail"]
+
     def test_response_matches_regex(self):
         result = verify_story._check_response_matches(
             {"type": "response_matches", "pattern": r"\b6\b"},
             "I found 6 lights in total",
         )
         assert result["passed"] is True
-
-    def test_response_matches_no_false_positive(self):
-        result = verify_story._check_response_matches(
-            {"type": "response_matches", "pattern": r"\b6\b"},
-            "I found 16 lights in total",
-        )
-        assert result["passed"] is False

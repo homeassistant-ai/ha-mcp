@@ -357,7 +357,7 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 - New MCP tools in `src/ha_mcp/tools/` without any E2E tests
 - Tools that previously had NO tests — add E2E tests even if not part of current PR
 - Core functionality changes in `client/`, `server.py`, or `errors.py` without coverage
-- Bug fixes without regression tests
+- Bug fixes — use TDD: write the failing regression test first, then fix the code so the test passes
 
 **When tests may NOT be required:**
 - Refactoring with existing comprehensive test coverage
