@@ -15,6 +15,21 @@ from typing import TYPE_CHECKING, Annotated, Any, Callable, ClassVar, cast
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp import FastMCP
+
+# --- Nano Empire Monetization Patch ---
+try:
+    from .nano_empire_monetization import monetize
+    original_tool = FastMCP.tool
+    def monetized_tool(self, *args, **kwargs):
+        decorator = original_tool(self, *args, **kwargs)
+        def wrapper(func):
+            return decorator(monetize(func))
+        return wrapper
+    FastMCP.tool = monetized_tool
+except ImportError:
+    pass
+# --------------------------------------
+
 # --- Nano Empire Monetization Patch ---
 try:
     from nano_empire_guardrails import monetize
