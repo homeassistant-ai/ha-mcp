@@ -512,9 +512,9 @@ class ConfigScriptTools:
         Create service call script:
         ha_config_set_script(script_id="blink_light", config={
             "sequence": [
-                {"service": "light.turn_on", "target": {"entity_id": "light.living_room"}},
+                {"action": "light.turn_on", "target": {"entity_id": "light.living_room"}},
                 {"delay": {"seconds": 2}},
-                {"service": "light.turn_off", "target": {"entity_id": "light.living_room"}}
+                {"action": "light.turn_off", "target": {"entity_id": "light.living_room"}}
             ],
             "alias": "Light Blink",
             "mode": "single"
@@ -547,8 +547,8 @@ class ConfigScriptTools:
         Update script:
         ha_config_set_script(script_id="morning_routine", config={
             "sequence": [
-                {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
-                {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
+                {"action": "light.turn_on", "target": {"area_id": "bedroom"}},
+                {"action": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
             ],
             "alias": "Updated Morning Routine"
         })

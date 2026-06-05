@@ -566,7 +566,7 @@ class AutomationConfigTools:
             "alias": "Morning Lights",
             "description": "Turn on bedroom lights at 7 AM to help wake up",
             "trigger": [{"platform": "time", "at": "07:00:00"}],
-            "action": [{"service": "light.turn_on", "target": {"area_id": "bedroom"}}]
+            "action": [{"action": "light.turn_on", "target": {"area_id": "bedroom"}}]
         })
 
         Motion-activated lighting — `for:` on the off-transition replaces action-delay:
@@ -583,9 +583,9 @@ class AutomationConfigTools:
                         {"condition": "trigger", "id": "motion_on"},
                         {"condition": "sun", "after": "sunset"}
                     ],
-                     "sequence": [{"service": "light.turn_on", "target": {"entity_id": "light.hallway"}}]},
+                     "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.hallway"}}]},
                     {"conditions": [{"condition": "trigger", "id": "motion_off"}],
-                     "sequence": [{"service": "light.turn_off", "target": {"entity_id": "light.hallway"}}]}
+                     "sequence": [{"action": "light.turn_off", "target": {"entity_id": "light.hallway"}}]}
                 ]}
             ]
         })
@@ -597,8 +597,8 @@ class AutomationConfigTools:
                 "alias": "Updated Morning Routine",
                 "trigger": [{"platform": "time", "at": "06:30:00"}],
                 "action": [
-                    {"service": "light.turn_on", "target": {"area_id": "bedroom"}},
-                    {"service": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
+                    {"action": "light.turn_on", "target": {"area_id": "bedroom"}},
+                    {"action": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
                 ]
             }
         )
@@ -636,7 +636,7 @@ class AutomationConfigTools:
 
         TRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more
         CONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more
-        ACTION TYPES: service calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
+        ACTION TYPES: action calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
 
         For comprehensive automation documentation with all trigger/condition/action types and advanced examples:
         - Use: ha_get_skill_guide
@@ -747,13 +747,34 @@ class AutomationConfigTools:
                 and e.status_code == 404
             ):
                 await self._raise_automation_not_found(identifier)
+            error_text = str(e)
             suggestions = [
                 "Check automation configuration format",
                 "Ensure required fields: alias, trigger, action",
                 "Use entity_id format: automation.morning_routine or unique_id",
                 "Use ha_search_entities(domain_filter='automation') to find automations",
-                "Use ha_get_skill_guide for help",
+                "Use ha_get_skill_guide for automation examples",
             ]
+            if isinstance(e, HomeAssistantAPIError):
+                if "'service'" in error_text and "not allowed" in error_text:
+                    suggestions.insert(
+                        0,
+                        "Use 'action:' not 'service:' for service calls in action steps "
+                        "(renamed in HA 2024.8).",
+                    )
+                elif "unexpected keyword argument" in error_text.lower():
+                    suggestions.insert(
+                        0,
+                        "An action step contains a field that belongs at the automation root "
+                        "(e.g. alias, trigger, condition). Each action step should only contain "
+                        "action/target/data/delay/choose/if/repeat/parallel keys.",
+                    )
+                elif "'variables'" in error_text and "dictionary" in error_text:
+                    suggestions.insert(
+                        0,
+                        "variables must be a dict mapping names to values, "
+                        'e.g. {"variables": {"my_var": 42}}',
+                    )
             if bp_warnings:
                 suggestions.append(
                     "Config had best-practice issues that may be related: "
