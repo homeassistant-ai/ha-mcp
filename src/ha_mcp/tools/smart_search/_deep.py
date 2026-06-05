@@ -109,8 +109,19 @@ class DeepSearchMixin(SceneSearchMixin):
                 "registry_failed": False,
             }
 
+            # Budget-skip counters for the Attempt-C path on automations/scripts.
+            # Non-zero means the per-id config fetch exhausted its wall-clock
+            # budget and some configs were never retrieved — surfaced as
+            # ``partial: True`` in the response so callers can detect capped
+            # results.
+            automation_skipped = 0
+            script_skipped = 0
+
             if "automation" in search_types:
-                results["automations"] = await self._deep_search_automations(
+                (
+                    results["automations"],
+                    automation_skipped,
+                ) = await self._deep_search_automations(
                     all_entities, automation_unique_id_map, query_lower, exact_match
                 )
                 phase_done += 1
@@ -122,7 +133,10 @@ class DeepSearchMixin(SceneSearchMixin):
                 )
 
             if "script" in search_types:
-                results["scripts"] = await self._deep_search_scripts(
+                (
+                    results["scripts"],
+                    script_skipped,
+                ) = await self._deep_search_scripts(
                     all_entities, query_lower, exact_match
                 )
                 phase_done += 1
@@ -183,6 +197,8 @@ class DeepSearchMixin(SceneSearchMixin):
                 limit,
                 include_config,
                 scene_stats,
+                automation_skipped=automation_skipped,
+                script_skipped=script_skipped,
             )
 
         except ToolError:
@@ -225,8 +241,16 @@ class DeepSearchMixin(SceneSearchMixin):
         automation_unique_id_map: dict[str, str],
         query_lower: str,
         exact_match: bool,
-    ) -> list[dict[str, Any]]:
-        """Deep-search automations: 3-tier config fetch (REST bulk -> WS bulk -> individual)."""
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Deep-search automations: 3-tier config fetch (REST bulk -> WS bulk -> individual).
+
+        Returns ``(matches, skipped_count)``. ``skipped_count`` is non-zero
+        only when bulk fetch fell back to the per-id Attempt-C path AND its
+        wall-clock budget exhausted before all configs were fetched; the
+        skipped ids carry their score-without-config through the merge and
+        fall below threshold silently. Surfaced as ``partial: True`` by the
+        response builder so callers can detect capped-vs-complete results.
+        """
         automation_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("automation.")
         ]
@@ -261,6 +285,7 @@ class DeepSearchMixin(SceneSearchMixin):
             configs = {}
 
         # Attempt C: parallel individual REST calls with time budget (LAST RESORT)
+        skipped_count = 0
         if not bulk_fetched:
             uids_to_fetch = [
                 uid for _, _, uid, _ in scored if uid and uid not in configs
@@ -281,7 +306,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     )
                     return (uid, None)
 
-            fetched_configs, _, _ = await self._individual_fetch_budgeted(
+            fetched_configs, _, skipped_count = await self._individual_fetch_budgeted(
                 uids_to_fetch,
                 _fetch_automation_config,
                 AUTOMATION_CONFIG_TIME_BUDGET,
@@ -291,7 +316,7 @@ class DeepSearchMixin(SceneSearchMixin):
             configs.update(fetched_configs)
 
         # Phase 3: Score with whatever configs we have
-        return [
+        matches = [
             {
                 "entity_id": m["entity_id"],
                 "friendly_name": m["friendly_name"],
@@ -304,14 +329,19 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
+        return matches, skipped_count
 
     async def _deep_search_scripts(
         self,
         all_entities: list[dict[str, Any]],
         query_lower: str,
         exact_match: bool,
-    ) -> list[dict[str, Any]]:
-        """Deep-search scripts: same 3-tier strategy as automations."""
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Deep-search scripts: same 3-tier strategy as automations.
+
+        Returns ``(matches, skipped_count)``; ``skipped_count`` semantics
+        identical to ``_deep_search_automations``.
+        """
         script_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("script.")
         ]
@@ -342,6 +372,7 @@ class DeepSearchMixin(SceneSearchMixin):
             configs = {}
 
         # Attempt C: parallel individual fetch with budget (see #879)
+        skipped_count = 0
         if not bulk_fetched:
             sids_to_fetch = [
                 sid for _, _, sid, _ in scored if sid and sid not in configs
@@ -360,7 +391,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
                     return (sid, None)
 
-            fetched_configs, _, _ = await self._individual_fetch_budgeted(
+            fetched_configs, _, skipped_count = await self._individual_fetch_budgeted(
                 sids_to_fetch,
                 _fetch_script_config,
                 SCRIPT_CONFIG_TIME_BUDGET,
@@ -370,7 +401,7 @@ class DeepSearchMixin(SceneSearchMixin):
             configs.update(fetched_configs)
 
         # Phase 3: Score scripts
-        return [
+        matches = [
             {
                 "entity_id": m["entity_id"],
                 "script_id": m["key"],
@@ -384,6 +415,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
+        return matches, skipped_count
 
     async def _search_helper_type(
         self,
@@ -580,6 +612,9 @@ class DeepSearchMixin(SceneSearchMixin):
         limit: int,
         include_config: bool,
         scene_stats: dict[str, Any],
+        *,
+        automation_skipped: int = 0,
+        script_skipped: int = 0,
     ) -> dict[str, Any]:
         """Merge per-type results, sort by score, paginate, and assemble the response."""
         tagged_results: list[tuple[str, dict[str, Any]]] = []
@@ -630,7 +665,46 @@ class DeepSearchMixin(SceneSearchMixin):
             response["dashboards"] = final_results["dashboards"]
 
         self._apply_scene_partial_flag(response, scene_stats)
+        self._apply_budget_partial_flag(
+            response,
+            automation_skipped=automation_skipped,
+            script_skipped=script_skipped,
+        )
         return response
+
+    @staticmethod
+    def _apply_budget_partial_flag(
+        response: dict[str, Any],
+        *,
+        automation_skipped: int = 0,
+        script_skipped: int = 0,
+    ) -> None:
+        """Set ``partial: True`` when the per-id Attempt-C config fetch hits its
+        wall-clock budget on automations or scripts.
+
+        Distinct from ``_apply_scene_partial_flag`` (scene-specific signals)
+        and append-safe: the existing ``partial_reason`` (if any) is preserved
+        and the new reason is concatenated.
+        """
+        reasons: list[str] = []
+        if automation_skipped:
+            reasons.append(
+                f"Automation config fetch incomplete: {automation_skipped} "
+                "skipped (time budget — tune "
+                "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET to raise the budget)."
+            )
+        if script_skipped:
+            reasons.append(
+                f"Script config fetch incomplete: {script_skipped} skipped "
+                "(time budget — tune HAMCP_SCRIPT_CONFIG_TIME_BUDGET to "
+                "raise the budget)."
+            )
+        if not reasons:
+            return
+        response["partial"] = True
+        existing = response.get("partial_reason", "")
+        separator = " " if existing else ""
+        response["partial_reason"] = existing + separator + " ".join(reasons)
 
     async def _search_flow_helpers(
         self,

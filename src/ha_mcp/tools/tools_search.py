@@ -395,11 +395,22 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Caveats:
           - Both surfaces fan out in parallel; response carries `partial: True`
             plus an `errors[]` array tagged by surface ("entities" / "configs")
-            when one branch fails. Empty `entities`/`automations`/... combined
+            when one branch raises. Empty `entities`/`automations`/... combined
             with `partial: True` means "search failed", not "no results".
+          - `partial: True` is ALSO set (with `partial_reason`) when the
+            config-body branch hits its per-call wall-clock budget and skips
+            unfetched configs — the result-count would otherwise look
+            complete (`has_more: false`) when it isn't.
           - `count` is items in this response (post-pagination), not total
             matches across the corpus. Use `entity_total_matches` +
             `config_total_matches` for the totals.
+          - `limit`/`offset` are applied per-surface independently. The flat
+            `has_more` / `next_offset` keys describe the next caller-page
+            (same offset/limit semantics as a single-surface tool — iterate
+            with `offset = next_offset`). Per-surface
+            `entity_has_more`/`entity_next_offset` and
+            `config_has_more`/`config_next_offset` let callers see which
+            surface still has results when only one of two does.
 
         Examples:
             - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
@@ -514,18 +525,38 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if label == "entities":
                 response["entities"] = payload.get("results", [])
                 response["entity_total_matches"] = payload.get("total_matches", 0)
+                response["entity_has_more"] = bool(payload.get("has_more", False))
+                response["entity_next_offset"] = payload.get("next_offset")
+                # ``offset``/``limit`` are caller inputs echoed by both
+                # branches with identical values — first-wins via the merge
+                # is correct, no skip needed. ``has_more``/``next_offset``
+                # ARE per-surface so they must be skipped (synthesized below).
                 _merge_payload_metadata(
-                    response, payload, skip_keys=("results", "total_matches")
+                    response,
+                    payload,
+                    skip_keys=(
+                        "results",
+                        "total_matches",
+                        "has_more",
+                        "next_offset",
+                    ),
                 )
             elif label == "configs":
                 for bucket in _CONFIG_BUCKETS:
                     if bucket in payload:
                         response[bucket] = payload[bucket]
                 response["config_total_matches"] = payload.get("total_matches", 0)
+                response["config_has_more"] = bool(payload.get("has_more", False))
+                response["config_next_offset"] = payload.get("next_offset")
                 _merge_payload_metadata(
                     response,
                     payload,
-                    skip_keys=(*_CONFIG_BUCKETS, "total_matches"),
+                    skip_keys=(
+                        *_CONFIG_BUCKETS,
+                        "total_matches",
+                        "has_more",
+                        "next_offset",
+                    ),
                 )
 
         # ``count`` mirrors the previous ha_search_entities semantics: items
@@ -535,6 +566,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         response["count"] = len(response["entities"]) + sum(
             len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
         )
+
+        # Per-surface pagination: each branch paginates its own surface with
+        # the shared ``limit/offset`` (see #1529 review). The flat
+        # ``has_more`` / ``next_offset`` keys give the caller the next page
+        # for "iterate normally" usage; per-surface ``entity_has_more`` /
+        # ``config_has_more`` (and matching ``_next_offset``) let callers
+        # see which surface still has results. Both branches use the same
+        # caller offset/limit so ``entity_next_offset`` and
+        # ``config_next_offset`` encode the same value (offset + limit) when
+        # set — picking whichever is non-None is correct.
+        entity_has_more = bool(response.get("entity_has_more"))
+        config_has_more = bool(response.get("config_has_more"))
+        response["has_more"] = entity_has_more or config_has_more
+        response["next_offset"] = response.get("entity_next_offset") or response.get(
+            "config_next_offset"
+        )
+
         if partial:
             response["partial"] = True
             response["errors"] = errors
