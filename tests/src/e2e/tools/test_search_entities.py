@@ -413,42 +413,117 @@ async def test_search_entities_pagination_metadata(mcp_client):
     assert "offset" in data, "Response must include offset field"
     assert "limit" in data, "Response must include limit field"
 
-    results_count = len(data.get("entities", []))
-    total_matches = data.get("entity_total_matches", 0)
-
-    # count should match actual results length
-    assert data["count"] == results_count, (
-        f"count ({data['count']}) should equal results length ({results_count})"
+    # ``count`` is items-in-this-response across both surfaces (entities +
+    # all config buckets), not entities-only. Comparing it to ``len(entities)``
+    # alone would break the assertion the moment a config bucket matches
+    # — and "sensor" routinely matches automation/script configs.
+    entity_count = len(data.get("entities", []))
+    config_bucket_count = sum(
+        len(data.get(bucket, []))
+        for bucket in ("automations", "scripts", "scenes", "helpers", "dashboards")
+    )
+    expected_count = entity_count + config_bucket_count
+    assert data["count"] == expected_count, (
+        f"count ({data['count']}) should equal entities ({entity_count}) "
+        f"+ config buckets ({config_bucket_count}) = {expected_count}"
     )
 
-    # If total_matches > results count, has_more should be True
-    if total_matches > results_count:
+    # Per-surface totals come from the dedicated keys. The flat ``has_more``
+    # is OR-of-both surfaces; the flat ``next_offset`` picks whichever
+    # surface still has more (both encode caller_offset + limit when set).
+    entity_total = data.get("entity_total_matches", 0)
+    config_total = data.get("config_total_matches", 0)
+    expected_has_more = (entity_total > entity_count) or (
+        config_total > config_bucket_count
+    )
+
+    if expected_has_more:
         assert data["has_more"] is True, (
-            f"Expected has_more=True when total_matches ({total_matches}) > results ({results_count})"
+            f"Expected has_more=True when entity_total ({entity_total}) > "
+            f"entity_count ({entity_count}) or config_total ({config_total}) "
+            f"> config_bucket_count ({config_bucket_count})"
         )
         assert data["next_offset"] is not None, (
             "next_offset should be set when has_more=True"
         )
         logger.info(
-            f"Pagination: {results_count} of {total_matches} shown, has_more=True, next_offset={data['next_offset']}"
+            f"Pagination: entities {entity_count}/{entity_total}, "
+            f"configs {config_bucket_count}/{config_total}, "
+            f"has_more=True, next_offset={data['next_offset']}"
         )
     else:
         assert data["has_more"] is False, (
-            f"Expected has_more=False when total_matches ({total_matches}) <= results ({results_count})"
+            f"Expected has_more=False when both surfaces exhausted: "
+            f"entities {entity_count}/{entity_total}, "
+            f"configs {config_bucket_count}/{config_total}"
         )
         assert data.get("next_offset") is None, (
             "next_offset should be None when has_more=False"
         )
         logger.info(
-            f"No pagination needed: {results_count} of {total_matches} shown, has_more=False"
+            f"No pagination needed: entities {entity_count}/{entity_total}, "
+            f"configs {config_bucket_count}/{config_total}"
         )
 
-    # total_matches should always be >= results_count
-    assert total_matches >= results_count, (
-        f"total_matches ({total_matches}) should be >= results count ({results_count})"
+    # Per-surface totals should be >= their corresponding response counts.
+    assert entity_total >= entity_count, (
+        f"entity_total_matches ({entity_total}) should be >= entity_count "
+        f"({entity_count})"
+    )
+    assert config_total >= config_bucket_count, (
+        f"config_total_matches ({config_total}) should be >= "
+        f"config_bucket_count ({config_bucket_count})"
     )
 
     logger.info("Pagination metadata test passed")
+
+
+@pytest.mark.asyncio
+async def test_ha_search_combined_surface_populated(mcp_client):
+    """Pin S7(a): a single ha_search call against a generic term should
+    return BOTH a populated ``entities`` list and at least one populated
+    config bucket — without this assertion, the orchestrator could quietly
+    regress to entity-only or config-only output on a query that the BAT
+    runs against expecting both surfaces to fire.
+
+    "light" is the canonical broad query — the test HA fixture has light
+    entities and at least one automation/scene referencing "light" by name.
+    """
+    result = await mcp_client.call_tool(
+        "ha_search",
+        {"query": "light", "limit": 5},
+    )
+    data = assert_mcp_success(result, "Combined-surface ha_search")
+
+    # Entity surface must be populated.
+    entities = data.get("entities", [])
+    assert len(entities) > 0, (
+        "Combined ha_search('light') should return at least one entity"
+    )
+
+    # At least one config bucket must be populated. We don't pin WHICH
+    # bucket — the test HA fixture might have automations/scripts/scenes/
+    # helpers/dashboards in any combination — but the orchestrator must
+    # have fanned out and brought back something on the config surface
+    # when the term broadly matches.
+    config_buckets = ("automations", "scripts", "scenes", "helpers", "dashboards")
+    config_populated = sum(len(data.get(b, [])) for b in config_buckets)
+    assert config_populated > 0, (
+        f"Combined ha_search('light') should populate at least one config "
+        f"bucket; got: "
+        f"{ {b: len(data.get(b, [])) for b in config_buckets} }"
+    )
+
+    # The combined response shape sanity-check: count = entities + buckets.
+    assert data["count"] == len(entities) + config_populated, (
+        f"count mismatch: {data['count']} vs entities({len(entities)}) + "
+        f"buckets({config_populated})"
+    )
+
+    logger.info(
+        f"Combined surface populated: {len(entities)} entities + "
+        f"{config_populated} config items"
+    )
 
 
 @pytest.mark.asyncio

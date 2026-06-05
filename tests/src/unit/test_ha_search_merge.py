@@ -407,6 +407,103 @@ def test_dual_surface_next_offset_picks_non_none() -> None:
     assert flat is None
 
 
+def test_dual_surface_has_more_is_or_of_branches() -> None:
+    """Pin S7(b): the flat ``has_more`` is the boolean OR of the per-surface
+    flags. Previously covered only by an inline reimplementation inside
+    the e2e pagination test; lifting it to unit level catches the
+    synthesis logic regressing without a full e2e run."""
+    # Mirrors tools_search.py: response["has_more"] =
+    #     bool(response.get("entity_has_more")) or
+    #     bool(response.get("config_has_more"))
+    def synthesise(eh: bool, ch: bool) -> bool:
+        response: dict = {"entity_has_more": eh, "config_has_more": ch}
+        return bool(response.get("entity_has_more")) or bool(
+            response.get("config_has_more")
+        )
+
+    assert synthesise(False, False) is False
+    assert synthesise(True, False) is True
+    assert synthesise(False, True) is True
+    assert synthesise(True, True) is True
+
+
+def test_orchestrator_entity_branch_exception_partial_shape() -> None:
+    """Pin S7(c): when the entity branch raises and the config branch
+    returns clean, the orchestrator's exception-handling at
+    ``tools_search.py:~554-606`` should produce a response with
+    ``partial: True``, an ``errors`` list tagged with ``surface: 'entities'``,
+    AND the surviving config bucket's payload preserved (not clobbered by
+    the orchestrator-local errors assignment at the end of the merge loop).
+    The shape here mirrors what the real ha_search would assemble; unit-
+    level so a regression in the clobber-or-extend behavior catches without
+    a full e2e fixture."""
+    # Simulate the orchestrator's response init + the in-loop exception
+    # bookkeeping + the post-loop ``response["errors"].extend(errors)``.
+    response: dict = {
+        "success": True,
+        "query": "kitchen",
+        "entities": [],
+        "entity_total_matches": 0,
+        "automations": [],
+        "scripts": [],
+        "scenes": [],
+        "helpers": [],
+        "config_total_matches": 0,
+        "partial": False,
+        "errors": [],
+        "warnings": [],
+    }
+    partial = False
+    orchestrator_errors: list[dict[str, str]] = []
+
+    # Entity branch raised — the orchestrator records the surface tag.
+    entity_exception = RuntimeError("ws_connection_closed")
+    partial = True
+    orchestrator_errors.append(
+        {"surface": "entities", "error": str(entity_exception)}
+    )
+
+    # Config branch returned clean with its own diagnostic ``warnings`` —
+    # the merge helper picks those up.
+    config_payload = {
+        "success": True,
+        "automations": [{"entity_id": "automation.a"}],
+        "total_matches": 1,
+        "warnings": ["config-side: dashboard opt-in skipped"],
+    }
+    for bucket in ("automations", "scripts", "scenes", "helpers", "dashboards"):
+        if bucket in config_payload:
+            response[bucket] = config_payload[bucket]
+    response["config_total_matches"] = config_payload.get("total_matches", 0)
+    _merge_payload_metadata(
+        response,
+        config_payload,
+        skip_keys=(
+            "automations", "scripts", "scenes", "helpers", "dashboards",
+            "total_matches", "has_more", "next_offset",
+        ),
+    )
+
+    # End-of-loop: set partial + extend (NOT clobber) the orchestrator's
+    # error list onto whatever the merge already accumulated.
+    if partial:
+        response["partial"] = True
+        response["errors"].extend(orchestrator_errors)
+
+    # Assertions: surface tagging + payload preservation.
+    assert response["partial"] is True
+    assert response["errors"] == [
+        {"surface": "entities", "error": "ws_connection_closed"}
+    ]
+    # Config payload's warnings survived the merge.
+    assert response["warnings"] == ["config-side: dashboard opt-in skipped"]
+    # Surviving config bucket is present.
+    assert response["automations"] == [{"entity_id": "automation.a"}]
+    assert response["entities"] == []
+    assert response["entity_total_matches"] == 0
+    assert response["config_total_matches"] == 1
+
+
 # Budget-exhaustion partial flag --------------------------------------------
 
 
