@@ -319,6 +319,25 @@ def _check_response_contains(check: dict, agent_output: str) -> dict:
     }
 
 
+def _check_response_contains_any(check: dict, agent_output: str) -> dict:
+    values = check["values"]
+    output_lower = agent_output.lower()
+    matched = next((v for v in values if v.lower() in output_lower), None)
+    if matched:
+        return {
+            **check,
+            "type": "response_contains_any",
+            "passed": True,
+            "detail": f"Found '{matched}'",
+        }
+    return {
+        **check,
+        "type": "response_contains_any",
+        "passed": False,
+        "detail": f"None of {values!r} found in response",
+    }
+
+
 def _check_response_matches(check: dict, agent_output: str) -> dict:
     pattern = check["pattern"]
     if re.search(pattern, agent_output):
@@ -357,6 +376,7 @@ ASYNC_CHECKS = {
 
 RESPONSE_CHECKS = {
     "response_contains": _check_response_contains,
+    "response_contains_any": _check_response_contains_any,
     "response_matches": _check_response_matches,
 }
 

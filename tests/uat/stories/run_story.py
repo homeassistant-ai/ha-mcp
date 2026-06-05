@@ -783,12 +783,13 @@ def append_result(
     if tokens_first_input is not None:
         record["tokens_first_input"] = tokens_first_input
 
-    # Include verify_results, agent response, and tool trace only on failure
+    # Always include agent response so passing runs are inspectable too.
+    # verify_results and tool_trace only on failure to keep records compact.
+    agent_response = test_phase.get("output", "")
+    if agent_response:
+        record["agent_response"] = agent_response
     if verify_results is not None and not all(r["passed"] for r in verify_results):
         record["verify_results"] = verify_results
-        agent_response = test_phase.get("output", "")
-        if agent_response:
-            record["agent_response"] = agent_response
         tool_trace = test_phase.get("tool_trace")
         if tool_trace:
             record["tool_trace"] = tool_trace

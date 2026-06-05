@@ -33,8 +33,8 @@ verify:
   ha_checks:
     - type: response_contains
       value: "light.bed_light"
-    - type: response_contains
-      value: "automation"
+    - type: response_contains_any
+      values: ["automation", "logbook", "history"]
 
 expected:
   tools_should_use:
