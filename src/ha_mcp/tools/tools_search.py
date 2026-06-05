@@ -1966,7 +1966,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Use this when you need to find configurations by what they *do* (e.g., which automations
         call a specific service, which scenes set a particular entity, or any config that contains
-        a certain action). For finding entity IDs by name, use ha_search_entities instead.
+        a certain action). For finding entity IDs by name, use ha_search instead.
 
         Searches within configuration definitions including triggers, actions, sequences, scene
         entity sets, and other config fields. Also searches dashboard configurations (cards,
@@ -1989,11 +1989,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exact_match: Use exact substring matching (default: True)
 
         Examples:
-            - Find automations referencing an entity: ha_deep_search("sensor.temperature")
-            - Find with fuzzy matching: ha_deep_search("motion", exact_match=False)
-            - Find scenes touching a light: ha_deep_search("light.kitchen")
-            - Search dashboards for entity refs: ha_deep_search("sensor.temperature", search_types=["dashboard"])
-            - Search everything: ha_deep_search("light.bedroom", search_types=["automation","script","scene","helper","dashboard"])
+            - Find automations referencing an entity: ha_search("sensor.temperature")
+            - Find with fuzzy matching: ha_search("motion", exact_match=False)
+            - Find scenes touching a light: ha_search("light.kitchen")
+            - Search dashboards for entity refs: ha_search("sensor.temperature", search_types=["dashboard"])
+            - Search everything: ha_search("light.bedroom", search_types=["automation","script","scene","helper","dashboard"])
         """
         # Parse search_types to handle JSON string input from MCP clients
         try:
@@ -2189,7 +2189,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     suggestions=[
                         f"Verify entity '{entity_id}' exists in Home Assistant",
                         "Check Home Assistant connection",
-                        "Use ha_search_entities() to find correct entity IDs",
+                        "Use ha_search() to find correct entity IDs",
                     ],
                 )
 
@@ -2293,7 +2293,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 response["errors"] = errors
                 response["error_count"] = len(errors)
                 response["suggestions"] = [
-                    "Use ha_search_entities() to find correct entity IDs for failed lookups",
+                    "Use ha_search() to find correct entity IDs for failed lookups",
                     "Verify entities exist in Home Assistant",
                 ]
                 if states:

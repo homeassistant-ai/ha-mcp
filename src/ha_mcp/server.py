@@ -608,7 +608,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "zone, person, tag. Flow-based helpers (template, group, "
             "utility_meter, derivative, statistics, trend, threshold, "
             "filter, switch_as_x, etc.) cannot be listed through this "
-            "tool — use ha_search or ha_search.\n\n"
+            "tool — use ha_search.\n\n"
             "For per-type schemas and decision guidance, see "
             "ha_get_skill_guide."
         ),

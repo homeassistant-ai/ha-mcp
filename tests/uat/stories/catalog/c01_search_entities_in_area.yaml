@@ -52,6 +52,7 @@ verify:
 expected:
   tools_should_use:
     - ha_search_entities
+    - ha_search
   description: >
     Agent should call ha_search_entities (or, on the variant arm, ha_search)
     with domain_filter='sensor' and area_filter='Bathroom' (or equivalent
