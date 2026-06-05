@@ -8,8 +8,14 @@ on ``has_more``/``next_offset``, and the budget-exhaustion ``partial`` flag.
 
 from __future__ import annotations
 
+import pytest
+from fastmcp.exceptions import ToolError
+
 from ha_mcp.tools.smart_search._deep import DeepSearchMixin
-from ha_mcp.tools.tools_search import _merge_payload_metadata
+from ha_mcp.tools.tools_search import (
+    _merge_payload_metadata,
+    _validate_search_types,
+)
 
 
 def test_propagates_non_conflicting_keys() -> None:
@@ -64,6 +70,71 @@ def test_warnings_non_list_falls_back_to_shadow_protect() -> None:
     payload = {"warnings": "string-not-list"}
     _merge_payload_metadata(response, payload, skip_keys=())
     assert response["warnings"] == ["from-orchestrator"]
+
+
+def test_warnings_response_side_non_list_replaced_with_payload() -> None:
+    """When ``response['warnings']`` already exists but is not a list (a
+    contract violation upstream — top-level ``warnings`` MUST be
+    ``list[str]``), and the payload carries a well-typed warnings list, the
+    merge replaces response's broken value with the payload's list rather
+    than raising ``AttributeError`` from ``setdefault(...).extend(value)``
+    returning the non-list sentinel."""
+    response: dict = {"warnings": "not-a-list-violates-contract"}
+    payload = {"warnings": ["payload-add"]}
+    _merge_payload_metadata(response, payload, skip_keys=())
+    assert response["warnings"] == ["payload-add"]
+
+
+# search_types validation --------------------------------------------------
+
+
+def test_validate_search_types_none_passes() -> None:
+    _validate_search_types(None)
+
+
+def test_validate_search_types_empty_list_passes() -> None:
+    """Empty list bypasses validation — semantics of [] are decided at the
+    orchestrator (see search-types-empty-list discussion); validation here
+    only rejects *unknown* values."""
+    _validate_search_types([])
+
+
+def test_validate_search_types_all_valid_passes() -> None:
+    _validate_search_types(
+        ["automation", "script", "scene", "helper", "dashboard"]
+    )
+
+
+def test_validate_search_types_subset_passes() -> None:
+    _validate_search_types(["scene"])
+
+
+def test_validate_search_types_unknown_rejected() -> None:
+    """A typo / stale type name like ``blueprint`` (KP13 review S8) or
+    ``frobnicate`` would previously return zero matches with no warning —
+    now surfaces as ``VALIDATION_FAILED`` with ``parameter='search_types'``."""
+    with pytest.raises(ToolError) as excinfo:
+        _validate_search_types(["frobnicate"])
+    assert "frobnicate" in str(excinfo.value)
+
+
+def test_validate_search_types_mixed_valid_invalid_rejected() -> None:
+    with pytest.raises(ToolError) as excinfo:
+        _validate_search_types(["automation", "frobnicate", "scene"])
+    assert "frobnicate" in str(excinfo.value)
+    # Valid types from the input shouldn't appear in the unknown list.
+    assert "['frobnicate']" in str(excinfo.value) or "frobnicate" in str(
+        excinfo.value
+    )
+
+
+def test_validate_search_types_blueprint_rejected() -> None:
+    """Pins the S8 finding: ``blueprint`` is not implemented as a search
+    type. The pre-fix behavior silently returned zero matches; the new
+    validation surfaces it as a typed error."""
+    with pytest.raises(ToolError) as excinfo:
+        _validate_search_types(["blueprint"])
+    assert "blueprint" in str(excinfo.value)
 
 
 def test_empty_payload_is_noop() -> None:

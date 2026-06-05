@@ -47,6 +47,36 @@ _CONFIG_BUCKETS: tuple[str, ...] = (
     "dashboards",
 )
 
+# ``search_types`` accepts singular type names; ``_CONFIG_BUCKETS`` uses the
+# plural response-key names. Keep both lists alongside so the relationship
+# is local — a new type needs both entries.
+_VALID_SEARCH_TYPES: frozenset[str] = frozenset(
+    {"automation", "script", "scene", "helper", "dashboard"}
+)
+
+
+def _validate_search_types(parsed: list[str] | None) -> None:
+    """Reject unknown ``search_types`` values with a structured validation error.
+
+    ``parse_string_list_param`` only verifies the *shape* (string / list /
+    JSON-array); it does not check values against the known set, so a typo
+    like ``search_types=["frobnicate"]`` would silently return zero matches
+    with no warning or partial flag. Centralised here so ``ha_search`` and
+    ``ha_deep_search`` share the contract — adding a new valid type needs
+    one change.
+    """
+    if parsed is None:
+        return
+    unknown = [t for t in parsed if t not in _VALID_SEARCH_TYPES]
+    if unknown:
+        raise_tool_error(
+            create_validation_error(
+                f"Unknown search_types: {unknown}. "
+                f"Valid types: {sorted(_VALID_SEARCH_TYPES)}.",
+                parameter="search_types",
+            )
+        )
+
 
 def _merge_payload_metadata(
     response: dict[str, Any],
@@ -68,7 +98,16 @@ def _merge_payload_metadata(
         if key in skip_keys:
             continue
         if key == "warnings" and isinstance(value, list):
-            response.setdefault("warnings", []).extend(value)
+            current = response.get("warnings")
+            if isinstance(current, list):
+                current.extend(value)
+            else:
+                # ``warnings`` already present but not a list — that already
+                # violates the top-level ``list[str]`` contract upstream.
+                # Replace with the payload's well-typed list rather than
+                # crash on ``.extend`` from ``setdefault`` returning the
+                # broken value.
+                response["warnings"] = list(value)
             continue
         if key in response:
             continue
@@ -419,7 +458,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             - Which automations use an entity: ha_search("light.bed_light")
             - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
         """
-        parsed_search_types = parse_string_list_param(search_types, "search_types")
+        try:
+            parsed_search_types = parse_string_list_param(
+                search_types, "search_types"
+            )
+        except ValueError as exc:
+            raise_tool_error(
+                create_validation_error(str(exc), parameter="search_types")
+            )
+        _validate_search_types(parsed_search_types)
 
         # Normalise query once. The two surfaces have different eligibility:
         # registry runs whenever a query OR a filter is set (it supports
@@ -429,8 +476,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         domain_filter_text = (domain_filter or "").strip()
         area_filter_text = (area_filter or "").strip()
         # ``search_types`` lists config-surface types only (automation, script,
-        # scene, helper, blueprint, dashboard). When the caller pins it, they
-        # are asking for config-only — skip the entity branch.
+        # scene, helper, dashboard). When the caller pins it, they are asking
+        # for config-only — skip the entity branch.
         explicit_config_only = parsed_search_types is not None
         registry_eligible = (
             bool(query_text or domain_filter_text or area_filter_text)
@@ -1864,7 +1911,15 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             - Search everything: ha_deep_search("light.bedroom", search_types=["automation","script","scene","helper","dashboard"])
         """
         # Parse search_types to handle JSON string input from MCP clients
-        parsed_search_types = parse_string_list_param(search_types, "search_types")
+        try:
+            parsed_search_types = parse_string_list_param(
+                search_types, "search_types"
+            )
+        except ValueError as exc:
+            raise_tool_error(
+                create_validation_error(str(exc), parameter="search_types")
+            )
+        _validate_search_types(parsed_search_types)
         include_config_bool = include_config
         exact_match_bool = exact_match
         try:
