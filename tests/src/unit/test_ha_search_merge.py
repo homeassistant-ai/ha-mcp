@@ -12,6 +12,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.smart_search._deep import DeepSearchMixin
+from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 from ha_mcp.tools.tools_search import (
     _ALWAYS_KEEP_PROJECTION,
     _INTENT_SKIP_WARNING,
@@ -657,6 +658,84 @@ def test_mirror_partial_to_warnings_preserves_existing_warnings() -> None:
         "pre-existing warning",
         "incomplete results: Y failed",
     ]
+
+
+# Scene fetch — registry-succeeded-zero-HA-managed case --------------
+#
+# Pin the fix for the re-review's "Investigate the 106/106 scene
+# config-fetch failures" finding. The pre-fix `_select_scene_ids_to_fetch`
+# conflated two cases via `if not homeassistant_scene_uids`: registry
+# walk failed (legitimate fallback to attempt-all) AND registry walk
+# succeeded with zero HA-managed scenes (every scene is integration-
+# managed; attempting them 404s every one). The fix distinguishes via
+# an explicit `registry_failed` parameter.
+
+
+def test_select_scene_ids_registry_succeeded_zero_ha_managed_skips_all() -> None:
+    """KP13's 106/106 case: registry succeeded but the fixture has only
+    integration-managed scenes (no platform='homeassistant' entries).
+    Pre-fix: fell back to attempt-all, every fetch 404'd, partial_reason
+    reported `N scenes failed`. Post-fix: all counted as
+    integration_skipped, zero fetched, no false partial."""
+    scored = [
+        ("scene.x", "X", "uid-x", 100),
+        ("scene.y", "Y", "uid-y", 100),
+    ]
+    sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
+        scored, configs={}, homeassistant_scene_uids=set(), registry_failed=False
+    )
+    assert sids == []
+    assert integration_skipped == 2
+
+
+def test_select_scene_ids_registry_failed_attempts_all() -> None:
+    """When the registry walk actually failed, the existing fallback
+    remains: attempt all scenes, accept false partials (better than
+    dropping legitimate HA-managed scenes silently)."""
+    scored = [
+        ("scene.x", "X", "uid-x", 100),
+        ("scene.y", "Y", "uid-y", 100),
+    ]
+    sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
+        scored, configs={}, homeassistant_scene_uids=set(), registry_failed=True
+    )
+    assert sorted(sids) == ["uid-x", "uid-y"]
+    assert integration_skipped == 0
+
+
+def test_select_scene_ids_mixed_ha_and_integration_splits_correctly() -> None:
+    """When some scenes are HA-managed and some integration-managed,
+    fetch only HA ones; count integration scenes as skipped."""
+    scored = [
+        ("scene.x", "X", "uid-x", 100),
+        ("scene.y", "Y", "uid-y", 100),
+        ("scene.z", "Z", "uid-z", 100),
+    ]
+    sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
+        scored,
+        configs={},
+        homeassistant_scene_uids={"uid-x"},
+        registry_failed=False,
+    )
+    assert sids == ["uid-x"]
+    assert integration_skipped == 2
+
+
+def test_select_scene_ids_skips_already_fetched_configs() -> None:
+    """Scenes whose config is already in the bulk-fetched dict are
+    skipped from the per-id fetch regardless of integration / HA status."""
+    scored = [
+        ("scene.x", "X", "uid-x", 100),
+        ("scene.y", "Y", "uid-y", 100),
+    ]
+    sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
+        scored,
+        configs={"uid-x": {"name": "X"}},
+        homeassistant_scene_uids={"uid-x", "uid-y"},
+        registry_failed=False,
+    )
+    assert sids == ["uid-y"]
+    assert integration_skipped == 0
 
 
 def test_always_keep_set_includes_all_diagnostic_and_pagination_keys() -> None:

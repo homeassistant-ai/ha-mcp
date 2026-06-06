@@ -96,19 +96,33 @@ class SceneSearchMixin(ConfigFetchMixin):
         scored: list[tuple[str, str, str | None, int]],
         configs: dict[str, dict[str, Any]],
         homeassistant_scene_uids: set[str],
+        registry_failed: bool,
     ) -> tuple[list[str], int]:
         """Pick scene ids needing a per-id fetch, skipping integration-managed ones.
 
         Issue #1168 R3 blocker 2: integration-managed scenes 404 on the per-id
         REST endpoint by design, so surfacing those as fetch failures masks real
         errors. They are counted separately (returned as ``integration_skipped``).
-        When the registry call failed (``homeassistant_scene_uids`` empty), fall
-        back to attempting all scenes -- false partials beat dropping legitimate
-        HA-managed scenes silently.
+
+        Three cases on the registry walk's outcome:
+
+        - ``registry_failed=True`` — the entity-registry call raised; we can't
+          tell which scenes are HA-managed, so attempt all (false partials
+          beat dropping HA-managed scenes silently).
+        - ``registry_failed=False`` with non-empty ``homeassistant_scene_uids``
+          — fetch only the HA-managed ones, count integration scenes as
+          ``integration_skipped``.
+        - ``registry_failed=False`` with empty ``homeassistant_scene_uids``
+          — registry succeeded but found zero HA-managed scenes (every scene
+          is integration-managed). Attempting them would 404 every single
+          one (KP13 #1529 re-review: 106/106 failures observed). Skip all
+          per-id fetches and count them as ``integration_skipped``.
 
         Returns ``(sids_to_fetch, integration_skipped_count)``.
         """
-        if not homeassistant_scene_uids:
+        if registry_failed:
+            # Registry walk failed — we can't distinguish HA-managed from
+            # integration-managed. Attempt all and accept false partials.
             return [sid for _, _, sid, _ in scored if sid and sid not in configs], 0
         sids: list[str] = []
         integration_skipped = 0
@@ -210,7 +224,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         # slow scenes don't tank the whole search.
         if not bulk_fetched:
             sids_to_fetch, integration_skipped = self._select_scene_ids_to_fetch(
-                scored, configs, homeassistant_scene_uids
+                scored, configs, homeassistant_scene_uids, registry_failed
             )
 
             async def _fetch_scene_config(
