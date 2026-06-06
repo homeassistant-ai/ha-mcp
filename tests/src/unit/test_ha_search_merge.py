@@ -781,8 +781,16 @@ def test_budget_partial_flag_set_when_automation_skipped() -> None:
         response, automation_skipped=3, script_skipped=0
     )
     assert response["partial"] is True
-    assert "Automation config fetch incomplete: 3 skipped" in response["partial_reason"]
-    assert "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET" in response["partial_reason"]
+    reason = response["partial_reason"]
+    assert "3 automation(s) not scanned (time budget exhausted)" in reason
+    # The un-rationalisable triad — every reason must state plainly that
+    # the entities were not scanned, their match status is unknown, and
+    # the result is not exhaustive. PR #1529 R5 strengthened the wording
+    # because the prior softer phrasing was rationalised away by blind
+    # agents who reported the result as complete.
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
+    assert "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET" in reason
 
 
 def test_budget_partial_flag_set_when_script_skipped() -> None:
@@ -791,8 +799,11 @@ def test_budget_partial_flag_set_when_script_skipped() -> None:
         response, automation_skipped=0, script_skipped=7
     )
     assert response["partial"] is True
-    assert "Script config fetch incomplete: 7 skipped" in response["partial_reason"]
-    assert "HAMCP_SCRIPT_CONFIG_TIME_BUDGET" in response["partial_reason"]
+    reason = response["partial_reason"]
+    assert "7 script(s) not scanned (time budget exhausted)" in reason
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
+    assert "HAMCP_SCRIPT_CONFIG_TIME_BUDGET" in reason
 
 
 def test_budget_partial_flag_combines_both_surfaces() -> None:
@@ -802,8 +813,8 @@ def test_budget_partial_flag_combines_both_surfaces() -> None:
     )
     assert response["partial"] is True
     reason = response["partial_reason"]
-    assert "Automation config fetch incomplete: 2 skipped" in reason
-    assert "Script config fetch incomplete: 4 skipped" in reason
+    assert "2 automation(s) not scanned" in reason
+    assert "4 script(s) not scanned" in reason
 
 
 def test_budget_partial_flag_appends_to_existing_reason() -> None:
@@ -819,7 +830,7 @@ def test_budget_partial_flag_appends_to_existing_reason() -> None:
     )
     assert response["partial"] is True
     assert response["partial_reason"].startswith("Scene config fetch incomplete")
-    assert "Automation config fetch incomplete: 3 skipped" in response["partial_reason"]
+    assert "3 automation(s) not scanned" in response["partial_reason"]
 
 
 def test_budget_partial_flag_noop_when_no_skips() -> None:
@@ -839,14 +850,70 @@ def test_budget_partial_flag_set_when_automation_individual_fetches_failed() -> 
     response: dict = {"success": True}
     DeepSearchMixin._apply_per_type_partial_flag(response, automation_failed=4)
     assert response["partial"] is True
-    assert "Automation config fetch incomplete: 4 failed" in response["partial_reason"]
+    reason = response["partial_reason"]
+    assert "4 automation(s) not scanned (per-id fetch raised a non-404 error)" in reason
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
 
 
 def test_budget_partial_flag_set_when_script_individual_fetches_failed() -> None:
     response: dict = {"success": True}
     DeepSearchMixin._apply_per_type_partial_flag(response, script_failed=2)
     assert response["partial"] is True
-    assert "Script config fetch incomplete: 2 failed" in response["partial_reason"]
+    reason = response["partial_reason"]
+    assert "2 script(s) not scanned (per-id fetch raised a non-404 error)" in reason
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
+
+
+def test_budget_partial_flag_set_when_automation_yaml_skipped() -> None:
+    """404 on the per-id endpoint flags YAML-defined automations as
+    structurally unfetchable (a distinct class from a generic non-404
+    fetch failure). Closes the find-references completeness honesty gap
+    from PR #1529 R5: previously these were lumped into ``failed`` and the
+    warning didn't tell callers the gap was structural rather than
+    transient."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(response, automation_yaml_skipped=2)
+    assert response["partial"] is True
+    reason = response["partial_reason"]
+    assert "2 automation(s) not scanned" in reason
+    assert "404" in reason
+    assert "YAML-defined" in reason
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
+
+
+def test_budget_partial_flag_set_when_script_yaml_skipped() -> None:
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(response, script_yaml_skipped=5)
+    assert response["partial"] is True
+    reason = response["partial_reason"]
+    assert "5 script(s) not scanned" in reason
+    assert "404" in reason
+    assert "YAML-defined" in reason
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
+
+
+def test_budget_partial_flag_distinguishes_yaml_skipped_from_failed() -> None:
+    """When both a 404 (yaml_skipped) and a non-404 (failed) error occur
+    on the same type, the two fragments must be reported separately so
+    a caller can tell the structural class apart from the transient
+    class. The transient class is retry-able; the structural class is
+    not, and the prescribed fix differs."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        response, automation_failed=3, automation_yaml_skipped=2
+    )
+    assert response["partial"] is True
+    reason = response["partial_reason"]
+    assert "3 automation(s) not scanned (per-id fetch raised a non-404 error)" in reason
+    assert "2 automation(s) not scanned" in reason
+    assert "404" in reason
+    assert "YAML-defined" in reason
+    # Two distinct per-type fragments → exactly one ` ; ` separator.
+    assert reason.count(" ; ") == 1
 
 
 def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:
@@ -857,10 +924,10 @@ def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:
     response: dict = {"success": True}
     DeepSearchMixin._apply_per_type_partial_flag(response, helper_failed=3)
     assert response["partial"] is True
-    assert (
-        "Helper list fetch incomplete: 3 input_* type(s) failed"
-        in (response["partial_reason"])
-    )
+    reason = response["partial_reason"]
+    assert "3 input_* helper type(s) not scanned" in reason
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
 
 
 def test_budget_partial_flag_failed_and_skipped_combine() -> None:
@@ -875,9 +942,9 @@ def test_budget_partial_flag_failed_and_skipped_combine() -> None:
     )
     assert response["partial"] is True
     reason = response["partial_reason"]
-    assert "Automation config fetch incomplete: 5 skipped" in reason
-    assert "Automation config fetch incomplete: 2 failed" in reason
-    assert "Helper list fetch incomplete: 1 input_* type(s) failed" in reason
+    assert "5 automation(s) not scanned (time budget exhausted)" in reason
+    assert "2 automation(s) not scanned (per-id fetch raised a non-404 error)" in reason
+    assert "1 input_* helper type(s) not scanned" in reason
 
 
 def test_budget_partial_flag_failures_append_to_existing_reason() -> None:
@@ -893,11 +960,8 @@ def test_budget_partial_flag_failures_append_to_existing_reason() -> None:
     )
     assert response["partial"] is True
     assert response["partial_reason"].startswith("Scene config fetch incomplete")
-    assert "Script config fetch incomplete: 3 failed" in response["partial_reason"]
-    assert (
-        "Helper list fetch incomplete: 1 input_* type(s) failed"
-        in (response["partial_reason"])
-    )
+    assert "3 script(s) not scanned" in response["partial_reason"]
+    assert "1 input_* helper type(s) not scanned" in response["partial_reason"]
 
 
 def test_entities_branch_skip_keys_strip_real_leak_set() -> None:
@@ -1038,9 +1102,7 @@ def test_budget_partial_flag_uses_space_semicolon_space_separator() -> None:
         "partial_reason": "Scene config fetch incomplete: 1 failed, 2 skipped.",
     }
     DeepSearchMixin._apply_per_type_partial_flag(seeded, automation_skipped=3)
-    assert (
-        "skipped. ; Automation config fetch incomplete" in seeded["partial_reason"]
-    ), (
+    assert "skipped. ; 3 automation(s) not scanned" in seeded["partial_reason"], (
         f"existing reason and new fragment must be joined with ' ; '; "
         f"got {seeded['partial_reason']!r}"
     )

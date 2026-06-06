@@ -258,21 +258,26 @@ class SceneSearchMixin(ConfigFetchMixin):
 
             async def _fetch_scene_config(
                 sid: str,
-            ) -> tuple[str, dict[str, Any] | None]:
+            ) -> tuple[str, dict[str, Any] | None, str | None]:
                 try:
                     config_resp = await asyncio.wait_for(
                         self.client.get_scene_config(sid),
                         timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                     )
-                    return (sid, config_resp.get("config", {}))
+                    return (sid, config_resp.get("config", {}), None)
                 except Exception as e:
                     logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
-                    return (sid, None)
+                    return (sid, None, "failed")
 
             (
                 fetched_configs,
                 failed_count,
                 skipped_count,
+                # Scene YAML/integration-managed pre-classification happens
+                # upstream via `_walk_scene_registry`; the 4th tuple slot
+                # from `_individual_fetch_budgeted` is therefore expected
+                # to stay at zero on this path.
+                _scene_yaml_skipped,
             ) = await self._individual_fetch_budgeted(
                 sids_to_fetch,
                 _fetch_scene_config,
@@ -319,17 +324,36 @@ class SceneSearchMixin(ConfigFetchMixin):
         downstream consumers treat absence as success. Issue #1168 R3 blocker 2:
         integration-managed scenes intentionally skip the per-id fetch and never
         raise ``partial`` on their own (the count is informational).
+
+        Wording uses the same forceful triad as ``_apply_per_type_partial_flag``
+        (``not scanned`` / ``match status is unknown`` / ``not exhaustive``)
+        so blind agents can't rationalise scene incompleteness any more easily
+        than automation/script incompleteness — the softer prior phrasing was
+        empirically rationalised away on parallel paths.
         """
         failed = scene_stats["failed"]
         skipped = scene_stats["skipped"]
         if not (failed or skipped):
             return
         response["partial"] = True
-        reason_parts = [
-            f"Scene config fetch incomplete: {failed} failed, "
-            f"{skipped} skipped (time budget)."
-        ]
+        reason_parts: list[str] = []
+        if failed:
+            reason_parts.append(
+                f"{failed} scene(s) not scanned (per-id fetch raised) — "
+                "their match status is unknown; this result is not exhaustive."
+            )
+        if skipped:
+            reason_parts.append(
+                f"{skipped} scene(s) not scanned (time budget exhausted) — "
+                "their match status is unknown; this result is not exhaustive. "
+                "Pass `config_time_budget=` on `ha_search` to raise the "
+                "per-call limit (or set HAMCP_SCENE_CONFIG_TIME_BUDGET for "
+                "the default)."
+            )
         if scene_stats["integration_skipped"]:
+            # Informational, not an unknown-match-status condition: these
+            # scenes are deliberately scored by attribute-only, so their
+            # match status is *known* (by name+state), just incomplete.
             reason_parts.append(
                 f"{scene_stats['integration_skipped']} integration-managed "
                 "scenes are scored by attribute only (no per-id fetch)."
@@ -344,11 +368,6 @@ class SceneSearchMixin(ConfigFetchMixin):
                 "unavailable, attempted all scenes (false-positive failures "
                 "expected for integration-managed scenes)."
             )
-        reason_parts.append(
-            "Some scene matches may be missing config data; pass "
-            "`config_time_budget=` on `ha_search` to raise it per-call, or "
-            "set HAMCP_SCENE_CONFIG_TIME_BUDGET to raise the default."
-        )
         # Use the standardised " ; " separator (matches
         # ``_merge_payload_metadata`` and ``_apply_per_type_partial_flag``).
         response["partial_reason"] = " ; ".join(reason_parts)

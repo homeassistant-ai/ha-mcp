@@ -383,7 +383,10 @@ class TestSceneIntegrationFilter:
         assert result.get("partial") is True
         reason = result.get("partial_reason", "")
         # The real failure is named (so the operator knows something broke).
-        assert "failed" in reason.lower()
+        # Wording strengthened in PR #1529 R5 — every per-type/scene
+        # incompleteness fragment carries the "not scanned" triad.
+        assert "scene(s) not scanned (per-id fetch raised)" in reason
+        assert "match status is unknown" in reason.lower()
         # Integration-managed scenes are surfaced separately so their
         # 100+ count on Hue installs doesn't read as "everything broken".
         assert "integration-managed" in reason.lower(), (
@@ -600,7 +603,12 @@ class TestApplyScenePartialFlag:
             },
         )
         assert response["partial"] is True
-        assert "3 failed" in response["partial_reason"]
+        reason = response["partial_reason"]
+        assert "3 scene(s) not scanned (per-id fetch raised)" in reason
+        # Triad — matches the un-rationalisable wording introduced for
+        # automation/script paths in PR #1529 R5.
+        assert "match status is unknown" in reason
+        assert "not exhaustive" in reason
 
     def test_skipped_sets_partial_with_budget_reason(self) -> None:
         from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
@@ -617,8 +625,10 @@ class TestApplyScenePartialFlag:
         )
         assert response["partial"] is True
         reason = response["partial_reason"]
-        assert "5 skipped" in reason
-        assert "time budget" in reason
+        assert "5 scene(s) not scanned (time budget exhausted)" in reason
+        assert "match status is unknown" in reason
+        assert "not exhaustive" in reason
+        assert "HAMCP_SCENE_CONFIG_TIME_BUDGET" in reason
 
     def test_registry_failed_adds_filter_unavailable_clause(self) -> None:
         """When the registry walk failed (raise OR soft-failure), the

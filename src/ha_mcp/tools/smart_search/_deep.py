@@ -8,6 +8,7 @@ from typing import Any
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 
+from ...client.rest_client import HomeAssistantAPIError
 from ..helpers import exception_to_structured_error, safe_info, safe_progress
 from ..tools_config_dashboards import fetch_dashboards_list
 from ..tools_config_entry_flow import FLOW_HELPER_TYPES
@@ -118,8 +119,10 @@ class DeepSearchMixin(SceneSearchMixin):
             # fetch attempted but raised (caught at ``debug``-level).
             automation_skipped = 0
             automation_failed = 0
+            automation_yaml_skipped = 0
             script_skipped = 0
             script_failed = 0
+            script_yaml_skipped = 0
             helper_failed = 0
 
             if "automation" in search_types:
@@ -127,6 +130,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     results["automations"],
                     automation_skipped,
                     automation_failed,
+                    automation_yaml_skipped,
                 ) = await self._deep_search_automations(
                     all_entities,
                     automation_unique_id_map,
@@ -147,6 +151,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     results["scripts"],
                     script_skipped,
                     script_failed,
+                    script_yaml_skipped,
                 ) = await self._deep_search_scripts(
                     all_entities,
                     query_lower,
@@ -219,8 +224,10 @@ class DeepSearchMixin(SceneSearchMixin):
                 scene_stats,
                 automation_skipped=automation_skipped,
                 automation_failed=automation_failed,
+                automation_yaml_skipped=automation_yaml_skipped,
                 script_skipped=script_skipped,
                 script_failed=script_failed,
+                script_yaml_skipped=script_yaml_skipped,
                 helper_failed=helper_failed,
             )
 
@@ -266,18 +273,22 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
-    ) -> tuple[list[dict[str, Any]], int, int]:
+    ) -> tuple[list[dict[str, Any]], int, int, int]:
         """Deep-search automations: 3-tier config fetch (REST bulk -> WS bulk -> individual).
 
-        Returns ``(matches, skipped_count, failed_count)``. ``skipped_count``
-        is non-zero only when bulk fetch fell back to the per-id Attempt-C
-        path AND its wall-clock budget exhausted before all configs were
-        fetched; ``failed_count`` is non-zero when individual config fetches
-        raised exceptions (caught at ``debug``-level). Both surface as
+        Returns ``(matches, skipped_count, failed_count, yaml_skipped_count)``.
+        ``skipped_count`` is non-zero only when bulk fetch fell back to the
+        per-id Attempt-C path AND its wall-clock budget exhausted before all
+        configs were fetched; ``failed_count`` is non-zero when individual
+        config fetches raised a non-404 exception (caught at ``debug``-level);
+        ``yaml_skipped_count`` is non-zero when individual config fetches
+        returned 404, which is the documented HA behaviour for YAML-defined
+        automations (the ``/config/automation/config/<id>`` REST endpoint
+        only exposes UI-storage automations). All three surface as
         ``partial: True`` in the response so callers can distinguish a
-        complete zero-result from an incomplete one — skipped ids carry
-        their score-without-config through the merge and fall below the
-        match threshold silently otherwise.
+        complete zero-result from an incomplete one — skipped/failed ids
+        carry their score-without-config through the merge and fall below
+        the match threshold silently otherwise.
         """
         automation_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("automation.")
@@ -321,23 +332,40 @@ class DeepSearchMixin(SceneSearchMixin):
 
             async def _fetch_automation_config(
                 uid: str,
-            ) -> tuple[str, dict[str, Any] | None]:
+            ) -> tuple[str, dict[str, Any] | None, str | None]:
                 try:
                     config = await asyncio.wait_for(
                         self.client._request("GET", f"/config/automation/config/{uid}"),
                         timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                     )
-                    return (uid, config)
+                    return (uid, config, None)
+                except HomeAssistantAPIError as e:
+                    if e.status_code == 404:
+                        # YAML-defined automations 404 on the per-id REST
+                        # endpoint by design (it only serves UI-storage
+                        # automations). Classify distinctly so the warning
+                        # explains the gap is structural, not transient.
+                        logger.debug(
+                            f"Automation individual config fetch ({uid}) "
+                            "returned 404 — likely YAML-defined; not exposed "
+                            "via /config/automation/config."
+                        )
+                        return (uid, None, "yaml_skipped")
+                    logger.debug(
+                        f"Automation individual config fetch ({uid}) failed: {e}"
+                    )
+                    return (uid, None, "failed")
                 except Exception as e:
                     logger.debug(
                         f"Automation individual config fetch ({uid}) failed: {e}"
                     )
-                    return (uid, None)
+                    return (uid, None, "failed")
 
             (
                 fetched_configs,
                 failed_count,
                 skipped_count,
+                yaml_skipped_count,
             ) = await self._individual_fetch_budgeted(
                 uids_to_fetch,
                 _fetch_automation_config,
@@ -350,6 +378,7 @@ class DeepSearchMixin(SceneSearchMixin):
             configs.update(fetched_configs)
         else:
             failed_count = 0
+            yaml_skipped_count = 0
 
         # Phase 3: Score with whatever configs we have
         matches = [
@@ -365,7 +394,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
-        return matches, skipped_count, failed_count
+        return matches, skipped_count, failed_count, yaml_skipped_count
 
     async def _deep_search_scripts(
         self,
@@ -374,11 +403,13 @@ class DeepSearchMixin(SceneSearchMixin):
         exact_match: bool,
         *,
         config_time_budget: float | None = None,
-    ) -> tuple[list[dict[str, Any]], int, int]:
+    ) -> tuple[list[dict[str, Any]], int, int, int]:
         """Deep-search scripts: same 3-tier strategy as automations.
 
-        Returns ``(matches, skipped_count, failed_count)``; semantics
-        identical to ``_deep_search_automations``.
+        Returns ``(matches, skipped_count, failed_count, yaml_skipped_count)``;
+        semantics identical to ``_deep_search_automations`` — the 404 path
+        catches YAML-defined scripts (which ``client.get_script_config``
+        re-raises as ``HomeAssistantAPIError(status_code=404)``).
         """
         script_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("script.")
@@ -418,21 +449,35 @@ class DeepSearchMixin(SceneSearchMixin):
 
             async def _fetch_script_config(
                 sid: str,
-            ) -> tuple[str, dict[str, Any] | None]:
+            ) -> tuple[str, dict[str, Any] | None, str | None]:
                 try:
                     config_resp = await asyncio.wait_for(
                         self.client.get_script_config(sid),
                         timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                     )
-                    return (sid, config_resp.get("config", {}))
+                    return (sid, config_resp.get("config", {}), None)
+                except HomeAssistantAPIError as e:
+                    if e.status_code == 404:
+                        # YAML-defined scripts 404 on the per-id REST endpoint.
+                        # See _fetch_automation_config for the rationale; same
+                        # structural-gap class.
+                        logger.debug(
+                            f"Script individual config fetch ({sid}) returned "
+                            "404 — likely YAML-defined; not exposed via "
+                            "/config/script/config."
+                        )
+                        return (sid, None, "yaml_skipped")
+                    logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
+                    return (sid, None, "failed")
                 except Exception as e:
                     logger.debug(f"Script individual config fetch ({sid}) failed: {e}")
-                    return (sid, None)
+                    return (sid, None, "failed")
 
             (
                 fetched_configs,
                 failed_count,
                 skipped_count,
+                yaml_skipped_count,
             ) = await self._individual_fetch_budgeted(
                 sids_to_fetch,
                 _fetch_script_config,
@@ -445,6 +490,7 @@ class DeepSearchMixin(SceneSearchMixin):
             configs.update(fetched_configs)
         else:
             failed_count = 0
+            yaml_skipped_count = 0
 
         # Phase 3: Score scripts
         matches = [
@@ -461,7 +507,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 scored, configs, query_lower, exact_match
             )
         ]
-        return matches, skipped_count, failed_count
+        return matches, skipped_count, failed_count, yaml_skipped_count
 
     async def _search_helper_type(
         self,
@@ -674,6 +720,8 @@ class DeepSearchMixin(SceneSearchMixin):
         script_skipped: int = 0,
         automation_failed: int = 0,
         script_failed: int = 0,
+        automation_yaml_skipped: int = 0,
+        script_yaml_skipped: int = 0,
         helper_failed: int = 0,
     ) -> dict[str, Any]:
         """Merge per-type results, sort by score, paginate, and assemble the response."""
@@ -731,6 +779,8 @@ class DeepSearchMixin(SceneSearchMixin):
             script_skipped=script_skipped,
             automation_failed=automation_failed,
             script_failed=script_failed,
+            automation_yaml_skipped=automation_yaml_skipped,
+            script_yaml_skipped=script_yaml_skipped,
             helper_failed=helper_failed,
         )
         return response
@@ -743,51 +793,84 @@ class DeepSearchMixin(SceneSearchMixin):
         script_skipped: int = 0,
         automation_failed: int = 0,
         script_failed: int = 0,
+        automation_yaml_skipped: int = 0,
+        script_yaml_skipped: int = 0,
         helper_failed: int = 0,
     ) -> None:
         """Set ``partial: True`` when the deep-search per-type fetch path lost
         data — either the Attempt-C wall-clock budget exhausted
-        (``*_skipped``) or individual fetches raised exceptions (``*_failed``,
-        caught at ``debug``-level so they would otherwise be silent).
+        (``*_skipped``), individual fetches raised non-404 exceptions
+        (``*_failed``, caught at ``debug``-level so they would otherwise
+        be silent), or individual fetches returned 404 because the entity
+        is YAML-defined (``*_yaml_skipped``).
 
         Mirrors ``_apply_scene_partial_flag`` 's "looks complete when it
         isn't" coverage onto the automation/script/helper paths — helpers
         in particular run on every default ``ha_search`` call, so silent
         per-type-list failures would leave callers unable to tell a real
-        zero-match from a partial backend outage. Append-safe: the existing
-        ``partial_reason`` (if any) is preserved and the new reasons are
-        concatenated.
+        zero-match from a partial backend outage.
+
+        The wording is intentionally forceful — every fragment states
+        plainly that the entities were *not scanned*, that their match
+        status is *unknown*, and that the result *cannot be treated as
+        exhaustive*. Earlier, softer wording (``"N failed (per-id fetch
+        raised; see server logs at debug level)"``) was empirically
+        rationalised away by blind agents who reported the result as
+        complete; the harder phrasing closes that gap.
+
+        Append-safe: the existing ``partial_reason`` (if any) is preserved
+        and the new reasons are concatenated with ``" ; "``.
         """
         reasons: list[str] = []
         if automation_skipped:
             reasons.append(
-                f"Automation config fetch incomplete: {automation_skipped} "
-                "skipped (time budget — pass `config_time_budget=` on "
-                "`ha_search` to raise it per-call, or set "
-                "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET to raise the default)."
+                f"{automation_skipped} automation(s) not scanned (time budget "
+                "exhausted) — their match status is unknown; this result is "
+                "not exhaustive. Pass `config_time_budget=` on `ha_search` to "
+                "raise the per-call limit (or set "
+                "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET for the default)."
             )
         if automation_failed:
             reasons.append(
-                f"Automation config fetch incomplete: {automation_failed} "
-                "failed (per-id fetch raised; see server logs at debug level)."
+                f"{automation_failed} automation(s) not scanned (per-id fetch "
+                "raised a non-404 error) — their match status is unknown; "
+                "this result is not exhaustive."
+            )
+        if automation_yaml_skipped:
+            reasons.append(
+                f"{automation_yaml_skipped} automation(s) not scanned "
+                "(per-id config endpoint returned 404 — these are likely "
+                "YAML-defined automations that the /config/automation/config "
+                "REST endpoint does not expose) — their match status is "
+                "unknown; this result is not exhaustive."
             )
         if script_skipped:
             reasons.append(
-                f"Script config fetch incomplete: {script_skipped} skipped "
-                "(time budget — pass `config_time_budget=` on `ha_search` "
-                "to raise it per-call, or set HAMCP_SCRIPT_CONFIG_TIME_BUDGET "
-                "to raise the default)."
+                f"{script_skipped} script(s) not scanned (time budget "
+                "exhausted) — their match status is unknown; this result is "
+                "not exhaustive. Pass `config_time_budget=` on `ha_search` to "
+                "raise the per-call limit (or set "
+                "HAMCP_SCRIPT_CONFIG_TIME_BUDGET for the default)."
             )
         if script_failed:
             reasons.append(
-                f"Script config fetch incomplete: {script_failed} failed "
-                "(per-id fetch raised; see server logs at debug level)."
+                f"{script_failed} script(s) not scanned (per-id fetch raised "
+                "a non-404 error) — their match status is unknown; this "
+                "result is not exhaustive."
+            )
+        if script_yaml_skipped:
+            reasons.append(
+                f"{script_yaml_skipped} script(s) not scanned (per-id config "
+                "endpoint returned 404 — these are likely YAML-defined "
+                "scripts that the /config/script/config REST endpoint does "
+                "not expose) — their match status is unknown; this result "
+                "is not exhaustive."
             )
         if helper_failed:
             reasons.append(
-                f"Helper list fetch incomplete: {helper_failed} "
-                "input_* type(s) failed (per-type WS list raised; see server "
-                "logs at debug level)."
+                f"{helper_failed} input_* helper type(s) not scanned (per-type "
+                "WS list raised) — their match status is unknown; this result "
+                "is not exhaustive."
             )
         if not reasons:
             return

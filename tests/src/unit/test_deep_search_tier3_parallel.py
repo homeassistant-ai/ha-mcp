@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.smart_search import SmartSearchTools
 
 
@@ -373,3 +374,258 @@ class TestAttemptCScriptParallelFetch:
         assert "script.night_lockup" in matched_ids, (
             f"Should find script referencing front_door. Got: {matched_ids}"
         )
+
+
+class TestYamlSkippedClassification:
+    """End-to-end coverage of the 404 → ``yaml_skipped`` classification.
+
+    The companion unit tests for ``_apply_per_type_partial_flag`` in
+    ``test_ha_search_merge.py`` cover the warning-assembly side. These
+    tests close the FETCH→CLASSIFY→COUNT structural gap so a regression
+    in the 404-detection branch (wrong exception type, wrong status
+    code attribute, wrong return slot, dropped counter through the
+    4-tuple unpack) surfaces here rather than silently misclassifying
+    YAML-defined entities as generic ``failed``.
+
+    The classification matters for find-references honesty: only the
+    ``yaml_skipped`` warning explains the gap is *structural* (the
+    config exists, the REST endpoint just can't return it), so a caller
+    knows not to retry. KP13's PR #1529 R5 blind-agent BAT found that
+    lumping these into ``failed`` let agents rationalise the result as
+    complete.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        # Bulk fetch fails (triggers Tier 3 per-id fallback).
+        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client.send_websocket_message = AsyncMock(
+            side_effect=Exception("WebSocket unavailable")
+        )
+        return client
+
+    @pytest.fixture
+    def smart_tools(self, mock_client):
+        return _make_tools(mock_client)
+
+    @pytest.mark.asyncio
+    async def test_automation_404_classifies_as_yaml_skipped(
+        self, mock_client, smart_tools
+    ):
+        """A 404 on ``/config/automation/config/<uid>`` must increment
+        ``yaml_skipped_count`` (not ``failed_count``). The 404 is the
+        documented HA behaviour for YAML-defined automations."""
+        automations = [
+            {
+                "entity_id": "automation.yaml_one",
+                "state": "on",
+                "attributes": {"friendly_name": "YAML One", "id": "uid_yaml_one"},
+            },
+            {
+                "entity_id": "automation.yaml_two",
+                "state": "on",
+                "attributes": {"friendly_name": "YAML Two", "id": "uid_yaml_two"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _per_id_404(method: str, url: str) -> dict:
+            # Bulk URL stays at the fixture's generic Exception (drives
+            # fallback to Attempt C); per-id URL returns 404 like the
+            # live HA REST API does for YAML-defined automations.
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            raise HomeAssistantAPIError(
+                f"API error: 404 - Not Found ({url})", status_code=404
+            )
+
+        mock_client._request = AsyncMock(side_effect=_per_id_404)
+
+        (
+            matches,
+            skipped_count,
+            failed_count,
+            yaml_skipped_count,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {
+                "automation.yaml_one": "uid_yaml_one",
+                "automation.yaml_two": "uid_yaml_two",
+            },
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert yaml_skipped_count == 2, (
+            f"both automation 404s must classify as yaml_skipped; got "
+            f"yaml_skipped={yaml_skipped_count}, failed={failed_count}"
+        )
+        assert failed_count == 0, (
+            f"404s must NOT count as generic failed; got failed={failed_count}"
+        )
+        assert skipped_count == 0
+        assert matches == []
+
+    @pytest.mark.asyncio
+    async def test_automation_non_404_classifies_as_failed(
+        self, mock_client, smart_tools
+    ):
+        """A non-404 ``HomeAssistantAPIError`` (e.g. 500) and a generic
+        ``Exception`` both classify as ``failed`` — the structural-vs-
+        transient distinction only fires on 404."""
+        automations = [
+            {
+                "entity_id": "automation.five_hundred",
+                "state": "on",
+                "attributes": {
+                    "friendly_name": "Five Hundred",
+                    "id": "uid_500",
+                },
+            },
+            {
+                "entity_id": "automation.generic_oops",
+                "state": "on",
+                "attributes": {
+                    "friendly_name": "Generic Oops",
+                    "id": "uid_oops",
+                },
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _per_id_mixed(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            if url.endswith("uid_500"):
+                raise HomeAssistantAPIError(
+                    "API error: 500 - Internal Server Error", status_code=500
+                )
+            raise RuntimeError("generic explosion")
+
+        mock_client._request = AsyncMock(side_effect=_per_id_mixed)
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            yaml_skipped_count,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {
+                "automation.five_hundred": "uid_500",
+                "automation.generic_oops": "uid_oops",
+            },
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert failed_count == 2, (
+            f"500 + generic Exception must count as failed; got "
+            f"failed={failed_count}, yaml_skipped={yaml_skipped_count}"
+        )
+        assert yaml_skipped_count == 0, (
+            f"only 404s count as yaml_skipped; got yaml_skipped={yaml_skipped_count}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_script_404_classifies_as_yaml_skipped(
+        self, mock_client, smart_tools
+    ):
+        """Mirror of the automation 404 test for scripts. The script
+        path uses ``client.get_script_config`` (which already re-raises
+        404s as ``HomeAssistantAPIError(status_code=404)`` per the REST
+        client) rather than ``client._request``, so a separate fetch
+        surface needs separate coverage."""
+        scripts = [
+            {
+                "entity_id": "script.yaml_alpha",
+                "state": "off",
+                "attributes": {"friendly_name": "YAML Alpha"},
+            },
+            {
+                "entity_id": "script.yaml_beta",
+                "state": "off",
+                "attributes": {"friendly_name": "YAML Beta"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=scripts)
+
+        async def _script_404(sid: str) -> dict:
+            raise HomeAssistantAPIError(f"Script not found: {sid}", status_code=404)
+
+        mock_client.get_script_config = AsyncMock(side_effect=_script_404)
+
+        (
+            matches,
+            skipped_count,
+            failed_count,
+            yaml_skipped_count,
+        ) = await smart_tools._deep_search_scripts(
+            scripts,
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert yaml_skipped_count == 2, (
+            f"both script 404s must classify as yaml_skipped; got "
+            f"yaml_skipped={yaml_skipped_count}, failed={failed_count}"
+        )
+        assert failed_count == 0
+        assert skipped_count == 0
+        assert matches == []
+
+    @pytest.mark.asyncio
+    async def test_mixed_404_and_success_only_404s_yaml_skipped(
+        self, mock_client, smart_tools
+    ):
+        """When some automations fetch successfully and others 404, only
+        the 404s count as ``yaml_skipped`` — the successful ones flow
+        into ``matches`` (or fall below threshold) without leaking into
+        any failure counter."""
+        automations = [
+            {
+                "entity_id": "automation.ui_one",
+                "state": "on",
+                "attributes": {"friendly_name": "UI One", "id": "uid_ui_one"},
+            },
+            {
+                "entity_id": "automation.yaml_one",
+                "state": "on",
+                "attributes": {
+                    "friendly_name": "YAML One",
+                    "id": "uid_yaml_one",
+                },
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _mixed_per_id(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            if url.endswith("uid_ui_one"):
+                return {"id": "uid_ui_one", "action": []}
+            raise HomeAssistantAPIError(
+                f"API error: 404 - Not Found ({url})", status_code=404
+            )
+
+        mock_client._request = AsyncMock(side_effect=_mixed_per_id)
+
+        (
+            _matches,
+            skipped_count,
+            failed_count,
+            yaml_skipped_count,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {
+                "automation.ui_one": "uid_ui_one",
+                "automation.yaml_one": "uid_yaml_one",
+            },
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert yaml_skipped_count == 1, (
+            f"only the YAML automation should count as yaml_skipped; got "
+            f"yaml_skipped={yaml_skipped_count}, failed={failed_count}"
+        )
+        assert failed_count == 0
+        assert skipped_count == 0
