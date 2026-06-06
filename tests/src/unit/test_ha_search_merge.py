@@ -13,11 +13,13 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.smart_search._deep import DeepSearchMixin
 from ha_mcp.tools.tools_search import (
+    _ALWAYS_KEEP_PROJECTION,
     _INTENT_SKIP_WARNING,
     _compute_eligibility,
     _emit_intent_skip_warning,
     _finalize_partial_state,
     _merge_payload_metadata,
+    _project_response_fields,
     _synthesize_combined_pagination,
     _validate_search_types,
 )
@@ -489,6 +491,131 @@ def test_intent_skip_warning_preserves_existing_warnings() -> None:
     _emit_intent_skip_warning(response, body_skipped_by_intent_gate=True)
     assert response["warnings"][0] == "from-entity-branch"
     assert response["warnings"][1] == _INTENT_SKIP_WARNING
+
+
+# Top-level fields= projection -------------------------------------------
+#
+# Pins B1-new from the re-review: the `fields=` capability that
+# `ha_search_entities` carried pre-rename is restored at the orchestrator
+# layer. Always-keep covers all diagnostic / pagination keys so a
+# projection can never hide incomplete-results state.
+
+
+def _projection_response_fixture() -> dict:
+    return {
+        "success": True,
+        "query": "kitchen",
+        "entities": [{"entity_id": "light.kitchen"}],
+        "entity_total_matches": 1,
+        "automations": [{"entity_id": "automation.k"}],
+        "scripts": [],
+        "scenes": [],
+        "helpers": [],
+        "config_total_matches": 1,
+        "search_types": ["automation", "script", "scene", "helper"],
+        "count": 2,
+        "offset": 0,
+        "limit": 10,
+        "has_more": False,
+        "next_offset": None,
+        "entity_has_more": False,
+        "entity_next_offset": None,
+        "config_has_more": False,
+        "config_next_offset": None,
+        "warnings": ["sample-warning"],
+        "errors": [],
+        "partial": False,
+    }
+
+
+def test_project_response_fields_none_returns_unchanged() -> None:
+    response = _projection_response_fixture()
+    result = _project_response_fields(response, None)
+    assert result is response  # identity, not a copy
+
+
+def test_project_response_fields_keeps_requested_bucket() -> None:
+    """Requesting one bucket drops the other top-level buckets that aren't
+    in the always-keep set — but diagnostic / pagination keys survive."""
+    response = _projection_response_fixture()
+    result = _project_response_fields(response, ["entities"])
+    assert "entities" in result
+    # Other buckets are top-level and not always-keep — dropped.
+    assert "automations" not in result
+    assert "scripts" not in result
+    # Diagnostic / pagination keys always survive.
+    for k in (
+        "success",
+        "warnings",
+        "errors",
+        "partial",
+        "entity_total_matches",
+        "config_total_matches",
+        "has_more",
+        "next_offset",
+        "count",
+        "offset",
+        "limit",
+    ):
+        assert k in result, f"always-keep key {k!r} was dropped"
+
+
+def test_project_response_fields_always_keep_protects_partial_state() -> None:
+    """A caller passing fields=["entities"] can't accidentally hide
+    `partial: True` / `partial_reason` / `errors[]` — the always-keep
+    contract is the whole point of the projection."""
+    response = _projection_response_fixture()
+    response["partial"] = True
+    response["partial_reason"] = "config-body budget exhausted: 5 skipped"
+    response["errors"] = [{"surface": "entities", "error": "ws_lost"}]
+    result = _project_response_fields(response, ["entities"])
+    assert result["partial"] is True
+    assert result["partial_reason"] == "config-body budget exhausted: 5 skipped"
+    assert result["errors"] == [{"surface": "entities", "error": "ws_lost"}]
+
+
+def test_project_response_fields_keeps_multiple_requested() -> None:
+    response = _projection_response_fixture()
+    result = _project_response_fields(response, ["entities", "automations"])
+    assert "entities" in result
+    assert "automations" in result
+    assert "scripts" not in result
+    assert "scenes" not in result
+
+
+def test_project_response_fields_unknown_key_is_safe_noop() -> None:
+    """A caller requesting a key not present in the response gets a
+    response without that key — no KeyError. Always-keep keys survive."""
+    response = _projection_response_fixture()
+    result = _project_response_fields(response, ["nonexistent_bucket"])
+    assert "nonexistent_bucket" not in result
+    assert "success" in result  # always-keep
+
+
+def test_always_keep_set_includes_all_diagnostic_and_pagination_keys() -> None:
+    """Pin the always-keep set membership so an accidental removal of one
+    of the diagnostic keys would fail loudly. KP13's contract: the
+    projection must protect partial / error / pagination state."""
+    required = {
+        "success",
+        "warnings",
+        "errors",
+        "partial",
+        "partial_reason",
+        "entity_total_matches",
+        "config_total_matches",
+        "has_more",
+        "next_offset",
+        "entity_has_more",
+        "entity_next_offset",
+        "config_has_more",
+        "config_next_offset",
+        "count",
+        "offset",
+        "limit",
+    }
+    missing = required - _ALWAYS_KEEP_PROJECTION
+    assert not missing, f"always-keep set missing: {missing}"
 
 
 # Per-type partial flag ---------------------------------------------------

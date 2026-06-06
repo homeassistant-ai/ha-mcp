@@ -87,6 +87,58 @@ def _validate_search_types(parsed: list[str] | None) -> None:
         )
 
 
+# Top-level response keys that survive a ``fields=`` projection regardless
+# of the caller's request — so a projection can never hide partial / error
+# state. Mirrors KP13's review prescription for the ``fields=`` restore:
+# narrowing the response is fine; silently hiding diagnostic signals is not.
+_ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
+    {
+        "success",
+        "query",
+        "search_types",
+        "entity_total_matches",
+        "config_total_matches",
+        "warnings",
+        "errors",
+        "partial",
+        "partial_reason",
+        "count",
+        "offset",
+        "limit",
+        "has_more",
+        "next_offset",
+        "entity_has_more",
+        "entity_next_offset",
+        "config_has_more",
+        "config_next_offset",
+    }
+)
+
+
+def _project_response_fields(
+    response: dict[str, Any], parsed_fields: list[str] | None
+) -> dict[str, Any]:
+    """Project top-level response keys to caller-requested ∪ always-keep.
+
+    Restores the top-level ``fields=`` projection that ``ha_search_entities``
+    carried pre-rename, applied to the new flat envelope. ``None`` returns
+    the response unchanged. Otherwise, returns a new dict containing only:
+
+    - keys in ``parsed_fields`` (caller's request), AND
+    - keys in ``_ALWAYS_KEEP_PROJECTION`` (diagnostic / pagination contract).
+
+    The always-keep set means ``fields=["entities"]`` still leaves
+    ``partial`` / ``errors[]`` / ``warnings[]`` / ``*_total_matches`` /
+    pagination keys accessible — projection narrows the response but
+    never hides incompleteness.
+    """
+    if parsed_fields is None:
+        return response
+    requested = set(parsed_fields)
+    keep = requested | _ALWAYS_KEEP_PROJECTION
+    return {k: v for k, v in response.items() if k in keep}
+
+
 _INTENT_SKIP_WARNING: str = (
     "config-body search skipped: domain_filter / area_filter / "
     "state_filter signals entity-only intent; pass "
@@ -532,6 +584,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project the response to only the specified top-level "
+                    'keys (e.g. ["entities", "automations"]). Diagnostic / '
+                    "pagination keys — success, warnings, errors, partial, "
+                    "partial_reason, *_total_matches, has_more, next_offset, "
+                    "and per-surface counterparts — are always retained "
+                    "regardless of projection, so narrowing the response "
+                    "shape cannot hide partial / error state. None = full "
+                    "response. Distinct from `result_fields` (which projects "
+                    "each entity record's fields)."
+                ),
+            ),
+        ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
@@ -586,6 +655,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           - When the body branch is skipped by the entity-intent gate above,
             the response carries a `warnings[]` entry naming the skip
             reason; pass `search_types=[...]` to override.
+          - The `fields=` parameter projects the response to only the
+            named top-level keys; diagnostic / pagination keys
+            (`success`, `warnings`, `errors`, `partial`, `partial_reason`,
+            `*_total_matches`, `has_more`, `next_offset`, and per-surface
+            counterparts) are always retained so projection cannot hide
+            incomplete-results state. Distinct from `result_fields=`
+            which projects each entity record's fields.
           - `count` is items in this response (post-pagination), not total
             matches across the corpus. Use `entity_total_matches` +
             `config_total_matches` for the totals.
@@ -603,6 +679,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             - Find a light by name: ha_search("kitchen", domain_filter="light")
             - Which automations use an entity (no filter, body included): ha_search("light.bed_light")
             - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
+            - Narrow the response to only the entity bucket: ha_search("kitchen", fields=["entities"])
         """
         try:
             parsed_search_types = parse_string_list_param(search_types, "search_types")
@@ -611,6 +688,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 create_validation_error(str(exc), parameter="search_types")
             )
         _validate_search_types(parsed_search_types)
+        try:
+            parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+        except ValueError as exc:
+            raise_tool_error(create_validation_error(str(exc), parameter="fields"))
 
         # Normalise the caller-input strings once; the eligibility helper
         # below is purely a function of normalized inputs so it stays
@@ -774,7 +855,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         _synthesize_combined_pagination(response)
         _finalize_partial_state(response, partial_local=partial, errors_local=errors)
 
-        return response
+        return _project_response_fields(response, parsed_fields)
 
     async def ha_search_entities(
         query: Annotated[
