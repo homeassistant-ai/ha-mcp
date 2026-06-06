@@ -189,21 +189,38 @@ def _mirror_partial_to_warnings(response: dict[str, Any]) -> None:
 def _project_response_fields(
     response: dict[str, Any], parsed_fields: list[str] | None
 ) -> dict[str, Any]:
-    """Project the orchestrator response via the shared ``project_fields``
-    helper, extending its always-keep set with ``_ALWAYS_KEEP_PROJECTION``
-    so the diagnostic / pagination contract holds.
+    """Project the orchestrator response to the caller-requested top-level
+    keys, retaining the diagnostic / pagination contract via
+    ``_ALWAYS_KEEP_PROJECTION``.
 
-    Delegates the projection mechanics (parsing, typo-guard, always-keep
-    retention) to ``util_helpers.project_fields`` — restoring the top-level
-    ``fields=`` capability that ``ha_search_entities`` carried pre-rename,
-    applied to the new flat envelope. The always-keep set means
+    Inlined rather than delegated to ``util_helpers.project_fields`` so the
+    pre-parsed list passes through end-to-end — the orchestrator already
+    parsed ``fields=`` once via ``parse_string_list_param``, and
+    ``project_fields`` would re-parse the same list (idempotent but
+    redundant work on every call). Restores the top-level ``fields=``
+    capability that ``ha_search_entities`` carried pre-rename, applied to
+    the new flat envelope. The always-keep set means
     ``fields=["entities"]`` still leaves ``partial`` / ``errors[]`` /
     ``warnings[]`` / ``*_total_matches`` / pagination keys accessible —
     projection narrows the response but never hides incompleteness.
     """
-    return project_fields(
-        response, parsed_fields, extra_always_keep=_ALWAYS_KEEP_PROJECTION
-    )
+    if parsed_fields is None:
+        return response
+    always_keep: set[str] = {"success", "warnings"} | set(_ALWAYS_KEEP_PROJECTION)
+    requested = set(parsed_fields)
+    keep = requested | always_keep
+    result = {k: v for k, v in response.items() if k in keep}
+    # Typo guard — flag any requested keys absent from the response so
+    # ``fields=["frobnicate"]`` surfaces a diagnostic rather than a
+    # mysteriously empty payload. Excludes the always-keep sentinels so
+    # ``fields=["success"]`` never warns.
+    unknown = sorted(requested - set(response.keys()) - always_keep)
+    if unknown:
+        available = sorted(k for k in response.keys() if k not in always_keep)
+        result.setdefault("warnings", []).append(
+            f"fields {unknown!r} not found in response — available keys: {available!r}"
+        )
+    return result
 
 
 _INTENT_SKIP_WARNING: str = (
