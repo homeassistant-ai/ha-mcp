@@ -1212,7 +1212,11 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         self.mcp.tool(
             name=SKILL_TOOL_NAME,
             description=tool_description,
-            annotations={"readOnlyHint": True, "idempotentHint": True},
+            annotations={
+                "readOnlyHint": True,
+                "idempotentHint": True,
+                "title": "Get Home Assistant Best Practices Skill Guide",
+            },
             tags={"System"},
         )(ha_get_skill_guide)
         logger.info(
