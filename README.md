@@ -215,6 +215,26 @@ Spend less time configuring, more time enjoying your smart home.
 
 ---
 
+## 🆚 ha-mcp vs. Home Assistant's built-in MCP Server
+
+Home Assistant ships its own [MCP Server integration](https://www.home-assistant.io/integrations/mcp_server/). It is built on the **Assist** pipeline, so a connected MCP client can read and control the entities you have exposed to Assist and run the intents Assist understands — handy for voice-style control of already-exposed devices.
+
+ha-mcp is a standalone server built for **configuring, building, and debugging** your smart home, not just controlling it. On top of device control, it adds capabilities the built-in integration does not have:
+
+| Capability | Built-in MCP Server | ha-mcp |
+|------------|:-------------------:|:------:|
+| Control exposed devices, query states | Yes | Yes |
+| Entity scope | Only entities exposed to Assist | Everything in Home Assistant |
+| Create / edit automations, scripts, scenes | No | Yes |
+| Build & edit dashboards | No | Yes |
+| Debug automations from traces, read history & logs | No | Yes |
+| Manage helpers, areas, zones, labels, groups | No | Yes |
+| Backups, add-ons, HACS, device & entity registry | No | Yes |
+
+**Rule of thumb:** Use the built-in integration for voice-style control of devices you have already exposed; use ha-mcp when you want an AI assistant that can also build and maintain your Home Assistant setup.
+
+---
+
 ## 🔌 Custom Component (ha_mcp_tools) *(beta)*
 
 Some tools require a companion custom component installed in Home Assistant. Standard HA APIs do not expose file system access or YAML config editing. This component provides both.
