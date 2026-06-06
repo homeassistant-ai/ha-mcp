@@ -215,7 +215,7 @@ Spend less time configuring, more time enjoying your smart home.
 
 ---
 
-## ha-mcp vs. Home Assistant's built-in MCP Server
+## 🆚 ha-mcp vs. Home Assistant's built-in MCP Server
 
 Home Assistant ships its own [MCP Server integration](https://www.home-assistant.io/integrations/mcp_server/). It is built on the **Assist** pipeline, so a connected MCP client can read and control the entities you have exposed to Assist and run the intents Assist understands — handy for voice-style control of already-exposed devices.
 
