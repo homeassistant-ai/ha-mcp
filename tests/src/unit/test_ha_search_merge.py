@@ -1023,8 +1023,12 @@ def test_budget_partial_flag_uses_space_semicolon_space_separator() -> None:
     assert " ; " in reason, (
         f"per-type fragments must be joined with ' ; '; got {reason!r}"
     )
-    assert ", " not in reason or reason.count(" ; ") >= 1, (
-        f"expected ' ; ' separator, not ', '; got {reason!r}"
+    # Two per-type fragments → exactly one ` ; ` separator. A regression
+    # that joined fragments with ", " or repeated " ; " on each item would
+    # break this count (the substring check above only pins presence).
+    assert reason.count(" ; ") == 1, (
+        f"two per-type fragments → exactly one ' ; ' separator; "
+        f"got {reason.count(' ; ')} in {reason!r}"
     )
 
     # Existing-reason-to-new-fragment boundary.

@@ -198,51 +198,103 @@ class TestAttemptCParallelFetch:
             f"Expected exactly one batch of 10, but fetched {call_count}"
         )
 
+    @pytest.mark.parametrize(
+        ("search_type", "budget_const_path", "individual_attr"),
+        [
+            (
+                "automation",
+                "ha_mcp.tools.smart_search._deep.AUTOMATION_CONFIG_TIME_BUDGET",
+                "_request",
+            ),
+            (
+                "script",
+                "ha_mcp.tools.smart_search._deep.SCRIPT_CONFIG_TIME_BUDGET",
+                "get_script_config",
+            ),
+            (
+                "scene",
+                "ha_mcp.tools.smart_search._scenes.SCENE_CONFIG_TIME_BUDGET",
+                "get_scene_config",
+            ),
+        ],
+        ids=["automation", "script", "scene"],
+    )
     async def test_config_time_budget_param_overrides_env_default(
-        self, mock_client, smart_tools
+        self,
+        mock_client,
+        smart_tools,
+        search_type,
+        budget_const_path,
+        individual_attr,
     ):
-        """`config_time_budget=` param replaces AUTOMATION_CONFIG_TIME_BUDGET for that call.
+        """`config_time_budget=` param replaces the per-type env default for that call.
 
-        The env-default is set to a value high enough that without an
-        override the test would fetch all batches; the per-call override is
-        tight enough to skip after the first batch. Asserting one batch =
-        the override was honoured by `_individual_fetch_budgeted` rather
-        than silently ignored.
+        Pins the "automation, script, AND scene" promise in the param
+        docstring — all three per-type branches feed the same
+        ``_individual_fetch_budgeted`` helper, so a regression that
+        silently drops the override on one branch would otherwise slip
+        through (the previous automation-only assertion missed two of the
+        three threads).
+
+        The env-default is patched high enough that without an override the
+        test would fetch all three batches; the per-call override is tight
+        enough to skip after the first batch (10 fetches). The assertion
+        ``call_count == 10`` proves the override was honoured rather than
+        silently ignored.
         """
-        automations = _make_automation_entities(30)
-        mock_client.get_states = AsyncMock(return_value=automations)
+        entities = [
+            {
+                "entity_id": f"{search_type}.x_{i}",
+                "state": "on",
+                "attributes": {"friendly_name": f"X {i}", "id": f"uid_{i}"},
+            }
+            for i in range(30)
+        ]
+        mock_client.get_states = AsyncMock(return_value=entities)
 
         call_count = 0
 
-        async def _slow_fetch(method: str, url: str) -> dict:
+        async def _count_individual() -> dict:
             nonlocal call_count
-            uid = url.split("/")[-1]
-            if url.rstrip("/") == "/config/automation/config":
-                raise Exception("Bulk unavailable")
             call_count += 1
             await asyncio.sleep(0.01)
-            return {"id": uid, "action": []}
+            return {"id": "x", "config": {}, "action": []}
 
-        mock_client._request = AsyncMock(side_effect=_slow_fetch)
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=Exception("WebSocket unavailable")
-        )
+        if search_type == "automation":
+            # `_request` covers both the bulk-fetch URL (must raise to force
+            # Tier 3) and the per-id URL (must count). Discriminate by path.
+            async def _auto_request(method: str, url: str) -> dict:
+                if url.rstrip("/") == "/config/automation/config":
+                    raise Exception("Bulk unavailable")
+                return await _count_individual()
+
+            mock_client._request = AsyncMock(side_effect=_auto_request)
+        else:
+            # Script/scene per-id calls go through a dedicated client method;
+            # the fixture's `_request`/`send_websocket_message` exceptions
+            # already block their bulk-fetch and registry-walk tiers.
+            async def _typed_individual(sid: str) -> dict:
+                return await _count_individual()
+
+            setattr(
+                mock_client,
+                individual_attr,
+                AsyncMock(side_effect=_typed_individual),
+            )
 
         # Env default high (would fetch all 3 batches); per-call override
         # is tight (stops after batch 1).
-        with patch(
-            "ha_mcp.tools.smart_search._deep.AUTOMATION_CONFIG_TIME_BUDGET", 60.0
-        ):
+        with patch(budget_const_path, 60.0):
             await smart_tools.deep_search(
                 query="test",
-                search_types=["automation"],
+                search_types=[search_type],
                 limit=10,
                 config_time_budget=0.005,
             )
 
         assert call_count == 10, (
-            "Per-call config_time_budget=0.005 must override the env default; "
-            f"got {call_count} fetches (expected 10 = single batch)"
+            f"Per-call config_time_budget=0.005 must override the {search_type} "
+            f"env default; got {call_count} fetches (expected 10 = single batch)"
         )
 
 

@@ -381,6 +381,84 @@ def _harvest_marker_dicts(
     return keys
 
 
+def _harvest_marker_dict_var_keys(
+    rel_path: str, func_name: str, markers: frozenset[str]
+) -> set[str]:
+    """Two-pass harvest of every key landing on a response-shaped dict.
+
+    Pass 1 — flag a var as response-shaped via *either* signal:
+
+    - It is initialised as a dict literal whose key set intersects ``markers``
+      (catches ``search_data = {"results": ..., "total_matches": ...}``).
+    - A subscript assignment writes a marker key to it (catches ``result =
+      await smart_entity_search(...)`` followed by ``result["results"] =
+      result.pop("matches")`` — the init isn't a literal, but the post-init
+      marker-key write identifies the var as response-shaped).
+
+    Pass 2 — for every flagged var, run ``_harvest_var_keys`` to collect
+    subscript / ``setdefault`` / ``update`` assignments. Literal keys from
+    Pass 1 are unioned in.
+
+    The literal-only ``_harvest_marker_dicts`` is structurally blind to
+    subscript-assigned keys; the post-init Pass-1 leg + Pass-2 sweep close
+    that gap on the ``ha_search_entities`` entity-branch builder, which is
+    where most of the surfacing happens.
+    """
+    module = _read_module(rel_path)
+    try:
+        func = _find_function(module, func_name)
+    except LookupError:
+        return set()
+
+    keys: set[str] = set()
+    marker_vars: set[str] = set()
+
+    def _literal_keys(d: ast.Dict) -> set[str]:
+        return {
+            k.value
+            for k in d.keys
+            if isinstance(k, ast.Constant) and isinstance(k.value, str)
+        }
+
+    for node in ast.walk(func):
+        # Pass 1a — marker-bearing dict literal assigned or returned.
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
+            node.value, ast.Dict
+        ):
+            literal = _literal_keys(node.value)
+            if literal & markers:
+                keys.update(literal)
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                for tgt in targets:
+                    if isinstance(tgt, ast.Name):
+                        marker_vars.add(tgt.id)
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+            literal = _literal_keys(node.value)
+            if literal & markers:
+                keys.update(literal)
+
+        # Pass 1b — subscript write of a marker key surfaces the var as
+        # response-shaped even when its init wasn't a literal.
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if (
+                    isinstance(tgt, ast.Subscript)
+                    and isinstance(tgt.value, ast.Name)
+                    and isinstance(tgt.slice, ast.Constant)
+                    and isinstance(tgt.slice.value, str)
+                    and tgt.slice.value in markers
+                ):
+                    marker_vars.add(tgt.value.id)
+
+    # Pass 2 — pick up subscript / setdefault / update on every flagged var.
+    for var in marker_vars:
+        keys |= _harvest_var_keys(rel_path, func_name, var)
+
+    return keys
+
+
 @pytest.mark.parametrize("spec", TOOL_SPECS, ids=lambda s: s["tool"])
 def test_fields_description_lists_every_emitted_key(spec: dict[str, Any]) -> None:
     doc_module, doc_func = spec["docstring"]
@@ -453,7 +531,8 @@ def test_fields_description_lists_every_emitted_key(spec: dict[str, Any]) -> Non
 
 
 def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
-    """Closes the structural blindness called out in PR #1529 round-3 hygiene #4.
+    """Closes the structural blindness called out in PR #1529 round-3 hygiene #4
+    and tightened in round 4 to also see subscript-assigned keys.
 
     The parametrized ``ha_search`` drift-check runs in manifest mode and
     is structurally blind to keys the entities branch emits but that
@@ -463,10 +542,13 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     pass the manifest check (the manifest is hand-maintained, doesn't
     re-derive).
 
-    Harvest every key emitted from the sub-payload builders inside
-    ``ha_search_entities`` (response-shaped dicts identified by the
-    ``{"results", "total_matches"}`` marker) and require each one to be
-    either:
+    Harvest via ``_harvest_marker_dict_var_keys`` (literal + subscript +
+    ``setdefault`` + ``update`` on any marker-flagged var) so the post-init
+    ``result["by_domain"] = ...`` / ``result.setdefault("offset", ...)``
+    style is covered alongside the dict-literal shape. Round-3 caught only
+    the literals; round-4 closes the dominant emission style.
+
+    Require every emitted key to be either:
 
     - in ``_ENTITIES_BRANCH_SKIP_KEYS`` (intentionally stripped by the
       orchestrator), OR
@@ -481,7 +563,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     from ha_mcp.tools.tools_search import _ENTITIES_BRANCH_SKIP_KEYS
 
     markers = frozenset({"results", "total_matches"})
-    emitted = _harvest_marker_dicts(
+    emitted = _harvest_marker_dict_var_keys(
         "tools/tools_search.py", "ha_search_entities", markers
     )
     assert emitted, (
