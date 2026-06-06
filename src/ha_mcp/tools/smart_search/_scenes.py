@@ -197,6 +197,8 @@ class SceneSearchMixin(ConfigFetchMixin):
         all_entities: list[dict[str, Any]],
         query_lower: str,
         exact_match: bool,
+        *,
+        config_time_budget: float | None = None,
     ) -> tuple[list[dict[str, Any]], int, int, int, bool]:
         """Deep-search scenes: 3-tier strategy plus registry-walk augmentation.
 
@@ -274,7 +276,9 @@ class SceneSearchMixin(ConfigFetchMixin):
             ) = await self._individual_fetch_budgeted(
                 sids_to_fetch,
                 _fetch_scene_config,
-                SCENE_CONFIG_TIME_BUDGET,
+                config_time_budget
+                if config_time_budget is not None
+                else SCENE_CONFIG_TIME_BUDGET,
                 "Scene",
                 "scenes",
             )
@@ -341,8 +345,9 @@ class SceneSearchMixin(ConfigFetchMixin):
                 "expected for integration-managed scenes)."
             )
         reason_parts.append(
-            "Some scene matches may be missing config data; tune "
-            "HAMCP_SCENE_CONFIG_TIME_BUDGET to raise the budget."
+            "Some scene matches may be missing config data; pass "
+            "`config_time_budget=` on `ha_search` to raise it per-call, or "
+            "set HAMCP_SCENE_CONFIG_TIME_BUDGET to raise the default."
         )
         # Use the standardised " ; " separator (matches
         # ``_merge_payload_metadata`` and ``_apply_per_type_partial_flag``).

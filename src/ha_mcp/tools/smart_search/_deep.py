@@ -36,6 +36,7 @@ class DeepSearchMixin(SceneSearchMixin):
         include_config: bool = False,
         concurrency_limit: int = DEFAULT_CONCURRENCY_LIMIT,
         exact_match: bool = True,
+        config_time_budget: float | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
@@ -127,7 +128,11 @@ class DeepSearchMixin(SceneSearchMixin):
                     automation_skipped,
                     automation_failed,
                 ) = await self._deep_search_automations(
-                    all_entities, automation_unique_id_map, query_lower, exact_match
+                    all_entities,
+                    automation_unique_id_map,
+                    query_lower,
+                    exact_match,
+                    config_time_budget=config_time_budget,
                 )
                 phase_done += 1
                 await safe_progress(
@@ -143,7 +148,10 @@ class DeepSearchMixin(SceneSearchMixin):
                     script_skipped,
                     script_failed,
                 ) = await self._deep_search_scripts(
-                    all_entities, query_lower, exact_match
+                    all_entities,
+                    query_lower,
+                    exact_match,
+                    config_time_budget=config_time_budget,
                 )
                 phase_done += 1
                 await safe_progress(
@@ -161,7 +169,10 @@ class DeepSearchMixin(SceneSearchMixin):
                     scene_stats["integration_skipped"],
                     scene_stats["registry_failed"],
                 ) = await self._deep_search_scenes(
-                    all_entities, query_lower, exact_match
+                    all_entities,
+                    query_lower,
+                    exact_match,
+                    config_time_budget=config_time_budget,
                 )
                 phase_done += 1
                 await safe_progress(
@@ -253,6 +264,8 @@ class DeepSearchMixin(SceneSearchMixin):
         automation_unique_id_map: dict[str, str],
         query_lower: str,
         exact_match: bool,
+        *,
+        config_time_budget: float | None = None,
     ) -> tuple[list[dict[str, Any]], int, int]:
         """Deep-search automations: 3-tier config fetch (REST bulk -> WS bulk -> individual).
 
@@ -328,7 +341,9 @@ class DeepSearchMixin(SceneSearchMixin):
             ) = await self._individual_fetch_budgeted(
                 uids_to_fetch,
                 _fetch_automation_config,
-                AUTOMATION_CONFIG_TIME_BUDGET,
+                config_time_budget
+                if config_time_budget is not None
+                else AUTOMATION_CONFIG_TIME_BUDGET,
                 "Automation",
                 "automations",
             )
@@ -357,6 +372,8 @@ class DeepSearchMixin(SceneSearchMixin):
         all_entities: list[dict[str, Any]],
         query_lower: str,
         exact_match: bool,
+        *,
+        config_time_budget: float | None = None,
     ) -> tuple[list[dict[str, Any]], int, int]:
         """Deep-search scripts: same 3-tier strategy as automations.
 
@@ -419,7 +436,9 @@ class DeepSearchMixin(SceneSearchMixin):
             ) = await self._individual_fetch_budgeted(
                 sids_to_fetch,
                 _fetch_script_config,
-                SCRIPT_CONFIG_TIME_BUDGET,
+                config_time_budget
+                if config_time_budget is not None
+                else SCRIPT_CONFIG_TIME_BUDGET,
                 "Script",
                 "scripts",
             )
@@ -743,8 +762,9 @@ class DeepSearchMixin(SceneSearchMixin):
         if automation_skipped:
             reasons.append(
                 f"Automation config fetch incomplete: {automation_skipped} "
-                "skipped (time budget — tune "
-                "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET to raise the budget)."
+                "skipped (time budget — pass `config_time_budget=` on "
+                "`ha_search` to raise it per-call, or set "
+                "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET to raise the default)."
             )
         if automation_failed:
             reasons.append(
@@ -754,8 +774,9 @@ class DeepSearchMixin(SceneSearchMixin):
         if script_skipped:
             reasons.append(
                 f"Script config fetch incomplete: {script_skipped} skipped "
-                "(time budget — tune HAMCP_SCRIPT_CONFIG_TIME_BUDGET to "
-                "raise the budget)."
+                "(time budget — pass `config_time_budget=` on `ha_search` "
+                "to raise it per-call, or set HAMCP_SCRIPT_CONFIG_TIME_BUDGET "
+                "to raise the default)."
             )
         if script_failed:
             reasons.append(

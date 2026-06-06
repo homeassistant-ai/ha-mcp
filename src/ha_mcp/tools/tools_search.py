@@ -624,6 +624,24 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
+        config_time_budget: Annotated[
+            float | None,
+            Field(
+                default=None,
+                gt=0,
+                le=300,
+                description=(
+                    "Per-call override for the per-id config-fetch wall-clock "
+                    "budget (seconds). Replaces the per-type "
+                    "HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, "
+                    "script, AND scene branches when their bulk-fetch falls "
+                    "through to per-id Attempt-C. Use when a `partial: True` "
+                    "response names time-budget skipping. Stateless per-call: "
+                    "one caller raising the budget doesn't affect others. "
+                    "None = use the per-type env defaults."
+                ),
+            ),
+        ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
@@ -776,6 +794,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     offset=offset,
                     include_config=include_config,
                     exact_match=exact_match,
+                    config_time_budget=config_time_budget,
                     ctx=ctx,
                 )
             )
@@ -2102,6 +2121,23 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = True,
+        config_time_budget: Annotated[
+            float | None,
+            Field(
+                default=None,
+                gt=0,
+                le=300,
+                description=(
+                    "Per-call override for the per-id config-fetch wall-clock "
+                    "budget (seconds). Replaces the per-type "
+                    "HAMCP_*_CONFIG_TIME_BUDGET defaults for automation, "
+                    "script, AND scene branches. Use when a `partial: True` "
+                    "response names time-budget skipping. Stateless per-call: "
+                    "one caller's override doesn't affect others. None = use "
+                    "the per-type env defaults."
+                ),
+            ),
+        ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Search inside automation, script, scene, helper, and dashboard *configurations* — not for finding entity IDs.
@@ -2155,6 +2191,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 offset,
                 include_config_bool,
                 exact_match=exact_match_bool,
+                config_time_budget=config_time_budget,
                 ctx=ctx,
             )
             return cast(dict[str, Any], result)

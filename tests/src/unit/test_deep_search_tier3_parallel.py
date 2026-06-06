@@ -198,6 +198,53 @@ class TestAttemptCParallelFetch:
             f"Expected exactly one batch of 10, but fetched {call_count}"
         )
 
+    async def test_config_time_budget_param_overrides_env_default(
+        self, mock_client, smart_tools
+    ):
+        """`config_time_budget=` param replaces AUTOMATION_CONFIG_TIME_BUDGET for that call.
+
+        The env-default is set to a value high enough that without an
+        override the test would fetch all batches; the per-call override is
+        tight enough to skip after the first batch. Asserting one batch =
+        the override was honoured by `_individual_fetch_budgeted` rather
+        than silently ignored.
+        """
+        automations = _make_automation_entities(30)
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        call_count = 0
+
+        async def _slow_fetch(method: str, url: str) -> dict:
+            nonlocal call_count
+            uid = url.split("/")[-1]
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk unavailable")
+            call_count += 1
+            await asyncio.sleep(0.01)
+            return {"id": uid, "action": []}
+
+        mock_client._request = AsyncMock(side_effect=_slow_fetch)
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=Exception("WebSocket unavailable")
+        )
+
+        # Env default high (would fetch all 3 batches); per-call override
+        # is tight (stops after batch 1).
+        with patch(
+            "ha_mcp.tools.smart_search._deep.AUTOMATION_CONFIG_TIME_BUDGET", 60.0
+        ):
+            await smart_tools.deep_search(
+                query="test",
+                search_types=["automation"],
+                limit=10,
+                config_time_budget=0.005,
+            )
+
+        assert call_count == 10, (
+            "Per-call config_time_budget=0.005 must override the env default; "
+            f"got {call_count} fetches (expected 10 = single batch)"
+        )
+
 
 class TestAttemptCScriptParallelFetch:
     """Test that Attempt C works for scripts (structurally different from automations)."""
