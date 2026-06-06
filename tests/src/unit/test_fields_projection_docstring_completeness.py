@@ -300,6 +300,19 @@ def _harvest_var_keys(rel_path: str, func_name: str, var_name: str) -> set[str]:
                 ):
                     keys.add(tgt.slice.value)
 
+        # var["k"] += ...  (covers ``warnings`` accumulation and similar
+        # augmented writes that AST splits off from the plain ``Assign``
+        # node).
+        if (
+            isinstance(node, ast.AugAssign)
+            and isinstance(node.target, ast.Subscript)
+            and isinstance(node.target.value, ast.Name)
+            and node.target.value.id == var_name
+            and isinstance(node.target.slice, ast.Constant)
+            and isinstance(node.target.slice.value, str)
+        ):
+            keys.add(node.target.slice.value)
+
         # var.setdefault("k", ...)
         if (
             isinstance(node, ast.Call)
@@ -405,17 +418,22 @@ def _harvest_marker_dicts(
                 keys.update(literal)
 
         # Pass 1b — subscript write of a marker key surfaces the var as
-        # response-shaped even when its init wasn't a literal.
+        # response-shaped even when its init wasn't a literal. Both plain
+        # `var["k"] = ...` and augmented `var["k"] += ...` flag the var.
+        subscript_targets: list[ast.expr] = []
         if isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                if (
-                    isinstance(tgt, ast.Subscript)
-                    and isinstance(tgt.value, ast.Name)
-                    and isinstance(tgt.slice, ast.Constant)
-                    and isinstance(tgt.slice.value, str)
-                    and tgt.slice.value in markers
-                ):
-                    marker_vars.add(tgt.value.id)
+            subscript_targets.extend(node.targets)
+        elif isinstance(node, ast.AugAssign):
+            subscript_targets.append(node.target)
+        for tgt in subscript_targets:
+            if (
+                isinstance(tgt, ast.Subscript)
+                and isinstance(tgt.value, ast.Name)
+                and isinstance(tgt.slice, ast.Constant)
+                and isinstance(tgt.slice.value, str)
+                and tgt.slice.value in markers
+            ):
+                marker_vars.add(tgt.value.id)
 
     # Pass 2 — pick up subscript / setdefault / update on every flagged var.
     for var in marker_vars:
