@@ -308,6 +308,8 @@ def compact_service_result(
 def project_fields(
     data: dict[str, Any],
     fields: str | list[str] | None,
+    *,
+    extra_always_keep: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Apply optional field projection to a response data dict.
 
@@ -315,23 +317,29 @@ def project_fields(
     CSV/JSON-array string for *fields*.  Apply to the inner payload before any
     outer wrapper that adds top-level keys you want to preserve.
 
+    ``extra_always_keep`` lets a caller extend the retained set with its own
+    contract / diagnostic keys (e.g. the orchestrator's pagination + partial-
+    state keys) without having to reimplement the projection logic.
+
     Typo guard: if any requested key does not exist in *data* (excluding the
-    always-retained ``success``/``warnings`` keys), a diagnostic is appended to
-    ``result["warnings"]`` listing the unknown keys and the available ones.
-    This mirrors the per-record ``result_fields_warning`` guard and ensures
-    callers get a signal rather than a mysteriously empty response.
+    always-retained keys), a diagnostic is appended to ``result["warnings"]``
+    listing the unknown keys and the available ones.  This mirrors the
+    per-record ``result_fields_warning`` guard and ensures callers get a
+    signal rather than a mysteriously empty response.
     """
     if fields is None:
         return data
     parsed = parse_string_list_param(fields, "fields", allow_csv=True) or []
-    keep = set(parsed) | {"success", "warnings"}
+    always_keep: set[str] = {"success", "warnings"}
+    if extra_always_keep is not None:
+        always_keep |= extra_always_keep
+    keep = set(parsed) | always_keep
     result = {k: v for k, v in data.items() if k in keep}
     # Typo guard — flag any requested keys that are absent from the response.
     # Exclude the always-retained sentinels so fields=["success"] never warns.
-    _force_retain = {"success", "warnings"}
-    unknown = sorted(set(parsed) - set(data.keys()) - _force_retain)
+    unknown = sorted(set(parsed) - set(data.keys()) - always_keep)
     if unknown:
-        available = sorted(k for k in data.keys() if k not in _force_retain)
+        available = sorted(k for k in data.keys() if k not in always_keep)
         result.setdefault("warnings", []).append(
             f"fields {unknown!r} not found in response — available keys: {available!r}"
         )

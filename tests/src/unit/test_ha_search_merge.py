@@ -585,13 +585,22 @@ def test_project_response_fields_keeps_multiple_requested() -> None:
     assert "scenes" not in result
 
 
-def test_project_response_fields_unknown_key_is_safe_noop() -> None:
-    """A caller requesting a key not present in the response gets a
-    response without that key — no KeyError. Always-keep keys survive."""
+def test_project_response_fields_unknown_key_appends_typo_warning() -> None:
+    """A caller requesting a key not present in the response gets a typo-
+    guard warning appended to ``warnings[]`` listing the unknown keys and
+    what's available — provided for free by delegating to
+    ``util_helpers.project_fields``. Better UX than the previous silent
+    drop: an agent that mistypes ``fields=["entitis"]`` gets a clear
+    signal rather than a mysteriously empty response."""
     response = _projection_response_fixture()
     result = _project_response_fields(response, ["nonexistent_bucket"])
     assert "nonexistent_bucket" not in result
     assert "success" in result  # always-keep
+    # Original warning entries preserved + typo warning appended.
+    assert "sample-warning" in result["warnings"]
+    assert any(
+        "nonexistent_bucket" in w and "not found" in w for w in result["warnings"]
+    ), f"expected typo-guard warning, got: {result['warnings']!r}"
 
 
 # partial → warnings mirror ----------------------------------------------

@@ -140,25 +140,21 @@ def _mirror_partial_to_warnings(response: dict[str, Any]) -> None:
 def _project_response_fields(
     response: dict[str, Any], parsed_fields: list[str] | None
 ) -> dict[str, Any]:
-    """Project top-level response keys to caller-requested + always-keep.
+    """Project the orchestrator response via the shared ``project_fields``
+    helper, extending its always-keep set with ``_ALWAYS_KEEP_PROJECTION``
+    so the diagnostic / pagination contract holds.
 
-    Restores the top-level ``fields=`` projection that ``ha_search_entities``
-    carried pre-rename, applied to the new flat envelope. ``None`` returns
-    the response unchanged. Otherwise, returns a new dict containing only:
-
-    - keys in ``parsed_fields`` (caller's request), AND
-    - keys in ``_ALWAYS_KEEP_PROJECTION`` (diagnostic / pagination contract).
-
-    The always-keep set means ``fields=["entities"]`` still leaves
-    ``partial`` / ``errors[]`` / ``warnings[]`` / ``*_total_matches`` /
-    pagination keys accessible — projection narrows the response but
-    never hides incompleteness.
+    Delegates the projection mechanics (parsing, typo-guard, always-keep
+    retention) to ``util_helpers.project_fields`` — restoring the top-level
+    ``fields=`` capability that ``ha_search_entities`` carried pre-rename,
+    applied to the new flat envelope. The always-keep set means
+    ``fields=["entities"]`` still leaves ``partial`` / ``errors[]`` /
+    ``warnings[]`` / ``*_total_matches`` / pagination keys accessible —
+    projection narrows the response but never hides incompleteness.
     """
-    if parsed_fields is None:
-        return response
-    requested = set(parsed_fields)
-    keep = requested | _ALWAYS_KEEP_PROJECTION
-    return {k: v for k, v in response.items() if k in keep}
+    return project_fields(
+        response, parsed_fields, extra_always_keep=_ALWAYS_KEEP_PROJECTION
+    )
 
 
 _INTENT_SKIP_WARNING: str = (
