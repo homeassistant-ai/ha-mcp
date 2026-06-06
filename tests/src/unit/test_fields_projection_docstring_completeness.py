@@ -107,6 +107,51 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "return_harvest": [],
     },
     {
+        # ha_search's ``fields=`` projects the top-level response shape —
+        # the always-keep diagnostic / pagination set plus the per-surface
+        # bucket keys. The set is well-defined by the orchestrator's
+        # response-init dict literal, the four per-surface pagination
+        # assignments in the merge loop, the dashboards opt-in bucket
+        # from ``_CONFIG_BUCKETS``, and ``partial_reason`` set via the
+        # merge accumulator + ``_apply_*_partial_flag`` helpers. Use a
+        # ``documented_must_equal`` manifest so any future drift on
+        # either side (new key emitted but not enumerated, or vice
+        # versa) surfaces as a single clear error rather than a partial-
+        # var-harvest miss.
+        "tool": "ha_search",
+        "docstring": ("tools/tools_search.py", "ha_search"),
+        "var_harvest": [],
+        "return_harvest": [],
+        "documented_must_equal": frozenset(
+            {
+                "success",
+                "query",
+                "search_types",
+                "entities",
+                "automations",
+                "scripts",
+                "scenes",
+                "helpers",
+                "dashboards",
+                "entity_total_matches",
+                "config_total_matches",
+                "count",
+                "offset",
+                "limit",
+                "has_more",
+                "next_offset",
+                "entity_has_more",
+                "entity_next_offset",
+                "config_has_more",
+                "config_next_offset",
+                "warnings",
+                "errors",
+                "partial",
+                "partial_reason",
+            }
+        ),
+    },
+    {
         "tool": "ha_list_services",
         "docstring": ("tools/tools_services.py", "ha_list_services"),
         "var_harvest": [

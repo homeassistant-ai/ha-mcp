@@ -613,13 +613,18 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 description=(
                     "Project the response to only the specified top-level "
                     'keys (e.g. ["entities", "automations"]). Diagnostic / '
-                    "pagination keys — success, warnings, errors, partial, "
-                    "partial_reason, *_total_matches, has_more, next_offset, "
-                    "and per-surface counterparts — are always retained "
-                    "regardless of projection, so narrowing the response "
-                    "shape cannot hide partial / error state. None = full "
-                    "response. Distinct from `result_fields` (which projects "
-                    "each entity record's fields)."
+                    "pagination keys are always retained regardless of "
+                    "projection, so narrowing the response shape cannot "
+                    "hide partial / error state. None = full response. "
+                    "Distinct from `result_fields` (which projects each "
+                    "entity record's fields). Available keys: success, "
+                    "query, entities, automations, scripts, scenes, "
+                    "helpers, dashboards, search_types, "
+                    "entity_total_matches, config_total_matches, count, "
+                    "offset, limit, has_more, next_offset, "
+                    "entity_has_more, entity_next_offset, "
+                    "config_has_more, config_next_offset, warnings, "
+                    "errors, partial, partial_reason."
                 ),
             ),
         ] = None,
