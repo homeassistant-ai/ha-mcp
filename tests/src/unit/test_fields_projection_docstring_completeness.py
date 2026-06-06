@@ -349,42 +349,12 @@ def _harvest_return_keys(rel_path: str, func_name: str) -> set[str]:
 def _harvest_marker_dicts(
     rel_path: str, func_name: str, markers: frozenset[str]
 ) -> set[str]:
-    """Harvest top-level keys from every dict literal (assigned or returned)
-    inside ``func_name`` whose key set intersects ``markers``.
+    """Two-pass harvest of every key landing on a response-shaped dict.
 
     Use for tools whose response is built in many locally-named dicts
-    (``area_search_data``, ``empty_area_data``, ``domain_listing``, ...) —
+    (``area_search_data``, ``empty_area_data``, ``domain_list_data`` …) —
     too many to enumerate in ``var_harvest``. The marker set acts as a
     "this dict is response-shaped" filter.
-    """
-    module = _read_module(rel_path)
-    try:
-        func = _find_function(module, func_name)
-    except LookupError:
-        return set()
-    keys: set[str] = set()
-
-    def _collect(d: ast.Dict) -> None:
-        this_keys = {
-            k.value
-            for k in d.keys
-            if isinstance(k, ast.Constant) and isinstance(k.value, str)
-        }
-        if this_keys & markers:
-            keys.update(this_keys)
-
-    for node in ast.walk(func):
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.Return)) and isinstance(
-            node.value, ast.Dict
-        ):
-            _collect(node.value)
-    return keys
-
-
-def _harvest_marker_dict_var_keys(
-    rel_path: str, func_name: str, markers: frozenset[str]
-) -> set[str]:
-    """Two-pass harvest of every key landing on a response-shaped dict.
 
     Pass 1 — flag a var as response-shaped via *either* signal:
 
@@ -398,11 +368,6 @@ def _harvest_marker_dict_var_keys(
     Pass 2 — for every flagged var, run ``_harvest_var_keys`` to collect
     subscript / ``setdefault`` / ``update`` assignments. Literal keys from
     Pass 1 are unioned in.
-
-    The literal-only ``_harvest_marker_dicts`` is structurally blind to
-    subscript-assigned keys; the post-init Pass-1 leg + Pass-2 sweep close
-    that gap on the ``ha_search_entities`` entity-branch builder, which is
-    where most of the surfacing happens.
     """
     module = _read_module(rel_path)
     try:
@@ -542,7 +507,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     pass the manifest check (the manifest is hand-maintained, doesn't
     re-derive).
 
-    Harvest via ``_harvest_marker_dict_var_keys`` (literal + subscript +
+    Harvest via ``_harvest_marker_dicts`` (literal + subscript +
     ``setdefault`` + ``update`` on any marker-flagged var) so the post-init
     ``result["by_domain"] = ...`` / ``result.setdefault("offset", ...)``
     style is covered alongside the dict-literal shape. Round-3 caught only
@@ -563,7 +528,7 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     from ha_mcp.tools.tools_search import _ENTITIES_BRANCH_SKIP_KEYS
 
     markers = frozenset({"results", "total_matches"})
-    emitted = _harvest_marker_dict_var_keys(
+    emitted = _harvest_marker_dicts(
         "tools/tools_search.py", "ha_search_entities", markers
     )
     assert emitted, (
