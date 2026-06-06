@@ -89,16 +89,16 @@ def _validate_search_types(parsed: list[str] | None) -> None:
 
 # Top-level response keys that survive a ``fields=`` projection regardless
 # of the caller's request — so a projection can never hide partial / error
-# state. Mirrors KP13's review prescription for the ``fields=`` restore:
-# narrowing the response is fine; silently hiding diagnostic signals is not.
+# state. ``success`` and ``warnings`` are guaranteed by ``project_fields``
+# itself; this set extends the protection to orchestrator-specific echoes
+# (query, search_types), the error / partial diagnostics, and the
+# pagination axis.
 _ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
     {
-        "success",
         "query",
         "search_types",
         "entity_total_matches",
         "config_total_matches",
-        "warnings",
         "errors",
         "partial",
         "partial_reason",

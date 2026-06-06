@@ -127,8 +127,8 @@ class SceneSearchMixin(ConfigFetchMixin):
         - ``registry_failed=False`` with empty ``homeassistant_scene_uids``
           — registry succeeded but found zero HA-managed scenes (every scene
           is integration-managed). Attempting them would 404 every single
-          one (KP13 #1529 re-review: 106/106 failures observed). Skip all
-          per-id fetches and count them as ``integration_skipped``.
+          one. Skip all per-id fetches and count them as
+          ``integration_skipped``.
 
         Returns ``(sids_to_fetch, integration_skipped_count)``.
         """

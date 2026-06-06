@@ -120,9 +120,9 @@ def test_validate_search_types_subset_passes() -> None:
 
 
 def test_validate_search_types_unknown_rejected() -> None:
-    """A typo / stale type name like ``blueprint`` (KP13 review S8) or
-    ``frobnicate`` would previously return zero matches with no warning —
-    now surfaces as ``VALIDATION_FAILED`` with ``parameter='search_types'``."""
+    """A typo / stale type name like ``blueprint`` or ``frobnicate`` would
+    previously return zero matches with no warning — now surfaces as
+    ``VALIDATION_FAILED`` with ``parameter='search_types'``."""
     with pytest.raises(ToolError) as excinfo:
         _validate_search_types(["frobnicate"])
     assert "frobnicate" in str(excinfo.value)
@@ -233,8 +233,7 @@ def test_partial_reason_empty_payload_does_not_overwrite() -> None:
 #
 # ``_compute_eligibility`` is the pure decision function for which sub-search
 # branches the orchestrator fans out to. These cells pin the 14 behaviorally-
-# distinct input combinations identified during the gate's design (BAT round
-# + scrutinize pass). Returns (registry_eligible, body_eligible,
+# distinct input combinations. Returns (registry_eligible, body_eligible,
 # body_skipped_by_intent_gate).
 
 
@@ -681,11 +680,11 @@ def test_mirror_partial_to_warnings_preserves_existing_warnings() -> None:
 
 
 def test_select_scene_ids_registry_succeeded_zero_ha_managed_skips_all() -> None:
-    """KP13's 106/106 case: registry succeeded but the fixture has only
-    integration-managed scenes (no platform='homeassistant' entries).
-    Pre-fix: fell back to attempt-all, every fetch 404'd, partial_reason
-    reported `N scenes failed`. Post-fix: all counted as
-    integration_skipped, zero fetched, no false partial."""
+    """Registry succeeded but the fixture has only integration-managed
+    scenes (no platform='homeassistant' entries). Pre-fix: fell back to
+    attempt-all, every fetch 404'd, partial_reason reported `N scenes
+    failed`. Post-fix: all counted as integration_skipped, zero fetched,
+    no false partial."""
     scored = [
         ("scene.x", "X", "uid-x", 100),
         ("scene.y", "Y", "uid-y", 100),
@@ -749,11 +748,10 @@ def test_select_scene_ids_skips_already_fetched_configs() -> None:
 
 def test_always_keep_set_includes_all_diagnostic_and_pagination_keys() -> None:
     """Pin the always-keep set membership so an accidental removal of one
-    of the diagnostic keys would fail loudly. KP13's contract: the
-    projection must protect partial / error / pagination state."""
+    of the diagnostic keys would fail loudly. ``success`` and ``warnings``
+    are guaranteed by ``project_fields`` itself, so they are intentionally
+    not in this orchestrator-side extension set."""
     required = {
-        "success",
-        "warnings",
         "errors",
         "partial",
         "partial_reason",
