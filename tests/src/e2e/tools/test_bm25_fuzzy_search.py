@@ -30,8 +30,7 @@ async def test_fuzzy_search_multi_word_non_adjacent(mcp_client):
         "ha_search",
         {"query": "light kitchen", "exact_match": False, "limit": 10},
     )
-    raw_data = assert_mcp_success(result, "Multi-word fuzzy search")
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Multi-word fuzzy search")
 
     assert data.get("success") is True
     results = data.get("entities", [])
@@ -60,8 +59,7 @@ async def test_fuzzy_search_reduces_noise(mcp_client):
             "limit": 10,
         },
     )
-    raw_data = assert_mcp_success(result, "Noise reduction fuzzy search")
-    data = raw_data.get("data", raw_data)
+    data = assert_mcp_success(result, "Noise reduction fuzzy search")
 
     assert data.get("success") is True
     total = data.get("entity_total_matches", 0)

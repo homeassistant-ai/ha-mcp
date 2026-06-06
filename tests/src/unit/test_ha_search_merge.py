@@ -121,11 +121,17 @@ def test_validate_search_types_unknown_rejected() -> None:
 
 
 def test_validate_search_types_mixed_valid_invalid_rejected() -> None:
+    """Pin that valid types from a mixed input are NOT echoed back in the
+    error message's unknown-types list — only the actual unknown value
+    appears, so the agent can correct the typo cleanly."""
     with pytest.raises(ToolError) as excinfo:
         _validate_search_types(["automation", "frobnicate", "scene"])
-    assert "frobnicate" in str(excinfo.value)
-    # Valid types from the input shouldn't appear in the unknown list.
-    assert "['frobnicate']" in str(excinfo.value) or "frobnicate" in str(excinfo.value)
+    err = str(excinfo.value)
+    # The error message contains the Python repr of the unknown-only list.
+    # If valid types leaked in, this exact-list match would fail.
+    assert "['frobnicate']" in err, (
+        f"Unknown-types list should contain exactly ['frobnicate']; got: {err}"
+    )
 
 
 def test_validate_search_types_blueprint_rejected() -> None:
@@ -512,7 +518,7 @@ def test_orchestrator_entity_branch_exception_partial_shape() -> None:
 
 def test_budget_partial_flag_set_when_automation_skipped() -> None:
     response: dict = {"success": True}
-    DeepSearchMixin._apply_budget_partial_flag(
+    DeepSearchMixin._apply_per_type_partial_flag(
         response, automation_skipped=3, script_skipped=0
     )
     assert response["partial"] is True
@@ -522,7 +528,7 @@ def test_budget_partial_flag_set_when_automation_skipped() -> None:
 
 def test_budget_partial_flag_set_when_script_skipped() -> None:
     response: dict = {"success": True}
-    DeepSearchMixin._apply_budget_partial_flag(
+    DeepSearchMixin._apply_per_type_partial_flag(
         response, automation_skipped=0, script_skipped=7
     )
     assert response["partial"] is True
@@ -532,7 +538,7 @@ def test_budget_partial_flag_set_when_script_skipped() -> None:
 
 def test_budget_partial_flag_combines_both_surfaces() -> None:
     response: dict = {"success": True}
-    DeepSearchMixin._apply_budget_partial_flag(
+    DeepSearchMixin._apply_per_type_partial_flag(
         response, automation_skipped=2, script_skipped=4
     )
     assert response["partial"] is True
@@ -549,7 +555,7 @@ def test_budget_partial_flag_appends_to_existing_reason() -> None:
         "partial": True,
         "partial_reason": "Scene config fetch incomplete: 1 failed, 2 skipped.",
     }
-    DeepSearchMixin._apply_budget_partial_flag(
+    DeepSearchMixin._apply_per_type_partial_flag(
         response, automation_skipped=3, script_skipped=0
     )
     assert response["partial"] is True
@@ -559,7 +565,7 @@ def test_budget_partial_flag_appends_to_existing_reason() -> None:
 
 def test_budget_partial_flag_noop_when_no_skips() -> None:
     response: dict = {"success": True}
-    DeepSearchMixin._apply_budget_partial_flag(
+    DeepSearchMixin._apply_per_type_partial_flag(
         response, automation_skipped=0, script_skipped=0
     )
     assert "partial" not in response
@@ -572,14 +578,14 @@ def test_budget_partial_flag_set_when_automation_individual_fetches_failed() -> 
     response can show ``total_matches=0`` while the backend was actually
     partially down."""
     response: dict = {"success": True}
-    DeepSearchMixin._apply_budget_partial_flag(response, automation_failed=4)
+    DeepSearchMixin._apply_per_type_partial_flag(response, automation_failed=4)
     assert response["partial"] is True
     assert "Automation config fetch incomplete: 4 failed" in response["partial_reason"]
 
 
 def test_budget_partial_flag_set_when_script_individual_fetches_failed() -> None:
     response: dict = {"success": True}
-    DeepSearchMixin._apply_budget_partial_flag(response, script_failed=2)
+    DeepSearchMixin._apply_per_type_partial_flag(response, script_failed=2)
     assert response["partial"] is True
     assert "Script config fetch incomplete: 2 failed" in response["partial_reason"]
 
@@ -590,7 +596,7 @@ def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:
     zero-helper-match from a partial backend outage. ``helper_failed``
     closes that gap."""
     response: dict = {"success": True}
-    DeepSearchMixin._apply_budget_partial_flag(response, helper_failed=3)
+    DeepSearchMixin._apply_per_type_partial_flag(response, helper_failed=3)
     assert response["partial"] is True
     assert (
         "Helper list fetch incomplete: 3 input_* type(s) failed"
@@ -602,7 +608,7 @@ def test_budget_partial_flag_failed_and_skipped_combine() -> None:
     """Mixed budget exhaustion + individual fetch failures concatenate
     in ``partial_reason`` — caller sees both failure modes."""
     response: dict = {"success": True}
-    DeepSearchMixin._apply_budget_partial_flag(
+    DeepSearchMixin._apply_per_type_partial_flag(
         response,
         automation_skipped=5,
         automation_failed=2,
@@ -623,7 +629,7 @@ def test_budget_partial_flag_failures_append_to_existing_reason() -> None:
         "partial": True,
         "partial_reason": "Scene config fetch incomplete: 1 failed, 2 skipped.",
     }
-    DeepSearchMixin._apply_budget_partial_flag(
+    DeepSearchMixin._apply_per_type_partial_flag(
         response, script_failed=3, helper_failed=1
     )
     assert response["partial"] is True

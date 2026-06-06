@@ -543,8 +543,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             - Find a light by name: ha_search("kitchen", domain_filter="light")
             - Which automations use an entity (no filter, body included): ha_search("light.bed_light")
             - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
-            - Find automations referencing a sensor while scoped by domain (explicit pin opts back into body):
-              ha_search("temperature", domain_filter="sensor", search_types=["automation"])
         """
         try:
             parsed_search_types = parse_string_list_param(search_types, "search_types")
@@ -1988,11 +1986,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             exact_match: Use exact substring matching (default: True)
 
         Examples:
-            - Find automations referencing an entity: ha_search("sensor.temperature")
-            - Find with fuzzy matching: ha_search("motion", exact_match=False)
-            - Find scenes touching a light: ha_search("light.kitchen")
-            - Search dashboards for entity refs: ha_search("sensor.temperature", search_types=["dashboard"])
-            - Search everything: ha_search("light.bedroom", search_types=["automation","script","scene","helper","dashboard"])
+            - Find automations referencing an entity: ha_deep_search("sensor.temperature")
+            - Find with fuzzy matching: ha_deep_search("motion", exact_match=False)
+            - Find scenes touching a light: ha_deep_search("light.kitchen")
+            - Search dashboards for entity refs: ha_deep_search("sensor.temperature", search_types=["dashboard"])
+            - Search everything: ha_deep_search("light.bedroom", search_types=["automation","script","scene","helper","dashboard"])
         """
         # Parse search_types to handle JSON string input from MCP clients
         try:

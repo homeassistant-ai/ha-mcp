@@ -259,13 +259,12 @@ class DeepSearchMixin(SceneSearchMixin):
         Returns ``(matches, skipped_count, failed_count)``. ``skipped_count``
         is non-zero only when bulk fetch fell back to the per-id Attempt-C
         path AND its wall-clock budget exhausted before all configs were
-        fetched. ``failed_count`` is non-zero when individual config fetches
-        raised exceptions (caught at ``debug``-level) — surfaced as
-        ``partial: True`` in the response so callers can distinguish
-        complete-zero from incomplete-zero. The
-        skipped ids carry their score-without-config through the merge and
-        fall below threshold silently. Surfaced as ``partial: True`` by the
-        response builder so callers can detect capped-vs-complete results.
+        fetched; ``failed_count`` is non-zero when individual config fetches
+        raised exceptions (caught at ``debug``-level). Both surface as
+        ``partial: True`` in the response so callers can distinguish a
+        complete zero-result from an incomplete one — skipped ids carry
+        their score-without-config through the merge and fall below the
+        match threshold silently otherwise.
         """
         automation_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("automation.")
@@ -707,7 +706,7 @@ class DeepSearchMixin(SceneSearchMixin):
             response["dashboards"] = final_results["dashboards"]
 
         self._apply_scene_partial_flag(response, scene_stats)
-        self._apply_budget_partial_flag(
+        self._apply_per_type_partial_flag(
             response,
             automation_skipped=automation_skipped,
             script_skipped=script_skipped,
@@ -718,7 +717,7 @@ class DeepSearchMixin(SceneSearchMixin):
         return response
 
     @staticmethod
-    def _apply_budget_partial_flag(
+    def _apply_per_type_partial_flag(
         response: dict[str, Any],
         *,
         automation_skipped: int = 0,
