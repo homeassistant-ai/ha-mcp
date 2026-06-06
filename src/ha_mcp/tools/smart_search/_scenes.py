@@ -286,7 +286,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         ]
         if scene_stats["integration_skipped"]:
             reason_parts.append(
-                f" {scene_stats['integration_skipped']} integration-managed "
+                f"{scene_stats['integration_skipped']} integration-managed "
                 "scenes are scored by attribute only (no per-id fetch)."
             )
         if scene_stats["registry_failed"]:
@@ -295,12 +295,14 @@ class SceneSearchMixin(ConfigFetchMixin):
             # back to attempting all scenes -- surface that so an elevated
             # failed_count isn't mistaken for a real config outage.
             reason_parts.append(
-                " Entity-registry fetch failed; integration-platform filter "
+                "Entity-registry fetch failed; integration-platform filter "
                 "unavailable, attempted all scenes (false-positive failures "
                 "expected for integration-managed scenes)."
             )
         reason_parts.append(
-            " Some scene matches may be missing config data; tune "
+            "Some scene matches may be missing config data; tune "
             "HAMCP_SCENE_CONFIG_TIME_BUDGET to raise the budget."
         )
-        response["partial_reason"] = "".join(reason_parts)
+        # Use the standardised " ; " separator (matches
+        # ``_merge_payload_metadata`` and ``_apply_per_type_partial_flag``).
+        response["partial_reason"] = " ; ".join(reason_parts)

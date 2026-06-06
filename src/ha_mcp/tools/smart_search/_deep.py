@@ -772,8 +772,8 @@ class DeepSearchMixin(SceneSearchMixin):
             return
         response["partial"] = True
         existing = response.get("partial_reason", "")
-        separator = " " if existing else ""
-        response["partial_reason"] = existing + separator + " ".join(reasons)
+        separator = " ; " if existing else ""
+        response["partial_reason"] = existing + separator + " ; ".join(reasons)
 
     async def _search_flow_helpers(
         self,

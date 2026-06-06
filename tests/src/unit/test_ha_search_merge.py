@@ -19,6 +19,7 @@ from ha_mcp.tools.tools_search import (
     _emit_intent_skip_warning,
     _finalize_partial_state,
     _merge_payload_metadata,
+    _mirror_partial_to_warnings,
     _project_response_fields,
     _synthesize_combined_pagination,
     _validate_search_types,
@@ -590,6 +591,72 @@ def test_project_response_fields_unknown_key_is_safe_noop() -> None:
     result = _project_response_fields(response, ["nonexistent_bucket"])
     assert "nonexistent_bucket" not in result
     assert "success" in result  # always-keep
+
+
+# partial → warnings mirror ----------------------------------------------
+#
+# Pins the BAT-driven ask from the re-review: agents read warnings[]
+# consistently but ignore partial / partial_reason. Mirroring the
+# truncation reason into warnings makes incompleteness reach the
+# user even when the agent drops the partial flag.
+
+
+def test_mirror_partial_to_warnings_copies_reason_with_prefix() -> None:
+    response: dict = {
+        "partial": True,
+        "partial_reason": "config-body budget exhausted: 5 automations skipped",
+        "warnings": [],
+    }
+    _mirror_partial_to_warnings(response)
+    assert response["warnings"] == [
+        "incomplete results: config-body budget exhausted: 5 automations skipped"
+    ]
+
+
+def test_mirror_partial_to_warnings_noop_when_partial_false() -> None:
+    response: dict = {
+        "partial": False,
+        "partial_reason": "should-not-mirror",
+        "warnings": [],
+    }
+    _mirror_partial_to_warnings(response)
+    assert response["warnings"] == []
+
+
+def test_mirror_partial_to_warnings_noop_when_no_reason() -> None:
+    """``partial: True`` without a reason text is unusual but tolerated —
+    the mirror has nothing to surface, so it does nothing rather than
+    appending an empty / misleading warning entry."""
+    response: dict = {"partial": True, "warnings": []}
+    _mirror_partial_to_warnings(response)
+    assert response["warnings"] == []
+
+
+def test_mirror_partial_to_warnings_idempotent_does_not_duplicate() -> None:
+    """A response that already carries the mirror entry shouldn't grow
+    a duplicate on a second mirror call — important because the
+    orchestrator calls the mirror once but a future re-run inside a
+    retry loop could otherwise double-append."""
+    response: dict = {
+        "partial": True,
+        "partial_reason": "X failed",
+        "warnings": ["incomplete results: X failed"],
+    }
+    _mirror_partial_to_warnings(response)
+    assert response["warnings"] == ["incomplete results: X failed"]
+
+
+def test_mirror_partial_to_warnings_preserves_existing_warnings() -> None:
+    response: dict = {
+        "partial": True,
+        "partial_reason": "Y failed",
+        "warnings": ["pre-existing warning"],
+    }
+    _mirror_partial_to_warnings(response)
+    assert response["warnings"] == [
+        "pre-existing warning",
+        "incomplete results: Y failed",
+    ]
 
 
 def test_always_keep_set_includes_all_diagnostic_and_pagination_keys() -> None:

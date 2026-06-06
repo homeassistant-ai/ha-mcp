@@ -115,6 +115,28 @@ _ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
 )
 
 
+def _mirror_partial_to_warnings(response: dict[str, Any]) -> None:
+    """Mirror ``partial_reason`` into ``warnings[]`` so agents see truncation.
+
+    The re-review's BAT data showed agents reliably read ``warnings`` but
+    commonly ignore ``partial`` / ``partial_reason`` — without mirroring,
+    a config-body backend incompleteness surfaces only via the partial
+    keys, which agents drop when relaying results. The mirror copies the
+    reason verbatim with a leading ``"incomplete results: "`` so the
+    diagnostic message lands on the channel agents actually read.
+    Idempotent: re-running does not re-append the same warning.
+    """
+    if not response.get("partial"):
+        return
+    reason = response.get("partial_reason")
+    if not reason:
+        return
+    warning_text = f"incomplete results: {reason}"
+    warnings = response.setdefault("warnings", [])
+    if warning_text not in warnings:
+        warnings.append(warning_text)
+
+
 def _project_response_fields(
     response: dict[str, Any], parsed_fields: list[str] | None
 ) -> dict[str, Any]:
@@ -652,6 +674,11 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             default call, so silent per-type-list failures would otherwise
             leave callers unable to tell a real zero-match from a partial
             backend outage.
+          - When `partial: True` is set, the `partial_reason` text is
+            also mirrored into `warnings[]` with an `"incomplete results: "`
+            prefix. Agents that read `warnings` consistently (the
+            entity-intent skip warning lands fine) but ignore `partial`
+            still see the truncation diagnostic this way.
           - When the body branch is skipped by the entity-intent gate above,
             the response carries a `warnings[]` entry naming the skip
             reason; pass `search_types=[...]` to override.
@@ -854,6 +881,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         _synthesize_combined_pagination(response)
         _finalize_partial_state(response, partial_local=partial, errors_local=errors)
+        _mirror_partial_to_warnings(response)
 
         return _project_response_fields(response, parsed_fields)
 
