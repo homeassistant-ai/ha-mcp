@@ -70,6 +70,21 @@ class SceneSearchMixin(ConfigFetchMixin):
                     self._index_scene_registry_entry(
                         entry, configs, homeassistant_scene_uids, slug_to_storage_id
                     )
+            else:
+                # Soft-failure path: `send_websocket_message` returns
+                # `{"success": False, "error": ...}` on connection drops or
+                # post-retry 403s rather than raising. Treat it the same as
+                # the raise branch — without the platform filter we cannot
+                # tell HA-managed from integration-managed scenes, so route
+                # to attempt-all + registry_failed=True. Falling through to
+                # `return ..., False` here would produce a fully-complete-
+                # looking response with no scene configs.
+                logger.warning(
+                    "Scene entity-registry list returned non-success: %r; "
+                    "integration-platform filter unavailable, attempting all scenes",
+                    reg_resp,
+                )
+                return homeassistant_scene_uids, slug_to_storage_id, True
         except Exception as e:
             # Issue #1168 R5 blocker 11: promote DEBUG -> WARNING and signal the
             # fallback so partial_reason can explain why the count looks

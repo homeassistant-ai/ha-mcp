@@ -493,3 +493,49 @@ class TestSceneRegistryFetchFailureSurfacing:
         assert (
             "filter unavailable" in reason.lower() or "false-positive" in reason.lower()
         ), f"partial_reason must explain the elevated failed_count; got {reason!r}"
+
+    async def test_registry_soft_failure_routes_to_registry_failed(
+        self, mock_client
+    ) -> None:
+        """A non-raising non-success registry response must set ``registry_failed=True``.
+
+        ``RestClient.send_websocket_message`` returns ``{"success": False, ...}``
+        on connection drops or post-retry 403s rather than raising. Before the
+        fix this took the falsy ``.get("success")`` branch and fell through to
+        ``registry_failed=False`` with an empty UID set — every scene was then
+        counted as ``integration_skipped`` and the response looked fully
+        complete with zero scene configs and no ``partial`` flag. The fix
+        routes the soft-failure response to the same attempt-all +
+        ``registry_failed=True`` path as the raise branch, so
+        ``_apply_scene_partial_flag`` surfaces the registry outage.
+        """
+
+        async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
+            msg_type = message.get("type")
+            if msg_type == "config/entity_registry/list":
+                # Soft-failure: returned, not raised.
+                return {"success": False, "error": "connection lost"}
+            # WS bulk also returns soft-failure so we reach Attempt C.
+            return {"success": False}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+
+        async def _failing_get(scene_id: str) -> dict[str, Any]:
+            raise RuntimeError(f"Mock fetch fail for {scene_id}")
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_failing_get)
+        tools = _make_tools(mock_client)
+
+        result = await tools.deep_search(
+            query="bedroom", search_types=["scene"], limit=10
+        )
+
+        # Same observable outcome as the raise path: partial=True with the
+        # registry-fetch-failed reason surfaced.
+        assert result.get("partial") is True, (
+            f"soft-failure registry response must set partial=True; got {result}"
+        )
+        reason = result.get("partial_reason", "")
+        assert "registry" in reason.lower() and "fetch failed" in reason.lower(), (
+            f"partial_reason must surface the registry-fetch fallback on soft failure; got {reason!r}"
+        )
