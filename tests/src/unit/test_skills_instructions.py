@@ -630,7 +630,13 @@ class TestSkillToolRegistration:
 
     def test_tool_annotations_are_correct(self, server, populated_dir, captor):
         """readOnlyHint + idempotentHint must stay set — a flip to
-        destructiveHint would weaken client-side permission gating."""
+        destructiveHint would weaken client-side permission gating.
+
+        The ``title`` annotation must also be present so the tool shows a
+        human-readable display name in client tool lists, matching every
+        other tool (all of which carry an ``annotations.title``). Without
+        it, clients fall back to rendering the raw ``ha_get_skill_guide``
+        name."""
         from ha_mcp.server import SKILL_TOOL_NAME
 
         captured, fake_tool = captor
@@ -643,6 +649,9 @@ class TestSkillToolRegistration:
         assert annotations.get("readOnlyHint") is True
         assert annotations.get("idempotentHint") is True
         assert annotations.get("destructiveHint") is not True
+        assert (
+            annotations.get("title") == "Get Home Assistant Best Practices Skill Guide"
+        )
 
     def test_tool_tags_are_correct(self, server, populated_dir, captor):
         """``System`` tag drives settings-UI placement; a missing tag
