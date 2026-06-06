@@ -140,7 +140,7 @@ def _mirror_partial_to_warnings(response: dict[str, Any]) -> None:
 def _project_response_fields(
     response: dict[str, Any], parsed_fields: list[str] | None
 ) -> dict[str, Any]:
-    """Project top-level response keys to caller-requested ∪ always-keep.
+    """Project top-level response keys to caller-requested + always-keep.
 
     Restores the top-level ``fields=`` projection that ``ha_search_entities``
     carried pre-rename, applied to the new flat envelope. ``None`` returns
