@@ -155,6 +155,17 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 # Resolved area names (fuzzy `area_filter` may match
                 # multiple areas) — caller value beyond the input echo.
                 "area_names",
+                # Entity-branch internal mode label — kept (E2E suite pins
+                # at 17+ assertion sites, callers rely on it to identify
+                # which entity-search path produced the result).
+                "search_type",
+                # Caller-input echoes — kept (E2E suite pins, so callers
+                # actually read them back).
+                "domain_filter",
+                "area_filter",
+                # Conditional zero-result diagnostic — kept (E2E suite
+                # pins at 2 sites).
+                "message",
                 "warnings",
                 "errors",
                 "partial",

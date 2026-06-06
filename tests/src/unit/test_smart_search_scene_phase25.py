@@ -664,8 +664,7 @@ class TestApplyScenePartialFlag:
         )
         reason = response["partial_reason"]
         assert " ; " in reason, (
-            f"scene partial_reason fragments must be joined with ' ; '; "
-            f"got {reason!r}"
+            f"scene partial_reason fragments must be joined with ' ; '; got {reason!r}"
         )
 
 

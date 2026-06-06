@@ -903,17 +903,19 @@ def test_budget_partial_flag_failures_append_to_existing_reason() -> None:
 def test_entities_branch_skip_keys_strip_real_leak_set() -> None:
     """The orchestrator strips every entity sub-payload context key that the
     entities branch actually emits AND has no caller value at the envelope
-    top — caller-input echoes (``domain_filter``, ``area_filter``,
-    ``state_filter``), the internal mode label (``search_type``), per-entity
-    decoration (``area_name``), and the redundant ``note`` mode label. None
-    are in ``_ALWAYS_KEEP_PROJECTION`` nor the ``fields=`` Available keys
-    docstring, so leaking them would advertise undocumented keys via the
-    typo-guard while a real ``fields=`` projection silently strips them.
+    top. The strip set is empirically narrow: ``state_filter`` (input echo
+    with no E2E coverage), ``area_name`` (per-entity decoration), and
+    ``note`` (redundant mode-label already conveyed by ``search_type``).
+    None are in ``_ALWAYS_KEEP_PROJECTION`` nor the ``fields=`` Available
+    keys docstring, so leaking them would advertise undocumented keys via
+    the typo-guard while a real ``fields=`` projection silently strips
+    them.
 
-    ``by_domain`` (toggle-gated by ``group_by_domain=True``) and
-    ``state_filter_note`` (conditional under fuzzy + state_filter) are
-    intentionally NOT stripped — both carry observable caller value at the
-    envelope top and live in ``_ALWAYS_KEEP_PROJECTION`` + the docstring.
+    ``search_type``, ``domain_filter``, ``area_filter``, ``message``,
+    ``by_domain``, ``state_filter_note``, and ``area_names`` are
+    intentionally NOT stripped — the E2E test suite empirically pins
+    their presence at the envelope top (callers verifiably depend on
+    them), so all live in ``_ALWAYS_KEEP_PROJECTION`` + the docstring.
 
     The constant must also include the pagination plumbing
     (``results``/``total_matches``/``has_more``/``next_offset``) so the
@@ -951,9 +953,6 @@ def test_entities_branch_skip_keys_strip_real_leak_set() -> None:
         "total_matches",
         "has_more",
         "next_offset",
-        "search_type",
-        "domain_filter",
-        "area_filter",
         "state_filter",
         "area_name",
         "note",
@@ -964,9 +963,7 @@ def test_entities_branch_skip_keys_strip_real_leak_set() -> None:
         "extend _ENTITIES_BRANCH_SKIP_KEYS"
     )
 
-    # ``by_domain`` and ``state_filter_note`` are intentionally kept
-    # (documented + always-keep — toggle-gated feature + conditional
-    # diagnostic with observable caller value).
+    # E2E-pinned keys are intentionally kept (documented + always-keep).
     assert response.get("by_domain") == {"light": [{"entity_id": "light.kitchen"}]}, (
         "by_domain must survive the orchestrator merge — it is documented + "
         "in _ALWAYS_KEEP_PROJECTION as the toggle-gated feature output"
@@ -977,6 +974,11 @@ def test_entities_branch_skip_keys_strip_real_leak_set() -> None:
         "state_filter_note must survive the orchestrator merge — it explains "
         "why entity_total_matches differs from count under fuzzy + state_filter"
     )
+    for kept in ("search_type", "domain_filter", "area_filter"):
+        assert kept in response, (
+            f"{kept!r} must survive the orchestrator merge — E2E suite "
+            f"empirically pins its presence at the envelope top"
+        )
 
     # warnings must still accumulate (it's NOT in skip_keys).
     assert response["warnings"] == ["seeded warning"]

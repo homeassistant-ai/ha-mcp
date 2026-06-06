@@ -48,37 +48,30 @@ _CONFIG_BUCKETS: tuple[str, ...] = (
 )
 
 # Entity sub-payload keys the orchestrator must NOT lift to the top level
-# of the flat dual-surface envelope. They describe the entity-side search
-# only — ``search_type`` is the entity-branch's internal mode label;
-# ``domain_filter`` / ``area_filter`` / ``state_filter`` are caller-input
-# echoes (the caller already has them); ``area_name`` is per-entity
-# decoration that belongs inside the entity record, not at the envelope
-# top; ``note`` is the redundant mode-label string. None are in
-# ``_ALWAYS_KEEP_PROJECTION`` or the ``fields=`` Available keys docstring,
-# so leaking them would advertise undocumented keys via the typo-guard
-# while a real ``fields=`` projection silently strips them.
+# of the flat dual-surface envelope. ``state_filter`` is a caller-input
+# echo with no observable verification value at the envelope top (the
+# caller has the input they passed); ``area_name`` is per-entity
+# decoration that belongs inside the entity record; ``note`` is a
+# redundant mode-label string already conveyed by ``search_type``. None
+# are in ``_ALWAYS_KEEP_PROJECTION`` or the ``fields=`` Available keys
+# docstring, so leaking them would advertise undocumented keys via the
+# typo-guard while a real ``fields=`` projection silently strips them.
 #
-# ``by_domain`` and ``state_filter_note`` are intentionally NOT in the
-# strip set — both are toggle-gated diagnostic / feature outputs
-# (``group_by_domain=True`` and fuzzy+state_filter respectively) with
-# observable caller value at the envelope top. Both are documented as
-# top-level keys + retained in ``_ALWAYS_KEEP_PROJECTION``.
+# ``search_type``, ``domain_filter``, ``area_filter``, ``message``,
+# ``by_domain``, ``state_filter_note``, and ``area_names`` are
+# intentionally NOT in the strip set — the E2E test suite empirically
+# pins their presence (search_type at 17+ sites, domain_filter at 6,
+# area_filter at 1, message at 2), so callers verifiably depend on them.
+# All are documented as top-level keys + retained in
+# ``_ALWAYS_KEEP_PROJECTION``.
 _ENTITIES_BRANCH_SKIP_KEYS: tuple[str, ...] = (
     "results",
     "total_matches",
     "has_more",
     "next_offset",
-    "search_type",
-    "domain_filter",
-    "area_filter",
     "state_filter",
     "area_name",
     "note",
-    # Redundant human-readable string echoing total_matches=0 + the
-    # already-known filter — same class as ``note``. The caller has the
-    # filter inputs they passed; ``total_matches`` tells them whether the
-    # search hit anything.
-    "message",
 )
 
 # Derived from ``_CONFIG_BUCKETS``: every bucket entry is the plural
@@ -160,6 +153,24 @@ _ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
         # ``["Kitchen", "Kitchen Pantry"]``). Surfaces which areas the
         # search actually scanned — caller value beyond the input echo.
         "area_names",
+        # Entity-branch internal mode label ("exact_match", "fuzzy_search",
+        # "area_only", "area_filtered_query", "domain_listing"). E2E tests
+        # pin its presence at 17+ assertion sites — callers verifiably
+        # rely on it to disambiguate which entity-search path produced
+        # the result, so retained at the envelope top instead of stripped.
+        "search_type",
+        # Caller-input echoes — would normally be stripped as no-value
+        # echoes (the caller has the inputs they passed), but the E2E
+        # test suite pins their presence (domain_filter at 6 assertion
+        # sites, area_filter at 1), so callers do read them back. Kept
+        # at the envelope top + documented.
+        "domain_filter",
+        "area_filter",
+        # Zero-result diagnostic ("No <domain> entities found in area:
+        # <area>"). E2E tests pin it at 2 sites. Conditional emission
+        # under area_filter + zero-result; survives ``fields=`` projection
+        # so a narrowing caller still gets the explanation.
+        "message",
     }
 )
 
@@ -681,13 +692,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Distinct from `result_fields` (which projects each "
                     "entity record's fields). Available keys: success, "
                     "query, entities, automations, scripts, scenes, "
-                    "helpers, dashboards, search_types, "
+                    "helpers, dashboards, search_types, search_type, "
                     "entity_total_matches, config_total_matches, count, "
                     "offset, limit, has_more, next_offset, "
                     "entity_has_more, entity_next_offset, "
                     "config_has_more, config_next_offset, by_domain, "
-                    "state_filter_note, area_names, warnings, errors, "
-                    "partial, partial_reason."
+                    "state_filter_note, area_names, domain_filter, "
+                    "area_filter, message, warnings, errors, partial, "
+                    "partial_reason."
                 ),
             ),
         ] = None,
