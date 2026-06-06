@@ -40,6 +40,18 @@ class SceneSearchMixin(ConfigFetchMixin):
 
         Run unconditionally so the platform filter is available even when the
         bulk fetch returned nothing (the common Hue-only case).
+
+        Assumption — caveat for downstream callers: when ``registry_failed``
+        is ``False``, the returned ``homeassistant_scene_uids`` set is
+        assumed to be COMPLETE — every HA-managed scene the registry knows
+        about appears in the set. ``_select_scene_ids_to_fetch`` relies on
+        this to classify out-of-set UIDs as integration-managed. If HA ever
+        returns a successful-but-truncated ``entity_registry/list`` response
+        (no current known case), genuinely-HA-managed scenes whose UIDs are
+        missing from the response would be misclassified as
+        integration-managed and never fetched. Detecting a truncated
+        registry response is not generally possible from its shape — the
+        function trusts ``success: True`` as a completeness signal.
         """
         homeassistant_scene_uids: set[str] = set()
         # Issue #1168 R7 blocker 17/21: registry-derived slug->storage map for
