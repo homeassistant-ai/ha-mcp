@@ -74,6 +74,11 @@ _ENTITIES_BRANCH_SKIP_KEYS: tuple[str, ...] = (
     "state_filter",
     "area_name",
     "note",
+    # Redundant human-readable string echoing total_matches=0 + the
+    # already-known filter — same class as ``note``. The caller has the
+    # filter inputs they passed; ``total_matches`` tells them whether the
+    # search hit anything.
+    "message",
 )
 
 # Derived from ``_CONFIG_BUCKETS``: every bucket entry is the plural
@@ -150,6 +155,11 @@ _ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
         # Retained so a caller projecting ``fields=["results", ...]``
         # still gets the explanation.
         "state_filter_note",
+        # Resolved area names matching the ``area_filter`` input (which
+        # may be fuzzy, e.g. ``area_filter="kitchen"`` → matches
+        # ``["Kitchen", "Kitchen Pantry"]``). Surfaces which areas the
+        # search actually scanned — caller value beyond the input echo.
+        "area_names",
     }
 )
 
@@ -659,8 +669,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "offset, limit, has_more, next_offset, "
                     "entity_has_more, entity_next_offset, "
                     "config_has_more, config_next_offset, by_domain, "
-                    "state_filter_note, warnings, errors, partial, "
-                    "partial_reason."
+                    "state_filter_note, area_names, warnings, errors, "
+                    "partial, partial_reason."
                 ),
             ),
         ] = None,

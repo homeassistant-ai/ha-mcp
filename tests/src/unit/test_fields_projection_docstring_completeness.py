@@ -152,6 +152,9 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 # callers projecting via ``fields=`` still get the dual-
                 # count explanation.
                 "state_filter_note",
+                # Resolved area names (fuzzy `area_filter` may match
+                # multiple areas) — caller value beyond the input echo.
+                "area_names",
                 "warnings",
                 "errors",
                 "partial",
@@ -436,6 +439,58 @@ def test_fields_description_lists_every_emitted_key(spec: dict[str, Any]) -> Non
 # ---------------------------------------------------------------------------
 # Meta-tests: pin the scanner's own invariants so they can't silently drift.
 # ---------------------------------------------------------------------------
+
+
+def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
+    """Closes the structural blindness called out in PR #1529 round-3 hygiene #4.
+
+    The parametrized ``ha_search`` drift-check runs in manifest mode and
+    is structurally blind to keys the entities branch emits but that
+    ``_merge_payload_metadata`` then propagates into the orchestrator
+    response. A new key added to ``ha_search_entities``'s sub-payload
+    builders would silently land at the top level of ``ha_search`` and
+    pass the manifest check (the manifest is hand-maintained, doesn't
+    re-derive).
+
+    Harvest every key emitted from the sub-payload builders inside
+    ``ha_search_entities`` (response-shaped dicts identified by the
+    ``{"results", "total_matches"}`` marker) and require each one to be
+    either:
+
+    - in ``_ENTITIES_BRANCH_SKIP_KEYS`` (intentionally stripped by the
+      orchestrator), OR
+    - in the ``documented_must_equal`` manifest for ``ha_search``
+      (intentionally surfaced at the top level + listed in the
+      ``fields=`` ``Available keys`` enumeration + retained in
+      ``_ALWAYS_KEEP_PROJECTION``).
+
+    Adding a new key to either bucket forces the contract decision
+    explicitly; landing in neither raises this test.
+    """
+    from ha_mcp.tools.tools_search import _ENTITIES_BRANCH_SKIP_KEYS
+
+    markers = frozenset({"results", "total_matches"})
+    emitted = _harvest_marker_dicts(
+        "tools/tools_search.py", "ha_search_entities", markers
+    )
+    assert emitted, (
+        "harvested no response-shaped dicts from ha_search_entities — the "
+        "marker set ({'results', 'total_matches'}) may need updating"
+    )
+
+    ha_search_spec = next(s for s in TOOL_SPECS if s["tool"] == "ha_search")
+    documented = ha_search_spec["documented_must_equal"]
+    stripped = set(_ENTITIES_BRANCH_SKIP_KEYS)
+
+    uncategorised = emitted - stripped - documented - _AUTO_RETAINED
+    assert not uncategorised, (
+        f"ha_search_entities emits {sorted(uncategorised)!r} into its "
+        f"sub-payload, but the orchestrator neither strips them (not in "
+        f"_ENTITIES_BRANCH_SKIP_KEYS) nor documents them (not in the "
+        f"`Available keys:` enumeration / documented_must_equal manifest). "
+        f"Either add to _ENTITIES_BRANCH_SKIP_KEYS to strip, or add to the "
+        f"manifest + docstring + _ALWAYS_KEEP_PROJECTION to surface."
+    )
 
 
 def test_harvester_finds_dismissed_repair_count_in_ha_get_overview() -> None:
