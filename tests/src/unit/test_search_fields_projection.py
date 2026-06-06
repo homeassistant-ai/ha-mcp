@@ -536,19 +536,35 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
         assert padded_ids == plain_ids
 
     @pytest.mark.asyncio
-    async def test_state_filter_echoed_in_response(self, search_tool):
-        """state_filter value (after strip) is echoed back in the data dict."""
+    async def test_state_filter_not_echoed_at_top_level(self, search_tool):
+        """state_filter is a caller-input echo and must not bleed into the
+        ha_search top-level envelope (entities-branch strip — see
+        `_ENTITIES_BRANCH_SKIP_KEYS`). The filtering still applies to
+        `entities`; the caller already has the input they passed.
+        """
         result = await search_tool(query="light", state_filter="on")
-        assert result["state_filter"] == "on"
+        assert "state_filter" not in result, (
+            f"state_filter must not echo at top level of ha_search; "
+            f"got keys {sorted(result)}"
+        )
 
     @pytest.mark.asyncio
     async def test_state_filter_domain_listing_branch(self, search_tool):
-        """state_filter works in the domain_listing branch (empty query + domain_filter)."""
+        """state_filter works in the domain_listing branch (empty query + domain_filter).
+
+        The filter still applies to each entity in ``entities``; the input
+        echo at top level is stripped at the orchestrator (see
+        ``_ENTITIES_BRANCH_SKIP_KEYS``), so callers must not expect the
+        echo even when they read it through the domain_listing branch.
+        """
         result = await search_tool(domain_filter="light", state_filter="on")
         data = result
         for entity in data["entities"]:
             assert entity["state"] == "on"
-        assert data.get("state_filter") == "on"
+        assert "state_filter" not in data, (
+            f"state_filter must not echo at top level even in domain_listing; "
+            f"got keys {sorted(data)}"
+        )
 
     @pytest.mark.asyncio
     async def test_state_filter_whitespace_only_treated_as_no_filter(self, search_tool):
@@ -666,29 +682,28 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
         assert "state_filter_note" in data
         assert "has_more" in data["state_filter_note"]
 
-    @pytest.mark.skip(
-        reason="ha_search does not expose `fields=` top-level projection — only `result_fields=` (entity-record projection)."
-    )
     @pytest.mark.asyncio
     async def test_state_filter_note_survives_fields_projection(self, search_tool):
         """state_filter_note is force-retained even when not in fields=.
 
-        A caller with fields=["results", "total_matches"] still needs the note
-        to understand that total_matches is the unfiltered count.
+        A caller projecting to only ``entities`` still needs the note to
+        understand that ``entity_total_matches`` is the unfiltered fuzzy
+        count, not the post-filter result count. Pinned via
+        ``_ALWAYS_KEEP_PROJECTION``.
         """
         result = await search_tool(
             query="light",
             exact_match=False,
             state_filter="on",
-            fields=["results", "total_matches"],
+            fields=["entities"],
         )
         data = result
         # state_filter_note must be force-retained even when not listed in fields=
         assert "state_filter_note" in data, (
-            "state_filter_note must survive fields= projection"
+            "state_filter_note must survive fields= projection "
+            f"(in _ALWAYS_KEEP_PROJECTION); got keys {sorted(data)}"
         )
-        # Projected keys present
-        assert "entity_total_matches" in data
+        # Requested key present.
         assert "entities" in data
-        # Non-requested keys absent (count was not in fields=)
-        assert "count" not in data
+        # entity_total_matches is also force-retained (in _ALWAYS_KEEP_PROJECTION).
+        assert "entity_total_matches" in data

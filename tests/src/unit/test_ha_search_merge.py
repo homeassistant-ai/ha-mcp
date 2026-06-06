@@ -15,6 +15,7 @@ from ha_mcp.tools.smart_search._deep import DeepSearchMixin
 from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
 from ha_mcp.tools.tools_search import (
     _ALWAYS_KEEP_PROJECTION,
+    _ENTITIES_BRANCH_SKIP_KEYS,
     _INTENT_SKIP_WARNING,
     _compute_eligibility,
     _emit_intent_skip_warning,
@@ -896,4 +897,144 @@ def test_budget_partial_flag_failures_append_to_existing_reason() -> None:
     assert (
         "Helper list fetch incomplete: 1 input_* type(s) failed"
         in (response["partial_reason"])
+    )
+
+
+def test_entities_branch_skip_keys_strip_real_leak_set() -> None:
+    """The orchestrator strips every entity sub-payload context key that the
+    entities branch actually emits AND has no caller value at the envelope
+    top — caller-input echoes (``domain_filter``, ``area_filter``,
+    ``state_filter``), the internal mode label (``search_type``), per-entity
+    decoration (``area_name``), and the redundant ``note`` mode label. None
+    are in ``_ALWAYS_KEEP_PROJECTION`` nor the ``fields=`` Available keys
+    docstring, so leaking them would advertise undocumented keys via the
+    typo-guard while a real ``fields=`` projection silently strips them.
+
+    ``by_domain`` (toggle-gated by ``group_by_domain=True``) and
+    ``state_filter_note`` (conditional under fuzzy + state_filter) are
+    intentionally NOT stripped — both carry observable caller value at the
+    envelope top and live in ``_ALWAYS_KEEP_PROJECTION`` + the docstring.
+
+    The constant must also include the pagination plumbing
+    (``results``/``total_matches``/``has_more``/``next_offset``) so the
+    orchestrator can synthesise the per-surface ``entity_*`` versions from
+    them without first-wins clobbering.
+    """
+    # Mirrors the real emission surface verified via grep on the
+    # entities-branch (tools_search.py L1228/1517/1667 search_type;
+    # L1231/1357/1421/1617 domain_filter; L1225/1339/1413/1713 area_filter;
+    # L1233/1359/1423/1521/1674 state_filter; L1236/1646
+    # state_filter_note; L1350 area_name; L1518 note; L1259/1388/1542/1665
+    # by_domain). Phantoms (``area_id`` is loop var, ``suggestions`` is
+    # ha_get_bulk_status only) are NOT included.
+    payload = {
+        "results": [{"entity_id": "light.kitchen"}],
+        "total_matches": 1,
+        "has_more": False,
+        "next_offset": 0,
+        "search_type": "exact_match",
+        "domain_filter": "light",
+        "area_filter": "Kitchen",
+        "state_filter": "on",
+        "area_name": "Kitchen",
+        "note": "Listing all light entities (empty query with domain_filter)",
+        "by_domain": {"light": [{"entity_id": "light.kitchen"}]},
+        "state_filter_note": "fuzzy mode — total_matches is unfiltered count",
+        "warnings": ["seeded warning"],
+    }
+    response: dict = {"success": True, "query": "kitchen", "warnings": []}
+    _merge_payload_metadata(response, payload, skip_keys=_ENTITIES_BRANCH_SKIP_KEYS)
+
+    # Stripped keys must not appear at top level.
+    must_strip = {
+        "results",
+        "total_matches",
+        "has_more",
+        "next_offset",
+        "search_type",
+        "domain_filter",
+        "area_filter",
+        "state_filter",
+        "area_name",
+        "note",
+    }
+    leaked = sorted(must_strip & set(response))
+    assert not leaked, (
+        f"entity sub-payload context keys leaked into top-level response: {leaked}; "
+        "extend _ENTITIES_BRANCH_SKIP_KEYS"
+    )
+
+    # ``by_domain`` and ``state_filter_note`` are intentionally kept
+    # (documented + always-keep — toggle-gated feature + conditional
+    # diagnostic with observable caller value).
+    assert response.get("by_domain") == {"light": [{"entity_id": "light.kitchen"}]}, (
+        "by_domain must survive the orchestrator merge — it is documented + "
+        "in _ALWAYS_KEEP_PROJECTION as the toggle-gated feature output"
+    )
+    assert response.get("state_filter_note") == (
+        "fuzzy mode — total_matches is unfiltered count"
+    ), (
+        "state_filter_note must survive the orchestrator merge — it explains "
+        "why entity_total_matches differs from count under fuzzy + state_filter"
+    )
+
+    # warnings must still accumulate (it's NOT in skip_keys).
+    assert response["warnings"] == ["seeded warning"]
+
+
+def test_entity_context_keys_not_in_always_keep_projection() -> None:
+    """The entity sub-payload CONTEXT keys (the ones added specifically to
+    keep the entity-side search context from leaking) must not appear in
+    ``_ALWAYS_KEEP_PROJECTION`` — otherwise a ``fields=`` projection would
+    resurrect a key the orchestrator just stripped, defeating the strip.
+
+    ``has_more``/``next_offset`` appear in both tuples by design: the
+    skip-set drops the per-surface payload values before merge (so the
+    orchestrator can synthesise combined + per-surface versions cleanly);
+    the always-keep set then retains the synthesised combined keys post-
+    merge under the same names. They share names but live in different
+    semantic positions.
+    """
+    pagination_plumbing = {"results", "total_matches", "has_more", "next_offset"}
+    context_only = set(_ENTITIES_BRANCH_SKIP_KEYS) - pagination_plumbing
+    overlap = context_only & set(_ALWAYS_KEEP_PROJECTION)
+    assert not overlap, (
+        f"entity context keys appear in both _ENTITIES_BRANCH_SKIP_KEYS and "
+        f"_ALWAYS_KEEP_PROJECTION: {overlap} — a fields= projection would "
+        "resurrect them after the orchestrator strip, undoing the fix"
+    )
+
+
+def test_budget_partial_flag_uses_space_semicolon_space_separator() -> None:
+    """`" ; "` is the standardised boundary between fragments — matches
+    ``_merge_payload_metadata`` and ``_apply_scene_partial_flag``. A
+    regression to ``", "`` or ``"\\n"`` would still pass the substring
+    assertions in the other tests but break callers (Haiku in particular)
+    that split on ``" ; "`` to enumerate failure modes. Pin it explicitly.
+    """
+    # Fragment-to-fragment within a single _apply_per_type_partial_flag call.
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(
+        response, automation_skipped=2, script_skipped=4
+    )
+    reason = response["partial_reason"]
+    assert " ; " in reason, (
+        f"per-type fragments must be joined with ' ; '; got {reason!r}"
+    )
+    assert ", " not in reason or reason.count(" ; ") >= 1, (
+        f"expected ' ; ' separator, not ', '; got {reason!r}"
+    )
+
+    # Existing-reason-to-new-fragment boundary.
+    seeded: dict = {
+        "success": True,
+        "partial": True,
+        "partial_reason": "Scene config fetch incomplete: 1 failed, 2 skipped.",
+    }
+    DeepSearchMixin._apply_per_type_partial_flag(seeded, automation_skipped=3)
+    assert (
+        "skipped. ; Automation config fetch incomplete" in seeded["partial_reason"]
+    ), (
+        f"existing reason and new fragment must be joined with ' ; '; "
+        f"got {seeded['partial_reason']!r}"
     )

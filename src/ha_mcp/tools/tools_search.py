@@ -47,6 +47,35 @@ _CONFIG_BUCKETS: tuple[str, ...] = (
     "dashboards",
 )
 
+# Entity sub-payload keys the orchestrator must NOT lift to the top level
+# of the flat dual-surface envelope. They describe the entity-side search
+# only — ``search_type`` is the entity-branch's internal mode label;
+# ``domain_filter`` / ``area_filter`` / ``state_filter`` are caller-input
+# echoes (the caller already has them); ``area_name`` is per-entity
+# decoration that belongs inside the entity record, not at the envelope
+# top; ``note`` is the redundant mode-label string. None are in
+# ``_ALWAYS_KEEP_PROJECTION`` or the ``fields=`` Available keys docstring,
+# so leaking them would advertise undocumented keys via the typo-guard
+# while a real ``fields=`` projection silently strips them.
+#
+# ``by_domain`` and ``state_filter_note`` are intentionally NOT in the
+# strip set — both are toggle-gated diagnostic / feature outputs
+# (``group_by_domain=True`` and fuzzy+state_filter respectively) with
+# observable caller value at the envelope top. Both are documented as
+# top-level keys + retained in ``_ALWAYS_KEEP_PROJECTION``.
+_ENTITIES_BRANCH_SKIP_KEYS: tuple[str, ...] = (
+    "results",
+    "total_matches",
+    "has_more",
+    "next_offset",
+    "search_type",
+    "domain_filter",
+    "area_filter",
+    "state_filter",
+    "area_name",
+    "note",
+)
+
 # Derived from ``_CONFIG_BUCKETS``: every bucket entry is the plural
 # response-key (``automations`` etc.); the ``search_types`` token is the
 # singular (drop the trailing ``s``). Deriving keeps the two lists in
@@ -111,6 +140,16 @@ _ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
         "entity_next_offset",
         "config_has_more",
         "config_next_offset",
+        # Toggle-gated entity-branch feature output — retained so callers
+        # using ``group_by_domain=True`` can pair it with ``fields=`` for
+        # response shaping without losing the grouping itself.
+        "by_domain",
+        # Conditional diagnostic — fires under fuzzy + state_filter to
+        # explain why ``entity_total_matches`` differs from ``count`` (the
+        # fuzzy-engine count is unfiltered; the filter applies post-hoc).
+        # Retained so a caller projecting ``fields=["results", ...]``
+        # still gets the explanation.
+        "state_filter_note",
     }
 )
 
@@ -619,8 +658,9 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "entity_total_matches, config_total_matches, count, "
                     "offset, limit, has_more, next_offset, "
                     "entity_has_more, entity_next_offset, "
-                    "config_has_more, config_next_offset, warnings, "
-                    "errors, partial, partial_reason."
+                    "config_has_more, config_next_offset, by_domain, "
+                    "state_filter_note, warnings, errors, partial, "
+                    "partial_reason."
                 ),
             ),
         ] = None,
@@ -863,15 +903,12 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 # branches with identical values — first-wins via the merge
                 # is correct, no skip needed. ``has_more``/``next_offset``
                 # ARE per-surface so they must be skipped (synthesized below).
+                # See ``_ENTITIES_BRANCH_SKIP_KEYS`` for why the entity
+                # sub-payload context keys are stripped here too.
                 _merge_payload_metadata(
                     response,
                     payload,
-                    skip_keys=(
-                        "results",
-                        "total_matches",
-                        "has_more",
-                        "next_offset",
-                    ),
+                    skip_keys=_ENTITIES_BRANCH_SKIP_KEYS,
                 )
             elif label == "configs":
                 for bucket in _CONFIG_BUCKETS:

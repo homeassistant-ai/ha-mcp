@@ -144,6 +144,14 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "entity_next_offset",
                 "config_has_more",
                 "config_next_offset",
+                # Toggle-gated entity-branch feature output — kept at top
+                # level + in ``_ALWAYS_KEEP_PROJECTION`` so a caller using
+                # ``group_by_domain=True`` can pair it with ``fields=``.
+                "by_domain",
+                # Conditional diagnostic (fuzzy + state_filter) — kept so
+                # callers projecting via ``fields=`` still get the dual-
+                # count explanation.
+                "state_filter_note",
                 "warnings",
                 "errors",
                 "partial",
