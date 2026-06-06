@@ -527,15 +527,21 @@ async def test_ha_search_combined_surface_populated(mcp_client):
             description="ha_search finds fixture automation on config branch",
         )
 
-        # Entity surface: query is unique to the fixture, so entities may
-        # be empty (no entity_id matches "combined_surface_fixture"). The
-        # assertion that matters for S7(a) is that the orchestrator fanned
-        # out and the config branch returned the fixture match.
+        # The fixture automation's entity_id is
+        # ``automation.combined_surface_fixture``; the query substring
+        # matches both the entity_id (entity surface) AND the alias /
+        # config body (config surface). Both must populate for the test
+        # to verify the dual-surface merge it names — without the entity
+        # assertion the test would silently degrade to a config-only
+        # check (the review's S7-new finding).
         entities = data.get("entities", [])
+        assert len(entities) > 0, (
+            "Entity branch should match the fixture automation's entity_id"
+        )
         config_buckets = ("automations", "scripts", "scenes", "helpers", "dashboards")
         config_populated = sum(len(data.get(b, [])) for b in config_buckets)
         assert config_populated > 0, (
-            f"Fixture automation should be found on config branch; got: "
+            f"Config branch should find the fixture automation; got: "
             f"{ {b: len(data.get(b, [])) for b in config_buckets} }"
         )
 

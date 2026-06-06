@@ -87,6 +87,66 @@ def _validate_search_types(parsed: list[str] | None) -> None:
         )
 
 
+_INTENT_SKIP_WARNING: str = (
+    "config-body search skipped: domain_filter / area_filter / "
+    "state_filter signals entity-only intent; pass "
+    'search_types=["automation", ...] to include config matches '
+    "alongside entity results."
+)
+
+
+def _emit_intent_skip_warning(
+    response: dict[str, Any], body_skipped_by_intent_gate: bool
+) -> None:
+    """Append the caller-facing warning when the entity-intent gate fires.
+
+    Extracted from the orchestrator so the contract — gate-True ⟹ exactly
+    one warning entry naming the opt-back-in mechanism — is unit-testable
+    without an MCP fixture. Pre-existing warnings already in the response
+    are preserved.
+    """
+    if body_skipped_by_intent_gate:
+        response.setdefault("warnings", []).append(_INTENT_SKIP_WARNING)
+
+
+def _synthesize_combined_pagination(response: dict[str, Any]) -> None:
+    """Set the flat ``has_more`` / ``next_offset`` from per-surface keys.
+
+    The flat keys give callers a "iterate normally" surface; per-surface
+    keys let callers see which surface still has results. Both branches
+    paginate with the same caller offset/limit, so their per-surface
+    next_offsets encode the same value (offset + limit) when set —
+    ``or`` picks whichever is non-None. Extracted from the orchestrator
+    so the OR-synthesis is unit-testable against real code, not an
+    inline simulation.
+    """
+    entity_has_more = bool(response.get("entity_has_more"))
+    config_has_more = bool(response.get("config_has_more"))
+    response["has_more"] = entity_has_more or config_has_more
+    response["next_offset"] = response.get("entity_next_offset") or response.get(
+        "config_next_offset"
+    )
+
+
+def _finalize_partial_state(
+    response: dict[str, Any],
+    *,
+    partial_local: bool,
+    errors_local: list[dict[str, str]],
+) -> None:
+    """Apply the orchestrator-local partial state to the response.
+
+    Sets ``partial: True`` when a branch raised, AND extends ``errors[]``
+    with the orchestrator-tagged surface errors — extending, not clobbering,
+    so any payload-side errors already accumulated by
+    ``_merge_payload_metadata`` survive. Extracted from the orchestrator
+    so the no-clobber contract is unit-testable.
+    """
+    if partial_local:
+        response["partial"] = True
+        response["errors"].extend(errors_local)
+
+
 def _compute_eligibility(
     *,
     query_text: str,
@@ -638,16 +698,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "errors": [],
             "warnings": [],
         }
-        if body_skipped_by_intent_gate:
-            # Surface the body-skip so a caller who actually wanted config
-            # matches alongside the entity scope can see why their request
-            # returned no automations / scripts / etc.
-            response["warnings"].append(
-                "config-body search skipped: domain_filter / area_filter / "
-                "state_filter signals entity-only intent; pass "
-                'search_types=["automation", ...] to include config matches '
-                "alongside entity results."
-            )
+        # Surface the body-skip so a caller who actually wanted config
+        # matches alongside the entity scope can see why their request
+        # returned no automations / scripts / etc.
+        _emit_intent_skip_warning(response, body_skipped_by_intent_gate)
         partial = False
         errors: list[dict[str, str]] = []
         for label, outcome in zip(labels, outcomes, strict=True):
@@ -717,27 +771,8 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
         )
 
-        # Per-surface pagination: each branch paginates its own surface with
-        # the shared ``limit/offset`` (see #1529 review). The flat
-        # ``has_more`` / ``next_offset`` keys give the caller the next page
-        # for "iterate normally" usage; per-surface ``entity_has_more`` /
-        # ``config_has_more`` (and matching ``_next_offset``) let callers
-        # see which surface still has results. Both branches use the same
-        # caller offset/limit so ``entity_next_offset`` and
-        # ``config_next_offset`` encode the same value (offset + limit) when
-        # set — picking whichever is non-None is correct.
-        entity_has_more = bool(response.get("entity_has_more"))
-        config_has_more = bool(response.get("config_has_more"))
-        response["has_more"] = entity_has_more or config_has_more
-        response["next_offset"] = response.get("entity_next_offset") or response.get(
-            "config_next_offset"
-        )
-
-        if partial:
-            response["partial"] = True
-            # Accumulate orchestrator-tagged surface errors after any
-            # payload-side errors already merged in — don't clobber.
-            response["errors"].extend(errors)
+        _synthesize_combined_pagination(response)
+        _finalize_partial_state(response, partial_local=partial, errors_local=errors)
 
         return response
 

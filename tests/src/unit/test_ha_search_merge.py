@@ -13,8 +13,12 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.smart_search._deep import DeepSearchMixin
 from ha_mcp.tools.tools_search import (
+    _INTENT_SKIP_WARNING,
     _compute_eligibility,
+    _emit_intent_skip_warning,
+    _finalize_partial_state,
     _merge_payload_metadata,
+    _synthesize_combined_pagination,
     _validate_search_types,
 )
 
@@ -385,135 +389,109 @@ def test_two_payload_pagination_no_first_wins_leak() -> None:
     assert "next_offset" not in response
 
 
-def test_dual_surface_next_offset_picks_non_none() -> None:
-    """When only one surface has more results, the flat ``next_offset`` picks
-    that surface's value (both encode caller_offset + caller_limit when set).
-    This mirrors the orchestrator's post-merge synthesis logic."""
-    # Entity has more, config doesn't.
-    response = {"entity_next_offset": 10, "config_next_offset": None}
-    flat = response.get("entity_next_offset") or response.get("config_next_offset")
-    assert flat == 10
+def test_synthesize_combined_pagination_truth_table() -> None:
+    """Pin S7(b) + S7(c)-pagination against the real
+    ``_synthesize_combined_pagination`` helper. The previous tests
+    reimplemented the OR-synthesis and next_offset pick inside the test
+    body, so a regression at the real call site (e.g. ``or`` → ``and``)
+    would have silently passed."""
 
-    # Config has more, entity doesn't.
-    response = {"entity_next_offset": None, "config_next_offset": 5}
-    flat = response.get("entity_next_offset") or response.get("config_next_offset")
-    assert flat == 5
+    def _run(eh: bool, eno: int | None, ch: bool, cno: int | None) -> dict:
+        response: dict = {
+            "entity_has_more": eh,
+            "entity_next_offset": eno,
+            "config_has_more": ch,
+            "config_next_offset": cno,
+        }
+        _synthesize_combined_pagination(response)
+        return response
 
-    # Both have more — values are equal (both = caller_offset + caller_limit),
-    # picking either is correct; ``or`` returns the first (entity).
-    response = {"entity_next_offset": 10, "config_next_offset": 10}
-    flat = response.get("entity_next_offset") or response.get("config_next_offset")
-    assert flat == 10
+    # Neither surface has more — flat keys are both falsy.
+    r = _run(False, None, False, None)
+    assert r["has_more"] is False
+    assert r["next_offset"] is None
 
-    # Neither has more.
-    response = {"entity_next_offset": None, "config_next_offset": None}
-    flat = response.get("entity_next_offset") or response.get("config_next_offset")
-    assert flat is None
+    # Only entity has more — flat keys take the entity side.
+    r = _run(True, 10, False, None)
+    assert r["has_more"] is True
+    assert r["next_offset"] == 10
 
+    # Only config has more — flat keys take the config side.
+    r = _run(False, None, True, 5)
+    assert r["has_more"] is True
+    assert r["next_offset"] == 5
 
-def test_dual_surface_has_more_is_or_of_branches() -> None:
-    """Pin S7(b): the flat ``has_more`` is the boolean OR of the per-surface
-    flags. Previously covered only by an inline reimplementation inside
-    the e2e pagination test; lifting it to unit level catches the
-    synthesis logic regressing without a full e2e run."""
-
-    # Mirrors tools_search.py: response["has_more"] =
-    #     bool(response.get("entity_has_more")) or
-    #     bool(response.get("config_has_more"))
-    def synthesise(eh: bool, ch: bool) -> bool:
-        response: dict = {"entity_has_more": eh, "config_has_more": ch}
-        return bool(response.get("entity_has_more")) or bool(
-            response.get("config_has_more")
-        )
-
-    assert synthesise(False, False) is False
-    assert synthesise(True, False) is True
-    assert synthesise(False, True) is True
-    assert synthesise(True, True) is True
+    # Both have more — flat picks the entity value (first non-None via ``or``).
+    r = _run(True, 10, True, 10)
+    assert r["has_more"] is True
+    assert r["next_offset"] == 10
 
 
-def test_orchestrator_entity_branch_exception_partial_shape() -> None:
-    """Pin S7(c): when the entity branch raises and the config branch
-    returns clean, the orchestrator's exception-handling at
-    ``tools_search.py:~554-606`` should produce a response with
-    ``partial: True``, an ``errors`` list tagged with ``surface: 'entities'``,
-    AND the surviving config bucket's payload preserved (not clobbered by
-    the orchestrator-local errors assignment at the end of the merge loop).
-    The shape here mirrors what the real ha_search would assemble; unit-
-    level so a regression in the clobber-or-extend behavior catches without
-    a full e2e fixture."""
-    # Simulate the orchestrator's response init + the in-loop exception
-    # bookkeeping + the post-loop ``response["errors"].extend(errors)``.
+def test_finalize_partial_state_extends_errors_not_clobbers() -> None:
+    """Pin S7(c) against the real ``_finalize_partial_state``. The no-
+    clobber contract is the heart of the A6 fix; a regression that
+    re-introduces ``response["errors"] = errors_local`` (the original
+    clobber) would now fail here, not silently pass an inline simulation."""
     response: dict = {
-        "success": True,
-        "query": "kitchen",
-        "entities": [],
-        "entity_total_matches": 0,
-        "automations": [],
-        "scripts": [],
-        "scenes": [],
-        "helpers": [],
-        "config_total_matches": 0,
         "partial": False,
-        "errors": [],
-        "warnings": [],
+        "errors": [{"surface": "config-internal", "code": "BUDGET"}],
     }
-    partial = False
-    orchestrator_errors: list[dict[str, str]] = []
-
-    # Entity branch raised — the orchestrator records the surface tag.
-    entity_exception = RuntimeError("ws_connection_closed")
-    partial = True
-    orchestrator_errors.append({"surface": "entities", "error": str(entity_exception)})
-
-    # Config branch returned clean with its own diagnostic ``warnings`` —
-    # the merge helper picks those up.
-    config_payload = {
-        "success": True,
-        "automations": [{"entity_id": "automation.a"}],
-        "total_matches": 1,
-        "warnings": ["config-side: dashboard opt-in skipped"],
-    }
-    for bucket in ("automations", "scripts", "scenes", "helpers", "dashboards"):
-        if bucket in config_payload:
-            response[bucket] = config_payload[bucket]
-    response["config_total_matches"] = config_payload.get("total_matches", 0)
-    _merge_payload_metadata(
-        response,
-        config_payload,
-        skip_keys=(
-            "automations",
-            "scripts",
-            "scenes",
-            "helpers",
-            "dashboards",
-            "total_matches",
-            "has_more",
-            "next_offset",
-        ),
+    orchestrator_errors = [{"surface": "entities", "error": "ws_connection_closed"}]
+    _finalize_partial_state(
+        response, partial_local=True, errors_local=orchestrator_errors
     )
-
-    # End-of-loop: set partial + extend (NOT clobber) the orchestrator's
-    # error list onto whatever the merge already accumulated.
-    if partial:
-        response["partial"] = True
-        response["errors"].extend(orchestrator_errors)
-
-    # Assertions: surface tagging + payload preservation.
     assert response["partial"] is True
+    # Both sets of errors must survive — payload errors first (already in
+    # response from the merge), orchestrator surface errors appended.
     assert response["errors"] == [
-        {"surface": "entities", "error": "ws_connection_closed"}
+        {"surface": "config-internal", "code": "BUDGET"},
+        {"surface": "entities", "error": "ws_connection_closed"},
     ]
-    # Config payload's warnings survived the merge.
-    assert response["warnings"] == ["config-side: dashboard opt-in skipped"]
-    # Surviving config bucket is present.
-    assert response["automations"] == [{"entity_id": "automation.a"}]
-    assert response["entities"] == []
-    assert response["entity_total_matches"] == 0
-    assert response["config_total_matches"] == 1
 
 
-# Budget-exhaustion partial flag --------------------------------------------
+def test_finalize_partial_state_noop_when_no_branch_raised() -> None:
+    """When the orchestrator-local partial is False (both branches returned
+    cleanly), the response keeps whatever ``partial`` / ``errors`` the merge
+    helper already accumulated — no overwrite."""
+    response: dict = {
+        "partial": True,
+        "errors": [{"surface": "config-internal", "code": "BUDGET"}],
+    }
+    _finalize_partial_state(response, partial_local=False, errors_local=[])
+    assert response["partial"] is True
+    assert response["errors"] == [{"surface": "config-internal", "code": "BUDGET"}]
+
+
+# Entity-intent skip warning emission ------------------------------------
+
+
+def test_intent_skip_warning_emitted_when_gate_fires() -> None:
+    """Pin S6-new: the gate-True path emits the entity-intent warning
+    naming ``search_types=[...]`` as the opt-back-in mechanism. The
+    previous test surface only covered the gate's True/False decision;
+    nothing verified the warning actually reaches the response."""
+    response: dict = {"warnings": []}
+    _emit_intent_skip_warning(response, body_skipped_by_intent_gate=True)
+    assert len(response["warnings"]) == 1
+    assert response["warnings"][0] == _INTENT_SKIP_WARNING
+    # The user-visible opt-back-in hint must be present; agents read this.
+    assert "search_types=" in response["warnings"][0]
+
+
+def test_intent_skip_warning_not_emitted_when_gate_quiet() -> None:
+    response: dict = {"warnings": ["pre-existing"]}
+    _emit_intent_skip_warning(response, body_skipped_by_intent_gate=False)
+    assert response["warnings"] == ["pre-existing"]
+
+
+def test_intent_skip_warning_preserves_existing_warnings() -> None:
+    response: dict = {"warnings": ["from-entity-branch"]}
+    _emit_intent_skip_warning(response, body_skipped_by_intent_gate=True)
+    assert response["warnings"][0] == "from-entity-branch"
+    assert response["warnings"][1] == _INTENT_SKIP_WARNING
+
+
+# Per-type partial flag ---------------------------------------------------
 
 
 def test_budget_partial_flag_set_when_automation_skipped() -> None:
