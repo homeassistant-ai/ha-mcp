@@ -1,5 +1,5 @@
 """
-Tests for ha_deep_search tool - searches within automation/script/helper configs.
+Tests for ha_search tool - searches within automation/script/helper configs.
 """
 
 import logging
@@ -55,7 +55,7 @@ async def test_deep_search_automation(mcp_client):
         # Poll until HA registers the automation and deep search can find it
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": "deep_search_test_sensor",
                 "search_types": ["automation"],
@@ -88,7 +88,7 @@ async def test_deep_search_automation(mcp_client):
 
         # Test: Search for the service call in the action
         result2 = await mcp_client.call_tool(
-            "ha_deep_search",
+            "ha_search",
             {"query": "light.turn_on", "search_types": ["automation"], "limit": 10},
         )
         data2 = assert_mcp_success(result2, "Deep search for service in automation")
@@ -140,7 +140,7 @@ async def test_deep_search_script(mcp_client):
         # Poll until HA registers the script and deep search can find it
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": "deep_search_unique_message",
                 "search_types": ["script"],
@@ -173,7 +173,7 @@ async def test_deep_search_script(mcp_client):
 
         # Test: Search for the delay action
         result2 = await mcp_client.call_tool(
-            "ha_deep_search",
+            "ha_search",
             {"query": "delay", "search_types": ["script"], "limit": 10},
         )
         data2 = assert_mcp_success(result2, "Deep search for delay in script")
@@ -222,7 +222,7 @@ async def test_deep_search_helper(mcp_client):
         # Poll until HA registers the helper and deep search can find it
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": "deep_search_option_a",
                 "search_types": ["helper"],
@@ -307,7 +307,7 @@ async def test_deep_search_finds_ui_template_helper(mcp_client):
         #    entry id under `entry_id` (storage helpers use `entity_id`).
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": "Deep Search Template Helper",
                 "search_types": ["helper"],
@@ -331,7 +331,7 @@ async def test_deep_search_finds_ui_template_helper(mcp_client):
         #    core of issue #1457.
         data2 = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": body_marker,
                 "search_types": ["helper"],
@@ -350,7 +350,7 @@ async def test_deep_search_finds_ui_template_helper(mcp_client):
 
         # 3) include_config=True attaches the probed options (template body).
         result3 = await mcp_client.call_tool(
-            "ha_deep_search",
+            "ha_search",
             {
                 "query": body_marker,
                 "search_types": ["helper"],
@@ -430,7 +430,7 @@ async def test_deep_search_finds_non_template_flow_helpers(
     try:
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={"query": name, "search_types": ["helper"], "limit": 10},
             predicate=lambda d: any(
                 h.get("entry_id") == entry_id for h in d.get("helpers", [])
@@ -479,7 +479,7 @@ async def test_deep_search_flow_helper_fuzzy_probes_config(mcp_client):
     try:
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={
                 "query": body_marker,
                 "search_types": ["helper"],
@@ -511,7 +511,7 @@ async def test_deep_search_all_types(mcp_client):
 
     # Search for a common keyword that might appear in multiple types
     result = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {
             "query": "light",
             "limit": 20,
@@ -549,7 +549,7 @@ async def test_deep_search_limit(mcp_client):
 
     # Search with a small limit
     result = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {
             "query": "light",
             "limit": 5,
@@ -571,7 +571,7 @@ async def test_deep_search_no_results(mcp_client):
     logger.info("🔍 Testing deep search with no matches")
 
     result = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {
             "query": "xyzabc123_nonexistent_query_string",
             "limit": 10,
@@ -621,7 +621,7 @@ async def test_deep_search_default_includes_scenes(mcp_client):
     logger.info("🔍 Testing deep search default includes scenes bucket")
 
     result = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {"query": "xyzabc123_nonexistent_default_scene_check"},
     )
     data = assert_mcp_success(result, "Default-call deep search")
@@ -674,7 +674,7 @@ async def test_deep_search_default_surfaces_created_scene(mcp_client):
         # that includes 'scene' implicitly.
         data = await wait_for_tool_result(
             mcp_client,
-            tool_name="ha_deep_search",
+            tool_name="ha_search",
             arguments={"query": scene_query_token, "limit": 10},
             predicate=lambda d: any(
                 scene_query_token in (s.get("friendly_name") or "")
@@ -714,7 +714,7 @@ async def test_deep_search_default_surfaces_created_scene(mcp_client):
 async def test_deep_search_invalid_params_returns_error(
     mcp_client, params, description
 ):
-    """Test that ha_deep_search rejects invalid limit and offset values.
+    """Test that ha_search rejects invalid limit and offset values.
 
     Before the fix, invalid values caused silent data corruption:
     limit=-1 dropped the last result (tagged_results[0:-1]), limit=0 returned
@@ -723,7 +723,7 @@ async def test_deep_search_invalid_params_returns_error(
     """
     result = await safe_call_tool(
         mcp_client,
-        "ha_deep_search",
+        "ha_search",
         {"query": "light", **params},
     )
     assert result["success"] is False, (

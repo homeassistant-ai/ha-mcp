@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 
 
 _CONTENT_TYPE_MAP = {
-    "jpeg": "jpeg", "jpg": "jpeg", "png": "png", "gif": "gif",
+    "jpeg": "jpeg",
+    "jpg": "jpeg",
+    "png": "png",
+    "gif": "gif",
 }
 
 
@@ -43,7 +46,7 @@ class CameraTools:
         if response.status_code == 404:
             raise ValueError(
                 f"Camera entity not found: {entity_id}. "
-                "Use ha_search_entities() to find available cameras."
+                "Use ha_search() to find available cameras."
             )
         if response.status_code >= 400:
             raise RuntimeError(
@@ -58,7 +61,11 @@ class CameraTools:
     @tool(
         name="ha_get_camera_image",
         tags={"Camera"},
-        annotations={"idempotentHint": True, "readOnlyHint": True, "title": "Get Camera Image"},
+        annotations={
+            "idempotentHint": True,
+            "readOnlyHint": True,
+            "title": "Get Camera Image",
+        },
     )
     @log_tool_usage
     async def ha_get_camera_image(
@@ -130,7 +137,9 @@ class CameraTools:
             params["height"] = str(height)
 
         try:
-            response = await self._client.httpx_client.get(endpoint, params=params or None)
+            response = await self._client.httpx_client.get(
+                endpoint, params=params or None
+            )
             self._check_response(response, entity_id)
 
             content_type = response.headers.get("content-type", "image/jpeg")

@@ -67,41 +67,6 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "return_harvest": [],
     },
     {
-        "tool": "ha_search_entities",
-        "docstring": ("tools/tools_search.py", "ha_search_entities"),
-        "var_harvest": [
-            ("tools/tools_search.py", "ha_search_entities", "result"),
-            ("tools/tools_search.py", "ha_search_entities", "response"),
-        ],
-        "return_harvest": [
-            ("tools/tools_search.py", "_exact_match_search"),
-            ("tools/smart_search/_entities.py", "smart_entity_search"),
-        ],
-        # ha_search_entities composes the projectable dict under many
-        # local names (``area_search_data``, ``empty_area_data``,
-        # ``domain_listing``...) and ``smart_entity_search`` assembles
-        # ``response = {...}`` before mutating + returning. Catch both
-        # by harvesting from any dict literal whose keys include a
-        # response-shape marker.
-        "marker_harvest": [
-            (
-                "tools/tools_search.py",
-                "ha_search_entities",
-                frozenset({"success", "results", "query"}),
-            ),
-            (
-                "tools/smart_search/_entities.py",
-                "smart_entity_search",
-                frozenset({"success", "results", "query", "matches"}),
-            ),
-        ],
-        # `matches` is the internal name smart_entity_search uses; the
-        # wrapper renames it to `results` via `result.pop("matches")`
-        # before the response reaches the caller, so it's never
-        # user-visible despite the AST harvest finding it.
-        "exclude_internal": frozenset({"matches"}),
-    },
-    {
         # ha_get_state's ``fields=`` projects HA's native entity-record
         # schema (entity_id, state, attributes, ...) — keys come from HA's
         # API, not from code we own, so AST harvest finds nothing. Instead
@@ -140,6 +105,73 @@ TOOL_SPECS: list[dict[str, Any]] = [
             ("tools/tools_areas.py", "ha_list_floors_areas", "response"),
         ],
         "return_harvest": [],
+    },
+    {
+        # ha_search's ``fields=`` projects the top-level response shape —
+        # the always-keep diagnostic / pagination set plus the per-surface
+        # bucket keys. The set is well-defined by the orchestrator's
+        # response-init dict literal, the four per-surface pagination
+        # assignments in the merge loop, the dashboards opt-in bucket
+        # from ``_CONFIG_BUCKETS``, and ``partial_reason`` set via the
+        # merge accumulator + ``_apply_*_partial_flag`` helpers. Use a
+        # ``documented_must_equal`` manifest so any future drift on
+        # either side (new key emitted but not enumerated, or vice
+        # versa) surfaces as a single clear error rather than a partial-
+        # var-harvest miss.
+        "tool": "ha_search",
+        "docstring": ("tools/tools_search.py", "ha_search"),
+        "var_harvest": [],
+        "return_harvest": [],
+        "documented_must_equal": frozenset(
+            {
+                "success",
+                "query",
+                "search_types",
+                "entities",
+                "automations",
+                "scripts",
+                "scenes",
+                "helpers",
+                "dashboards",
+                "entity_total_matches",
+                "config_total_matches",
+                "count",
+                "offset",
+                "limit",
+                "has_more",
+                "next_offset",
+                "entity_has_more",
+                "entity_next_offset",
+                "config_has_more",
+                "config_next_offset",
+                # Toggle-gated entity-branch feature output — kept at top
+                # level + in ``_ALWAYS_KEEP_PROJECTION`` so a caller using
+                # ``group_by_domain=True`` can pair it with ``fields=``.
+                "by_domain",
+                # Conditional diagnostic (fuzzy + state_filter) — kept so
+                # callers projecting via ``fields=`` still get the dual-
+                # count explanation.
+                "state_filter_note",
+                # Resolved area names (fuzzy `area_filter` may match
+                # multiple areas) — caller value beyond the input echo.
+                "area_names",
+                # Entity-branch internal mode label — kept (E2E suite pins
+                # at 17+ assertion sites, callers rely on it to identify
+                # which entity-search path produced the result).
+                "search_type",
+                # Caller-input echoes — kept (E2E suite pins, so callers
+                # actually read them back).
+                "domain_filter",
+                "area_filter",
+                # Conditional zero-result diagnostic — kept (E2E suite
+                # pins at 2 sites).
+                "message",
+                "warnings",
+                "errors",
+                "partial",
+                "partial_reason",
+            }
+        ),
     },
     {
         "tool": "ha_list_services",
@@ -268,6 +300,19 @@ def _harvest_var_keys(rel_path: str, func_name: str, var_name: str) -> set[str]:
                 ):
                     keys.add(tgt.slice.value)
 
+        # var["k"] += ...  (covers ``warnings`` accumulation and similar
+        # augmented writes that AST splits off from the plain ``Assign``
+        # node).
+        if (
+            isinstance(node, ast.AugAssign)
+            and isinstance(node.target, ast.Subscript)
+            and isinstance(node.target.value, ast.Name)
+            and node.target.value.id == var_name
+            and isinstance(node.target.slice, ast.Constant)
+            and isinstance(node.target.slice.value, str)
+        ):
+            keys.add(node.target.slice.value)
+
         # var.setdefault("k", ...)
         if (
             isinstance(node, ast.Call)
@@ -317,35 +362,83 @@ def _harvest_return_keys(rel_path: str, func_name: str) -> set[str]:
 def _harvest_marker_dicts(
     rel_path: str, func_name: str, markers: frozenset[str]
 ) -> set[str]:
-    """Harvest top-level keys from every dict literal (assigned or returned)
-    inside ``func_name`` whose key set intersects ``markers``.
+    """Two-pass harvest of every key landing on a response-shaped dict.
 
     Use for tools whose response is built in many locally-named dicts
-    (``area_search_data``, ``empty_area_data``, ``domain_listing``, ...) —
+    (``area_search_data``, ``empty_area_data``, ``domain_list_data`` …) —
     too many to enumerate in ``var_harvest``. The marker set acts as a
     "this dict is response-shaped" filter.
+
+    Pass 1 — flag a var as response-shaped via *either* signal:
+
+    - It is initialised as a dict literal whose key set intersects ``markers``
+      (catches ``search_data = {"results": ..., "total_matches": ...}``).
+    - A subscript assignment writes a marker key to it (catches ``result =
+      await smart_entity_search(...)`` followed by ``result["results"] =
+      result.pop("matches")`` — the init isn't a literal, but the post-init
+      marker-key write identifies the var as response-shaped).
+
+    Pass 2 — for every flagged var, run ``_harvest_var_keys`` to collect
+    subscript / ``setdefault`` / ``update`` assignments. Literal keys from
+    Pass 1 are unioned in.
     """
     module = _read_module(rel_path)
     try:
         func = _find_function(module, func_name)
     except LookupError:
         return set()
-    keys: set[str] = set()
 
-    def _collect(d: ast.Dict) -> None:
-        this_keys = {
+    keys: set[str] = set()
+    marker_vars: set[str] = set()
+
+    def _literal_keys(d: ast.Dict) -> set[str]:
+        return {
             k.value
             for k in d.keys
             if isinstance(k, ast.Constant) and isinstance(k.value, str)
         }
-        if this_keys & markers:
-            keys.update(this_keys)
 
     for node in ast.walk(func):
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.Return)) and isinstance(
+        # Pass 1a — marker-bearing dict literal assigned or returned.
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
             node.value, ast.Dict
         ):
-            _collect(node.value)
+            literal = _literal_keys(node.value)
+            if literal & markers:
+                keys.update(literal)
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                for tgt in targets:
+                    if isinstance(tgt, ast.Name):
+                        marker_vars.add(tgt.id)
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+            literal = _literal_keys(node.value)
+            if literal & markers:
+                keys.update(literal)
+
+        # Pass 1b — subscript write of a marker key surfaces the var as
+        # response-shaped even when its init wasn't a literal. Both plain
+        # `var["k"] = ...` and augmented `var["k"] += ...` flag the var.
+        subscript_targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            subscript_targets.extend(node.targets)
+        elif isinstance(node, ast.AugAssign):
+            subscript_targets.append(node.target)
+        for tgt in subscript_targets:
+            if (
+                isinstance(tgt, ast.Subscript)
+                and isinstance(tgt.value, ast.Name)
+                and isinstance(tgt.slice, ast.Constant)
+                and isinstance(tgt.slice.value, str)
+                and tgt.slice.value in markers
+            ):
+                marker_vars.add(tgt.value.id)
+
+    # Pass 2 — pick up subscript / setdefault / update on every flagged var.
+    for var in marker_vars:
+        keys |= _harvest_var_keys(rel_path, func_name, var)
+
     return keys
 
 
@@ -418,6 +511,62 @@ def test_fields_description_lists_every_emitted_key(spec: dict[str, Any]) -> Non
 # ---------------------------------------------------------------------------
 # Meta-tests: pin the scanner's own invariants so they can't silently drift.
 # ---------------------------------------------------------------------------
+
+
+def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
+    """Closes the structural blindness called out in PR #1529 round-3 hygiene #4
+    and tightened in round 4 to also see subscript-assigned keys.
+
+    The parametrized ``ha_search`` drift-check runs in manifest mode and
+    is structurally blind to keys the entities branch emits but that
+    ``_merge_payload_metadata`` then propagates into the orchestrator
+    response. A new key added to ``ha_search_entities``'s sub-payload
+    builders would silently land at the top level of ``ha_search`` and
+    pass the manifest check (the manifest is hand-maintained, doesn't
+    re-derive).
+
+    Harvest via ``_harvest_marker_dicts`` (literal + subscript +
+    ``setdefault`` + ``update`` on any marker-flagged var) so the post-init
+    ``result["by_domain"] = ...`` / ``result.setdefault("offset", ...)``
+    style is covered alongside the dict-literal shape. Round-3 caught only
+    the literals; round-4 closes the dominant emission style.
+
+    Require every emitted key to be either:
+
+    - in ``_ENTITIES_BRANCH_SKIP_KEYS`` (intentionally stripped by the
+      orchestrator), OR
+    - in the ``documented_must_equal`` manifest for ``ha_search``
+      (intentionally surfaced at the top level + listed in the
+      ``fields=`` ``Available keys`` enumeration + retained in
+      ``_ALWAYS_KEEP_PROJECTION``).
+
+    Adding a new key to either bucket forces the contract decision
+    explicitly; landing in neither raises this test.
+    """
+    from ha_mcp.tools.tools_search import _ENTITIES_BRANCH_SKIP_KEYS
+
+    markers = frozenset({"results", "total_matches"})
+    emitted = _harvest_marker_dicts(
+        "tools/tools_search.py", "ha_search_entities", markers
+    )
+    assert emitted, (
+        "harvested no response-shaped dicts from ha_search_entities — the "
+        "marker set ({'results', 'total_matches'}) may need updating"
+    )
+
+    ha_search_spec = next(s for s in TOOL_SPECS if s["tool"] == "ha_search")
+    documented = ha_search_spec["documented_must_equal"]
+    stripped = set(_ENTITIES_BRANCH_SKIP_KEYS)
+
+    uncategorised = emitted - stripped - documented - _AUTO_RETAINED
+    assert not uncategorised, (
+        f"ha_search_entities emits {sorted(uncategorised)!r} into its "
+        f"sub-payload, but the orchestrator neither strips them (not in "
+        f"_ENTITIES_BRANCH_SKIP_KEYS) nor documents them (not in the "
+        f"`Available keys:` enumeration / documented_must_equal manifest). "
+        f"Either add to _ENTITIES_BRANCH_SKIP_KEYS to strip, or add to the "
+        f"manifest + docstring + _ALWAYS_KEEP_PROJECTION to surface."
+    )
 
 
 def test_harvester_finds_dismissed_repair_count_in_ha_get_overview() -> None:

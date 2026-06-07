@@ -190,7 +190,7 @@ class TestHaGetStates:
         assert error["code"] == "ENTITY_NOT_FOUND"
         assert "sensor.nonexistent" in error["message"]
         assert "suggestions" in data
-        assert any("ha_search_entities" in s for s in data["suggestions"])
+        assert any("ha_search" in s for s in data["suggestions"])
 
     @pytest.mark.asyncio
     async def test_non_404_uses_structured_error(self, mock_client, get_states_tool):

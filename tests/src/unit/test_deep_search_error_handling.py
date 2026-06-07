@@ -1,24 +1,38 @@
-"""Unit tests for ha_deep_search error handling.
+"""Unit tests for the deep-search branch's error handling inside ha_search.
 
-Validates that ha_deep_search uses structured error responses and does NOT
-leak internal tracebacks to clients (issue #517).
+ha_deep_search is no longer @mcp.tool-decorated — it is invoked only as an
+internal helper by the merged ``ha_search`` orchestrator. Errors raised by
+the helper are captured by ``asyncio.gather(..., return_exceptions=True)``
+and surfaced via the orchestrator's ``partial=True`` + ``errors[]`` path.
+The structured-error formatting (no traceback / error_type leak, code +
+message + suggestions) is still provided by ``exception_to_structured_error``
+inside the helper and survives the gather capture as a stringified
+``ToolError`` payload (issue #517).
 """
 
 import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_search import register_search_tools
 
 
+def _extract_deep_search_error(response: dict) -> dict:
+    """Parse the captured ToolError JSON for the configs (deep-search) branch."""
+    assert response.get("partial") is True, "expected partial=True after helper failure"
+    errors = response.get("errors", [])
+    deep_errors = [e for e in errors if e.get("surface") == "configs"]
+    assert deep_errors, f"expected one configs-surface error, got {errors}"
+    # ``error`` is the str() of the captured ToolError, which is structured JSON.
+    return json.loads(deep_errors[0]["error"])
+
+
 class TestDeepSearchErrorHandling:
-    """Test ha_deep_search error path produces structured errors without traceback leaks."""
+    """The deep-search helper's structured error survives the orchestrator capture."""
 
     @pytest.fixture
     def mock_mcp(self):
-        """Create a mock MCP server that captures registered tools."""
         mcp = MagicMock()
         self.registered_tools = {}
 
@@ -34,7 +48,6 @@ class TestDeepSearchErrorHandling:
 
     @pytest.fixture
     def mock_client(self):
-        """Create a mock Home Assistant client."""
         client = MagicMock()
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         client.get_states = AsyncMock(return_value=[])
@@ -42,55 +55,47 @@ class TestDeepSearchErrorHandling:
 
     @pytest.fixture
     def mock_smart_tools(self):
-        """Create a mock smart_tools instance."""
         smart_tools = MagicMock()
         smart_tools.deep_search = AsyncMock()
         return smart_tools
 
     @pytest.fixture
-    def deep_search_tool(self, mock_mcp, mock_client, mock_smart_tools):
-        """Register tools and return the ha_deep_search function."""
+    def ha_search_tool(self, mock_mcp, mock_client, mock_smart_tools):
         register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_deep_search"]
+        return self.registered_tools["ha_search"]
 
     @pytest.mark.asyncio
     async def test_error_does_not_leak_traceback_or_raw_fields(
-        self, mock_mcp, mock_client, mock_smart_tools, deep_search_tool
+        self, mock_smart_tools, ha_search_tool
     ):
-        """Error response must NOT contain traceback or ad-hoc error fields (issue #517).
-
-        The old implementation returned 'traceback' (from traceback.format_exc())
-        and 'error_type' (from type(e).__name__). These leak internals to clients.
-        """
         mock_smart_tools.deep_search = AsyncMock(
             side_effect=RuntimeError("Connection refused")
         )
 
-        with pytest.raises(ToolError) as exc_info:
-            await deep_search_tool(query="test_query")
+        response = await ha_search_tool(query="test_query")
 
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        assert isinstance(result["error"], dict), "error must be structured dict, not raw string"
-        assert "code" in result["error"]
-        assert "message" in result["error"]
-        assert "traceback" not in result
-        assert "error_type" not in result
+        err = _extract_deep_search_error(response)
+        assert err["success"] is False
+        assert isinstance(err["error"], dict), (
+            "error must be structured dict, not raw string"
+        )
+        assert "code" in err["error"]
+        assert "message" in err["error"]
+        assert "traceback" not in err
+        assert "error_type" not in err
 
     @pytest.mark.asyncio
     async def test_error_includes_search_specific_suggestions(
-        self, mock_mcp, mock_client, mock_smart_tools, deep_search_tool
+        self, mock_smart_tools, ha_search_tool
     ):
-        """Error response must include the suggestions added by ha_deep_search."""
         mock_smart_tools.deep_search = AsyncMock(
             side_effect=RuntimeError("Something went wrong")
         )
 
-        with pytest.raises(ToolError) as exc_info:
-            await deep_search_tool(query="test_query")
+        response = await ha_search_tool(query="test_query")
 
-        result = json.loads(str(exc_info.value))
-        suggestions = result["error"]["suggestions"]
+        err = _extract_deep_search_error(response)
+        suggestions = err["error"]["suggestions"]
         assert "Check Home Assistant connection" in suggestions
         assert "Try simpler search terms" in suggestions
 
@@ -105,22 +110,18 @@ class TestDeepSearchErrorHandling:
     )
     async def test_different_exception_types_produce_correct_error_codes(
         self,
-        mock_mcp,
-        mock_client,
         mock_smart_tools,
-        deep_search_tool,
+        ha_search_tool,
         exception_cls,
         exception_msg,
         expected_code,
     ):
-        """Different exception types should map to appropriate error codes."""
         mock_smart_tools.deep_search = AsyncMock(
             side_effect=exception_cls(exception_msg)
         )
 
-        with pytest.raises(ToolError) as exc_info:
-            await deep_search_tool(query="test_query")
+        response = await ha_search_tool(query="test_query")
 
-        result = json.loads(str(exc_info.value))
-        assert result["success"] is False
-        assert result["error"]["code"] == expected_code
+        err = _extract_deep_search_error(response)
+        assert err["success"] is False
+        assert err["error"]["code"] == expected_code

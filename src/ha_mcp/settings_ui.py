@@ -83,12 +83,12 @@ logger = logging.getLogger(__name__)
 # Tools that are always enabled regardless of saved config — the server
 # strips them out of any disable list before applying. Three of these
 # overlap with DEFAULT_PINNED_TOOLS in transforms/categorized_search.py
-# (ha_search_entities, ha_get_overview, ha_report_issue); ha_get_state
+# (ha_search, ha_get_overview, ha_report_issue); ha_get_state
 # is mandatory but not pinned-by-default because it is reachable via the
 # ha_call_read_tool proxy when tool search is on. Keep these lists in
 # sync where it matters and divergent where it matters — don't merge them.
 MANDATORY_TOOLS: set[str] = {
-    "ha_search_entities",
+    "ha_search",
     "ha_get_overview",
     "ha_get_state",
     "ha_report_issue",

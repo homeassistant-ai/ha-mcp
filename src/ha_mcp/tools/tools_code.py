@@ -1047,7 +1047,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         Example — chain existing tools:
         ```python
-        result = await call_tool("ha_search_entities", {"query": "light", "limit": 5})
+        result = await call_tool("ha_search", {"query": "light", "limit": 5})
         data = result.get("data", result)
         lights = data.get("results", [])
         for e in lights:

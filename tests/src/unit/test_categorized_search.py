@@ -302,7 +302,7 @@ class TestDefaultPinnedTools:
         assert "ha_get_overview" in DEFAULT_PINNED_TOOLS
         assert "ha_manage_backup" in DEFAULT_PINNED_TOOLS
         assert "ha_report_issue" in DEFAULT_PINNED_TOOLS
-        assert "ha_search_entities" in DEFAULT_PINNED_TOOLS
+        assert "ha_search" in DEFAULT_PINNED_TOOLS
         assert "ha_get_skill_guide" in DEFAULT_PINNED_TOOLS
 
     def test_is_immutable_tuple(self):
@@ -376,7 +376,7 @@ class TestCategorizedCallDispatch:
             t,
             [
                 _make_tool("ha_get_state", read_only=True),
-                _make_tool("ha_search_entities", read_only=True),
+                _make_tool("ha_search", read_only=True),
                 _make_tool("ha_config_set_automation", destructive=True),
                 _make_tool("ha_call_service", destructive=True),
                 _make_tool("ha_remove_area_or_floor", destructive=True),
@@ -720,11 +720,9 @@ class TestSearchKeywordsTransform:
     async def test_keywords_appended(self):
         """Keywords are appended to existing description."""
         transform = SearchKeywordsTransform(
-            keywords={"ha_search_entities": "find lookup discover"}
+            keywords={"ha_search": "find lookup discover"}
         )
-        tool = _make_tool(
-            "ha_search_entities", read_only=True, description="Search entities."
-        )
+        tool = _make_tool("ha_search", read_only=True, description="Search entities.")
         result = await transform.list_tools([tool])
         assert len(result) == 1
         assert result[0].description.startswith("Search entities.")
@@ -734,10 +732,10 @@ class TestSearchKeywordsTransform:
     async def test_overrides_replace_description(self):
         """Overrides completely replace the description."""
         transform = SearchKeywordsTransform(
-            overrides={"ha_deep_search": "Narrowed description."}
+            overrides={"ha_search": "Narrowed description."}
         )
         tool = _make_tool(
-            "ha_deep_search", read_only=True, description="Original broad description."
+            "ha_search", read_only=True, description="Original broad description."
         )
         result = await transform.list_tools([tool])
         assert result[0].description == "Narrowed description."
@@ -746,10 +744,10 @@ class TestSearchKeywordsTransform:
     async def test_override_takes_priority_over_keywords(self):
         """When both override and keywords exist, override wins."""
         transform = SearchKeywordsTransform(
-            keywords={"ha_deep_search": "extra keywords"},
-            overrides={"ha_deep_search": "Override wins."},
+            keywords={"ha_search": "extra keywords"},
+            overrides={"ha_search": "Override wins."},
         )
-        tool = _make_tool("ha_deep_search", read_only=True, description="Original.")
+        tool = _make_tool("ha_search", read_only=True, description="Original.")
         result = await transform.list_tools([tool])
         assert result[0].description == "Override wins."
         assert "extra keywords" not in result[0].description
@@ -855,7 +853,7 @@ class TestApplySearchKeywordEnrichment:
             "ha_config_set_automation",
             "ha_config_set_script",
             "ha_config_set_helper",
-            "ha_search_entities",
+            "ha_search",
             "ha_manage_addon",
         ):
             assert tool_name in keywords, f"{tool_name} missing from _SEARCH_KEYWORDS"

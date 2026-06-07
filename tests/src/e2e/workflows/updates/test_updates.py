@@ -43,25 +43,25 @@ class TestUpdateManagement:
             # Verify response structure
             assert "success" in result, f"Missing 'success' field in result: {result}"
             assert result.get("success") is True, f"Expected success=True: {result}"
-            assert (
-                "updates_available" in result
-            ), f"Missing 'updates_available' field: {result}"
+            assert "updates_available" in result, (
+                f"Missing 'updates_available' field: {result}"
+            )
             assert "updates" in result, f"Missing 'updates' field: {result}"
             assert "categories" in result, f"Missing 'categories' field: {result}"
 
             # updates_available should be a non-negative integer
             updates_count = result.get("updates_available", -1)
-            assert (
-                isinstance(updates_count, int) and updates_count >= 0
-            ), f"Invalid updates_available value: {updates_count}"
+            assert isinstance(updates_count, int) and updates_count >= 0, (
+                f"Invalid updates_available value: {updates_count}"
+            )
 
             logger.info(f"Found {updates_count} available updates")
 
             # Verify updates list structure if any updates exist
             updates_list = result.get("updates", [])
-            assert isinstance(
-                updates_list, list
-            ), f"Updates should be a list: {type(updates_list)}"
+            assert isinstance(updates_list, list), (
+                f"Updates should be a list: {type(updates_list)}"
+            )
 
             if updates_list:
                 # Check first update has expected fields
@@ -74,16 +74,16 @@ class TestUpdateManagement:
                     "category",
                 ]
                 for field in expected_fields:
-                    assert (
-                        field in first_update
-                    ), f"Update missing field '{field}': {first_update}"
+                    assert field in first_update, (
+                        f"Update missing field '{field}': {first_update}"
+                    )
                 logger.info(f"First update: {first_update.get('title')}")
 
             # Verify categories structure
             categories = result.get("categories", {})
-            assert isinstance(
-                categories, dict
-            ), f"Categories should be a dict: {type(categories)}"
+            assert isinstance(categories, dict), (
+                f"Categories should be a dict: {type(categories)}"
+            )
 
             # Valid category keys
             valid_categories = {
@@ -96,9 +96,9 @@ class TestUpdateManagement:
                 "other",
             }
             for cat_key in categories.keys():
-                assert (
-                    cat_key in valid_categories
-                ), f"Unknown category '{cat_key}': {categories.keys()}"
+                assert cat_key in valid_categories, (
+                    f"Unknown category '{cat_key}': {categories.keys()}"
+                )
 
             logger.info("Basic update listing test passed")
 
@@ -168,15 +168,15 @@ class TestUpdateManagement:
             assert "version" in system_info, f"Missing 'version' field: {system_info}"
             version = system_info.get("version")
             assert version is not None, "Version should not be None"
-            assert isinstance(
-                version, str
-            ), f"Version should be string: {type(version)}"
+            assert isinstance(version, str), (
+                f"Version should be string: {type(version)}"
+            )
 
             # Version format validation (should be like "2025.1.0")
             version_parts = version.split(".")
-            assert (
-                len(version_parts) >= 2
-            ), f"Version should have at least 2 parts: {version}"
+            assert len(version_parts) >= 2, (
+                f"Version should have at least 2 parts: {version}"
+            )
 
             logger.info(f"Home Assistant version: {version}")
 
@@ -194,9 +194,9 @@ class TestUpdateManagement:
             # components_loaded should be a positive integer
             components = system_info.get("components_loaded")
             if components is not None:
-                assert (
-                    isinstance(components, int) and components > 0
-                ), f"Invalid components_loaded: {components}"
+                assert isinstance(components, int) and components > 0, (
+                    f"Invalid components_loaded: {components}"
+                )
 
             logger.info("System version test passed")
 
@@ -246,12 +246,11 @@ class TestUpdateManagement:
             if not updates:
                 # No updates available, search for update entities directly
                 search_result = await mcp.call_tool_success(
-                    "ha_search_entities",
+                    "ha_search",
                     {"query": "update", "domain_filter": "update", "limit": 5},
                 )
 
-                search_data = search_result.get("data", search_result)
-                results = search_data.get("results", [])
+                results = search_result.get("entities", [])
 
                 if not results:
                     logger.info(
@@ -279,10 +278,12 @@ class TestUpdateManagement:
 
             # Verify response structure
             assert result.get("success") is True, f"Expected success=True: {result}"
-            assert (
-                result.get("entity_id") == entity_id
-            ), f"Entity ID mismatch: {result.get('entity_id')} != {entity_id}"
-            assert "latest_version" in result, f"Missing 'latest_version' field: {result}"
+            assert result.get("entity_id") == entity_id, (
+                f"Entity ID mismatch: {result.get('entity_id')} != {entity_id}"
+            )
+            assert "latest_version" in result, (
+                f"Missing 'latest_version' field: {result}"
+            )
 
             # release_notes may be None if not available
             release_notes = result.get("release_notes")
@@ -330,9 +331,9 @@ class TestUpdateToolsEdgeCases:
             # (small differences possible if update status changes between calls)
             count1 = result1.get("updates_available", 0)
             count2 = result2.get("updates_available", 0)
-            assert (
-                abs(count1 - count2) <= 1
-            ), f"Update counts differ significantly: {count1} vs {count2}"
+            assert abs(count1 - count2) <= 1, (
+                f"Update counts differ significantly: {count1} vs {count2}"
+            )
 
             logger.info("Consistency test passed")
 
@@ -354,9 +355,9 @@ class TestUpdateToolsEdgeCases:
             # Core required fields in system_info
             required_fields = ["version"]
             for field in required_fields:
-                assert (
-                    field in system_info
-                ), f"Required field '{field}' missing from system_info: {system_info.keys()}"
+                assert field in system_info, (
+                    f"Required field '{field}' missing from system_info: {system_info.keys()}"
+                )
 
             # Common optional fields that should usually be present
             common_fields = [
@@ -368,9 +369,9 @@ class TestUpdateToolsEdgeCases:
             logger.info(f"Present optional fields: {present_fields}")
 
             # At least some optional fields should be present
-            assert (
-                len(present_fields) >= 1
-            ), f"Expected at least 1 optional field present: {common_fields}"
+            assert len(present_fields) >= 1, (
+                f"Expected at least 1 optional field present: {common_fields}"
+            )
 
             logger.info("Field presence test passed")
 
@@ -392,9 +393,9 @@ class TestUpdateToolsEdgeCases:
 
             # Every update in the list should have a category
             for update in updates:
-                assert (
-                    "category" in update
-                ), f"Update missing category: {update.get('entity_id')}"
+                assert "category" in update, (
+                    f"Update missing category: {update.get('entity_id')}"
+                )
                 category = update.get("category")
                 assert category in {
                     "core",
@@ -464,7 +465,9 @@ class TestIncludeReleaseNotes:
             {"entity_id": core_entity_id, "include_release_notes": True},
         )
 
-        assert detail_result.get("success") is True, f"Expected success=True: {detail_result}"
+        assert detail_result.get("success") is True, (
+            f"Expected success=True: {detail_result}"
+        )
         assert detail_result.get("category") == "core"
 
         # If an update is available, verify breaking changes structure
@@ -490,7 +493,9 @@ class TestIncludeReleaseNotes:
                 f"{len(detail_result['installed_integrations'])} integrations"
             )
         else:
-            logger.info("No Core update available, breaking changes fields may be absent")
+            logger.info(
+                "No Core update available, breaking changes fields may be absent"
+            )
 
         logger.info("include_release_notes test passed")
 

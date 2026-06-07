@@ -351,8 +351,7 @@ class TestSceneLifecycle:
         # No 'not yet queryable' warning means the resolver picked up the
         # real entity_id correctly — the regression KP13 surfaced via BAT.
         assert not any(
-            "not yet queryable" in w.lower()
-            for w in create_data.get("warnings", [])
+            "not yet queryable" in w.lower() for w in create_data.get("warnings", [])
         ), f"Resolver fell back to scene.{scene_id}; create_data={create_data}"
 
         # 2. Get via the storage scene_id — this drives the resolver to
@@ -383,8 +382,7 @@ class TestSceneLifecycle:
             f"Transform failed: {transform_data}"
         )
         assert not any(
-            "not yet queryable" in w.lower()
-            for w in transform_data.get("warnings", [])
+            "not yet queryable" in w.lower() for w in transform_data.get("warnings", [])
         ), f"Resolver fell back on transform path; transform_data={transform_data}"
 
         # Cleanup via remove uses the same resolver under the hood.
@@ -398,7 +396,7 @@ class TestSceneLifecycle:
     async def test_deep_search_to_get_scene_round_trip_on_renamed_scene(
         self, mcp_client, cleanup_tracker
     ):
-        """R7 blocker 17/21 end-to-end: ``ha_deep_search`` returns the
+        """R7 blocker 17/21 end-to-end: ``ha_search`` returns the
         storage key as ``scene_id`` (not the entity-id slug) for a
         renamed scene, and ``ha_config_get_scene`` lands on the same
         scene without relying on the resolver remap.
@@ -441,10 +439,10 @@ class TestSceneLifecycle:
         registered = await _wait_for_scene_registered(mcp_client, scene_id)
         assert registered, f"Scene {scene_id} not registered after create"
 
-        # 2. ha_deep_search by friendly_name fragment.
+        # 2. ha_search by friendly_name fragment.
         search_data = await safe_call_tool(
             mcp_client,
-            "ha_deep_search",
+            "ha_search",
             {
                 "query": "R7 Distinct Friendly",
                 "search_types": ["scene"],
@@ -454,7 +452,11 @@ class TestSceneLifecycle:
         assert search_data.get("success") is True, f"Search failed: {search_data}"
         scenes = search_data.get("scenes") or []
         match = next(
-            (s for s in scenes if s.get("entity_id") == "scene.r7_distinct_friendly_round_trip"),
+            (
+                s
+                for s in scenes
+                if s.get("entity_id") == "scene.r7_distinct_friendly_round_trip"
+            ),
             None,
         )
         assert match is not None, (

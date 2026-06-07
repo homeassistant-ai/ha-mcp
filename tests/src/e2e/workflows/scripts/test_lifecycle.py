@@ -152,14 +152,12 @@ async def verify_script_exists_and_registered(
 
             # Method 3: Try to search for the script entity
             search_result = await mcp_client.call_tool(
-                "ha_search_entities",
+                "ha_search",
                 {"query": script_id, "domain_filter": "script", "limit": 5},
             )
             search_data = enhanced_parse_mcp_result(search_result)
             search_results = (
-                search_data.get("data", {}).get("results", [])
-                if search_data.get("success")
-                else []
+                search_data.get("entities", []) if search_data.get("success") else []
             )
 
             for result in search_results:
@@ -1075,17 +1073,12 @@ async def test_script_search_and_discovery(mcp_client):
         # Search for existing scripts with enhanced error handling
         try:
             search_data = await mcp.call_tool_success(
-                "ha_search_entities",
+                "ha_search",
                 {"query": "script", "domain_filter": "script", "limit": 10},
             )
 
-            # Handle nested data structure
-            data = (
-                search_data.get("data", {}) if search_data.get("data") else search_data
-            )
-
-            if data.get("success") and data.get("results"):
-                results = data.get("results", [])
+            if search_data.get("success") and search_data.get("entities"):
+                results = search_data.get("entities", [])
                 logger.info(f"✅ Found {len(results)} existing scripts")
 
                 # Test getting configuration of first found script
@@ -1122,7 +1115,7 @@ async def test_script_search_and_discovery(mcp_client):
 
                     # Test search with more specific criteria
                     specific_search_data = await mcp.call_tool_success(
-                        "ha_search_entities",
+                        "ha_search",
                         {
                             "query": script_id[:5],  # First 5 chars of script ID
                             "domain_filter": "script",
@@ -1130,12 +1123,7 @@ async def test_script_search_and_discovery(mcp_client):
                         },
                     )
 
-                    specific_data = (
-                        specific_search_data.get("data", {})
-                        if specific_search_data.get("data")
-                        else specific_search_data
-                    )
-                    specific_results = specific_data.get("results", [])
+                    specific_results = specific_search_data.get("entities", [])
                     logger.info(
                         f"✅ Specific search found {len(specific_results)} matching scripts"
                     )

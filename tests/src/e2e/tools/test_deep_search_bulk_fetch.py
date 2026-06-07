@@ -1,5 +1,5 @@
 """
-E2E tests for the ha_deep_search 3-tier bulk fetch strategy.
+E2E tests for the ha_search 3-tier bulk fetch strategy.
 
 Validates that the bulk config fetching logic (REST bulk -> WebSocket bulk ->
 time-budgeted individual) works correctly and returns accurate search results
@@ -99,7 +99,9 @@ async def bulk_automations(mcp_client):
         if not entity_id:
             # Fallback to predicted ID if not returned (shouldn't happen)
             entity_id = f"automation.{_MARKER}_automation_{i}"
-            logger.warning(f"No entity_id returned for automation {i}, using predicted: {entity_id}")
+            logger.warning(
+                f"No entity_id returned for automation {i}, using predicted: {entity_id}"
+            )
         created_ids.append(entity_id)
         logger.info(f"Created automation {i}/{_AUTOMATION_COUNT}: {entity_id}")
 
@@ -177,7 +179,8 @@ async def bulk_scripts(mcp_client):
             states = await mcp_client.call_tool("ha_list_states", {})
             state_data = assert_mcp_success(states, "Get states (fallback polling)")
             registered_ids = {
-                s.get("entity_id") for s in state_data.get("states", [])
+                s.get("entity_id")
+                for s in state_data.get("states", [])
                 if s.get("entity_id", "").startswith("script.")
             }
             return expected_entity_ids.issubset(registered_ids)
@@ -185,8 +188,8 @@ async def bulk_scripts(mcp_client):
         await wait_for_condition(
             all_scripts_registered,
             condition_name=f"All {len(created_ids)} bulk scripts registered (fallback)",
-        timeout=10.0,
-    )
+            timeout=10.0,
+        )
 
     yield created_ids
 
@@ -222,8 +225,13 @@ async def test_bulk_fetch_finds_automation_by_config_content(
     search_term = f"{_MARKER}_trigger_3"
 
     result = await mcp_client.call_tool(
-        "ha_deep_search",
-        {"query": search_term, "search_types": ["automation"], "limit": 20, "include_config": True},
+        "ha_search",
+        {
+            "query": search_term,
+            "search_types": ["automation"],
+            "limit": 20,
+            "include_config": True,
+        },
     )
     data = assert_mcp_success(result, "Bulk fetch automation config search")
 
@@ -251,16 +259,12 @@ async def test_bulk_fetch_finds_automation_by_config_content(
     assert hit.get("config") is not None, (
         "Config object should be present in the result (proves bulk fetch worked)"
     )
-    logger.info(
-        f"Found automation 3 via config match, score={hit.get('score')}"
-    )
+    logger.info(f"Found automation 3 via config match, score={hit.get('score')}")
 
 
 @pytest.mark.asyncio
 @pytest.mark.e2e
-async def test_bulk_fetch_finds_script_by_config_content(
-    mcp_client, bulk_scripts
-):
+async def test_bulk_fetch_finds_script_by_config_content(mcp_client, bulk_scripts):
     """
     Verify that deep search with bulk fetch finds scripts by content that
     only appears inside their config (the unique payload message).
@@ -268,8 +272,13 @@ async def test_bulk_fetch_finds_script_by_config_content(
     search_term = f"{_MARKER}_script_payload_2"
 
     result = await mcp_client.call_tool(
-        "ha_deep_search",
-        {"query": search_term, "search_types": ["script"], "limit": 20, "include_config": True},
+        "ha_search",
+        {
+            "query": search_term,
+            "search_types": ["script"],
+            "limit": 20,
+            "include_config": True,
+        },
     )
     data = assert_mcp_success(result, "Bulk fetch script config search")
 
@@ -280,9 +289,7 @@ async def test_bulk_fetch_finds_script_by_config_content(
     )
 
     matched = [
-        s
-        for s in scripts
-        if f"{_MARKER} Script 2" in s.get("friendly_name", "")
+        s for s in scripts if f"{_MARKER} Script 2" in s.get("friendly_name", "")
     ]
     assert len(matched) == 1, (
         f"Expected exactly 1 match for script 2, got {len(matched)}"
@@ -295,9 +302,7 @@ async def test_bulk_fetch_finds_script_by_config_content(
     assert hit.get("config") is not None, (
         "Config object should be present (proves bulk fetch worked)"
     )
-    logger.info(
-        f"Found script 2 via config match, score={hit.get('score')}"
-    )
+    logger.info(f"Found script 2 via config match, score={hit.get('score')}")
 
 
 @pytest.mark.asyncio
@@ -312,8 +317,13 @@ async def test_bulk_fetch_populates_config_for_multiple_results(
     """
     # The marker appears in every automation's action message and trigger entity
     result = await mcp_client.call_tool(
-        "ha_deep_search",
-        {"query": f"{_MARKER}_payload", "search_types": ["automation"], "limit": 20, "include_config": True},
+        "ha_search",
+        {
+            "query": f"{_MARKER}_payload",
+            "search_types": ["automation"],
+            "limit": 20,
+            "include_config": True,
+        },
     )
     data = assert_mcp_success(result, "Bulk fetch multi-result search")
 
@@ -321,9 +331,7 @@ async def test_bulk_fetch_populates_config_for_multiple_results(
 
     # We should find multiple automations (all share the marker in config)
     bulk_matches = [
-        a
-        for a in automations
-        if f"{_MARKER} Automation" in a.get("friendly_name", "")
+        a for a in automations if f"{_MARKER} Automation" in a.get("friendly_name", "")
     ]
     assert len(bulk_matches) >= 3, (
         f"Expected at least 3 bulk test automations in results, got {len(bulk_matches)}. "
@@ -358,7 +366,7 @@ async def test_bulk_fetch_completes_within_timeout(
     start = time.perf_counter()
 
     result = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {"query": _MARKER, "limit": 50},
     )
     data = assert_mcp_success(result, "Bulk fetch timing validation")
@@ -372,7 +380,7 @@ async def test_bulk_fetch_completes_within_timeout(
         f"the 30s MCP timeout. Bulk fetch may not be working."
     )
 
-    total = data.get("total_matches", 0)
+    total = data.get("config_total_matches", 0)
     logger.info(
         f"Deep search completed in {elapsed:.1f}s, found {total} matches "
         f"across {_AUTOMATION_COUNT} automations + {_SCRIPT_COUNT} scripts"
@@ -381,16 +389,19 @@ async def test_bulk_fetch_completes_within_timeout(
 
 @pytest.mark.asyncio
 @pytest.mark.e2e
-async def test_bulk_fetch_result_structure_integrity(
-    mcp_client, bulk_automations
-):
+async def test_bulk_fetch_result_structure_integrity(mcp_client, bulk_automations):
     """
     Verify that results from bulk-fetched configs have the correct structure:
     entity_id, friendly_name, score, match flags, and config with expected keys.
     """
     result = await mcp_client.call_tool(
-        "ha_deep_search",
-        {"query": f"{_MARKER}_trigger", "search_types": ["automation"], "limit": 20, "include_config": True},
+        "ha_search",
+        {
+            "query": f"{_MARKER}_trigger",
+            "search_types": ["automation"],
+            "limit": 20,
+            "include_config": True,
+        },
     )
     data = assert_mcp_success(result, "Bulk fetch structure check")
 
@@ -406,8 +417,12 @@ async def test_bulk_fetch_result_structure_integrity(
         assert auto["entity_id"].startswith("automation."), "Bad entity_id format"
         assert "friendly_name" in auto, "Missing friendly_name"
         assert isinstance(auto.get("score"), (int, float)), "Score should be numeric"
-        assert isinstance(auto.get("match_in_name"), bool), "match_in_name should be bool"
-        assert isinstance(auto.get("match_in_config"), bool), "match_in_config should be bool"
+        assert isinstance(auto.get("match_in_name"), bool), (
+            "match_in_name should be bool"
+        )
+        assert isinstance(auto.get("match_in_config"), bool), (
+            "match_in_config should be bool"
+        )
 
         # Config should be a dict with automation keys
         config = auto.get("config")
@@ -440,7 +455,7 @@ async def test_deep_search_pagination_basic(mcp_client, bulk_automations):
     """
     # First page: limit=3, offset=0
     result_page1 = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {
             "query": _MARKER,
             "search_types": ["automation"],
@@ -459,14 +474,14 @@ async def test_deep_search_pagination_basic(mcp_client, bulk_automations):
     assert page1.get("next_offset") == 3, (
         f"next_offset should be 3, got {page1.get('next_offset')}"
     )
-    total = page1.get("total_matches", 0)
+    total = page1.get("config_total_matches", 0)
     assert total >= _AUTOMATION_COUNT, (
-        f"total_matches should be >= {_AUTOMATION_COUNT}, got {total}"
+        f"config_total_matches should be >= {_AUTOMATION_COUNT}, got {total}"
     )
 
     # Second page: limit=3, offset=3
     result_page2 = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {
             "query": _MARKER,
             "search_types": ["automation"],
@@ -479,9 +494,9 @@ async def test_deep_search_pagination_basic(mcp_client, bulk_automations):
     assert page2.get("count") == 3, (
         f"Expected 3 results on page 2, got {page2.get('count')}"
     )
-    # total_matches should be the same across pages
-    assert page2.get("total_matches") == total, (
-        "total_matches should be consistent across pages"
+    # config_total_matches should be the same across pages
+    assert page2.get("config_total_matches") == total, (
+        "config_total_matches should be consistent across pages"
     )
 
     # Verify no overlap between pages
@@ -505,7 +520,7 @@ async def test_deep_search_pagination_last_page(mcp_client, bulk_automations):
     """
     # First get total count
     result_all = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {
             "query": _MARKER,
             "search_types": ["automation"],
@@ -513,11 +528,11 @@ async def test_deep_search_pagination_last_page(mcp_client, bulk_automations):
         },
     )
     all_data = assert_mcp_success(result_all, "Get total count")
-    total = all_data.get("total_matches", 0)
+    total = all_data.get("config_total_matches", 0)
 
     # Request with offset past all results
     result_past = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {
             "query": _MARKER,
             "search_types": ["automation"],
@@ -548,7 +563,7 @@ async def test_deep_search_default_excludes_config(mcp_client, bulk_automations)
     This confirms the response slimming behavior.
     """
     result = await mcp_client.call_tool(
-        "ha_deep_search",
+        "ha_search",
         {"query": _MARKER, "search_types": ["automation"], "limit": 5},
     )
     data = assert_mcp_success(result, "Default config exclusion check")

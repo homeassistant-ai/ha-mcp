@@ -453,7 +453,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         "Once you know a tool name, call it directly \u2014 no need to search "
         "again.\n\n"
         "If using proxies, call with TWO top-level params:\n"
-        '   ha_call_read_tool(name="ha_search_entities", arguments={"query": "..."})\n'
+        '   ha_call_read_tool(name="ha_search", arguments={"query": "..."})\n'
         "   Do NOT nest name/arguments inside the arguments param.\n"
         "   Call proxy tools SEQUENTIALLY, not in parallel.\n\n"
         "ALWAYS search before assuming a capability is unavailable. "
@@ -467,11 +467,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     # (no semantic matching). Original tool docstrings stay unchanged;
     # these keywords are appended by the transform at list-tools time.
     _SEARCH_KEYWORDS: ClassVar[dict[str, str]] = {
-        # s02: "find entities" → ha_search_entities should outrank ha_deep_search
-        "ha_search_entities": (
-            "find entities lookup discover search lights sensors switches "
+        # s02: "find entities or configs" → ha_search outranks more specific tools
+        "ha_search": (
+            "find entities configs lookup discover search lights sensors switches "
             "covers climate fans media_player binary_sensor device_tracker "
-            "person weather automation script helper input_boolean input_number"
+            "person weather automation script helper input_boolean input_number "
+            "automations scripts scenes helpers dashboards"
         ),
         # s07: "get/read automation" → ha_config_get_automation should outrank set
         "ha_config_get_automation": (
@@ -488,7 +489,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "integration statistics trend random filter tod "
             "generic_thermostat switch_as_x generic_hygrostat"
         ),
-        # Boost tools that compete with ha_deep_search for common queries
+        # Boost tools that compete with ha_search for common queries
         "ha_config_get_script": (
             "read inspect fetch view existing script config sequence "
             "actions get show detail"
@@ -607,7 +608,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "zone, person, tag. Flow-based helpers (template, group, "
             "utility_meter, derivative, statistics, trend, threshold, "
             "filter, switch_as_x, etc.) cannot be listed through this "
-            "tool — use ha_search_entities or ha_deep_search.\n\n"
+            "tool — use ha_search.\n\n"
             "For per-type schemas and decision guidance, see "
             "ha_get_skill_guide."
         ),
@@ -655,7 +656,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "Execute a Home Assistant service to control entities or "
             "trigger automations. Calls `<domain>.<service>` "
             "(e.g., light.turn_on, climate.set_temperature). Use "
-            "ha_search_entities to find entity IDs and ha_get_state "
+            "ha_search to find entity IDs and ha_get_state "
             "to read current values before changing them.\n\n"
             "For service-parameter details and per-domain guidance, "
             "see ha_get_skill_guide."
@@ -685,15 +686,7 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
     # enable_tool_search=True, because they are tuned specifically for the
     # categorized search transform and replacing the base description would
     # unnecessarily trim context for other clients.
-    _SEARCH_DESCRIPTION_OVERRIDES: ClassVar[dict[str, str]] = {
-        "ha_deep_search": (
-            "Search INSIDE automation, script, and helper YAML configurations. "
-            "Use ONLY when you need to find where a specific service call, "
-            "entity reference, or config field appears within existing "
-            "automation/script/helper definitions. "
-            "NOT for finding entities or discovering tools."
-        ),
-    }
+    _SEARCH_DESCRIPTION_OVERRIDES: ClassVar[dict[str, str]] = {}
 
     def _apply_lite_docstrings(self) -> None:
         """Swap heavy tool descriptions for shorter variants if enabled.

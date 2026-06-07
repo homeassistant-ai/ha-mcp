@@ -22,8 +22,7 @@ class TestRaiseToolError:
     def test_raises_tool_error(self):
         """raise_tool_error should raise ToolError exception."""
         error_response = create_error_response(
-            ErrorCode.ENTITY_NOT_FOUND,
-            "Entity light.test not found"
+            ErrorCode.ENTITY_NOT_FOUND, "Entity light.test not found"
         )
 
         with pytest.raises(ToolError):
@@ -34,7 +33,7 @@ class TestRaiseToolError:
         error_response = create_error_response(
             ErrorCode.ENTITY_NOT_FOUND,
             "Entity light.test not found",
-            suggestions=["Use ha_search_entities() to find valid entity IDs"]
+            suggestions=["Use ha_search() to find valid entity IDs"],
         )
 
         with pytest.raises(ToolError) as exc_info:
@@ -84,8 +83,7 @@ class TestExceptionToStructuredError:
     def test_returns_dict_when_raise_error_false(self):
         """exception_to_structured_error should return dict when raise_error=False."""
         result = exception_to_structured_error(
-            ValueError("test error"),
-            raise_error=False
+            ValueError("test error"), raise_error=False
         )
 
         assert isinstance(result, dict)
@@ -95,8 +93,7 @@ class TestExceptionToStructuredError:
     def test_error_contains_correct_code(self):
         """Structured error should contain appropriate error code."""
         result = exception_to_structured_error(
-            ValueError("test validation error"),
-            raise_error=False
+            ValueError("test validation error"), raise_error=False
         )
 
         assert result["error"]["code"] == "VALIDATION_FAILED"
@@ -105,11 +102,12 @@ class TestExceptionToStructuredError:
         """Context should be preserved in the error response for relevant error types."""
         # Use an error type that includes context (API errors with 400 status)
         from ha_mcp.client.rest_client import HomeAssistantAPIError
+
         error = HomeAssistantAPIError("Bad request", status_code=400)
         result = exception_to_structured_error(
             error,
             context={"entity_id": "light.test", "action": "get"},
-            raise_error=False
+            raise_error=False,
         )
 
         # Context is added to the response at top level
@@ -181,9 +179,7 @@ class TestInternalErrorTracebackLogging:
             )
 
         assert result["error"]["code"] == ErrorCode.INTERNAL_ERROR
-        traceback_records = [
-            r for r in caplog.records if r.exc_info is not None
-        ]
+        traceback_records = [r for r in caplog.records if r.exc_info is not None]
         assert traceback_records, (
             f"Expected an exc_info=True log record, got: "
             f"{[(r.levelname, r.message) for r in caplog.records]}"
@@ -198,9 +194,7 @@ class TestInternalErrorTracebackLogging:
             )
 
         assert result["error"]["code"] == ErrorCode.VALIDATION_FAILED
-        traceback_records = [
-            r for r in caplog.records if r.exc_info is not None
-        ]
+        traceback_records = [r for r in caplog.records if r.exc_info is not None]
         assert not traceback_records, (
             f"Classified exceptions must not log a traceback (noise), got: "
             f"{[(r.levelname, r.message) for r in caplog.records]}"
@@ -213,24 +207,21 @@ class TestErrorCodeMapping:
     def test_value_error_maps_to_validation_failed(self):
         """ValueError should map to VALIDATION_FAILED error code."""
         result = exception_to_structured_error(
-            ValueError("Invalid parameter"),
-            raise_error=False
+            ValueError("Invalid parameter"), raise_error=False
         )
         assert result["error"]["code"] == "VALIDATION_FAILED"
 
     def test_timeout_error_maps_to_timeout_operation(self):
         """TimeoutError should map to TIMEOUT_OPERATION error code."""
         result = exception_to_structured_error(
-            TimeoutError("Request timed out"),
-            raise_error=False
+            TimeoutError("Request timed out"), raise_error=False
         )
         assert result["error"]["code"] == "TIMEOUT_OPERATION"
 
     def test_connection_error_in_message_maps_correctly(self):
         """Error messages containing 'connection' should be connection errors."""
         result = exception_to_structured_error(
-            Exception("Connection refused"),
-            raise_error=False
+            Exception("Connection refused"), raise_error=False
         )
         assert result["error"]["code"] == "CONNECTION_FAILED"
 
@@ -244,6 +235,7 @@ class TestIntegrationWithMCPProtocol:
         MCP clients can detect tool failures by catching ToolError exceptions,
         which FastMCP converts to isError=true in the protocol response.
         """
+
         def simulated_tool_call():
             """Simulates a tool call that returns an error."""
             error = create_validation_error("Invalid parameter value")

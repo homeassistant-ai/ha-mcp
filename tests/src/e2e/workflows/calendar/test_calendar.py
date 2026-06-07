@@ -8,7 +8,7 @@ Tests the calendar event management tools:
 
 Note: These tests require calendar integrations to be configured in Home Assistant.
 The tests are designed to work with the demo integration's calendar or local calendar.
-Use ha_search_entities(query='calendar', domain_filter='calendar') to find calendar entities.
+Use ha_search(query='calendar', domain_filter='calendar') to find calendar entities.
 """
 
 import logging
@@ -34,16 +34,13 @@ class TestCalendarEvents:
     async def _find_calendar_entity(self, mcp_client) -> str | None:
         """Find an available calendar entity for testing."""
         result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "calendar", "domain_filter": "calendar", "limit": 10},
         )
         data = parse_mcp_result(result)
 
         # Handle nested data structure
-        if "data" in data:
-            results = data.get("data", {}).get("results", [])
-        else:
-            results = data.get("results", [])
+        results = data.get("entities", [])
 
         if not results:
             return None
@@ -181,16 +178,13 @@ class TestCalendarEventLifecycle:
     async def _find_writable_calendar(self, mcp_client) -> str | None:
         """Find a calendar that supports event creation."""
         result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": "calendar", "domain_filter": "calendar", "limit": 10},
         )
         data = parse_mcp_result(result)
 
         # Handle nested data structure
-        if "data" in data:
-            results = data.get("data", {}).get("results", [])
-        else:
-            results = data.get("results", [])
+        results = data.get("entities", [])
 
         if not results:
             return None

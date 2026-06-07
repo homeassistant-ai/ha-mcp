@@ -243,7 +243,7 @@ class ConfigSceneTools:
                 message="scene_id must not be empty",
                 suggestions=[
                     "Pass a non-empty scene identifier (e.g. 'movie_night')",
-                    "Use ha_search_entities(domain_filter='scene') to find existing scene_ids",
+                    "Use ha_search(domain_filter='scene') to find existing scene_ids",
                 ],
                 context={"scene_id": scene_id},
             )
@@ -288,7 +288,7 @@ class ConfigSceneTools:
                     "entity_id": f"scene.{scene_id.removeprefix('scene.')}",
                 },
                 suggestions=[
-                    "Verify scene_id exists using ha_search_entities(domain_filter='scene')",
+                    "Verify scene_id exists using ha_search(domain_filter='scene')",
                     "Check Home Assistant connection",
                     "Use ha_get_skill_guide for help",
                 ],
@@ -518,7 +518,7 @@ class ConfigSceneTools:
           service="turn_on", target=...) — this tool only manages scene
           *configuration*, not the runtime turn-on/off side.
         - To list or look up existing scenes, use
-          ha_search_entities(domain_filter="scene") or ha_deep_search.
+          ha_search(domain_filter="scene").
 
         SCENE SHAPE: ``entities`` is a dict keyed by entity_id (e.g.,
         ``{'light.kitchen': {'state': 'on', 'brightness': 200}}``), NOT a
@@ -927,7 +927,7 @@ class ConfigSceneTools:
                 suggestions=[
                     "Ensure config includes an 'entities' field (a dict keyed by entity_id)",
                     "Scene shape: {'entities': {'light.kitchen': {'state': 'on'}}}",
-                    "Use ha_search_entities(domain_filter='scene') to find scenes",
+                    "Use ha_search(domain_filter='scene') to find scenes",
                     "Use ha_get_skill_guide for help",
                 ],
                 raise_error=False,
@@ -988,7 +988,7 @@ class ConfigSceneTools:
                 message="scene_id must not be empty",
                 suggestions=[
                     "Pass a non-empty scene identifier (e.g. 'old_scene')",
-                    "Use ha_search_entities(domain_filter='scene') to find existing scene_ids",
+                    "Use ha_search(domain_filter='scene') to find existing scene_ids",
                 ],
                 context={"scene_id": scene_id},
             )
@@ -1032,7 +1032,7 @@ class ConfigSceneTools:
                 e,
                 context={"scene_id": scene_id},
                 suggestions=[
-                    "Verify scene_id exists using ha_search_entities(domain_filter='scene')",
+                    "Verify scene_id exists using ha_search(domain_filter='scene')",
                     "Check if scene is being used by automations or scripts",
                     "Use ha_get_skill_guide for help",
                 ],

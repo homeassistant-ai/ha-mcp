@@ -125,7 +125,7 @@ def _build_service_suggestions(
         if entity_id
         else "Specify an entity_id for targeted service calls",
         f"Check available services for {domain} domain using ha_get_skill_guide",
-        "Use ha_search_entities() to find correct entity IDs",
+        "Use ha_search() to find correct entity IDs",
     ]
 
 
@@ -364,7 +364,7 @@ class ServiceTools:
         **For detailed service documentation, use ha_get_skill_guide.**
 
         Common patterns: Use ha_get_state() to check current values before making changes.
-        Use ha_search_entities() to find correct entity IDs.
+        Use ha_search() to find correct entity IDs.
         """
         # ha_mcp_tools.* services are restricted to the ha-mcp server's
         # dedicated wrappers (which inject the required caller token). Block

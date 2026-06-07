@@ -87,7 +87,16 @@ class TestProjectFields:
 
 
 class TestHaSearchEntitiesFieldsProjection:
-    """Tool-level tests for fields= projection in ha_search_entities."""
+    """Tool-level coverage of the top-level ``fields=`` projection on the
+    consolidated ``ha_search`` tool.
+
+    Re-enabled (was skipped as "ha_search does not expose ``fields=``"): the
+    consolidated tool exposes ``fields=`` and applies ``_project_response_fields``
+    as the final step of the orchestrator. These exercise the real tool call —
+    param parsing, the always-keep contract, the typo guard, and the malformed-
+    input error path — not just the ``project_fields`` helper. The response is
+    the flat orchestrator envelope (no ``["data"]`` wrapper).
+    """
 
     @pytest.fixture
     def mock_mcp(self):
@@ -126,32 +135,69 @@ class TestHaSearchEntitiesFieldsProjection:
 
     @pytest.fixture
     def mock_smart_tools(self):
-        return MagicMock()
+        smart_tools = MagicMock()
+        # ha_search orchestrator fans out to deep_search whenever ``query`` is
+        # set; mock it as an empty-config response so the merge logic doesn't
+        # see a non-awaitable MagicMock. The config buckets are present (empty)
+        # so a projection can be observed dropping them.
+        smart_tools.deep_search = AsyncMock(
+            return_value={
+                "success": True,
+                "automations": [],
+                "scripts": [],
+                "scenes": [],
+                "helpers": [],
+                "warnings": [],
+            }
+        )
+        return smart_tools
 
     @pytest.fixture
     def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
         register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_search_entities"]
+        return self.registered_tools["ha_search"]
 
     @pytest.mark.asyncio
     async def test_fields_none_returns_full_response(self, search_tool):
-        result = await search_tool(query="kitchen")
-        data = result["data"]
+        """No projection → the full flat envelope, including the config buckets."""
+        data = await search_tool(query="kitchen")
         assert "success" in data
-        assert "results" in data
+        assert "entities" in data
+        assert "automations" in data
 
     @pytest.mark.asyncio
-    async def test_fields_single_key_projects_correctly(self, search_tool):
-        result = await search_tool(query="kitchen", fields=["results"])
-        data = result["data"]
-        assert "results" in data
-        assert "success" in data
-        assert "total_matches" not in data
+    async def test_fields_projection_drops_unrequested_buckets(self, search_tool):
+        """``fields=["entities"]`` keeps the requested bucket and drops the
+        other (non-always-keep) surface buckets — the core projection behavior,
+        exercised through the registered tool's own ``fields=`` param."""
+        data = await search_tool(query="kitchen", fields=["entities"])
+        assert "entities" in data
+        # The other surface buckets are neither requested nor always-keep.
+        assert "automations" not in data
+        assert "scripts" not in data
+        assert "scenes" not in data
+        assert "helpers" not in data
 
     @pytest.mark.asyncio
-    async def test_fields_success_always_present(self, search_tool):
-        result = await search_tool(query="kitchen", fields=["results"])
-        assert result["data"]["success"] is True
+    async def test_fields_projection_retains_always_keep_diagnostics(self, search_tool):
+        """Projection narrows the response but never hides the diagnostic /
+        pagination contract — ``success`` and the always-keep keys survive even
+        when not named in ``fields=``."""
+        data = await search_tool(query="kitchen", fields=["entities"])
+        assert data["success"] is True
+        # Always-keep keys are retained so a narrowing caller can't lose
+        # incompleteness / pagination signal.
+        assert "search_types" in data
+        assert "count" in data
+
+    @pytest.mark.asyncio
+    async def test_fields_unknown_key_emits_typo_warning(self, search_tool):
+        """A requested key absent from the response surfaces a diagnostic
+        warning (with the available keys) rather than a mysteriously empty
+        payload."""
+        data = await search_tool(query="kitchen", fields=["frobnicate"])
+        assert "warnings" in data
+        assert any("frobnicate" in w for w in data["warnings"])
 
     @pytest.mark.asyncio
     async def test_malformed_fields_raises_tool_error(self, search_tool):
@@ -165,17 +211,17 @@ class TestHaSearchEntitiesFieldsProjection:
 
 
 class TestHaSearchEntitiesFieldsProjectionAreaBranches:
-    """Tool-level tests for fields= projection across the four area-related return paths.
+    """Tool-level ``fields=`` projection across the entity-branch return paths.
 
-    The regular-search return at ``tools_search.py:795`` is covered by
-    ``TestHaSearchEntitiesFieldsProjection`` above; this class pins the other
-    four projection call sites so a regression removing ``project_fields(...)``
-    at any of them still produces a test failure:
-
-    - area+query branch        (``tools_search.py:479``)
-    - area-only populated      (``tools_search.py:581``)
-    - area-only empty          (``tools_search.py:600``)
-    - domain-listing branch    (``tools_search.py:694``)
+    Re-enabled (was skipped on the false "does not expose ``fields=``" reason).
+    The consolidated orchestrator no longer projects per-branch — it applies a
+    single ``_project_response_fields`` end-pass after every branch assembles
+    its response, so one projection covers all exits. These pin that the
+    end-pass reaches each entity-branch exit (area+query, area-only populated,
+    area-only empty, domain-listing) by projecting onto a non-``entities`` key
+    and asserting the ``entities`` bucket is dropped on each path. The response
+    is the flat envelope (no ``["data"]`` wrapper); ``search_type`` /
+    ``area_names`` / ``message`` are now in ``_ALWAYS_KEEP_PROJECTION``.
     """
 
     @pytest.fixture
@@ -256,108 +302,113 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
         register_search_tools(
             mock_mcp, mock_client, smart_tools=mock_smart_tools_populated
         )
-        return self.registered_tools["ha_search_entities"]
+        return self.registered_tools["ha_search"]
 
     @pytest.fixture
     def search_tool_empty(self, mock_mcp, mock_client, mock_smart_tools_empty):
         register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools_empty)
-        return self.registered_tools["ha_search_entities"]
+        return self.registered_tools["ha_search"]
 
     @pytest.mark.asyncio
     async def test_area_plus_query_branch_projects(self, search_tool_populated):
-        """area+query branch (line 479) honours fields= projection."""
-        result = await search_tool_populated(
-            query="kitchen", area_filter="kitchen", fields=["results"]
+        """The end-pass honors ``fields=`` on the area+query branch for a
+        *non-always-keep* key: ``entities`` is retained when requested and
+        dropped when not. ``search_type`` is in ``_ALWAYS_KEEP_PROJECTION``, so
+        asserting it survives can't witness projection — only a non-always-keep
+        key can (PR #1529 R8)."""
+        retained = await search_tool_populated(
+            query="kitchen", area_filter="kitchen", fields=["entities"]
         )
-        data = result["data"]
-        # Only ``results`` (+ always-retained ``success``) should remain.
-        assert "results" in data
-        assert "success" in data
-        assert "total_matches" not in data
-        assert "search_type" not in data
-        assert "area_filter" not in data
+        assert "entities" in retained
+        dropped = await search_tool_populated(
+            query="kitchen", area_filter="kitchen", fields=["search_type"]
+        )
+        assert "success" in dropped
+        assert "entities" not in dropped
 
     @pytest.mark.asyncio
     async def test_area_plus_query_branch_unprojected_baseline(
         self, search_tool_populated
     ):
         """fields=None on area+query returns the full response (sanity check)."""
-        result = await search_tool_populated(query="kitchen", area_filter="kitchen")
-        data = result["data"]
-        assert "results" in data
+        data = await search_tool_populated(query="kitchen", area_filter="kitchen")
+        assert "entities" in data
         assert "search_type" in data
         assert data["search_type"] == "area_filtered_query"
 
     @pytest.mark.asyncio
     async def test_area_only_populated_branch_projects(self, search_tool_populated):
-        """area-only populated branch (line 581) honours fields= projection."""
-        result = await search_tool_populated(area_filter="kitchen", fields=["results"])
-        data = result["data"]
-        assert "results" in data
-        assert "success" in data
-        assert "area_names" not in data
-        assert "search_type" not in data
+        """The end-pass projects the area-only populated branch: the
+        non-always-keep ``entities`` bucket is retained when requested and
+        dropped when not."""
+        retained = await search_tool_populated(
+            area_filter="kitchen", fields=["entities"]
+        )
+        assert "entities" in retained
+        dropped = await search_tool_populated(
+            area_filter="kitchen", fields=["search_type"]
+        )
+        assert "success" in dropped
+        assert "entities" not in dropped
 
     @pytest.mark.asyncio
     async def test_area_only_populated_branch_unprojected_baseline(
         self, search_tool_populated
     ):
         """fields=None on area-only returns the full response (sanity check)."""
-        result = await search_tool_populated(area_filter="kitchen")
-        data = result["data"]
-        assert "results" in data
+        data = await search_tool_populated(area_filter="kitchen")
+        assert "entities" in data
         assert "search_type" in data
         assert data["search_type"] == "area_only"
         assert "area_names" in data
 
     @pytest.mark.asyncio
     async def test_area_only_empty_branch_projects(self, search_tool_empty):
-        """area-only empty branch (line 600) honours fields= projection.
-
-        Selecting ``message`` (set on the zero-match branch) confirms the
-        projection is applied to the empty-area response shape too.
-        """
-        result = await search_tool_empty(area_filter="nonexistent", fields=["message"])
-        data = result["data"]
-        assert "success" in data
-        assert "message" in data
-        assert "results" not in data
-        assert "search_type" not in data
+        """The end-pass projects the area-only empty branch: the non-always-keep
+        ``entities`` bucket (``[]`` on this branch) is retained when requested
+        and dropped when not. ``message`` is always-keep, so requesting it can't
+        witness projection — it survives either way."""
+        retained = await search_tool_empty(
+            area_filter="nonexistent", fields=["entities"]
+        )
+        assert "entities" in retained
+        dropped = await search_tool_empty(area_filter="nonexistent", fields=["message"])
+        assert "success" in dropped
+        assert "message" in dropped
+        assert "entities" not in dropped
 
     @pytest.mark.asyncio
     async def test_area_only_empty_branch_unprojected_baseline(self, search_tool_empty):
         """fields=None on the empty-area branch returns the full response."""
-        result = await search_tool_empty(area_filter="nonexistent")
-        data = result["data"]
-        assert "results" in data
-        assert data["results"] == []
+        data = await search_tool_empty(area_filter="nonexistent")
+        assert "entities" in data
+        assert data["entities"] == []
         assert "message" in data
 
     @pytest.mark.asyncio
     async def test_domain_listing_branch_projects(self, search_tool_populated):
-        """domain-listing branch (line 694) honours fields= projection.
-
-        Triggered by empty query + domain_filter. The smart_tools mock is
-        unused on this branch; client.get_states drives the result.
-        """
-        result = await search_tool_populated(domain_filter="light", fields=["results"])
-        data = result["data"]
-        assert "results" in data
-        assert "success" in data
-        assert "note" not in data
-        assert "search_type" not in data
+        """The end-pass projects the domain-listing branch (empty query +
+        domain_filter; client.get_states drives the result): the non-always-keep
+        ``entities`` bucket is retained when requested and dropped when not."""
+        retained = await search_tool_populated(
+            domain_filter="light", fields=["entities"]
+        )
+        assert "entities" in retained
+        dropped = await search_tool_populated(
+            domain_filter="light", fields=["search_type"]
+        )
+        assert "success" in dropped
+        assert "entities" not in dropped
 
     @pytest.mark.asyncio
     async def test_domain_listing_branch_unprojected_baseline(
         self, search_tool_populated
     ):
         """fields=None on the domain-listing branch returns the full response."""
-        result = await search_tool_populated(domain_filter="light")
-        data = result["data"]
-        assert "results" in data
+        data = await search_tool_populated(domain_filter="light")
+        assert "entities" in data
         assert "search_type" in data
         assert data["search_type"] == "domain_listing"
-        assert "note" in data
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +440,7 @@ _MULTI_ENTITY_STATES = [
 
 
 class _SearchToolFixture:
-    """Shared fixture mixin for ha_search_entities tests."""
+    """Shared fixture mixin for ha_search tests."""
 
     @pytest.fixture
     def mock_mcp(self):
@@ -419,12 +470,26 @@ class _SearchToolFixture:
 
     @pytest.fixture
     def mock_smart_tools(self):
-        return MagicMock()
+        smart_tools = MagicMock()
+        # ha_search orchestrator fans out to deep_search whenever ``query`` is
+        # set; mock it as an empty-config response so the merge logic doesn't
+        # see a non-awaitable MagicMock.
+        smart_tools.deep_search = AsyncMock(
+            return_value={
+                "success": True,
+                "automations": [],
+                "scripts": [],
+                "scenes": [],
+                "helpers": [],
+                "warnings": [],
+            }
+        )
+        return smart_tools
 
     @pytest.fixture
     def search_tool(self, mock_mcp, mock_client, mock_smart_tools):
         register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
-        return self.registered_tools["ha_search_entities"]
+        return self.registered_tools["ha_search"]
 
 
 class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
@@ -439,7 +504,7 @@ class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
             per_domain_limit=1,
             limit=20,
         )
-        by_domain = result["data"].get("by_domain", {})
+        by_domain = result.get("by_domain", {})
         assert "light" in by_domain
         assert len(by_domain["light"]) <= 1, (
             "per_domain_limit=1 should cap each domain bucket to at most 1 entity"
@@ -453,9 +518,9 @@ class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
             group_by_domain=False,
             per_domain_limit=1,
         )
-        data = result["data"]
+        data = result
         # Results still present; no by_domain grouping
-        assert "results" in data
+        assert "entities" in data
         assert "by_domain" not in data
 
     @pytest.mark.asyncio
@@ -467,7 +532,7 @@ class TestHaSearchEntitiesPerDomainLimit(_SearchToolFixture):
             per_domain_limit=1,
             limit=20,
         )
-        by_domain = result["data"].get("by_domain", {})
+        by_domain = result.get("by_domain", {})
         assert "light" in by_domain
         assert len(by_domain["light"]) <= 1
 
@@ -479,8 +544,8 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
     async def test_state_filter_exact_match_keeps_matching_entities(self, search_tool):
         """state_filter='on' in exact_match mode keeps only 'on' entities."""
         result = await search_tool(query="light", state_filter="on")
-        data = result["data"]
-        for entity in data["results"]:
+        data = result
+        for entity in data["entities"]:
             assert entity["state"] == "on", (
                 "state_filter='on' should remove non-'on' entities from results"
             )
@@ -491,32 +556,48 @@ class TestHaSearchEntitiesStateFilter(_SearchToolFixture):
         result_padded = await search_tool(query="light", state_filter="  on  ")
         result_plain = await search_tool(query="light", state_filter="on")
         # Both should return the same set of entities
-        padded_ids = {e["entity_id"] for e in result_padded["data"]["results"]}
-        plain_ids = {e["entity_id"] for e in result_plain["data"]["results"]}
+        padded_ids = {e["entity_id"] for e in result_padded["entities"]}
+        plain_ids = {e["entity_id"] for e in result_plain["entities"]}
         assert padded_ids == plain_ids
 
     @pytest.mark.asyncio
-    async def test_state_filter_echoed_in_response(self, search_tool):
-        """state_filter value (after strip) is echoed back in the data dict."""
+    async def test_state_filter_not_echoed_at_top_level(self, search_tool):
+        """state_filter is a caller-input echo and must not bleed into the
+        ha_search top-level envelope (entities-branch strip — see
+        `_ENTITIES_BRANCH_SKIP_KEYS`). The filtering still applies to
+        `entities`; the caller already has the input they passed.
+        """
         result = await search_tool(query="light", state_filter="on")
-        assert result["data"]["state_filter"] == "on"
+        assert "state_filter" not in result, (
+            f"state_filter must not echo at top level of ha_search; "
+            f"got keys {sorted(result)}"
+        )
 
     @pytest.mark.asyncio
     async def test_state_filter_domain_listing_branch(self, search_tool):
-        """state_filter works in the domain_listing branch (empty query + domain_filter)."""
+        """state_filter works in the domain_listing branch (empty query + domain_filter).
+
+        The filter still applies to each entity in ``entities``; the input
+        echo at top level is stripped at the orchestrator (see
+        ``_ENTITIES_BRANCH_SKIP_KEYS``), so callers must not expect the
+        echo even when they read it through the domain_listing branch.
+        """
         result = await search_tool(domain_filter="light", state_filter="on")
-        data = result["data"]
-        for entity in data["results"]:
+        data = result
+        for entity in data["entities"]:
             assert entity["state"] == "on"
-        assert data.get("state_filter") == "on"
+        assert "state_filter" not in data, (
+            f"state_filter must not echo at top level even in domain_listing; "
+            f"got keys {sorted(data)}"
+        )
 
     @pytest.mark.asyncio
     async def test_state_filter_whitespace_only_treated_as_no_filter(self, search_tool):
         """state_filter='   ' (whitespace only) is treated as no filter (None)."""
         result_no_filter = await search_tool(query="light")
         result_ws_filter = await search_tool(query="light", state_filter="   ")
-        no_filter_count = result_no_filter["data"]["count"]
-        ws_filter_count = result_ws_filter["data"]["count"]
+        no_filter_count = result_no_filter["count"]
+        ws_filter_count = result_ws_filter["count"]
         # Both should return the same number of results (no filtering applied)
         assert ws_filter_count == no_filter_count
 
@@ -528,26 +609,26 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
     async def test_result_fields_projects_entity_records(self, search_tool):
         """result_fields=['entity_id','state'] limits each record to those keys."""
         result = await search_tool(query="light", result_fields=["entity_id", "state"])
-        data = result["data"]
-        for entity in data["results"]:
+        data = result
+        for entity in data["entities"]:
             assert set(entity.keys()) == {"entity_id", "state"}
 
     @pytest.mark.asyncio
     async def test_result_fields_outer_response_keys_preserved(self, search_tool):
         """result_fields only projects inside results[]; top-level keys are unchanged."""
         result = await search_tool(query="light", result_fields=["entity_id"])
-        data = result["data"]
+        data = result
         assert "success" in data
-        assert "total_matches" in data
+        assert "entity_total_matches" in data
         assert "count" in data
 
     @pytest.mark.asyncio
     async def test_result_fields_unknown_key_emits_warning(self, search_tool):
         """result_fields with only unknown keys emits a diagnostic warning."""
         result = await search_tool(query="light", result_fields=["nonexistent_key"])
-        data = result["data"]
+        data = result
         # Each entity record is projected to {} since the key doesn't exist
-        for entity in data["results"]:
+        for entity in data["entities"]:
             assert entity == {}
         # A diagnostic warning should be present
         assert "warnings" in data
@@ -557,8 +638,8 @@ class TestHaSearchEntitiesResultFields(_SearchToolFixture):
     async def test_result_fields_domain_listing_branch(self, search_tool):
         """result_fields works in the domain_listing branch."""
         result = await search_tool(domain_filter="light", result_fields=["entity_id"])
-        data = result["data"]
-        for entity in data["results"]:
+        data = result
+        for entity in data["entities"]:
             assert set(entity.keys()) == {"entity_id"}
 
 
@@ -589,6 +670,16 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
     def mock_smart_tools(self):
         smart = MagicMock()
         smart.smart_entity_search = AsyncMock(return_value=dict(_FUZZY_RESULT))
+        smart.deep_search = AsyncMock(
+            return_value={
+                "success": True,
+                "automations": [],
+                "scripts": [],
+                "scenes": [],
+                "helpers": [],
+                "warnings": [],
+            }
+        )
         return smart
 
     @pytest.mark.asyncio
@@ -599,20 +690,20 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
         internally so total_matches cannot be recomputed after state filtering.
         """
         result = await search_tool(query="light", exact_match=False, state_filter="on")
-        data = result["data"]
+        data = result
         # count reflects only the filtered page
         assert data["count"] == 1, "count should reflect only the on-state entity"
-        assert data["results"][0]["entity_id"] == "light.kitchen"
+        assert data["entities"][0]["entity_id"] == "light.kitchen"
         # total_matches is the raw fuzzy-engine number, not re-counted
-        assert data["total_matches"] == 5, (
-            "total_matches must remain the unfiltered fuzzy count"
+        assert data["entity_total_matches"] == 5, (
+            "entity_total_matches must remain the unfiltered fuzzy count"
         )
 
     @pytest.mark.asyncio
     async def test_fuzzy_state_filter_note_present(self, search_tool):
         """state_filter_note appears in the response to explain the dual-count."""
         result = await search_tool(query="light", exact_match=False, state_filter="on")
-        data = result["data"]
+        data = result
         assert "state_filter_note" in data
         assert "has_more" in data["state_filter_note"]
 
@@ -620,22 +711,24 @@ class TestHaSearchEntitiesFuzzyStateFilter(_SearchToolFixture):
     async def test_state_filter_note_survives_fields_projection(self, search_tool):
         """state_filter_note is force-retained even when not in fields=.
 
-        A caller with fields=["results", "total_matches"] still needs the note
-        to understand that total_matches is the unfiltered count.
+        A caller projecting to only ``entities`` still needs the note to
+        understand that ``entity_total_matches`` is the unfiltered fuzzy
+        count, not the post-filter result count. Pinned via
+        ``_ALWAYS_KEEP_PROJECTION``.
         """
         result = await search_tool(
             query="light",
             exact_match=False,
             state_filter="on",
-            fields=["results", "total_matches"],
+            fields=["entities"],
         )
-        data = result["data"]
+        data = result
         # state_filter_note must be force-retained even when not listed in fields=
         assert "state_filter_note" in data, (
-            "state_filter_note must survive fields= projection"
+            "state_filter_note must survive fields= projection "
+            f"(in _ALWAYS_KEEP_PROJECTION); got keys {sorted(data)}"
         )
-        # Projected keys present
-        assert "total_matches" in data
-        assert "results" in data
-        # Non-requested keys absent (count was not in fields=)
-        assert "count" not in data
+        # Requested key present.
+        assert "entities" in data
+        # entity_total_matches is also force-retained (in _ALWAYS_KEEP_PROJECTION).
+        assert "entity_total_matches" in data

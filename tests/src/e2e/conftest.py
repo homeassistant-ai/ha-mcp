@@ -1982,18 +1982,17 @@ async def test_light_entity(mcp_client) -> str:
     """
     # Search for light entities
     search_result = await mcp_client.call_tool(
-        "ha_search_entities", {"query": "light", "domain_filter": "light", "limit": 10}
+        "ha_search", {"query": "light", "domain_filter": "light", "limit": 10}
     )
 
     # Parse search results
     search_data = parse_mcp_result(search_result)
 
-    data = search_data.get("data", {})
-    if not data.get("success") or not data.get("results"):
+    if not search_data.get("success") or not search_data.get("entities"):
         pytest.skip("No light entities available for testing")
 
     # Find a light that's currently off (preferred for testing)
-    for entity in data["results"]:
+    for entity in search_data["entities"]:
         entity_id = entity["entity_id"]
 
         # Get current state
@@ -2007,7 +2006,7 @@ async def test_light_entity(mcp_client) -> str:
             return entity_id
 
     # If no off lights, use the first available
-    entity_id = data["results"][0]["entity_id"]
+    entity_id = search_data["entities"][0]["entity_id"]
     logger.info(f"🔍 Using test light: {entity_id} (may be on)")
     return entity_id
 
@@ -2028,13 +2027,13 @@ async def clean_test_environment(mcp_client):
     for pattern in search_patterns:
         # Search automations
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"query": pattern, "domain_filter": "automation", "limit": 20},
         )
 
         search_data = parse_mcp_result(search_result)
-        if search_data.get("success") and search_data.get("results"):
-            for entity in search_data["results"]:
+        if search_data.get("success") and search_data.get("entities"):
+            for entity in search_data["entities"]:
                 entity_id = entity["entity_id"]
                 if any(test_word in entity_id.lower() for test_word in ["test", "e2e"]):
                     logger.info(f"🗑️ Found test automation to clean: {entity_id}")

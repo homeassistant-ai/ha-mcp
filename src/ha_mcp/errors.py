@@ -134,7 +134,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
         "Create a new token with required permissions",
     ],
     ErrorCode.ENTITY_NOT_FOUND: [
-        "Use ha_search_entities() to find correct entity ID",
+        "Use ha_search() to find correct entity ID",
         "Verify the entity exists in Home Assistant",
         "Check for typos in the entity ID",
     ],
@@ -145,7 +145,7 @@ DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {
     ],
     ErrorCode.ENTITY_INVALID_ID: [
         "Entity ID must be in format: domain.name",
-        "Use ha_search_entities() to find valid entity IDs",
+        "Use ha_search() to find valid entity IDs",
     ],
     ErrorCode.ENTITY_DOMAIN_MISMATCH: [
         "Cannot change entity to a different domain",
@@ -241,7 +241,7 @@ def create_error_response(
                 "code": "ENTITY_NOT_FOUND",
                 "message": "Entity light.nonexistent not found",
                 "details": "No entity with this ID exists in Home Assistant",
-                "suggestion": "Use ha_search_entities() to find correct entity ID"
+                "suggestion": "Use ha_search() to find correct entity ID"
             },
             "entity_id": "light.nonexistent"
         }

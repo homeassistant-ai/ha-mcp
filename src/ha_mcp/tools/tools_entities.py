@@ -248,7 +248,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if not result.get("success"):
                 error_msg = _extract_ws_error(result)
                 suggestions = [
-                    "Verify the entity_id exists using ha_search_entities()",
+                    "Verify the entity_id exists using ha_search()",
                 ]
                 if new_entity_id is not None:
                     suggestions.extend(
@@ -490,7 +490,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             "exposure_succeeded": exposure_result,
                         },
                         suggestions=[
-                            "Verify the entity_id exists using ha_search_entities()",
+                            "Verify the entity_id exists using ha_search()",
                             "The entity's exposure settings were likely changed, but its current state could not be confirmed.",
                         ],
                     )
@@ -741,7 +741,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Use new_device_name to rename the associated device. Can be combined with
         new_entity_id to rename both in one call. The device is looked up automatically.
 
-        Use ha_search_entities() or ha_get_device() to find entity IDs.
+        Use ha_search() or ha_get_device() to find entity IDs.
         Use ha_config_get_label() to find available label IDs.
 
         EXAMPLES:
@@ -1123,7 +1123,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         RELATED TOOLS:
         - ha_set_entity(): Modify entity properties (area, name, icon, enabled, hidden, aliases)
         - ha_get_state(): Get current state/attributes (on/off, temperature, etc.)
-        - ha_search_entities(): Find entities by name, domain, or area
+        - ha_search(): Find entities by name, domain, or area
 
         EXAMPLES:
         - Single entity: ha_get_entity("sensor.temperature")
@@ -1237,7 +1237,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             f"Entity not found: {e}",
                             context={"entity_id": eid},
                             suggestions=[
-                                "Use ha_search_entities() to find valid entity IDs",
+                                "Use ha_search() to find valid entity IDs",
                                 "Check the entity_id spelling and format (e.g., 'sensor.temperature')",
                             ],
                         )
@@ -1280,7 +1280,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if errors:
                 response["errors"] = errors
                 response["suggestions"] = [
-                    "Use ha_search_entities() to find valid entity IDs for failed lookups"
+                    "Use ha_search() to find valid entity IDs for failed lookups"
                 ]
 
             return response
@@ -1337,7 +1337,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ha_set_entity(entity_id="sensor.old", enabled=False)
 
         RELATED TOOLS:
-        - ha_search_entities: Find entities to verify the entity_id before removing
+        - ha_search: Find entities to verify the entity_id before removing
         - ha_get_entity: Check entity details before removal
         """
         try:
@@ -1347,7 +1347,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 entity_id,
                 "entity_id",
                 suggestions=[
-                    "Use ha_search_entities() to find valid entity IDs",
+                    "Use ha_search() to find valid entity IDs",
                 ],
             )
             result = await client.send_websocket_message(
@@ -1363,7 +1363,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             f"Entity '{entity_id}' not found in registry",
                             context={"entity_id": entity_id},
                             suggestions=[
-                                "Use ha_search_entities() to find valid entity IDs",
+                                "Use ha_search() to find valid entity IDs",
                                 "The entity may have already been removed",
                             ],
                         )

@@ -402,7 +402,7 @@ class FuzzyEntitySearcher:
     ) -> int:
         """Calculate a comprehensive fuzzy score for an entity name/domain.
 
-        Actively used by ``ha_deep_search`` name scoring (automation, script,
+        Actively used by ``ha_search`` name scoring (automation, script,
         helper phases) to produce a score comparable to the legacy additive
         output those paths already rely on. Do not remove without migrating
         the deep-search callers to a BM25-based scheme.

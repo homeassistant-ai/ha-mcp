@@ -991,23 +991,14 @@ async def test_helper_search_and_discovery(mcp_client):
     for domain in helper_domains:
         logger.info(f"🔍 Searching for {domain} helpers...")
         search_result = await mcp_client.call_tool(
-            "ha_search_entities", {"domain_filter": domain, "limit": 10}
+            "ha_search", {"domain_filter": domain, "limit": 10}
         )
 
         search_data = parse_mcp_result(search_result)
-        # Handle different response formats - search might return data directly or nested
-        if "data" in search_data and "results" in search_data["data"]:
-            data_section = search_data["data"]
-            assert data_section.get("success", True), (
-                f"Helper search failed for {domain}: {search_data}"
-            )
-            results = data_section.get("results", [])
-        elif "results" in search_data:
-            # Direct results format
-            results = search_data.get("results", [])
-        else:
-            # Fallback - no results found
-            results = []
+        assert search_data.get("success", True), (
+            f"Helper search failed for {domain}: {search_data}"
+        )
+        results = search_data.get("entities", [])
         logger.info(f"🔍 Found {len(results)} {domain} helpers")
 
         # If helpers exist, verify their structure

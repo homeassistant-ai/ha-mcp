@@ -1,4 +1,4 @@
-"""Unit tests for ``ha_deep_search`` coverage of UI-created flow-based
+"""Unit tests for ``ha_search`` coverage of UI-created flow-based
 helpers (template, group, utility_meter, derivative, ...).
 
 Issue #1457: deep_search previously hard-coded the helper list to
@@ -73,7 +73,7 @@ class TestFlowHelperDeepSearch:
 
         tools = _make_tools(client)
         semaphore = asyncio.Semaphore(8)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "weather", exact_match=True, semaphore=semaphore, include_config=False
         )
 
@@ -109,7 +109,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "outside_temperature",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -140,7 +140,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "comfort",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -176,7 +176,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "match",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -197,7 +197,7 @@ class TestFlowHelperDeepSearch:
             ]
         )
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "locked",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -205,17 +205,54 @@ class TestFlowHelperDeepSearch:
         )
         assert results == []
 
-    async def test_returns_empty_when_rest_call_fails(self) -> None:
+    async def test_rest_call_failure_signals_failed_for_partial(self) -> None:
+        # The config-entries list fetch raising means the whole flow-helper
+        # surface is unreachable — it must signal a non-zero failure count (not
+        # just an empty list) so ``_deep_search_helpers`` routes it to
+        # ``partial``. The whole-surface failure counts as 1.
         client = MagicMock()
         client._request = AsyncMock(side_effect=RuntimeError("REST down"))
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, failed = await tools._search_flow_helpers(
             "anything",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
             include_config=False,
         )
         assert results == []
+        assert failed == 1
+
+    async def test_unexpected_list_shape_signals_failed(self) -> None:
+        # A non-list response from the config-entries endpoint (e.g. an error
+        # dict on a future HA version) is a backend failure, not "no helpers" —
+        # it must signal a non-zero count rather than be swallowed to empty.
+        client = MagicMock()
+        client._request = AsyncMock(return_value={"error": "boom"})
+        tools = _make_tools(client)
+        results, failed = await tools._search_flow_helpers(
+            "anything",
+            exact_match=True,
+            semaphore=asyncio.Semaphore(8),
+            include_config=False,
+        )
+        assert results == []
+        assert failed == 1
+
+    async def test_empty_flow_entries_is_not_a_failure(self) -> None:
+        # A successful list with no flow-helper entries is a genuine zero —
+        # the failure count must stay 0 so a clean instance doesn't report
+        # partial.
+        client = MagicMock()
+        client._request = AsyncMock(return_value=[])
+        tools = _make_tools(client)
+        results, failed = await tools._search_flow_helpers(
+            "anything",
+            exact_match=True,
+            semaphore=asyncio.Semaphore(8),
+            include_config=False,
+        )
+        assert results == []
+        assert failed == 0
 
     async def test_does_not_match_on_opaque_entry_id(self) -> None:
         # Regression (issue #1457 review): the config-entry ULID must not be a
@@ -238,7 +275,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "weather",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -272,7 +309,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "match",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -280,12 +317,13 @@ class TestFlowHelperDeepSearch:
         )
         assert [r["entry_id"] for r in results] == ["01HXTEMPLATEOK"]
 
-    async def test_probe_swallow_does_not_drop_other_entries(self) -> None:
-        # start_options_flow raising for one entry is swallowed inside
-        # fetch_entry_options (→ {}) *before* score_entry runs, so that entry
-        # simply doesn't match while the healthy sibling is still returned.
-        # The gather-level isolation path (a bug inside score_entry) is covered
-        # by test_score_entry_crash_is_isolated_and_logged.
+    async def test_probe_failure_counts_but_keeps_other_entries(self) -> None:
+        # start_options_flow raising for one entry is a probe failure: that
+        # entry's config body is never searched, so it doesn't match — but the
+        # failure is now COUNTED (returned as 1) so deep_search can surface
+        # ``partial`` instead of a silent false no-match. The healthy sibling
+        # is still returned. The gather-level isolation path (a code bug inside
+        # score_entry) is covered by test_score_entry_crash_is_isolated.
         client = MagicMock()
         client._request = AsyncMock(
             return_value=[
@@ -313,19 +351,61 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, failed = await tools._search_flow_helpers(
             "outside_temperature",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
             include_config=False,
         )
         assert [r["entry_id"] for r in results] == ["01HXGOOD"]
+        # The bad entry's options-flow probe failed → counted as 1.
+        assert failed == 1
+
+    async def test_probe_failure_counted_even_when_entry_matches(self) -> None:
+        # A probe failure must be counted even when the entry still MATCHES (on
+        # title): the entry is returned, but its config body was never searched,
+        # so the failure is reported so the caller sees ``partial``. Guards the
+        # ``return result, probe_failed`` match-branch — a refactor that early-
+        # returns ``result`` alone would drop the signal and ship green.
+        client = MagicMock()
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXMATCH",
+                    "domain": "template",
+                    "title": "Kitchen Temp",
+                    "supports_options": True,
+                }
+            ]
+        )
+        # Probe fails — title still matches, so the entry is returned, but the
+        # config body is unread → the failure must be counted.
+        client.start_options_flow = AsyncMock(
+            side_effect=RuntimeError("options flow down")
+        )
+        client.abort_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        # Force a mid-range title score (matches at threshold 60, below the
+        # perfect-100 probe-skip), so the entry matches AND the probe runs.
+        with patch.object(tools, "_score_deep_match", return_value=(70, 60, True)):
+            results, failed = await tools._search_flow_helpers(
+                "kitchen",
+                exact_match=False,
+                semaphore=asyncio.Semaphore(8),
+                include_config=False,
+            )
+
+        assert [r["entry_id"] for r in results] == ["01HXMATCH"]
+        # The probe failed → counted as 1, even though the entry matched.
+        assert failed == 1
 
     async def test_score_entry_crash_is_isolated_and_logged(self, caplog) -> None:
-        # A real bug inside score_entry (not a swallowed probe/API error) is
-        # isolated by gather: the bad entry is dropped and logged at WARNING
-        # (discoverable, per review), the healthy entry is still returned, and
-        # the multi-source search does not crash.
+        # A real bug inside score_entry (not a probe/API failure) is isolated by
+        # gather: the bad entry is dropped and logged at WARNING (discoverable,
+        # per review), the healthy entry is still returned, and the multi-source
+        # search does not crash. Unlike a probe failure, a scoring bug is NOT a
+        # backend outage, so it must NOT count toward partial (failed stays 0).
         client = MagicMock()
         client._request = AsyncMock(
             return_value=[
@@ -356,7 +436,7 @@ class TestFlowHelperDeepSearch:
             patch.object(tools, "_score_deep_match", side_effect=scorer),
             caplog.at_level(logging.WARNING, logger="ha_mcp.tools.smart_search"),
         ):
-            results = await tools._search_flow_helpers(
+            results, failed = await tools._search_flow_helpers(
                 "good",
                 exact_match=True,
                 semaphore=asyncio.Semaphore(8),
@@ -365,6 +445,9 @@ class TestFlowHelperDeepSearch:
 
         assert [r["entry_id"] for r in results] == ["01HXGOOD"]
         assert "flow-helper scoring failed" in caplog.text
+        # A scoring bug is logged but not counted — it's a code error, not a
+        # backend probe failure, so it must not inflate the partial count.
+        assert failed == 0
 
     async def test_below_threshold_score_filters_entry(self) -> None:
         # A non-zero score below the threshold is filtered via
@@ -385,7 +468,7 @@ class TestFlowHelperDeepSearch:
         tools = _make_tools(client)
 
         with patch.object(tools, "_score_deep_match", return_value=(50, 100, False)):
-            results = await tools._search_flow_helpers(
+            results, _ = await tools._search_flow_helpers(
                 "x",
                 exact_match=True,
                 semaphore=asyncio.Semaphore(8),
@@ -418,7 +501,7 @@ class TestFlowHelperDeepSearch:
         tools = _make_tools(client)
         # Force a mid-range title score: above fuzzy_threshold (60), below 100.
         with patch.object(tools, "_score_deep_match", return_value=(70, 60, True)):
-            results = await tools._search_flow_helpers(
+            results, _ = await tools._search_flow_helpers(
                 "weather",
                 exact_match=False,
                 semaphore=asyncio.Semaphore(8),

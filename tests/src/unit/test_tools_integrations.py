@@ -19,6 +19,7 @@ from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
     _get_entry_id_for_flow_helper,
     fetch_entry_options,
+    fetch_entry_options_with_status,
     options_from_form_flow,
 )
 
@@ -369,7 +370,7 @@ class TestRemoveHelpersIntegrations:
         assert "my_button" in err["error"]["message"]
         # Pin the diagnostic-hint wording (same rationale as Path 3).
         assert "May indicate" in err["error"]["message"]
-        assert "ha_search_entities" in err["error"]["message"]
+        assert "ha_search" in err["error"]["message"]
         assert "already_deleted" not in json.dumps(err)
 
     async def test_simple_path_404_on_state_check_raises_entity_not_found(
@@ -410,7 +411,7 @@ class TestRemoveHelpersIntegrations:
         # Same diagnostic hint as the state-gone branch — both sub-paths
         # of Path 1 confirmed-absent route to the same raise.
         assert "May indicate" in err["error"]["message"]
-        assert "ha_search_entities" in err["error"]["message"]
+        assert "ha_search" in err["error"]["message"]
         assert "already_deleted" not in json.dumps(err)
 
     async def test_simple_path_non_404_apierror_propagates(self, tools, mock_client):
@@ -661,7 +662,7 @@ class TestRemoveHelpersIntegrations:
         assert "template.ghost" in err["error"]["message"]
         # Pin the diagnostic-hint wording (same rationale as Path 1).
         assert "May indicate" in err["error"]["message"]
-        assert "ha_search_entities" in err["error"]["message"]
+        assert "ha_search" in err["error"]["message"]
         assert "already_deleted" not in json.dumps(err)
 
     async def test_flow_path_lookup_failed_maps_to_websocket_disconnected(
@@ -1383,3 +1384,96 @@ class TestFetchEntryOptions:
 
         assert await fetch_entry_options(client, "entry_nf") == {}
         client.abort_options_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+class TestFetchEntryOptionsWithStatus:
+    """``fetch_entry_options_with_status`` distinguishes a probe failure from a
+    genuinely-empty options form (both yield ``{}`` for options) so bulk
+    callers (smart_search) can surface ``partial`` on a mid-search probe
+    failure (PR #1529 R8)."""
+
+    async def test_form_read_reports_ok_true(self) -> None:
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={
+                "flow_id": "f1",
+                "type": "form",
+                "data_schema": [
+                    {"name": "state", "description": {"suggested_value": "{{ true }}"}}
+                ],
+            }
+        )
+        client.abort_options_flow = AsyncMock()
+
+        options, ok = await fetch_entry_options_with_status(client, "entry_x")
+        assert options == {"state": "{{ true }}"}
+        assert ok is True
+
+    async def test_empty_form_is_a_successful_read(self) -> None:
+        # A form first-step with no harvestable fields is a genuine empty read,
+        # NOT a failure — ok must be True so an empty options form doesn't
+        # false-flag partial.
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={"flow_id": "f2", "type": "form", "data_schema": []}
+        )
+        client.abort_options_flow = AsyncMock()
+
+        options, ok = await fetch_entry_options_with_status(client, "entry_e")
+        assert options == {}
+        assert ok is True
+
+    async def test_menu_first_step_reports_ok_false(self) -> None:
+        # A non-form first step (menu) can't be harvested into options — the
+        # config body is unread, so ok is False (a failure to read).
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={"flow_id": "f3", "type": "menu", "menu_options": []}
+        )
+        client.abort_options_flow = AsyncMock()
+
+        options, ok = await fetch_entry_options_with_status(client, "entry_m")
+        assert options == {}
+        assert ok is False
+        client.abort_options_flow.assert_awaited_once_with("f3")
+
+    async def test_start_raises_reports_ok_false(self) -> None:
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(side_effect=RuntimeError("init blew up"))
+        client.abort_options_flow = AsyncMock()
+
+        options, ok = await fetch_entry_options_with_status(client, "entry_r")
+        assert options == {}
+        assert ok is False
+        # start raised before a flow_id existed → abort skipped.
+        client.abort_options_flow.assert_not_awaited()
+
+    async def test_extraction_raises_after_start_reports_ok_false(self) -> None:
+        # The flow starts (flow_id exists) but parsing blows up — ok is False
+        # and the finally block still aborts so the flow doesn't sit half-open.
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={"flow_id": "f4", "type": "form", "data_schema": []}
+        )
+        client.abort_options_flow = AsyncMock()
+
+        with patch(
+            "ha_mcp.tools.tools_integrations.options_from_form_flow",
+            side_effect=RuntimeError("parse blew up"),
+        ):
+            options, ok = await fetch_entry_options_with_status(client, "entry_p")
+        assert options == {}
+        assert ok is False
+        client.abort_options_flow.assert_awaited_once_with("f4")
+
+    async def test_wrapper_drops_status_flag(self) -> None:
+        # The thin fetch_entry_options wrapper returns only the options dict,
+        # preserving the legacy contract for callers that don't need the flag.
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(
+            return_value={"flow_id": "f5", "type": "menu"}
+        )
+        client.abort_options_flow = AsyncMock()
+
+        assert await fetch_entry_options(client, "entry_w") == {}

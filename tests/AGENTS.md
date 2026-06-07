@@ -33,10 +33,10 @@ from ..utilities.wait_helpers import wait_for_tool_result
 
 data = await wait_for_tool_result(
     mcp_client,
-    tool_name="ha_deep_search",
+    tool_name="ha_search",
     arguments={"query": "my_sensor", "search_types": ["automation"], "limit": 10},
     predicate=lambda d: len(d.get("automations", [])) > 0,
-    description="deep search finds new automation",
+    description="ha_search finds new automation",
 )
 ```
 Other available helpers: `wait_for_entity_state()`, `wait_for_condition()`, `wait_for_state_change()`. See `wait_helpers.py` for the full set.

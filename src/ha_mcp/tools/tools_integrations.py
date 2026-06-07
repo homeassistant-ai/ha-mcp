@@ -133,10 +133,27 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-async def fetch_entry_options(
+async def fetch_entry_options_with_status(
     client: Any, entry_id: str, *, quiet: bool = False
-) -> dict[str, Any]:
-    """Read the current ``options`` for a config entry via its OptionsFlow.
+) -> tuple[dict[str, Any], bool]:
+    """Read a config entry's ``options`` and report whether the probe succeeded.
+
+    Identical mechanics to :func:`fetch_entry_options` but returns
+    ``(options, ok)`` so callers can tell a probe *failure* apart from a
+    genuinely-empty options form — both yield ``{}`` for ``options``, but
+    ``ok`` is:
+
+    - ``True`` only when a form first-step was read (even if it harvested no
+      fields: a genuinely-empty options form is a successful read).
+    - ``False`` when the OptionsFlow could not be read into options: the flow
+      raised, or its first step was not a form (a menu / abort / create_entry),
+      so no defaults could be harvested.
+
+    The flag lets bulk fan-out callers (``smart_search``) surface ``partial``
+    when an options-flow probe fails mid-search instead of silently scoring the
+    helper on title/domain only — the per-entry analog of the per-type/per-
+    dashboard backend-failure signals. The abort in ``finally`` is cleanup; a
+    failed abort does not flip ``ok`` (the options were already harvested).
 
     Home Assistant does not expose ``ConfigEntry.options`` through any
     read-only REST or WebSocket endpoint — ``/api/config/config_entries/entry``
@@ -145,17 +162,10 @@ async def fetch_entry_options(
     first-step ``data_schema``: integrations build that schema from the
     existing options dict, so the defaults match the persisted state.
 
-    Starts the flow, harvests ``{name: default}`` from the first step, and
-    aborts the flow in ``finally`` so it doesn't sit half-open.
-
-    Returns ``{}`` on any failure (unsupported entry, non-form first step
-    such as a menu, init/abort errors) so callers can treat the return as
-    the canonical "options" field without further checks.
-
     Probe failures log at ``warning`` (so breakage of a deliberate
     single-entry probe is discoverable) unless ``quiet=True``, which demotes
     them to ``debug`` for bulk fan-out callers (e.g. ``smart_search`` probes
-    one entry per flow-helper on every ``ha_deep_search``; a per-entry
+    one entry per flow-helper on every ``ha_search``; a per-entry
     warning there would spam the log on routine searches).
 
     Exposed at module level (not as a method) so non-class callers such as
@@ -173,13 +183,13 @@ async def fetch_entry_options(
                 f"OptionsFlow for {entry_id} returned type={flow_type!r}, "
                 f"not a form — cannot extract option defaults"
             )
-            return {}
-        return options_from_form_flow(flow)
+            return {}, False
+        return options_from_form_flow(flow), True
     except Exception as exc:
         log_probe_failure(
             f"Failed to fetch options for {entry_id}: {type(exc).__name__}: {exc}"
         )
-        return {}
+        return {}, False
     finally:
         if flow_id:
             try:
@@ -189,6 +199,25 @@ async def fetch_entry_options(
                     f"Failed to abort options flow {flow_id}: "
                     f"{type(abort_err).__name__}: {abort_err}"
                 )
+
+
+async def fetch_entry_options(
+    client: Any, entry_id: str, *, quiet: bool = False
+) -> dict[str, Any]:
+    """Read the current ``options`` for a config entry via its OptionsFlow.
+
+    Starts the flow, harvests ``{name: default}`` from the first step, and
+    aborts the flow so it doesn't sit half-open. Returns ``{}`` on any failure
+    (unsupported entry, non-form first step such as a menu, init/abort errors)
+    so callers can treat the return as the canonical "options" field without
+    further checks.
+
+    Thin wrapper over :func:`fetch_entry_options_with_status` for callers that
+    only need the options dict and not the success flag (e.g. the
+    ``ha_remove_helpers_integrations`` / ``ha_get_integration`` config readout).
+    """
+    options, _ok = await fetch_entry_options_with_status(client, entry_id, quiet=quiet)
+    return options
 
 
 async def _get_entry_id_for_flow_helper(
@@ -1279,7 +1308,7 @@ class IntegrationTools:
 
         **WARNING:** Removing a helper or integration that is referenced by
         automations, scripts, or other integrations may cause those to fail.
-        Use ha_search_entities() / ha_get_integration() to verify before
+        Use ha_search() / ha_get_integration() to verify before
         removal. Cannot be undone.
         """
         # === Confirm gate (uniform for all four paths) ===
@@ -1313,8 +1342,8 @@ class IntegrationTools:
             "target",
             suggestions=[
                 "Use ha_get_integration() to find valid entry_ids",
-                "For simple helpers, use ha_search_entities() to find the helper_id",
-                "For flow helpers, use ha_search_entities() to find an entity_id",
+                "For simple helpers, use ha_search() to find the helper_id",
+                "For flow helpers, use ha_search() to find an entity_id",
             ],
             context={"helper_type": helper_type},
         )
@@ -1519,7 +1548,7 @@ class IntegrationTools:
                                 f"registry (looked up as {entity_id}). "
                                 "May indicate it was already removed, "
                                 "never existed, or the identifier is a "
-                                "typo. Verify with ha_search_entities() "
+                                "typo. Verify with ha_search() "
                                 "before retrying."
                             ),
                             context={
@@ -1528,7 +1557,7 @@ class IntegrationTools:
                                 "entity_id": entity_id,
                             },
                             suggestions=[
-                                "Use ha_search_entities() — flow helper "
+                                "Use ha_search() — flow helper "
                                 "types often expose entities under a "
                                 "different domain than the helper_type "
                                 "itself (e.g. utility_meter → sensor.*, "
@@ -1554,7 +1583,7 @@ class IntegrationTools:
                         },
                         suggestions=[
                             "If unsure about the correct entity_id, use "
-                            "ha_search_entities() — flow helper types often "
+                            "ha_search() — flow helper types often "
                             "expose entities under a different domain than "
                             "the helper_type itself (e.g. utility_meter → "
                             "sensor.*, switch_as_x → switch.* / light.*).",
@@ -1673,7 +1702,7 @@ class IntegrationTools:
                 },
                 suggestions=[
                     "Check Home Assistant connection",
-                    "Verify the target exists using ha_search_entities() "
+                    "Verify the target exists using ha_search() "
                     + "or ha_get_integration()",
                 ],
             )
@@ -1931,7 +1960,7 @@ class IntegrationTools:
                                     "it was already removed, never "
                                     "existed, or the identifier is a "
                                     "typo. Verify with "
-                                    "ha_search_entities() before "
+                                    "ha_search() before "
                                     "retrying."
                                 ),
                                 context={
@@ -1984,7 +2013,7 @@ class IntegrationTools:
                         ),
                         suggestions=[
                             "Helper may not be properly registered or was "
-                            "already deleted. Use ha_search_entities() to "
+                            "already deleted. Use ha_search() to "
                             "verify.",
                         ],
                         context={"target": target, "entity_id": entity_id},
@@ -2053,7 +2082,7 @@ class IntegrationTools:
                 context={"helper_type": helper_type, "target": target},
                 suggestions=[
                     "Check Home Assistant connection",
-                    "Verify target exists using ha_search_entities()",
+                    "Verify target exists using ha_search()",
                     "Ensure helper is not used by automations or scripts",
                 ],
             )

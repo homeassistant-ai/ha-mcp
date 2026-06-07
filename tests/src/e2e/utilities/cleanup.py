@@ -224,14 +224,14 @@ async def cleanup_test_entities_by_name(
         try:
             # Search for entities in this domain
             search_result = await mcp_client.call_tool(
-                "ha_search_entities",
+                "ha_search",
                 {"domain_filter": domain, "limit": 50},
             )
 
             search_data = parse_mcp_result(search_result)
 
-            if search_data.get("success") and search_data.get("results"):
-                entities = search_data["results"]
+            if search_data.get("success") and search_data.get("entities"):
+                entities = search_data["entities"]
 
                 # Filter for test entities
                 test_entities = []

@@ -354,18 +354,18 @@ class TestCodeModeCallTool:
         logger.info("call_tool bridge successfully invoked ha_get_overview")
 
     async def test_call_tool_search_entities(self, mcp_client_with_code_mode):
-        """call_tool can invoke ha_search_entities and return results."""
+        """call_tool can invoke ha_search and return results."""
         check = await _check_tool_available(mcp_client_with_code_mode)
         _skip_if_unavailable(check, "call_tool search")
 
-        # ha_search_entities wraps results with add_timezone_metadata, so
+        # ha_search wraps results with add_timezone_metadata, so
         # the shape is {"data": {"success": True, "results": [...]}, "metadata": {...}}.
         # Unwrap the "data" layer first, then access "results".
         code = (
-            'result = await call_tool("ha_search_entities", '
+            'result = await call_tool("ha_search", '
             '{"query": "light", "limit": 5})\n'
             'data = result.get("data", result)\n'
-            'results = data.get("results", [])\n'
+            'results = data.get("entities", [])\n'
             '{"found": len(results) > 0, "count": len(results)}'
         )
         data = await safe_call_tool(

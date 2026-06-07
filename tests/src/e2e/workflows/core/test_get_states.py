@@ -25,15 +25,12 @@ class TestGetStates:
 
         # Find a sensor entity to pair with sun.sun
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"domain_filter": "sensor", "limit": 1},
         )
         search_data = parse_mcp_result(search_result)
 
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
+        results = search_data.get("entities", [])
 
         if not results:
             pytest.skip("No sensor entities available for testing")

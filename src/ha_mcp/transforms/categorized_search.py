@@ -61,7 +61,7 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
     "ha_manage_backup",
     "ha_get_overview",
     "ha_report_issue",
-    "ha_search_entities",
+    "ha_search",
     "ha_config_get_automation",
     "ha_config_set_automation",
     # Skill guide must stay visible when tool search hides the catalog —

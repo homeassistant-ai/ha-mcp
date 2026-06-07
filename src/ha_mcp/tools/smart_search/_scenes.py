@@ -40,6 +40,18 @@ class SceneSearchMixin(ConfigFetchMixin):
 
         Run unconditionally so the platform filter is available even when the
         bulk fetch returned nothing (the common Hue-only case).
+
+        Assumption — caveat for downstream callers: when ``registry_failed``
+        is ``False``, the returned ``homeassistant_scene_uids`` set is
+        assumed to be COMPLETE — every HA-managed scene the registry knows
+        about appears in the set. ``_select_scene_ids_to_fetch`` relies on
+        this to classify out-of-set UIDs as integration-managed. If HA ever
+        returns a successful-but-truncated ``entity_registry/list`` response
+        (no current known case), genuinely-HA-managed scenes whose UIDs are
+        missing from the response would be misclassified as
+        integration-managed and never fetched. Detecting a truncated
+        registry response is not generally possible from its shape — the
+        function trusts ``success: True`` as a completeness signal.
         """
         homeassistant_scene_uids: set[str] = set()
         # Issue #1168 R7 blocker 17/21: registry-derived slug->storage map for
@@ -58,6 +70,21 @@ class SceneSearchMixin(ConfigFetchMixin):
                     self._index_scene_registry_entry(
                         entry, configs, homeassistant_scene_uids, slug_to_storage_id
                     )
+            else:
+                # Soft-failure path: `send_websocket_message` returns
+                # `{"success": False, "error": ...}` on connection drops or
+                # post-retry 403s rather than raising. Treat it the same as
+                # the raise branch — without the platform filter we cannot
+                # tell HA-managed from integration-managed scenes, so route
+                # to attempt-all + registry_failed=True. Falling through to
+                # `return ..., False` here would produce a fully-complete-
+                # looking response with no scene configs.
+                logger.warning(
+                    "Scene entity-registry list returned non-success: %r; "
+                    "integration-platform filter unavailable, attempting all scenes",
+                    reg_resp,
+                )
+                return homeassistant_scene_uids, slug_to_storage_id, True
         except Exception as e:
             # Issue #1168 R5 blocker 11: promote DEBUG -> WARNING and signal the
             # fallback so partial_reason can explain why the count looks
@@ -96,19 +123,33 @@ class SceneSearchMixin(ConfigFetchMixin):
         scored: list[tuple[str, str, str | None, int]],
         configs: dict[str, dict[str, Any]],
         homeassistant_scene_uids: set[str],
+        registry_failed: bool,
     ) -> tuple[list[str], int]:
         """Pick scene ids needing a per-id fetch, skipping integration-managed ones.
 
         Issue #1168 R3 blocker 2: integration-managed scenes 404 on the per-id
         REST endpoint by design, so surfacing those as fetch failures masks real
         errors. They are counted separately (returned as ``integration_skipped``).
-        When the registry call failed (``homeassistant_scene_uids`` empty), fall
-        back to attempting all scenes -- false partials beat dropping legitimate
-        HA-managed scenes silently.
+
+        Three cases on the registry walk's outcome:
+
+        - ``registry_failed=True`` — the entity-registry call raised; we can't
+          tell which scenes are HA-managed, so attempt all (false partials
+          beat dropping HA-managed scenes silently).
+        - ``registry_failed=False`` with non-empty ``homeassistant_scene_uids``
+          — fetch only the HA-managed ones, count integration scenes as
+          ``integration_skipped``.
+        - ``registry_failed=False`` with empty ``homeassistant_scene_uids``
+          — registry succeeded but found zero HA-managed scenes (every scene
+          is integration-managed). Attempting them would 404 every single
+          one. Skip all per-id fetches and count them as
+          ``integration_skipped``.
 
         Returns ``(sids_to_fetch, integration_skipped_count)``.
         """
-        if not homeassistant_scene_uids:
+        if registry_failed:
+            # Registry walk failed — we can't distinguish HA-managed from
+            # integration-managed. Attempt all and accept false partials.
             return [sid for _, _, sid, _ in scored if sid and sid not in configs], 0
         sids: list[str] = []
         integration_skipped = 0
@@ -143,7 +184,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         if scene_id in slug_to_storage_id:
             return slug_to_storage_id[scene_id]
         logger.warning(
-            "ha_deep_search scene result fell back to entity-id slug for "
+            "ha_search scene result fell back to entity-id slug for "
             "scene_id=%r -- neither bulk config nor registry walk produced a "
             "storage key. ``ha_config_get_scene`` will rely on its resolver "
             "remap to land on the right scene.",
@@ -156,6 +197,8 @@ class SceneSearchMixin(ConfigFetchMixin):
         all_entities: list[dict[str, Any]],
         query_lower: str,
         exact_match: bool,
+        *,
+        config_time_budget: float | None = None,
     ) -> tuple[list[dict[str, Any]], int, int, int, bool]:
         """Deep-search scenes: 3-tier strategy plus registry-walk augmentation.
 
@@ -210,30 +253,37 @@ class SceneSearchMixin(ConfigFetchMixin):
         # slow scenes don't tank the whole search.
         if not bulk_fetched:
             sids_to_fetch, integration_skipped = self._select_scene_ids_to_fetch(
-                scored, configs, homeassistant_scene_uids
+                scored, configs, homeassistant_scene_uids, registry_failed
             )
 
             async def _fetch_scene_config(
                 sid: str,
-            ) -> tuple[str, dict[str, Any] | None]:
+            ) -> tuple[str, dict[str, Any] | None, str | None]:
                 try:
                     config_resp = await asyncio.wait_for(
                         self.client.get_scene_config(sid),
                         timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                     )
-                    return (sid, config_resp.get("config", {}))
+                    return (sid, config_resp.get("config", {}), None)
                 except Exception as e:
                     logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
-                    return (sid, None)
+                    return (sid, None, "failed")
 
             (
                 fetched_configs,
                 failed_count,
                 skipped_count,
+                # Scene YAML/integration-managed pre-classification happens
+                # upstream via `_walk_scene_registry`; the 4th tuple slot
+                # from `_individual_fetch_budgeted` is therefore expected
+                # to stay at zero on this path.
+                _scene_yaml_skipped,
             ) = await self._individual_fetch_budgeted(
                 sids_to_fetch,
                 _fetch_scene_config,
-                SCENE_CONFIG_TIME_BUDGET,
+                config_time_budget
+                if config_time_budget is not None
+                else SCENE_CONFIG_TIME_BUDGET,
                 "Scene",
                 "scenes",
             )
@@ -274,19 +324,38 @@ class SceneSearchMixin(ConfigFetchMixin):
         downstream consumers treat absence as success. Issue #1168 R3 blocker 2:
         integration-managed scenes intentionally skip the per-id fetch and never
         raise ``partial`` on their own (the count is informational).
+
+        Wording uses the same forceful triad as ``_apply_per_type_partial_flag``
+        (``not scanned`` / ``match status is unknown`` / ``not exhaustive``)
+        so blind agents can't rationalise scene incompleteness any more easily
+        than automation/script incompleteness — the softer prior phrasing was
+        empirically rationalised away on parallel paths.
         """
         failed = scene_stats["failed"]
         skipped = scene_stats["skipped"]
         if not (failed or skipped):
             return
         response["partial"] = True
-        reason_parts = [
-            f"Scene config fetch incomplete: {failed} failed, "
-            f"{skipped} skipped (time budget)."
-        ]
-        if scene_stats["integration_skipped"]:
+        reason_parts: list[str] = []
+        if failed:
             reason_parts.append(
-                f" {scene_stats['integration_skipped']} integration-managed "
+                f"{failed} scene(s) not scanned (per-id fetch raised) — "
+                "their match status is unknown; this result is not exhaustive."
+            )
+        if skipped:
+            reason_parts.append(
+                f"{skipped} scene(s) not scanned (time budget exhausted) — "
+                "their match status is unknown; this result is not exhaustive. "
+                "Pass `config_time_budget=` on `ha_search` to raise the "
+                "per-call limit (or set HAMCP_SCENE_CONFIG_TIME_BUDGET for "
+                "the default)."
+            )
+        if scene_stats["integration_skipped"]:
+            # Informational, not an unknown-match-status condition: these
+            # scenes are deliberately scored by attribute-only, so their
+            # match status is *known* (by name+state), just incomplete.
+            reason_parts.append(
+                f"{scene_stats['integration_skipped']} integration-managed "
                 "scenes are scored by attribute only (no per-id fetch)."
             )
         if scene_stats["registry_failed"]:
@@ -295,12 +364,10 @@ class SceneSearchMixin(ConfigFetchMixin):
             # back to attempting all scenes -- surface that so an elevated
             # failed_count isn't mistaken for a real config outage.
             reason_parts.append(
-                " Entity-registry fetch failed; integration-platform filter "
+                "Entity-registry fetch failed; integration-platform filter "
                 "unavailable, attempted all scenes (false-positive failures "
                 "expected for integration-managed scenes)."
             )
-        reason_parts.append(
-            " Some scene matches may be missing config data; tune "
-            "HAMCP_SCENE_CONFIG_TIME_BUDGET to raise the budget."
-        )
-        response["partial_reason"] = "".join(reason_parts)
+        # Use the standardised " ; " separator (matches
+        # ``_merge_payload_metadata`` and ``_apply_per_type_partial_flag``).
+        response["partial_reason"] = " ; ".join(reason_parts)

@@ -108,7 +108,15 @@ async def test_sun_position_is_realistic(mcp_client: Any) -> None:
     assert next_dusk_raw, f"sun.sun missing next_dusk attribute. attrs={attributes}"
 
     now = datetime.now(UTC)
-    window_end = now + timedelta(hours=24)
+    # +1h upper-bound slack: HA's astronomical lib can return next_dawn /
+    # next_dusk at almost exactly T_boot+24h when HAOS boots within seconds
+    # of the corresponding astronomical event (it skips the just-happening
+    # event and returns tomorrow's). Suite-timing overhead between the
+    # ha_get_state call and datetime.now() then pushes parsed - now() a
+    # few seconds over the strict 24h window. The real bugs this test
+    # exists to catch (sun integration unavailable, clock skew hours+)
+    # still fail with the 25h window.
+    window_end = now + timedelta(hours=25)
     # HA emits these as ISO 8601 strings, optionally with trailing 'Z'.
     for label, raw_val in (("next_dawn", next_dawn_raw), ("next_dusk", next_dusk_raw)):
         normalized = (
@@ -118,7 +126,7 @@ async def test_sun_position_is_realistic(mcp_client: Any) -> None:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
         assert now - timedelta(minutes=5) <= parsed <= window_end, (
-            f"sun.sun {label}={parsed.isoformat()} is not within the next 24h "
+            f"sun.sun {label}={parsed.isoformat()} is not within the next 25h "
             f"of now={now.isoformat()}. Either the sun integration is broken "
             f"or the HAOS guest clock is skewed."
         )
@@ -254,7 +262,7 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
             assert cleanup.get("success"), (
                 f"Teardown of local_calendar entry {entry_id} failed; "
                 f"the qcow2 will leak this entry across the session and "
-                f"subsequent ha_search_entities calls will slow over time. "
+                f"subsequent ha_search calls will slow over time. "
                 f"Result: {cleanup}"
             )
 

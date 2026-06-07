@@ -4,7 +4,6 @@ These tests verify that error codes, error responses, and helper functions
 work correctly to provide informative, structured error messages.
 """
 
-
 from ha_mcp.errors import (
     DEFAULT_SUGGESTIONS,
     ErrorCode,
@@ -98,14 +97,18 @@ class TestCreateErrorResponse:
 
         assert "suggestion" in response["error"]
         # Should use default suggestions from DEFAULT_SUGGESTIONS
-        assert "ha_search_entities()" in response["error"]["suggestion"]
+        assert "ha_search()" in response["error"]["suggestion"]
 
     def test_error_response_with_context(self):
         """Error response should include context at top level."""
         response = create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             "Service call failed",
-            context={"domain": "light", "service": "turn_on", "entity_id": "light.test"},
+            context={
+                "domain": "light",
+                "service": "turn_on",
+                "entity_id": "light.test",
+            },
         )
 
         assert response["domain"] == "light"

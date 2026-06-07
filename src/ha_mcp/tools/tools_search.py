@@ -34,6 +34,362 @@ from .util_helpers import (
 
 logger = logging.getLogger(__name__)
 
+# Configuration-body buckets the merged ``ha_search`` orchestrator collects
+# from ``ha_deep_search``. ``dashboards`` is opt-in (excluded from the default
+# response shape) — the orchestrator's pre-populated defaults intentionally
+# omit it; this tuple is the canonical "all five" list used by the bucket-copy
+# and metadata-shadow logic.
+_CONFIG_BUCKETS: tuple[str, ...] = (
+    "automations",
+    "scripts",
+    "scenes",
+    "helpers",
+    "dashboards",
+)
+
+# Entity sub-payload keys the orchestrator must NOT lift to the top level
+# of the flat dual-surface envelope. ``state_filter`` is a caller-input
+# echo with no observable verification value at the envelope top (the
+# caller has the input they passed); ``area_name`` is per-entity
+# decoration that belongs inside the entity record; ``note`` is a
+# redundant mode-label string already conveyed by ``search_type``. None
+# are in ``_ALWAYS_KEEP_PROJECTION`` or the ``fields=`` Available keys
+# docstring, so leaking them would advertise undocumented keys via the
+# typo-guard while a real ``fields=`` projection silently strips them.
+#
+# ``search_type``, ``domain_filter``, ``area_filter``, ``message``,
+# ``by_domain``, ``state_filter_note``, and ``area_names`` are
+# intentionally NOT in the strip set — the E2E test suite empirically
+# pins their presence (search_type at 17+ sites, domain_filter at 6,
+# area_filter at 1, message at 2), so callers verifiably depend on them.
+# All are documented as top-level keys + retained in
+# ``_ALWAYS_KEEP_PROJECTION``.
+_ENTITIES_BRANCH_SKIP_KEYS: tuple[str, ...] = (
+    "results",
+    "total_matches",
+    "has_more",
+    "next_offset",
+    "state_filter",
+    "area_name",
+    "note",
+)
+
+# Derived from ``_CONFIG_BUCKETS``: every bucket entry is the plural
+# response-key (``automations`` etc.); the ``search_types`` token is the
+# singular (drop the trailing ``s``). Deriving keeps the two lists in
+# lockstep — adding a new bucket auto-extends the allowed set.
+_VALID_SEARCH_TYPES: frozenset[str] = frozenset(b[:-1] for b in _CONFIG_BUCKETS)
+
+
+def _validate_search_types(parsed: list[str] | None) -> None:
+    """Reject unknown or empty ``search_types`` values with a structured error.
+
+    ``parse_string_list_param`` only verifies the *shape* (string / list /
+    JSON-array); it does not check values against the known set, so a typo
+    like ``search_types=["frobnicate"]`` would silently return zero matches
+    with no warning or partial flag. Also rejects empty list: ``[]`` pins
+    branch eligibility to config-only while the response echoes the default
+    type list — a silent caller / runtime / response mismatch. Centralised
+    here so ``ha_search`` and ``ha_deep_search`` share the contract — adding
+    a new valid type needs one change.
+    """
+    if parsed is None:
+        return
+    if not parsed:
+        raise_tool_error(
+            create_validation_error(
+                "search_types must be non-empty if provided; omit the "
+                "parameter to use the default types.",
+                parameter="search_types",
+            )
+        )
+    unknown = [t for t in parsed if t not in _VALID_SEARCH_TYPES]
+    if unknown:
+        raise_tool_error(
+            create_validation_error(
+                f"Unknown search_types: {unknown}. "
+                f"Valid types: {sorted(_VALID_SEARCH_TYPES)}.",
+                parameter="search_types",
+            )
+        )
+
+
+# Top-level response keys that survive a ``fields=`` projection regardless
+# of the caller's request — so a projection can never hide partial / error
+# state. ``success`` and ``warnings`` are guaranteed by ``project_fields``
+# itself; this set extends the protection to orchestrator-specific echoes
+# (query, search_types), the error / partial diagnostics, and the
+# pagination axis.
+_ALWAYS_KEEP_PROJECTION: frozenset[str] = frozenset(
+    {
+        "query",
+        "search_types",
+        "entity_total_matches",
+        "config_total_matches",
+        "errors",
+        "partial",
+        "partial_reason",
+        "count",
+        "offset",
+        "limit",
+        "has_more",
+        "next_offset",
+        "entity_has_more",
+        "entity_next_offset",
+        "config_has_more",
+        "config_next_offset",
+        # Toggle-gated entity-branch feature output — retained so callers
+        # using ``group_by_domain=True`` can pair it with ``fields=`` for
+        # response shaping without losing the grouping itself.
+        "by_domain",
+        # Conditional diagnostic — fires under fuzzy + state_filter to
+        # explain why ``entity_total_matches`` differs from ``count`` (the
+        # fuzzy-engine count is unfiltered; the filter applies post-hoc).
+        # Retained so a caller projecting ``fields=["results", ...]``
+        # still gets the explanation.
+        "state_filter_note",
+        # Resolved area names matching the ``area_filter`` input (which
+        # may be fuzzy, e.g. ``area_filter="kitchen"`` → matches
+        # ``["Kitchen", "Kitchen Pantry"]``). Surfaces which areas the
+        # search actually scanned — caller value beyond the input echo.
+        "area_names",
+        # Entity-branch internal mode label ("exact_match", "fuzzy_search",
+        # "area_only", "area_filtered_query", "domain_listing"). E2E tests
+        # pin its presence at 17+ assertion sites — callers verifiably
+        # rely on it to disambiguate which entity-search path produced
+        # the result, so retained at the envelope top instead of stripped.
+        "search_type",
+        # Caller-input echoes — would normally be stripped as no-value
+        # echoes (the caller has the inputs they passed), but the E2E
+        # test suite pins their presence (domain_filter at 6 assertion
+        # sites, area_filter at 1), so callers do read them back. Kept
+        # at the envelope top + documented.
+        "domain_filter",
+        "area_filter",
+        # Zero-result diagnostic ("No <domain> entities found in area:
+        # <area>"). E2E tests pin it at 2 sites. Conditional emission
+        # under area_filter + zero-result; survives ``fields=`` projection
+        # so a narrowing caller still gets the explanation.
+        "message",
+    }
+)
+
+
+def _mirror_partial_to_warnings(response: dict[str, Any]) -> None:
+    """Mirror ``partial_reason`` into ``warnings[]`` so agents see truncation.
+
+    The re-review's BAT data showed agents reliably read ``warnings`` but
+    commonly ignore ``partial`` / ``partial_reason`` — without mirroring,
+    a config-body backend incompleteness surfaces only via the partial
+    keys, which agents drop when relaying results. The mirror copies the
+    reason verbatim with a leading ``"incomplete results: "`` so the
+    diagnostic message lands on the channel agents actually read.
+    Idempotent: re-running does not re-append the same warning.
+    """
+    if not response.get("partial"):
+        return
+    reason = response.get("partial_reason")
+    if not reason:
+        return
+    warning_text = f"incomplete results: {reason}"
+    warnings = response.setdefault("warnings", [])
+    if warning_text not in warnings:
+        warnings.append(warning_text)
+
+
+def _project_response_fields(
+    response: dict[str, Any], parsed_fields: list[str] | None
+) -> dict[str, Any]:
+    """Project the orchestrator response to the caller-requested top-level
+    keys, retaining the diagnostic / pagination contract via
+    ``_ALWAYS_KEEP_PROJECTION``.
+
+    Inlined rather than delegated to ``util_helpers.project_fields`` so the
+    pre-parsed list passes through end-to-end — the orchestrator already
+    parsed ``fields=`` once via ``parse_string_list_param``, and
+    ``project_fields`` would re-parse the same list (idempotent but
+    redundant work on every call). Restores the top-level ``fields=``
+    capability that ``ha_search_entities`` carried pre-rename, applied to
+    the new flat envelope. The always-keep set means
+    ``fields=["entities"]`` still leaves ``partial`` / ``errors[]`` /
+    ``warnings[]`` / ``*_total_matches`` / pagination keys accessible —
+    projection narrows the response but never hides incompleteness.
+    """
+    if parsed_fields is None:
+        return response
+    always_keep: set[str] = {"success", "warnings"} | set(_ALWAYS_KEEP_PROJECTION)
+    requested = set(parsed_fields)
+    keep = requested | always_keep
+    result = {k: v for k, v in response.items() if k in keep}
+    # Typo guard — flag any requested keys absent from the response so
+    # ``fields=["frobnicate"]`` surfaces a diagnostic rather than a
+    # mysteriously empty payload. Excludes the always-keep sentinels so
+    # ``fields=["success"]`` never warns.
+    unknown = sorted(requested - set(response.keys()) - always_keep)
+    if unknown:
+        available = sorted(k for k in response.keys() if k not in always_keep)
+        result.setdefault("warnings", []).append(
+            f"fields {unknown!r} not found in response — available keys: {available!r}"
+        )
+    return result
+
+
+_INTENT_SKIP_WARNING: str = (
+    "config-body search skipped: domain_filter / area_filter / "
+    "state_filter signals entity-only intent. To search config bodies, "
+    'pass search_types=["automation", ...] — but note this pins the call '
+    "to config-only and drops the entity-result surface, so it does not "
+    "return both alongside each other."
+)
+
+
+def _emit_intent_skip_warning(
+    response: dict[str, Any], body_skipped_by_intent_gate: bool
+) -> None:
+    """Append the caller-facing warning when the entity-intent gate fires.
+
+    Extracted from the orchestrator so the contract — gate-True ⟹ exactly
+    one warning entry naming the opt-back-in mechanism — is unit-testable
+    without an MCP fixture. Pre-existing warnings already in the response
+    are preserved.
+    """
+    if body_skipped_by_intent_gate:
+        response.setdefault("warnings", []).append(_INTENT_SKIP_WARNING)
+
+
+def _synthesize_combined_pagination(response: dict[str, Any]) -> None:
+    """Set the flat ``has_more`` / ``next_offset`` from per-surface keys.
+
+    The flat keys give callers a "iterate normally" surface; per-surface
+    keys let callers see which surface still has results. Both branches
+    paginate with the same caller offset/limit, so their per-surface
+    next_offsets encode the same value (offset + limit) when set —
+    ``or`` picks whichever is non-None. Extracted from the orchestrator
+    so the OR-synthesis is unit-testable against real code, not an
+    inline simulation.
+    """
+    entity_has_more = bool(response.get("entity_has_more"))
+    config_has_more = bool(response.get("config_has_more"))
+    response["has_more"] = entity_has_more or config_has_more
+    response["next_offset"] = response.get("entity_next_offset") or response.get(
+        "config_next_offset"
+    )
+
+
+def _finalize_partial_state(
+    response: dict[str, Any],
+    *,
+    partial_local: bool,
+    errors_local: list[dict[str, str]],
+) -> None:
+    """Apply the orchestrator-local partial state to the response.
+
+    Sets ``partial: True`` when a branch raised, AND extends ``errors[]``
+    with the orchestrator-tagged surface errors — extending, not clobbering,
+    so any payload-side errors already accumulated by
+    ``_merge_payload_metadata`` survive. Extracted from the orchestrator
+    so the no-clobber contract is unit-testable.
+    """
+    if partial_local:
+        response["partial"] = True
+        response["errors"].extend(errors_local)
+
+
+def _compute_eligibility(
+    *,
+    query_text: str,
+    domain_filter_text: str,
+    area_filter_text: str,
+    state_filter_text: str,
+    explicit_config_only: bool,
+) -> tuple[bool, bool, bool]:
+    """Decide which sub-search branches the orchestrator should fan out to.
+
+    Returns ``(registry_eligible, body_eligible, body_skipped_by_intent_gate)``:
+
+    - ``registry_eligible``: the entity-registry branch runs whenever any of
+      ``query`` / ``domain_filter`` / ``area_filter`` is set, except when the
+      caller pinned config-only via an explicit ``search_types``.
+    - ``body_eligible``: the config-body branch runs only when a ``query``
+      term is set AND the caller's inputs do not signal entity-only intent.
+      "Entity-only intent" = any of ``domain_filter`` / ``area_filter`` /
+      ``state_filter`` is set; the caller is scoping to entities, so the
+      heavy config-body search would be wasted work (BAT-verified pattern).
+      The gate is overridden by an explicit ``search_types`` pin.
+    - ``body_skipped_by_intent_gate``: True when ``body_eligible`` was
+      flipped from True to False by the entity-intent rule (caller passed
+      ``query`` + entity-filter without explicit pin). The orchestrator
+      surfaces a warning in this case so callers can opt back in.
+    """
+    any_registry_input = bool(query_text or domain_filter_text or area_filter_text)
+    registry_eligible = any_registry_input and not explicit_config_only
+    entity_intent_signal = bool(
+        domain_filter_text or area_filter_text or state_filter_text
+    )
+    body_eligible_unguarded = bool(query_text)
+    body_eligible = body_eligible_unguarded and (
+        explicit_config_only or not entity_intent_signal
+    )
+    body_skipped_by_intent_gate = (
+        body_eligible_unguarded and entity_intent_signal and not explicit_config_only
+    )
+    return registry_eligible, body_eligible, body_skipped_by_intent_gate
+
+
+def _merge_payload_metadata(
+    response: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    skip_keys: tuple[str, ...],
+) -> None:
+    """Shallow-merge non-conflicting metadata from a sub-helper payload into the
+    orchestrator response.
+
+    Accumulating keys — extend / OR-merge across branches so neither side's
+    diagnostic data is silently dropped: ``warnings`` (list[str], extend),
+    ``errors`` (list[dict], extend), ``partial`` (bool, OR),
+    ``partial_reason`` (str, separator-concat with de-dup).
+
+    Other keys use first-wins shadow-protect so orchestrator-owned fields
+    (``success``, ``query``, ``search_types``, ...) survive payload echoes.
+    """
+    for key, value in payload.items():
+        if key in skip_keys:
+            continue
+        if key == "warnings" and isinstance(value, list):
+            current = response.get("warnings")
+            if isinstance(current, list):
+                current.extend(value)
+            else:
+                # ``warnings`` already present but not a list — that already
+                # violates the top-level ``list[str]`` contract upstream.
+                # Replace with the payload's well-typed list rather than
+                # crash on ``.extend`` from ``setdefault`` returning the
+                # broken value.
+                response["warnings"] = list(value)
+            continue
+        if key == "errors" and isinstance(value, list):
+            current = response.get("errors")
+            if isinstance(current, list):
+                current.extend(value)
+            else:
+                response["errors"] = list(value)
+            continue
+        if key == "partial" and isinstance(value, bool):
+            response["partial"] = bool(response.get("partial")) or value
+            continue
+        if key == "partial_reason" and isinstance(value, str) and value:
+            current = response.get("partial_reason")
+            if isinstance(current, str) and current:
+                if value not in current:
+                    response["partial_reason"] = f"{current} ; {value}"
+            else:
+                response["partial_reason"] = value
+            continue
+        if key in response:
+            continue
+        response[key] = value
+
 
 def _build_pagination_metadata(
     total_matches: int, offset: int, limit: int, results: list[dict[str, Any]]
@@ -178,10 +534,454 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Search Entities",
+            "title": "Search",
         },
     )
     @log_tool_usage
+    async def ha_search(
+        query: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "What to search for (entity name fragment, free-text "
+                    "config term, entity_id). Searches BOTH the entity "
+                    "registry (entity_ids, friendly names, areas) AND "
+                    "configuration bodies (automation triggers/actions, "
+                    "script sequences, scene contents, helper bodies, "
+                    "dashboard cards) in one call. Use this for any "
+                    "find-something-in-HA question — entity OR config. "
+                    "Omit `query` to enumerate by `domain_filter` and/or "
+                    "`area_filter` alone (registry-listing mode); "
+                    "configuration-body search is skipped in that mode "
+                    "because there is no term to match against."
+                ),
+            ),
+        ] = None,
+        domain_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Narrow entity-registry results to a single domain "
+                    "(e.g. 'light', 'sensor'). Does not affect configuration "
+                    "search."
+                ),
+            ),
+        ] = None,
+        area_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Narrow entity-registry results to an area (id or name). "
+                    "Does not affect configuration search."
+                ),
+            ),
+        ] = None,
+        search_types: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Configuration types to include in body search: "
+                    "'automation', 'script', 'scene', 'helper', 'dashboard'. "
+                    "Default = automation+script+scene+helper. Pass as list "
+                    "or JSON-array string."
+                ),
+            ),
+        ] = None,
+        limit: Annotated[
+            int,
+            Field(
+                default=10,
+                ge=1,
+                description=(
+                    "Maximum results per surface (entities, configs). Default: 10."
+                ),
+            ),
+        ] = 10,
+        offset: Annotated[
+            int,
+            Field(
+                default=0,
+                ge=0,
+                description="Number of results to skip for pagination.",
+            ),
+        ] = 0,
+        exact_match: Annotated[
+            bool,
+            Field(
+                default=True,
+                description=(
+                    "Exact substring matching (default). Set False for "
+                    "fuzzy matching when the query may have typos."
+                ),
+            ),
+        ] = True,
+        include_hidden: Annotated[
+            bool,
+            Field(
+                default=True,
+                description=(
+                    "Include hidden entities in registry results (with a "
+                    "score penalty so they sort below visible matches). "
+                    "Set False to exclude entirely."
+                ),
+            ),
+        ] = True,
+        include_config: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Include full configuration bodies in body-search "
+                    "results. Default: False (summary only)."
+                ),
+            ),
+        ] = False,
+        group_by_domain: Annotated[
+            bool,
+            Field(
+                default=False,
+                description=(
+                    "Group entity-registry results by domain (entity-side only). "
+                    "Adds a `by_domain` map to the response."
+                ),
+            ),
+        ] = False,
+        per_domain_limit: Annotated[
+            int | None,
+            Field(
+                default=None,
+                description=(
+                    "When `group_by_domain=True`, cap entity-registry results "
+                    "per domain to this number. Ignored otherwise."
+                ),
+            ),
+        ] = None,
+        state_filter: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Filter entity-registry results to a specific state "
+                    '(e.g. "on", "off", "unavailable"). Case-insensitive.'
+                ),
+            ),
+        ] = None,
+        result_fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project each entity-registry record to only the specified "
+                    'keys (e.g. ["entity_id", "state"]). None = full records.'
+                ),
+            ),
+        ] = None,
+        fields: Annotated[
+            str | list[str] | None,
+            Field(
+                default=None,
+                description=(
+                    "Project the response to only the specified top-level "
+                    'keys (e.g. ["entities", "automations"]). Diagnostic / '
+                    "pagination keys are always retained regardless of "
+                    "projection, so narrowing the response shape cannot "
+                    "hide partial / error state. None = full response. "
+                    "Distinct from `result_fields` (which projects each "
+                    "entity record's fields). Available keys: success, "
+                    "query, entities, automations, scripts, scenes, "
+                    "helpers, dashboards, search_types, search_type, "
+                    "entity_total_matches, config_total_matches, count, "
+                    "offset, limit, has_more, next_offset, "
+                    "entity_has_more, entity_next_offset, "
+                    "config_has_more, config_next_offset, by_domain, "
+                    "state_filter_note, area_names, domain_filter, "
+                    "area_filter, message, warnings, errors, partial, "
+                    "partial_reason."
+                ),
+            ),
+        ] = None,
+        config_time_budget: Annotated[
+            float | None,
+            Field(
+                default=None,
+                gt=0,
+                le=300,
+                description=(
+                    "Per-call override for the per-id config-fetch wall-clock "
+                    "budget (seconds). Replaces the per-type "
+                    "HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, "
+                    "script, AND scene branches when their bulk-fetch falls "
+                    "through to per-id Attempt-C. Use when a `partial: True` "
+                    "response names time-budget skipping. Stateless per-call: "
+                    "one caller raising the budget doesn't affect others. "
+                    "None = use the per-type env defaults."
+                ),
+            ),
+        ] = None,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        """Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
+
+        Searches two surfaces in parallel and returns tagged results:
+          - **entities**: matches from the entity registry (entity_id,
+            friendly name, area). Use `domain_filter` and/or `area_filter` to
+            list/narrow. Omit `query` to enumerate entities by domain/area.
+          - **automations / scripts / scenes / helpers / dashboards**: matches
+            *inside* configuration definitions — triggers, actions, sequences,
+            scene entity-sets, helper bodies, dashboard cards. Use `query`
+            with config-body terms; filter with `search_types`.
+
+        Eligibility:
+          - Registry (entity) search runs whenever `query`, `domain_filter`,
+            or `area_filter` is set, except when `search_types` is explicitly
+            set (which pins to config-only).
+          - Config-body search runs only when `query` is non-empty AND the
+            caller's inputs do not signal entity-only intent — i.e. when
+            none of `domain_filter`/`area_filter`/`state_filter` is set, OR
+            when `search_types` is explicitly set as an override. The
+            "filter set ⇒ skip body" rule keeps name-based single-entity
+            lookups (e.g. `ha_search("bedroom motion", domain_filter=
+            "binary_sensor")`) off the expensive config-body backend; pass
+            `search_types=[...]` to opt back in (a warning surfaces in the
+            response when the gate fires so the skip is visible).
+
+        Use this whenever you need to find something in HA — without needing
+        to decide between entity-name search vs config-body search up front.
+
+        When NOT to use:
+          - To fetch the state of a known entity_id: use `ha_get_state` (cheaper,
+            no search overhead).
+          - To inspect a specific automation/script/scene config by id: use the
+            matching `ha_config_get_*` tool.
+          - To list installed add-ons: use `ha_get_addon`.
+
+        Caveats:
+          - Both surfaces fan out in parallel; response carries `partial: True`
+            plus an `errors[]` array tagged by surface ("entities" / "configs")
+            when one branch raises. Empty `entities`/`automations`/... combined
+            with `partial: True` means "search failed", not "no results".
+          - `partial: True` is ALSO set (with `partial_reason`) when the
+            config-body branch loses data on the per-type fetch paths —
+            either the per-id wall-clock budget exhausts and skips
+            unfetched configs, OR individual fetches raise exceptions
+            (caught at debug-level so they would otherwise be silent), OR
+            an `input_*` helper-type list fetch fails. Helpers run on every
+            default call, so silent per-type-list failures would otherwise
+            leave callers unable to tell a real zero-match from a partial
+            backend outage.
+          - When `partial: True` is set, the `partial_reason` text is
+            also mirrored into `warnings[]` with an `"incomplete results: "`
+            prefix. Agents that read `warnings` consistently (the
+            entity-intent skip warning lands fine) but ignore `partial`
+            still see the truncation diagnostic this way.
+          - When the body branch is skipped by the entity-intent gate above,
+            the response carries a `warnings[]` entry naming the skip
+            reason; pass `search_types=[...]` to override.
+          - The `fields=` parameter projects the response to only the
+            named top-level keys; diagnostic / pagination keys
+            (`success`, `warnings`, `errors`, `partial`, `partial_reason`,
+            `*_total_matches`, `has_more`, `next_offset`, and per-surface
+            counterparts) are always retained so projection cannot hide
+            incomplete-results state. Distinct from `result_fields=`
+            which projects each entity record's fields.
+          - `count` is items in this response (post-pagination), not total
+            matches across the corpus. Use `entity_total_matches` +
+            `config_total_matches` for the totals.
+          - `limit`/`offset` are applied per-surface independently. The flat
+            `has_more` / `next_offset` keys describe the next caller-page
+            (same offset/limit semantics as a single-surface tool — iterate
+            with `offset = next_offset`). Per-surface
+            `entity_has_more`/`entity_next_offset` and
+            `config_has_more`/`config_next_offset` let callers see which
+            surface still has results when only one of two does.
+
+        Examples:
+            - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
+            - List all calendars: ha_search(domain_filter="calendar")
+            - Find a light by name: ha_search("kitchen", domain_filter="light")
+            - Which automations use an entity (no filter, body included): ha_search("light.bed_light")
+            - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
+            - Narrow the response to only the entity bucket: ha_search("kitchen", fields=["entities"])
+        """
+        try:
+            parsed_search_types = parse_string_list_param(search_types, "search_types")
+        except ValueError as exc:
+            raise_tool_error(
+                create_validation_error(str(exc), parameter="search_types")
+            )
+        _validate_search_types(parsed_search_types)
+        try:
+            parsed_fields = parse_string_list_param(fields, "fields", allow_csv=True)
+        except ValueError as exc:
+            raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+
+        # Normalise the caller-input strings once; the eligibility helper
+        # below is purely a function of normalized inputs so it stays
+        # unit-testable without an MCP fixture.
+        query_text = (query or "").strip()
+        domain_filter_text = (domain_filter or "").strip()
+        area_filter_text = (area_filter or "").strip()
+        state_filter_text = (state_filter or "").strip()
+        explicit_config_only = parsed_search_types is not None
+        registry_eligible, body_eligible, body_skipped_by_intent_gate = (
+            _compute_eligibility(
+                query_text=query_text,
+                domain_filter_text=domain_filter_text,
+                area_filter_text=area_filter_text,
+                state_filter_text=state_filter_text,
+                explicit_config_only=explicit_config_only,
+            )
+        )
+
+        if not registry_eligible and not body_eligible:
+            raise_tool_error(
+                create_validation_error(
+                    "ha_search requires a non-empty query, or one of "
+                    "domain_filter / area_filter to enumerate.",
+                    parameter="query",
+                )
+            )
+
+        registry_callable_kwargs: dict[str, Any] = {
+            "query": query_text or None,
+            "domain_filter": domain_filter,
+            "area_filter": area_filter,
+            "limit": limit,
+            "offset": offset,
+            "exact_match": exact_match,
+            "include_hidden": include_hidden,
+            "group_by_domain": group_by_domain,
+            "per_domain_limit": per_domain_limit,
+            "state_filter": state_filter,
+            "result_fields": result_fields,
+        }
+
+        tasks: list[Any] = []
+        labels: list[str] = []
+        if registry_eligible:
+            tasks.append(ha_search_entities(**registry_callable_kwargs))
+            labels.append("entities")
+        if body_eligible:
+            tasks.append(
+                ha_deep_search(
+                    query=query_text,
+                    search_types=parsed_search_types,
+                    limit=limit,
+                    offset=offset,
+                    include_config=include_config,
+                    exact_match=exact_match,
+                    config_time_budget=config_time_budget,
+                    ctx=ctx,
+                )
+            )
+            labels.append("configs")
+
+        # ``return_exceptions=True`` captures sub-task exceptions; the gather
+        # call itself only raises if the orchestrator's own coroutine is
+        # cancelled before the tasks complete.
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+        response: dict[str, Any] = {
+            "success": True,
+            "query": query,
+            "entities": [],
+            "entity_total_matches": 0,
+            "automations": [],
+            "scripts": [],
+            "scenes": [],
+            "helpers": [],
+            "search_types": parsed_search_types
+            or ["automation", "script", "scene", "helper"],
+            "config_total_matches": 0,
+            # Pre-init the accumulating diagnostic keys so callers reading
+            # ``response["errors"]`` / ``response["partial"]`` / ``response
+            # ["warnings"]`` get a typed default instead of ``KeyError`` on
+            # the no-error path, and so ``_merge_payload_metadata`` extends
+            # rather than first-wins.
+            "partial": False,
+            "errors": [],
+            "warnings": [],
+        }
+        # Surface the body-skip so a caller who actually wanted config
+        # matches alongside the entity scope can see why their request
+        # returned no automations / scripts / etc.
+        _emit_intent_skip_warning(response, body_skipped_by_intent_gate)
+        partial = False
+        errors: list[dict[str, str]] = []
+        for label, outcome in zip(labels, outcomes, strict=True):
+            # Propagate non-Exception BaseException (CancelledError, SystemExit,
+            # KeyboardInterrupt, GeneratorExit) so callers — timeouts, structured
+            # concurrency, signal handlers — can react cleanly.
+            if isinstance(outcome, BaseException) and not isinstance(
+                outcome, Exception
+            ):
+                raise outcome
+            if isinstance(outcome, Exception):
+                partial = True
+                errors.append({"surface": label, "error": str(outcome)})
+                logger.warning("ha_search %s branch failed: %r", label, outcome)
+                continue
+            # ha_search_entities wraps its payload via add_timezone_metadata
+            # into {"data": {...}, "metadata": {...}}; ha_deep_search returns
+            # the search dict directly. Unwrap once so downstream reads see
+            # the same shape regardless of which helper produced it.
+            payload = (
+                outcome["data"]
+                if isinstance(outcome, dict) and "data" in outcome
+                else outcome
+            )
+            if label == "entities":
+                response["entities"] = payload.get("results", [])
+                response["entity_total_matches"] = payload.get("total_matches", 0)
+                response["entity_has_more"] = bool(payload.get("has_more", False))
+                response["entity_next_offset"] = payload.get("next_offset")
+                # ``offset``/``limit`` are caller inputs echoed by both
+                # branches with identical values — first-wins via the merge
+                # is correct, no skip needed. ``has_more``/``next_offset``
+                # ARE per-surface so they must be skipped (synthesized below).
+                # See ``_ENTITIES_BRANCH_SKIP_KEYS`` for why the entity
+                # sub-payload context keys are stripped here too.
+                _merge_payload_metadata(
+                    response,
+                    payload,
+                    skip_keys=_ENTITIES_BRANCH_SKIP_KEYS,
+                )
+            elif label == "configs":
+                for bucket in _CONFIG_BUCKETS:
+                    if bucket in payload:
+                        response[bucket] = payload[bucket]
+                response["config_total_matches"] = payload.get("total_matches", 0)
+                response["config_has_more"] = bool(payload.get("has_more", False))
+                response["config_next_offset"] = payload.get("next_offset")
+                _merge_payload_metadata(
+                    response,
+                    payload,
+                    skip_keys=(
+                        *_CONFIG_BUCKETS,
+                        "total_matches",
+                        "has_more",
+                        "next_offset",
+                    ),
+                )
+
+        # ``count`` mirrors the previous ha_search_entities semantics: items
+        # returned in this response (post-pagination), not total matches across
+        # the corpus. Total matches live in entity_total_matches +
+        # config_total_matches.
+        response["count"] = len(response["entities"]) + sum(
+            len(response.get(bucket, [])) for bucket in _CONFIG_BUCKETS
+        )
+
+        _synthesize_combined_pagination(response)
+        _finalize_partial_state(response, partial_local=partial, errors_local=errors)
+        _mirror_partial_to_warnings(response)
+
+        return _project_response_fields(response, parsed_fields)
+
     async def ha_search_entities(
         query: Annotated[
             str | None,
@@ -297,22 +1097,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = None,
-        fields: Annotated[
-            str | list[str] | None,
-            Field(
-                default=None,
-                description=(
-                    "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["results"]). '
-                    "None = full response (default). "
-                    "Available keys: success, query, results, total_matches, count, "
-                    "offset, limit, has_more, next_offset, search_type, "
-                    "domain_filter, area_filter, area_name, area_names, "
-                    "by_domain, warnings, partial, message, note, state_filter, "
-                    "state_filter_note."
-                ),
-            ),
-        ] = None,
     ) -> dict[str, Any]:
         """Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
 
@@ -324,17 +1108,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         example, `ha_search_entities(domain_filter="calendar")` lists all calendars. At
         least one of `query`, `domain_filter`, or `area_filter` must be set.
         """
-        # Validate fields= early so a malformed value returns VALIDATION_FAILED
-        # with parameter="fields" instead of bubbling to the outer except and
-        # getting reclassified as a generic search failure.
-        parsed_fields: list[str] | None = None
-        if fields is not None:
-            try:
-                parsed_fields = parse_string_list_param(
-                    fields, "fields", allow_csv=True
-                )
-            except ValueError as exc:
-                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
         parsed_result_fields: list[str] | None = None
         if result_fields is not None:
             try:
@@ -552,11 +1325,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             search_data.setdefault("warnings", []).append(_warn)
 
                     _r = await add_timezone_metadata(client, search_data)
-                    if parsed_fields is not None:
-                        _sfn = _r["data"].get("state_filter_note")
-                        _r["data"] = project_fields(_r["data"], parsed_fields)
-                        if _sfn is not None:
-                            _r["data"]["state_filter_note"] = _sfn
                     return _r
                 else:
                     # Just area filter, return area results with enhanced format
@@ -689,11 +1457,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                                     _warn
                                 )
                         _r = await add_timezone_metadata(client, area_search_data)
-                        if parsed_fields is not None:
-                            _sfn = _r["data"].get("state_filter_note")
-                            _r["data"] = project_fields(_r["data"], parsed_fields)
-                            if _sfn is not None:
-                                _r["data"]["state_filter_note"] = _sfn
                         return _r
                     else:
                         # Empty match: still emit `area_names: []` so
@@ -716,8 +1479,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         if group_by_domain_bool:
                             empty_area_data["by_domain"] = {}
                         _r = await add_timezone_metadata(client, empty_area_data)
-                        if parsed_fields is not None:
-                            _r["data"] = project_fields(_r["data"], parsed_fields)
                         return _r
 
             # Regular entity search (no area filter)
@@ -835,8 +1596,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         )
                     domain_list_data["by_domain"] = {domain_filter: domain_list_results}
                 _r = await add_timezone_metadata(client, domain_list_data)
-                if parsed_fields is not None:
-                    _r["data"] = project_fields(_r["data"], parsed_fields)
                 return _r
 
             # Search strategy depends on exact_match setting:
@@ -990,14 +1749,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 }
 
             _r = await add_timezone_metadata(client, result)
-            if parsed_fields is not None:
-                # Force-retain state_filter_note alongside success — it
-                # explains has_more/total_matches semantics for fuzzy+state_filter
-                # and should survive a fields= projection so the caller isn't misled.
-                _sfn = _r["data"].get("state_filter_note")
-                _r["data"] = project_fields(_r["data"], parsed_fields)
-                if _sfn is not None:
-                    _r["data"]["state_filter_note"] = _sfn
             return _r
 
         except ToolError:
@@ -1398,15 +2149,6 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         return projected
 
-    @mcp.tool(
-        tags={"Search & Discovery"},
-        annotations={
-            "idempotentHint": True,
-            "readOnlyHint": True,
-            "title": "Deep Search",
-        },
-    )
-    @log_tool_usage
     async def ha_deep_search(
         query: str,
         search_types: Annotated[
@@ -1456,13 +2198,30 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = True,
+        config_time_budget: Annotated[
+            float | None,
+            Field(
+                default=None,
+                gt=0,
+                le=300,
+                description=(
+                    "Per-call override for the per-id config-fetch wall-clock "
+                    "budget (seconds). Replaces the per-type "
+                    "HAMCP_*_CONFIG_TIME_BUDGET defaults for automation, "
+                    "script, AND scene branches. Use when a `partial: True` "
+                    "response names time-budget skipping. Stateless per-call: "
+                    "one caller's override doesn't affect others. None = use "
+                    "the per-type env defaults."
+                ),
+            ),
+        ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Search inside automation, script, scene, helper, and dashboard *configurations* — not for finding entity IDs.
 
         Use this when you need to find configurations by what they *do* (e.g., which automations
         call a specific service, which scenes set a particular entity, or any config that contains
-        a certain action). For finding entity IDs by name, use ha_search_entities instead.
+        a certain action). For finding entity IDs by name, use ha_search instead.
 
         Searches within configuration definitions including triggers, actions, sequences, scene
         entity sets, and other config fields. Also searches dashboard configurations (cards,
@@ -1492,7 +2251,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             - Search everything: ha_deep_search("light.bedroom", search_types=["automation","script","scene","helper","dashboard"])
         """
         # Parse search_types to handle JSON string input from MCP clients
-        parsed_search_types = parse_string_list_param(search_types, "search_types")
+        try:
+            parsed_search_types = parse_string_list_param(search_types, "search_types")
+        except ValueError as exc:
+            raise_tool_error(
+                create_validation_error(str(exc), parameter="search_types")
+            )
+        _validate_search_types(parsed_search_types)
         include_config_bool = include_config
         exact_match_bool = exact_match
         try:
@@ -1503,6 +2268,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 offset,
                 include_config_bool,
                 exact_match=exact_match_bool,
+                config_time_budget=config_time_budget,
                 ctx=ctx,
             )
             return cast(dict[str, Any], result)
@@ -1677,7 +2443,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     suggestions=[
                         f"Verify entity '{entity_id}' exists in Home Assistant",
                         "Check Home Assistant connection",
-                        "Use ha_search_entities() to find correct entity IDs",
+                        "Use ha_search() to find correct entity IDs",
                     ],
                 )
 
@@ -1781,7 +2547,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 response["errors"] = errors
                 response["error_count"] = len(errors)
                 response["suggestions"] = [
-                    "Use ha_search_entities() to find correct entity IDs for failed lookups",
+                    "Use ha_search() to find correct entity IDs for failed lookups",
                     "Verify entities exist in Home Assistant",
                 ]
                 if states:

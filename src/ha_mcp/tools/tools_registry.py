@@ -279,7 +279,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                             ErrorCode.ENTITY_NOT_FOUND,
                             f"Entity '{entity_id}' not found or has no associated device",
                             suggestions=[
-                                "Use ha_search_entities() to find valid entity IDs",
+                                "Use ha_search() to find valid entity IDs",
                             ],
                             context={"entity_id": entity_id},
                         )

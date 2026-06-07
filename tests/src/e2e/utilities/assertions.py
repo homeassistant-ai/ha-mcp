@@ -234,7 +234,7 @@ def assert_search_results(
     if not search_data.get("success", True):
         raise AssertionError(f"Search failed: {search_data.get('error')}")
 
-    results = search_data.get("results", [])
+    results = search_data.get("entities", search_data.get("results", []))
     result_count = len(results)
 
     if result_count < min_results:

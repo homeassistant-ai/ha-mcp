@@ -156,15 +156,12 @@ class TestBulkControl:
 
         # Search for multiple lights
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"domain_filter": "light", "limit": 5},
         )
         search_data = parse_mcp_result(search_result)
 
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
+        results = search_data.get("entities", [])
 
         if len(results) < 2:
             pytest.skip("Need at least 2 lights for multi-entity bulk test")
@@ -256,24 +253,18 @@ class TestBulkControl:
 
         # Search for light and switch entities
         light_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"domain_filter": "light", "limit": 2},
         )
         light_data = parse_mcp_result(light_result)
-        if "data" in light_data:
-            light_results = light_data.get("data", {}).get("results", [])
-        else:
-            light_results = light_data.get("results", [])
+        light_results = light_data.get("entities", [])
 
         switch_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"domain_filter": "switch", "limit": 2},
         )
         switch_data = parse_mcp_result(switch_result)
-        if "data" in switch_data:
-            switch_results = switch_data.get("data", {}).get("results", [])
-        else:
-            switch_results = switch_data.get("results", [])
+        switch_results = switch_data.get("entities", [])
 
         entities = []
         if light_results:
@@ -331,15 +322,12 @@ class TestBulkControl:
 
         # Search for lights
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"domain_filter": "light", "limit": 3},
         )
         search_data = parse_mcp_result(search_result)
 
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
+        results = search_data.get("entities", [])
 
         if len(results) < 2:
             pytest.skip("Need at least 2 lights for parallel test")
@@ -366,15 +354,12 @@ class TestBulkControl:
 
         # Search for lights
         search_result = await mcp_client.call_tool(
-            "ha_search_entities",
+            "ha_search",
             {"domain_filter": "light", "limit": 3},
         )
         search_data = parse_mcp_result(search_result)
 
-        if "data" in search_data:
-            results = search_data.get("data", {}).get("results", [])
-        else:
-            results = search_data.get("results", [])
+        results = search_data.get("entities", [])
 
         if len(results) < 2:
             pytest.skip("Need at least 2 lights for sequential test")

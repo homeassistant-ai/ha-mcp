@@ -68,16 +68,29 @@ class ConfigFetchMixin(ScoringMixin):
     async def _individual_fetch_budgeted(
         self,
         ids: list[str],
-        fetch_one: Callable[[str], Awaitable[tuple[str, dict[str, Any] | None]]],
+        fetch_one: Callable[
+            [str], Awaitable[tuple[str, dict[str, Any] | None, str | None]]
+        ],
         budget: float,
         label: str,
         plural: str,
-    ) -> tuple[dict[str, dict[str, Any]], int, int]:
+    ) -> tuple[dict[str, dict[str, Any]], int, int, int]:
         """Fetch configs individually in parallel batches under a wall-clock budget.
 
-        ``fetch_one(id)`` returns ``(id, config | None)``. New batches stop
-        launching once ``budget`` seconds elapse. Returns
-        ``(configs, failed_count, skipped_count)``.
+        ``fetch_one(id)`` returns ``(id, config | None, fail_kind | None)``
+        where ``fail_kind`` is ``None`` on success, ``"yaml_skipped"`` when
+        the per-id endpoint returned 404 (the config is structurally
+        unfetchable — typically a YAML-defined automation/script that the
+        ``/config/<type>/config/<id>`` REST endpoint can't expose), or
+        ``"failed"`` for any other exception. New batches stop launching
+        once ``budget`` seconds elapse. Returns
+        ``(configs, failed_count, skipped_count, yaml_skipped_count)``.
+
+        Counting the YAML-defined class distinctly lets callers explain to
+        end users that the gap is **structural** (the config exists, the
+        endpoint just can't return it) rather than a transient error. This
+        mirrors the scene path's ``integration_skipped`` treatment for
+        non-HA-managed scenes.
 
         Fetch order is NOT prioritized by name score: deep_search's purpose is
         to find matches INSIDE configs (conditions/actions), not just by name,
@@ -90,24 +103,30 @@ class ConfigFetchMixin(ScoringMixin):
         fetched_count = 0
         failed_count = 0
         skipped_count = 0
+        yaml_skipped_count = 0
         for i in range(0, len(ids), INDIVIDUAL_FETCH_BATCH_SIZE):
             if time.perf_counter() - budget_start > budget:
-                skipped_count = total_to_fetch - fetched_count - failed_count
+                skipped_count = (
+                    total_to_fetch - fetched_count - failed_count - yaml_skipped_count
+                )
                 logger.warning(
                     f"{label} config fetch budget exhausted ({budget}s). "
                     f"Fetched {fetched_count}/{total_to_fetch} "
-                    f"({failed_count} failed), skipped {skipped_count} {plural}."
+                    f"({failed_count} failed, {yaml_skipped_count} yaml-skipped), "
+                    f"skipped {skipped_count} {plural}."
                 )
                 break
             batch = ids[i : i + INDIVIDUAL_FETCH_BATCH_SIZE]
             batch_results = await asyncio.gather(*[fetch_one(x) for x in batch])
-            for key, config in batch_results:
+            for key, config, fail_kind in batch_results:
                 if config is not None:
                     configs[key] = config
                     fetched_count += 1
+                elif fail_kind == "yaml_skipped":
+                    yaml_skipped_count += 1
                 else:
                     failed_count += 1
-        return configs, failed_count, skipped_count
+        return configs, failed_count, skipped_count, yaml_skipped_count
 
     def _score_config_entries(
         self,

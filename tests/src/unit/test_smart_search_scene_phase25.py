@@ -383,7 +383,10 @@ class TestSceneIntegrationFilter:
         assert result.get("partial") is True
         reason = result.get("partial_reason", "")
         # The real failure is named (so the operator knows something broke).
-        assert "failed" in reason.lower()
+        # Wording strengthened in PR #1529 R5 — every per-type/scene
+        # incompleteness fragment carries the "not scanned" triad.
+        assert "scene(s) not scanned (per-id fetch raised)" in reason
+        assert "match status is unknown" in reason.lower()
         # Integration-managed scenes are surfaced separately so their
         # 100+ count on Hue installs doesn't read as "everything broken".
         assert "integration-managed" in reason.lower(), (
@@ -493,3 +496,392 @@ class TestSceneRegistryFetchFailureSurfacing:
         assert (
             "filter unavailable" in reason.lower() or "false-positive" in reason.lower()
         ), f"partial_reason must explain the elevated failed_count; got {reason!r}"
+
+    async def test_registry_soft_failure_routes_to_registry_failed(
+        self, mock_client
+    ) -> None:
+        """A non-raising non-success registry response must set ``registry_failed=True``.
+
+        ``RestClient.send_websocket_message`` returns ``{"success": False, ...}``
+        on connection drops or post-retry 403s rather than raising. Before the
+        fix this took the falsy ``.get("success")`` branch and fell through to
+        ``registry_failed=False`` with an empty UID set — every scene was then
+        counted as ``integration_skipped`` and the response looked fully
+        complete with zero scene configs and no ``partial`` flag. The fix
+        routes the soft-failure response to the same attempt-all +
+        ``registry_failed=True`` path as the raise branch, so
+        ``_apply_scene_partial_flag`` surfaces the registry outage.
+        """
+
+        async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
+            msg_type = message.get("type")
+            if msg_type == "config/entity_registry/list":
+                # Soft-failure: returned, not raised.
+                return {"success": False, "error": "connection lost"}
+            # WS bulk also returns soft-failure so we reach Attempt C.
+            return {"success": False}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+
+        async def _failing_get(scene_id: str) -> dict[str, Any]:
+            raise RuntimeError(f"Mock fetch fail for {scene_id}")
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_failing_get)
+        tools = _make_tools(mock_client)
+
+        result = await tools.deep_search(
+            query="bedroom", search_types=["scene"], limit=10
+        )
+
+        # Same observable outcome as the raise path: partial=True with the
+        # registry-fetch-failed reason surfaced.
+        assert result.get("partial") is True, (
+            f"soft-failure registry response must set partial=True; got {result}"
+        )
+        reason = result.get("partial_reason", "")
+        assert "registry" in reason.lower() and "fetch failed" in reason.lower(), (
+            f"partial_reason must surface the registry-fetch fallback on soft failure; got {reason!r}"
+        )
+
+
+class TestApplyScenePartialFlag:
+    """Direct unit coverage of ``_apply_scene_partial_flag``.
+
+    The companion ``_apply_per_type_partial_flag`` has nine focused unit
+    tests in ``test_ha_search_merge.py``; the scene equivalent had zero,
+    leaving the ``registry_failed`` reason-string branch and the
+    integration-skipped no-flag-on-its-own contract unanchored. These
+    tests close that gap.
+    """
+
+    def test_noop_when_no_failures_or_skips(self) -> None:
+        """No failures, no skips → no ``partial`` field at all."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 0,
+                "skipped": 0,
+                "integration_skipped": 0,
+                "registry_failed": False,
+            },
+        )
+        assert "partial" not in response
+        assert "partial_reason" not in response
+
+    def test_integration_skipped_alone_does_not_set_partial(self) -> None:
+        """Issue #1168 R3 blocker 2: integration-managed scenes intentionally
+        skip the per-id fetch and never raise ``partial`` on their own."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 0,
+                "skipped": 0,
+                "integration_skipped": 7,
+                "registry_failed": False,
+            },
+        )
+        assert "partial" not in response
+        assert "partial_reason" not in response
+
+    def test_failed_sets_partial_with_failure_reason(self) -> None:
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 3,
+                "skipped": 0,
+                "integration_skipped": 0,
+                "registry_failed": False,
+            },
+        )
+        assert response["partial"] is True
+        reason = response["partial_reason"]
+        assert "3 scene(s) not scanned (per-id fetch raised)" in reason
+        # Triad — matches the un-rationalisable wording introduced for
+        # automation/script paths in PR #1529 R5.
+        assert "match status is unknown" in reason
+        assert "not exhaustive" in reason
+
+    def test_skipped_sets_partial_with_budget_reason(self) -> None:
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 0,
+                "skipped": 5,
+                "integration_skipped": 0,
+                "registry_failed": False,
+            },
+        )
+        assert response["partial"] is True
+        reason = response["partial_reason"]
+        assert "5 scene(s) not scanned (time budget exhausted)" in reason
+        assert "match status is unknown" in reason
+        assert "not exhaustive" in reason
+        assert "HAMCP_SCENE_CONFIG_TIME_BUDGET" in reason
+
+    def test_registry_failed_adds_filter_unavailable_clause(self) -> None:
+        """When the registry walk failed (raise OR soft-failure), the
+        partial_reason must explain that the integration-platform filter
+        is unavailable so an elevated ``failed_count`` isn't read as a
+        config outage. Both #1168 R5 blocker 11 and this PR's
+        ``_walk_scene_registry`` soft-failure fix depend on this clause.
+        """
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 4,
+                "skipped": 0,
+                "integration_skipped": 0,
+                "registry_failed": True,
+            },
+        )
+        assert response["partial"] is True
+        reason = response["partial_reason"].lower()
+        assert "entity-registry fetch failed" in reason
+        assert "filter unavailable" in reason or "false-positive" in reason
+
+    def test_uses_space_semicolon_space_separator(self) -> None:
+        """`" ; "` is the standardised separator across all three partial-
+        flag setters (``_merge_payload_metadata``, ``_apply_per_type_partial_flag``,
+        ``_apply_scene_partial_flag``). A regression to ``", "`` or
+        ``"\\n"`` would pass the substring assertions above but break
+        callers that split on the boundary."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 2,
+                "skipped": 3,
+                "integration_skipped": 4,
+                "registry_failed": True,
+            },
+        )
+        reason = response["partial_reason"]
+        assert " ; " in reason, (
+            f"scene partial_reason fragments must be joined with ' ; '; got {reason!r}"
+        )
+
+    def test_registry_failed_alone_does_not_promote_to_partial(self) -> None:
+        """``registry_failed`` is an explanatory rider on a real failure,
+        never a partial condition on its own. With no per-id failures or
+        budget skips, toggling ``registry_failed`` must produce the
+        *identical* (no-partial) response — it has zero independent effect.
+
+        Guards against a future edit that folds ``registry_failed`` into the
+        partial-trigger gate (the ``if not (failed or skipped)`` early return
+        in ``_apply_scene_partial_flag``): that would flag ``partial`` on
+        every transient registry hiccup that lost no data and re-noise the
+        Hue case this whole branch exists to quiet. Asserting the delta
+        (False vs True → same output) rather than just the True-case outcome
+        is what makes it tight — a test checking only the True case passes
+        even if ``registry_failed`` is the gate's only trigger.
+        """
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        base = {"failed": 0, "skipped": 0, "integration_skipped": 0}
+        without_rf: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            without_rf, {**base, "registry_failed": False}
+        )
+        with_rf: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            with_rf, {**base, "registry_failed": True}
+        )
+
+        # Zero independent effect: True is byte-for-byte the False output,
+        # and that output carries no partial flag.
+        assert with_rf == without_rf == {"success": True}
+        assert "partial" not in with_rf
+        assert "partial_reason" not in with_rf
+
+    def test_informational_clauses_omit_unknown_triad(self) -> None:
+        """The ``integration_skipped`` and ``registry_failed`` clauses are
+        deliberately informational: their match status is *known*, so they
+        must NOT carry the "not scanned / match status is unknown / not
+        exhaustive" triad the real-failure clause carries. A future edit
+        that appended any triad element to the integration clause would
+        silently re-introduce the Hue "everything failed" false alarm that
+        clause exists to prevent.
+
+        Asserted clause-by-clause (split on the ``" ; "`` separator) so the
+        negative checks target the informational clauses specifically. The
+        failure clause is asserted to STILL carry all three triad elements,
+        so the negatives can't pass vacuously on a triad-free reason.
+        """
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 2,
+                "skipped": 0,
+                "integration_skipped": 5,
+                "registry_failed": True,
+            },
+        )
+        assert response["partial"] is True
+        clauses = response["partial_reason"].split(" ; ")
+
+        failure_clause = next(c for c in clauses if "per-id fetch raised" in c)
+        integration_clause = next(c for c in clauses if "scored by attribute only" in c)
+        registry_clause = next(
+            c for c in clauses if "entity-registry fetch failed" in c.lower()
+        )
+
+        # Two-sided anchor: the real-failure clause carries all three
+        # triad elements.
+        assert "not scanned" in failure_clause
+        assert "match status is unknown" in failure_clause
+        assert "not exhaustive" in failure_clause
+
+        # The informational clauses must carry NONE of them.
+        for clause in (integration_clause, registry_clause):
+            assert "not scanned" not in clause, (
+                f"informational clause must not claim entities were not scanned: {clause!r}"
+            )
+            assert "match status is unknown" not in clause, (
+                f"informational clause must not claim unknown match status: {clause!r}"
+            )
+            assert "not exhaustive" not in clause, (
+                f"informational clause must not claim non-exhaustive: {clause!r}"
+            )
+
+
+class TestIndexSceneRegistryEntry:
+    """Direct unit coverage of ``_index_scene_registry_entry``.
+
+    The HA-managed vs integration-managed classification (``platform ==
+    "homeassistant"``) was previously only tested transitively through
+    ``deep_search`` integration scenarios. A regression that flipped the
+    membership predicate (e.g. ``not "homeassistant"`` or matching
+    substring instead of exact equality) would change downstream
+    counting silently.
+    """
+
+    @staticmethod
+    def _empty_outputs() -> tuple[dict[str, Any], set[str], dict[str, str]]:
+        return {}, set(), {}
+
+    def test_homeassistant_platform_entry_recorded_as_managed(self) -> None:
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        configs, uids, slug_map = self._empty_outputs()
+        SceneSearchMixin._index_scene_registry_entry(
+            {
+                "entity_id": "scene.movie_night",
+                "unique_id": "movie_night_storage_uid",
+                "platform": "homeassistant",
+            },
+            configs,
+            uids,
+            slug_map,
+        )
+        assert "movie_night_storage_uid" in uids
+        assert slug_map.get("movie_night") == "movie_night_storage_uid"
+
+    def test_integration_platform_entry_skipped_from_uids_but_aliased(self) -> None:
+        """Integration-managed scenes still need their slug alias so the
+        result-builder fallback lands on the right storage key — but they
+        MUST NOT enter ``homeassistant_scene_uids`` (would round-trip
+        through per-id fetch and 404)."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        configs, uids, slug_map = self._empty_outputs()
+        SceneSearchMixin._index_scene_registry_entry(
+            {
+                "entity_id": "scene.hue_movie",
+                "unique_id": "hue_movie_uid",
+                "platform": "hue",
+            },
+            configs,
+            uids,
+            slug_map,
+        )
+        assert "hue_movie_uid" not in uids
+        assert slug_map.get("hue_movie") == "hue_movie_uid"
+
+    def test_non_scene_entry_ignored(self) -> None:
+        """Non-scene entries (lights, sensors, etc.) in the registry
+        response must not pollute the outputs even when ``platform ==
+        "homeassistant"``."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        configs, uids, slug_map = self._empty_outputs()
+        SceneSearchMixin._index_scene_registry_entry(
+            {
+                "entity_id": "light.kitchen",
+                "unique_id": "kitchen_light_uid",
+                "platform": "homeassistant",
+            },
+            configs,
+            uids,
+            slug_map,
+        )
+        assert uids == set()
+        assert slug_map == {}
+
+    def test_missing_unique_id_skipped(self) -> None:
+        """Entries without a ``unique_id`` cannot be aliased and must be
+        silently ignored — happens on partially-restored registries."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        configs, uids, slug_map = self._empty_outputs()
+        SceneSearchMixin._index_scene_registry_entry(
+            {
+                "entity_id": "scene.partial",
+                "unique_id": None,
+                "platform": "homeassistant",
+            },
+            configs,
+            uids,
+            slug_map,
+        )
+        assert uids == set()
+        assert slug_map == {}
+
+    def test_slug_aliased_to_existing_config_under_storage_key(self) -> None:
+        """When a config is already bulk-fetched under its storage key and
+        the entity_id slug differs, the registry walk must add a slug-keyed
+        alias pointing at the same config dict — that's the whole reason
+        Phase 2.5 exists (HA's slugify diverges from `.replace()` chains).
+        """
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        # Config bulk-fetched under storage key "ee04b...".
+        existing_config = {"id": "ee04b1a2", "name": "Movie Night"}
+        configs: dict[str, dict[str, Any]] = {"ee04b1a2": existing_config}
+        uids: set[str] = set()
+        slug_map: dict[str, str] = {}
+
+        # Registry says: this scene's entity_id is "scene.movie_night" but
+        # its unique_id (== storage key) is "ee04b1a2".
+        SceneSearchMixin._index_scene_registry_entry(
+            {
+                "entity_id": "scene.movie_night",
+                "unique_id": "ee04b1a2",
+                "platform": "homeassistant",
+            },
+            configs,
+            uids,
+            slug_map,
+        )
+
+        # Phase-3 lookup via slug now lands on the bulk-fetched config.
+        assert configs.get("movie_night") is existing_config
