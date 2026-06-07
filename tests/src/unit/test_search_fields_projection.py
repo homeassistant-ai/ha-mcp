@@ -86,14 +86,17 @@ class TestProjectFields:
         assert set(result.keys()) == {"success", "results"}
 
 
-@pytest.mark.skip(
-    reason="ha_search (consolidated tool) does not expose `fields=` top-level "
-    "projection — only `result_fields=` (entity-record projection). The "
-    "underlying `_project_fields` helper is still covered by TestProjectFields "
-    "above. Re-enable if `fields=` is added back to ha_search."
-)
 class TestHaSearchEntitiesFieldsProjection:
-    """Tool-level tests for fields= projection in ha_search."""
+    """Tool-level coverage of the top-level ``fields=`` projection on the
+    consolidated ``ha_search`` tool.
+
+    Re-enabled (was skipped as "ha_search does not expose ``fields=``"): the
+    consolidated tool exposes ``fields=`` and applies ``_project_response_fields``
+    as the final step of the orchestrator. These exercise the real tool call —
+    param parsing, the always-keep contract, the typo guard, and the malformed-
+    input error path — not just the ``project_fields`` helper. The response is
+    the flat orchestrator envelope (no ``["data"]`` wrapper).
+    """
 
     @pytest.fixture
     def mock_mcp(self):
@@ -135,7 +138,8 @@ class TestHaSearchEntitiesFieldsProjection:
         smart_tools = MagicMock()
         # ha_search orchestrator fans out to deep_search whenever ``query`` is
         # set; mock it as an empty-config response so the merge logic doesn't
-        # see a non-awaitable MagicMock.
+        # see a non-awaitable MagicMock. The config buckets are present (empty)
+        # so a projection can be observed dropping them.
         smart_tools.deep_search = AsyncMock(
             return_value={
                 "success": True,
@@ -155,23 +159,45 @@ class TestHaSearchEntitiesFieldsProjection:
 
     @pytest.mark.asyncio
     async def test_fields_none_returns_full_response(self, search_tool):
-        result = await search_tool(query="kitchen")
-        data = result["data"]
+        """No projection → the full flat envelope, including the config buckets."""
+        data = await search_tool(query="kitchen")
         assert "success" in data
         assert "entities" in data
+        assert "automations" in data
 
     @pytest.mark.asyncio
-    async def test_fields_single_key_projects_correctly(self, search_tool):
-        result = await search_tool(query="kitchen", fields=["results"])
-        data = result["data"]
+    async def test_fields_projection_drops_unrequested_buckets(self, search_tool):
+        """``fields=["entities"]`` keeps the requested bucket and drops the
+        other (non-always-keep) surface buckets — the core projection behavior,
+        exercised through the registered tool's own ``fields=`` param."""
+        data = await search_tool(query="kitchen", fields=["entities"])
         assert "entities" in data
-        assert "success" in data
-        assert "total_matches" not in data
+        # The other surface buckets are neither requested nor always-keep.
+        assert "automations" not in data
+        assert "scripts" not in data
+        assert "scenes" not in data
+        assert "helpers" not in data
 
     @pytest.mark.asyncio
-    async def test_fields_success_always_present(self, search_tool):
-        result = await search_tool(query="kitchen", fields=["results"])
-        assert result["data"]["success"] is True
+    async def test_fields_projection_retains_always_keep_diagnostics(self, search_tool):
+        """Projection narrows the response but never hides the diagnostic /
+        pagination contract — ``success`` and the always-keep keys survive even
+        when not named in ``fields=``."""
+        data = await search_tool(query="kitchen", fields=["entities"])
+        assert data["success"] is True
+        # Always-keep keys are retained so a narrowing caller can't lose
+        # incompleteness / pagination signal.
+        assert "search_types" in data
+        assert "count" in data
+
+    @pytest.mark.asyncio
+    async def test_fields_unknown_key_emits_typo_warning(self, search_tool):
+        """A requested key absent from the response surfaces a diagnostic
+        warning (with the available keys) rather than a mysteriously empty
+        payload."""
+        data = await search_tool(query="kitchen", fields=["frobnicate"])
+        assert "warnings" in data
+        assert any("frobnicate" in w for w in data["warnings"])
 
     @pytest.mark.asyncio
     async def test_malformed_fields_raises_tool_error(self, search_tool):
@@ -184,24 +210,18 @@ class TestHaSearchEntitiesFieldsProjection:
             await search_tool(query="kitchen", fields='["')
 
 
-@pytest.mark.skip(
-    reason="ha_search (consolidated tool) does not expose `fields=` top-level "
-    "projection. Area-branch coverage of the response shape is now via "
-    "TestHaSearchEntitiesResultFields (entity-record projection) and "
-    "TestProjectFields (helper-level)."
-)
 class TestHaSearchEntitiesFieldsProjectionAreaBranches:
-    """Tool-level tests for fields= projection across the four area-related return paths.
+    """Tool-level ``fields=`` projection across the entity-branch return paths.
 
-    The regular-search return at ``tools_search.py:795`` is covered by
-    ``TestHaSearchEntitiesFieldsProjection`` above; this class pins the other
-    four projection call sites so a regression removing ``project_fields(...)``
-    at any of them still produces a test failure:
-
-    - area+query branch        (``tools_search.py:479``)
-    - area-only populated      (``tools_search.py:581``)
-    - area-only empty          (``tools_search.py:600``)
-    - domain-listing branch    (``tools_search.py:694``)
+    Re-enabled (was skipped on the false "does not expose ``fields=``" reason).
+    The consolidated orchestrator no longer projects per-branch — it applies a
+    single ``_project_response_fields`` end-pass after every branch assembles
+    its response, so one projection covers all exits. These pin that the
+    end-pass reaches each entity-branch exit (area+query, area-only populated,
+    area-only empty, domain-listing) by projecting onto a non-``entities`` key
+    and asserting the ``entities`` bucket is dropped on each path. The response
+    is the flat envelope (no ``["data"]`` wrapper); ``search_type`` /
+    ``area_names`` / ``message`` are now in ``_ALWAYS_KEEP_PROJECTION``.
     """
 
     @pytest.fixture
@@ -291,46 +311,41 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
 
     @pytest.mark.asyncio
     async def test_area_plus_query_branch_projects(self, search_tool_populated):
-        """area+query branch (line 479) honours fields= projection."""
-        result = await search_tool_populated(
-            query="kitchen", area_filter="kitchen", fields=["results"]
+        """The end-pass projects the area+query branch: ``fields=["search_type"]``
+        keeps that key and drops the (non-always-keep) ``entities`` bucket."""
+        data = await search_tool_populated(
+            query="kitchen", area_filter="kitchen", fields=["search_type"]
         )
-        data = result["data"]
-        # Only ``results`` (+ always-retained ``success``) should remain.
-        assert "entities" in data
         assert "success" in data
-        assert "total_matches" not in data
-        assert "search_type" not in data
-        assert "area_filter" not in data
+        assert "search_type" in data
+        assert "entities" not in data
 
     @pytest.mark.asyncio
     async def test_area_plus_query_branch_unprojected_baseline(
         self, search_tool_populated
     ):
         """fields=None on area+query returns the full response (sanity check)."""
-        result = await search_tool_populated(query="kitchen", area_filter="kitchen")
-        data = result["data"]
+        data = await search_tool_populated(query="kitchen", area_filter="kitchen")
         assert "entities" in data
         assert "search_type" in data
         assert data["search_type"] == "area_filtered_query"
 
     @pytest.mark.asyncio
     async def test_area_only_populated_branch_projects(self, search_tool_populated):
-        """area-only populated branch (line 581) honours fields= projection."""
-        result = await search_tool_populated(area_filter="kitchen", fields=["results"])
-        data = result["data"]
-        assert "entities" in data
+        """The end-pass projects the area-only populated branch."""
+        data = await search_tool_populated(
+            area_filter="kitchen", fields=["search_type"]
+        )
         assert "success" in data
-        assert "area_names" not in data
-        assert "search_type" not in data
+        assert "search_type" in data
+        assert "entities" not in data
 
     @pytest.mark.asyncio
     async def test_area_only_populated_branch_unprojected_baseline(
         self, search_tool_populated
     ):
         """fields=None on area-only returns the full response (sanity check)."""
-        result = await search_tool_populated(area_filter="kitchen")
-        data = result["data"]
+        data = await search_tool_populated(area_filter="kitchen")
         assert "entities" in data
         assert "search_type" in data
         assert data["search_type"] == "area_only"
@@ -338,52 +353,41 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
 
     @pytest.mark.asyncio
     async def test_area_only_empty_branch_projects(self, search_tool_empty):
-        """area-only empty branch (line 600) honours fields= projection.
-
-        Selecting ``message`` (set on the zero-match branch) confirms the
-        projection is applied to the empty-area response shape too.
-        """
-        result = await search_tool_empty(area_filter="nonexistent", fields=["message"])
-        data = result["data"]
+        """The end-pass projects the area-only empty branch. ``message`` (set on
+        the zero-match branch) is selected and kept; ``entities`` is dropped."""
+        data = await search_tool_empty(area_filter="nonexistent", fields=["message"])
         assert "success" in data
         assert "message" in data
-        assert "results" not in data
-        assert "search_type" not in data
+        assert "entities" not in data
 
     @pytest.mark.asyncio
     async def test_area_only_empty_branch_unprojected_baseline(self, search_tool_empty):
         """fields=None on the empty-area branch returns the full response."""
-        result = await search_tool_empty(area_filter="nonexistent")
-        data = result["data"]
+        data = await search_tool_empty(area_filter="nonexistent")
         assert "entities" in data
-        assert data["results"] == []
+        assert data["entities"] == []
         assert "message" in data
 
     @pytest.mark.asyncio
     async def test_domain_listing_branch_projects(self, search_tool_populated):
-        """domain-listing branch (line 694) honours fields= projection.
-
-        Triggered by empty query + domain_filter. The smart_tools mock is
-        unused on this branch; client.get_states drives the result.
-        """
-        result = await search_tool_populated(domain_filter="light", fields=["results"])
-        data = result["data"]
-        assert "entities" in data
+        """The end-pass projects the domain-listing branch (empty query +
+        domain_filter; client.get_states drives the result)."""
+        data = await search_tool_populated(
+            domain_filter="light", fields=["search_type"]
+        )
         assert "success" in data
-        assert "note" not in data
-        assert "search_type" not in data
+        assert "search_type" in data
+        assert "entities" not in data
 
     @pytest.mark.asyncio
     async def test_domain_listing_branch_unprojected_baseline(
         self, search_tool_populated
     ):
         """fields=None on the domain-listing branch returns the full response."""
-        result = await search_tool_populated(domain_filter="light")
-        data = result["data"]
+        data = await search_tool_populated(domain_filter="light")
         assert "entities" in data
         assert "search_type" in data
         assert data["search_type"] == "domain_listing"
-        assert "note" in data
 
 
 # ---------------------------------------------------------------------------

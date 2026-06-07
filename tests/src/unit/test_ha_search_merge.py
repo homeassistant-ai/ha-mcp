@@ -920,12 +920,27 @@ def test_budget_partial_flag_set_when_helper_type_lists_failed() -> None:
     """Helpers run on every default ha_search call; silent per-type-list
     failures previously left callers unable to distinguish a clean
     zero-helper-match from a partial backend outage. ``helper_failed``
-    closes that gap."""
+    closes that gap (input_* WS lists AND the flow-helper config-entries
+    list, both surfaced through the same counter)."""
     response: dict = {"success": True}
     DeepSearchMixin._apply_per_type_partial_flag(response, helper_failed=3)
     assert response["partial"] is True
     reason = response["partial_reason"]
-    assert "3 input_* helper type(s) not scanned" in reason
+    assert "3 helper backend(s) not scanned" in reason
+    assert "match status is unknown" in reason
+    assert "not exhaustive" in reason
+
+
+def test_budget_partial_flag_set_when_dashboard_backend_failed() -> None:
+    """Dashboard search (opt-in) swallowed list/config failures to empty.
+    ``dashboard_failed`` routes a failed dashboard backend through the same
+    partial path so an opt-in dashboard search can't report a complete-looking
+    empty result when the list or a config fetch failed."""
+    response: dict = {"success": True}
+    DeepSearchMixin._apply_per_type_partial_flag(response, dashboard_failed=2)
+    assert response["partial"] is True
+    reason = response["partial_reason"]
+    assert "2 dashboard(s) not scanned" in reason
     assert "match status is unknown" in reason
     assert "not exhaustive" in reason
 
@@ -944,7 +959,7 @@ def test_budget_partial_flag_failed_and_skipped_combine() -> None:
     reason = response["partial_reason"]
     assert "5 automation(s) not scanned (time budget exhausted)" in reason
     assert "2 automation(s) not scanned (per-id fetch raised a non-404 error)" in reason
-    assert "1 input_* helper type(s) not scanned" in reason
+    assert "1 helper backend(s) not scanned" in reason
 
 
 def test_budget_partial_flag_failures_append_to_existing_reason() -> None:
@@ -961,7 +976,7 @@ def test_budget_partial_flag_failures_append_to_existing_reason() -> None:
     assert response["partial"] is True
     assert response["partial_reason"].startswith("Scene config fetch incomplete")
     assert "3 script(s) not scanned" in response["partial_reason"]
-    assert "1 input_* helper type(s) not scanned" in response["partial_reason"]
+    assert "1 helper backend(s) not scanned" in response["partial_reason"]
 
 
 def test_entities_branch_skip_keys_strip_real_leak_set() -> None:

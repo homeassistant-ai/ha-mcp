@@ -124,6 +124,7 @@ class DeepSearchMixin(SceneSearchMixin):
             script_failed = 0
             script_yaml_skipped = 0
             helper_failed = 0
+            dashboard_failed = 0
 
             if "automation" in search_types:
                 (
@@ -203,7 +204,10 @@ class DeepSearchMixin(SceneSearchMixin):
                 )
 
             if "dashboard" in search_types:
-                results["dashboards"] = await self._deep_search_dashboards(
+                (
+                    results["dashboards"],
+                    dashboard_failed,
+                ) = await self._deep_search_dashboards(
                     query_lower, exact_match, semaphore
                 )
                 phase_done += 1
@@ -229,6 +233,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 script_failed=script_failed,
                 script_yaml_skipped=script_yaml_skipped,
                 helper_failed=helper_failed,
+                dashboard_failed=dashboard_failed,
             )
 
         except ToolError:
@@ -515,15 +520,26 @@ class DeepSearchMixin(SceneSearchMixin):
         query_lower: str,
         exact_match: bool,
         semaphore: asyncio.Semaphore,
-    ) -> list[dict[str, Any]]:
-        """Fetch one input_* helper type via WS list and return query matches."""
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Fetch one input_* helper type via WS list and return query matches.
+
+        Returns ``(matches, failed)``. ``failed`` is True when the
+        ``<type>/list`` backend was unreachable (raised) or returned a
+        non-success response — distinct from a successful empty match set.
+        A soft ``{"success": False}`` is a backend failure, not a "no
+        helpers" signal, so it must surface as ``partial`` rather than be
+        swallowed to an empty list: otherwise the caller cannot tell a real
+        zero-match from a partial backend outage (helpers run on every
+        default ``ha_search`` call).
+        """
         async with semaphore:
             try:
                 resp = await self.client.send_websocket_message(
                     {"type": f"{helper_type}/list"}
                 )
                 if not resp.get("success"):
-                    return []
+                    logger.debug(f"{helper_type}/list returned non-success: {resp!r}")
+                    return [], True
 
                 matches: list[dict[str, Any]] = []
                 for helper in resp.get("result", []):
@@ -558,10 +574,10 @@ class DeepSearchMixin(SceneSearchMixin):
                                 "config": helper,
                             }
                         )
-                return matches
+                return matches, False
             except Exception as e:
                 logger.debug(f"Could not list {helper_type}: {e}")
-                return []
+                return [], True
 
     async def _deep_search_helpers(
         self,
@@ -572,13 +588,16 @@ class DeepSearchMixin(SceneSearchMixin):
     ) -> tuple[list[dict[str, Any]], int]:
         """Deep-search helpers: parallel input_* WS lists plus flow-based helpers.
 
-        Returns ``(results, failed_type_count)`` — ``failed_type_count`` is the
-        number of ``input_*`` helper-type list fetches that raised under the
-        ``return_exceptions=True`` gather. Flow-helper failures (line-level)
-        are tolerated inside ``_search_flow_helpers`` and don't surface here.
-        Helpers run on every default ``ha_search`` call, so silent failures
-        here mean the caller cannot tell "no helpers match" from "helper
-        backend partially down" — surfaced via ``partial: True``.
+        Returns ``(results, failed_type_count)`` — ``failed_type_count`` counts
+        each helper backend that failed: an ``input_*`` ``<type>/list`` fetch
+        that raised or returned a non-success response, plus the flow-helper
+        config-entries list fetch when it is unreachable or returns an
+        unexpected shape. Per-entry flow-helper scoring failures stay tolerated
+        inside ``_search_flow_helpers`` (one bad entry must not sink the
+        gather) and don't surface here. Helpers run on every default
+        ``ha_search`` call, so silent failures here mean the caller cannot
+        tell "no helpers match" from "helper backend partially down" —
+        surfaced via ``partial: True``.
         """
         helper_types = [
             "input_boolean",
@@ -599,8 +618,11 @@ class DeepSearchMixin(SceneSearchMixin):
             return_exceptions=True,
         )
         for result in type_results:
-            if isinstance(result, list):
-                results.extend(result)
+            if isinstance(result, tuple):
+                type_matches, type_failed = result
+                results.extend(type_matches)
+                if type_failed:
+                    failed_type_count += 1
             elif isinstance(result, Exception):
                 failed_type_count += 1
                 logger.debug(f"Helper list fetch failed: {result}")
@@ -611,14 +633,15 @@ class DeepSearchMixin(SceneSearchMixin):
         # /config/config_entries/entry REST surface and probe each entry's
         # options flow so the helper's current config is searchable alongside
         # the input_* helpers above.
-        results.extend(
-            await self._search_flow_helpers(
-                query_lower,
-                exact_match,
-                semaphore,
-                include_config=include_config,
-            )
+        flow_results, flow_failed = await self._search_flow_helpers(
+            query_lower,
+            exact_match,
+            semaphore,
+            include_config=include_config,
         )
+        results.extend(flow_results)
+        if flow_failed:
+            failed_type_count += 1
         return results, failed_type_count
 
     async def _search_one_dashboard(
@@ -628,8 +651,15 @@ class DeepSearchMixin(SceneSearchMixin):
         query_lower: str,
         exact_match: bool,
         semaphore: asyncio.Semaphore,
-    ) -> list[dict[str, Any]]:
-        """Search a single dashboard's config for the query."""
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Search a single dashboard's config for the query.
+
+        Returns ``(matches, failed)``. ``failed`` is True when the
+        ``lovelace/config`` fetch raised or returned a non-dict shape (a
+        backend failure for this dashboard) — distinct from a successful
+        no-match. Surfacing it lets ``ha_search(search_types=["dashboard"])``
+        report ``partial`` instead of a complete-looking empty result.
+        """
         async with semaphore:
             try:
                 get_data: dict[str, Any] = {"type": "lovelace/config"}
@@ -641,7 +671,11 @@ class DeepSearchMixin(SceneSearchMixin):
                 )
                 config = resp.get("result", resp) if isinstance(resp, dict) else resp
                 if not isinstance(config, dict):
-                    return []
+                    logger.debug(
+                        f"Dashboard config non-dict shape ({url_path}): "
+                        f"{type(config).__name__}"
+                    )
+                    return [], True
 
                 config_score = self._search_in_dict(config, query_lower, exact_match)
                 threshold = 100 if exact_match else self.settings.fuzzy_threshold
@@ -654,27 +688,38 @@ class DeepSearchMixin(SceneSearchMixin):
                             "match_in_config": True,
                             "config": config,
                         }
-                    ]
-                return []
+                    ], False
+                return [], False
             except Exception as e:
                 logger.debug(f"Dashboard search failed ({url_path}): {e}")
-                return []
+                return [], True
 
     async def _deep_search_dashboards(
         self,
         query_lower: str,
         exact_match: bool,
         semaphore: asyncio.Semaphore,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """Deep-search storage-mode dashboards plus the default dashboard.
 
-        Re-raises on failure so dashboard errors bubble to deep_search's outer
-        handler (this branch has no per-unit graceful degradation of its own).
+        Returns ``(results, failed_count)``. ``failed_count`` counts each
+        dashboard surface that failed *without* raising: the registry-list
+        fetch returning ``None`` (unexpected/failed shape — previously
+        swallowed by ``or []``) plus each per-dashboard ``lovelace/config``
+        fetch that raised or returned a non-dict. Routed through
+        ``_apply_per_type_partial_flag`` so a failed dashboard backend
+        surfaces as ``partial`` instead of a complete-looking empty result.
+        The outer ``except`` still re-raises a catastrophic gather failure to
+        deep_search's handler.
         """
         try:
-            dashboard_entries: list[dict[str, Any]] = (
-                await fetch_dashboards_list(self.client) or []
-            )
+            dashboard_entries = await fetch_dashboards_list(self.client)
+            # ``None`` = the list fetch hit an unexpected/failed shape
+            # (``fetch_dashboards_list`` logs a warning and returns None). The
+            # old ``or []`` collapsed that to a clean empty result; count it
+            # so the caller sees ``partial`` rather than a silent zero.
+            list_failed = dashboard_entries is None
+            dashboard_entries = dashboard_entries or []
 
             dashboards_to_search: list[tuple[str, str]] = [
                 ("default", "Default Dashboard")
@@ -695,12 +740,17 @@ class DeepSearchMixin(SceneSearchMixin):
                 return_exceptions=True,
             )
             results: list[dict[str, Any]] = []
+            failed_count = 1 if list_failed else 0
             for dash_result in dash_results:
-                if isinstance(dash_result, list):
-                    results.extend(dash_result)
+                if isinstance(dash_result, tuple):
+                    dash_matches, dash_failed = dash_result
+                    results.extend(dash_matches)
+                    if dash_failed:
+                        failed_count += 1
                 elif isinstance(dash_result, Exception):
+                    failed_count += 1
                     logger.debug(f"Dashboard search failed: {dash_result}")
-            return results
+            return results, failed_count
 
         except Exception as e:
             logger.error(f"Dashboard search error: {e}")
@@ -723,6 +773,7 @@ class DeepSearchMixin(SceneSearchMixin):
         automation_yaml_skipped: int = 0,
         script_yaml_skipped: int = 0,
         helper_failed: int = 0,
+        dashboard_failed: int = 0,
     ) -> dict[str, Any]:
         """Merge per-type results, sort by score, paginate, and assemble the response."""
         tagged_results: list[tuple[str, dict[str, Any]]] = []
@@ -782,6 +833,7 @@ class DeepSearchMixin(SceneSearchMixin):
             automation_yaml_skipped=automation_yaml_skipped,
             script_yaml_skipped=script_yaml_skipped,
             helper_failed=helper_failed,
+            dashboard_failed=dashboard_failed,
         )
         return response
 
@@ -796,19 +848,23 @@ class DeepSearchMixin(SceneSearchMixin):
         automation_yaml_skipped: int = 0,
         script_yaml_skipped: int = 0,
         helper_failed: int = 0,
+        dashboard_failed: int = 0,
     ) -> None:
         """Set ``partial: True`` when the deep-search per-type fetch path lost
         data — either the Attempt-C wall-clock budget exhausted
         (``*_skipped``), individual fetches raised non-404 exceptions
         (``*_failed``, caught at ``debug``-level so they would otherwise
         be silent), or individual fetches returned 404 because the entity
-        is YAML-defined (``*_yaml_skipped``).
+        is YAML-defined (``*_yaml_skipped``). ``helper_failed`` /
+        ``dashboard_failed`` cover the helper- and dashboard-list/config
+        backends, whose per-unit ``except`` blocks would otherwise swallow a
+        backend outage to an empty list with no signal.
 
         Mirrors ``_apply_scene_partial_flag`` 's "looks complete when it
-        isn't" coverage onto the automation/script/helper paths — helpers
-        in particular run on every default ``ha_search`` call, so silent
-        per-type-list failures would leave callers unable to tell a real
-        zero-match from a partial backend outage.
+        isn't" coverage onto the automation/script/helper/dashboard paths —
+        helpers in particular run on every default ``ha_search`` call, so
+        silent per-type-list failures would leave callers unable to tell a
+        real zero-match from a partial backend outage.
 
         The wording is intentionally forceful — every fragment states
         plainly that the entities were *not scanned*, that their match
@@ -868,9 +924,15 @@ class DeepSearchMixin(SceneSearchMixin):
             )
         if helper_failed:
             reasons.append(
-                f"{helper_failed} input_* helper type(s) not scanned (per-type "
-                "WS list raised) — their match status is unknown; this result "
-                "is not exhaustive."
+                f"{helper_failed} helper backend(s) not scanned (per-type list "
+                "or flow-entries fetch failed) — their match status is unknown; "
+                "this result is not exhaustive."
+            )
+        if dashboard_failed:
+            reasons.append(
+                f"{dashboard_failed} dashboard(s) not scanned (config or list "
+                "fetch failed) — their match status is unknown; this result is "
+                "not exhaustive."
             )
         if not reasons:
             return
@@ -886,7 +948,7 @@ class DeepSearchMixin(SceneSearchMixin):
         semaphore: asyncio.Semaphore,
         *,
         include_config: bool,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], bool]:
         """Search UI-created flow-based helpers (template, group, …).
 
         Flow-helpers live as config entries (not storage records) and have
@@ -900,19 +962,30 @@ class DeepSearchMixin(SceneSearchMixin):
         the title alone already scores the maximum (a deeper config match can
         only raise the total, never lower it); any title that leaves headroom
         is still probed for accurate scoring and ``match_in_config``.
+
+        Returns ``(results, failed)``. ``failed`` is True when the
+        config-entries list fetch raised or returned an unexpected shape —
+        the whole flow-helper surface was then unreachable, so the caller
+        must see ``partial`` rather than a silent empty list. Per-entry
+        scoring failures are logged and dropped without setting ``failed``
+        (one bad entry must not sink the gather).
         """
         try:
             response = await self.client._request("GET", "/config/config_entries/entry")
         except Exception as exc:
             logger.debug(f"flow-helper search: list_entries failed: {exc}")
-            return []
+            return [], True
 
         if not isinstance(response, list):
-            return []
+            logger.debug(
+                "flow-helper search: list_entries returned unexpected shape "
+                f"({type(response).__name__}); treating as backend failure"
+            )
+            return [], True
 
         flow_entries = [e for e in response if self._is_flow_helper_entry(e)]
         if not flow_entries:
-            return []
+            return [], False
 
         scored = await asyncio.gather(
             *(
@@ -934,7 +1007,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 # it's discoverable — one bad entry must not sink the whole
                 # multi-source deep_search, so we drop it and keep going.
                 logger.warning(f"flow-helper scoring failed: {item!r}")
-        return out
+        return out, False
 
     @staticmethod
     def _is_flow_helper_entry(entry: Any) -> bool:

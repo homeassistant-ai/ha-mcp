@@ -73,7 +73,7 @@ class TestFlowHelperDeepSearch:
 
         tools = _make_tools(client)
         semaphore = asyncio.Semaphore(8)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "weather", exact_match=True, semaphore=semaphore, include_config=False
         )
 
@@ -109,7 +109,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "outside_temperature",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -140,7 +140,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "comfort",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -176,7 +176,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "match",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -197,7 +197,7 @@ class TestFlowHelperDeepSearch:
             ]
         )
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "locked",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -205,17 +205,52 @@ class TestFlowHelperDeepSearch:
         )
         assert results == []
 
-    async def test_returns_empty_when_rest_call_fails(self) -> None:
+    async def test_rest_call_failure_signals_failed_for_partial(self) -> None:
+        # The config-entries list fetch raising means the whole flow-helper
+        # surface is unreachable — it must signal ``failed=True`` (not just an
+        # empty list) so ``_deep_search_helpers`` can route it to ``partial``.
         client = MagicMock()
         client._request = AsyncMock(side_effect=RuntimeError("REST down"))
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, failed = await tools._search_flow_helpers(
             "anything",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
             include_config=False,
         )
         assert results == []
+        assert failed is True
+
+    async def test_unexpected_list_shape_signals_failed(self) -> None:
+        # A non-list response from the config-entries endpoint (e.g. an error
+        # dict on a future HA version) is a backend failure, not "no helpers" —
+        # it must signal ``failed=True`` rather than be swallowed to empty.
+        client = MagicMock()
+        client._request = AsyncMock(return_value={"error": "boom"})
+        tools = _make_tools(client)
+        results, failed = await tools._search_flow_helpers(
+            "anything",
+            exact_match=True,
+            semaphore=asyncio.Semaphore(8),
+            include_config=False,
+        )
+        assert results == []
+        assert failed is True
+
+    async def test_empty_flow_entries_is_not_a_failure(self) -> None:
+        # A successful list with no flow-helper entries is a genuine zero —
+        # ``failed`` must stay False so a clean instance doesn't report partial.
+        client = MagicMock()
+        client._request = AsyncMock(return_value=[])
+        tools = _make_tools(client)
+        results, failed = await tools._search_flow_helpers(
+            "anything",
+            exact_match=True,
+            semaphore=asyncio.Semaphore(8),
+            include_config=False,
+        )
+        assert results == []
+        assert failed is False
 
     async def test_does_not_match_on_opaque_entry_id(self) -> None:
         # Regression (issue #1457 review): the config-entry ULID must not be a
@@ -238,7 +273,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "weather",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -272,7 +307,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "match",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -313,7 +348,7 @@ class TestFlowHelperDeepSearch:
         client.abort_options_flow = AsyncMock()
 
         tools = _make_tools(client)
-        results = await tools._search_flow_helpers(
+        results, _ = await tools._search_flow_helpers(
             "outside_temperature",
             exact_match=True,
             semaphore=asyncio.Semaphore(8),
@@ -356,7 +391,7 @@ class TestFlowHelperDeepSearch:
             patch.object(tools, "_score_deep_match", side_effect=scorer),
             caplog.at_level(logging.WARNING, logger="ha_mcp.tools.smart_search"),
         ):
-            results = await tools._search_flow_helpers(
+            results, _ = await tools._search_flow_helpers(
                 "good",
                 exact_match=True,
                 semaphore=asyncio.Semaphore(8),
@@ -385,7 +420,7 @@ class TestFlowHelperDeepSearch:
         tools = _make_tools(client)
 
         with patch.object(tools, "_score_deep_match", return_value=(50, 100, False)):
-            results = await tools._search_flow_helpers(
+            results, _ = await tools._search_flow_helpers(
                 "x",
                 exact_match=True,
                 semaphore=asyncio.Semaphore(8),
@@ -418,7 +453,7 @@ class TestFlowHelperDeepSearch:
         tools = _make_tools(client)
         # Force a mid-range title score: above fuzzy_threshold (60), below 100.
         with patch.object(tools, "_score_deep_match", return_value=(70, 60, True)):
-            results = await tools._search_flow_helpers(
+            results, _ = await tools._search_flow_helpers(
                 "weather",
                 exact_match=False,
                 semaphore=asyncio.Semaphore(8),

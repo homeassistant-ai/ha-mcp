@@ -236,9 +236,10 @@ def _project_response_fields(
 
 _INTENT_SKIP_WARNING: str = (
     "config-body search skipped: domain_filter / area_filter / "
-    "state_filter signals entity-only intent; pass "
-    'search_types=["automation", ...] to include config matches '
-    "alongside entity results."
+    "state_filter signals entity-only intent. To search config bodies, "
+    'pass search_types=["automation", ...] — but note this pins the call '
+    "to config-only and drops the entity-result surface, so it does not "
+    "return both alongside each other."
 )
 
 
