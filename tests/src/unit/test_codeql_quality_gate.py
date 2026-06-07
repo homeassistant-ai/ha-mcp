@@ -116,6 +116,37 @@ def test_vendored_paths_are_ignored(tmp_path: Path) -> None:
     assert [f[0] for f in findings] == ["src/a.py"]
 
 
+def test_javascript_findings_gate_and_vendored_js_is_ignored(tmp_path: Path) -> None:
+    """The gate is language-agnostic: a JS finding under the vendored fixture
+    tree is dropped by PATHS_IGNORE, while a first-party JS finding gates.
+
+    Guards the workflow's multi-language premise — the python+javascript matrix
+    feeds JS SARIFs through this same gate, and the only vendored JS that must be
+    dropped lives under tests/initial_test_state/ (e.g. HACS's iconset.js).
+    """
+    path = _write_sarif(
+        tmp_path,
+        [
+            _result(
+                "js/useless-assignment",
+                "tests/initial_test_state/custom_components/hacs/iconset.js",
+                42,
+                "The value assigned here is unused.",
+            ),
+            _result(
+                "js/useless-assignment",
+                "src/ha_mcp/settings.js",
+                2178,
+                "The value assigned to op here is unused.",
+            ),
+        ],
+    )
+    findings, suppressed = gate.classify(path)
+    assert [f[0] for f in findings] == ["src/ha_mcp/settings.js"]
+    assert not suppressed  # no JS entries in the (python-only) ALLOWLIST
+    assert gate.main(["prog", str(path)]) == 1
+
+
 def test_syntax_errors_are_not_suppressed(tmp_path: Path) -> None:
     """py/syntax-error is no longer blanket-ignored; any parse failure gates."""
     path = _write_sarif(

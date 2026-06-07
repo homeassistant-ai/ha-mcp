@@ -1,6 +1,17 @@
 name: CodeQL Code Quality
 
-# Runs the CodeQL "python-code-quality" suite and fails the PR on ANY finding.
+# Runs the CodeQL "<language>-code-quality" suites and fails the PR on ANY finding.
+#
+# Languages gated (one matrix leg each), both scanning the whole tree
+# (--source-root .):
+#   - python      vendored fixtures under tests/initial_test_state/ are dropped
+#                 by scripts/codeql_quality_gate.py's PATHS_IGNORE.
+#   - javascript  scans the JS/TS family (.js/.mjs/.cjs/.ts/.tsx/.jsx) across the
+#                 whole tree — first-party src/, the Astro site's .mjs config,
+#                 and test JS; the same PATHS_IGNORE drops the vendored fixture
+#                 tree. (CodeQL does not extract .astro component scripts, but
+#                 .astro is in the path triggers below so site/ edits still run
+#                 the gate.)
 #
 # Why a custom workflow instead of GitHub's Code Quality page:
 #   - GitHub Code Quality (Preview) is gated to Team/Enterprise Cloud org plans;
@@ -19,12 +30,26 @@ on:
     branches: [ master ]
     paths:
       - '**.py'
+      - '**.js'
+      - '**.mjs'
+      - '**.cjs'
+      - '**.jsx'
+      - '**.ts'
+      - '**.tsx'
+      - '**.astro'
       - '.github/workflows/codeql-quality.yml'
       - 'scripts/codeql_quality_gate.py'
   push:
     branches: [ master ]
     paths:
       - '**.py'
+      - '**.js'
+      - '**.mjs'
+      - '**.cjs'
+      - '**.jsx'
+      - '**.ts'
+      - '**.tsx'
+      - '**.astro'
   workflow_dispatch:
 
 concurrency:
@@ -33,9 +58,18 @@ concurrency:
 
 jobs:
   code-quality:
-    name: CodeQL Code Quality
+    name: CodeQL Code Quality (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            suite: codeql/python-queries:codeql-suites/python-code-quality.qls
+          - language: javascript
+            suite: codeql/javascript-queries:codeql-suites/javascript-code-quality.qls
 
     steps:
       - uses: actions/checkout@v6
@@ -52,22 +86,22 @@ jobs:
           gh extensions install github/gh-codeql
           gh codeql set-version latest
 
-      - name: Create CodeQL database
+      - name: Create CodeQL database (${{ matrix.language }})
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh codeql database create ha-mcp-db \
-            --language=python \
+            --language=${{ matrix.language }} \
             --build-mode=none \
             --source-root . \
             --overwrite
 
-      - name: Analyze with python-code-quality suite
+      - name: Analyze with ${{ matrix.language }}-code-quality suite
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh codeql database analyze ha-mcp-db \
-            codeql/python-queries:codeql-suites/python-code-quality.qls \
+            ${{ matrix.suite }} \
             --format=sarif-latest \
             --output quality.sarif \
             --download
@@ -76,7 +110,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: codeql-quality-sarif
+          name: codeql-quality-sarif-${{ matrix.language }}
           path: quality.sarif
           if-no-files-found: warn
 
