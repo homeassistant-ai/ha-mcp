@@ -2174,8 +2174,8 @@ function renderPolicyCard(toolName, rule) {
         // is meaningful UX shorthand (eq/neq/in/not_in/contains).
         // Silently coerce to op=exists so the row reads as
         // "args.* exists" and the rule actually gates on presence
-        // rather than storing a useless null-match.
-        op = 'exists';
+        // rather than storing a useless null-match. predicate is what gets
+        // persisted, so set it directly (the local `op` is not read again).
         predicate.op = 'exists';
       } else {
         predicate.value = parsed.value;
