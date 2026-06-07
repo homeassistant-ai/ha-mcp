@@ -138,7 +138,7 @@ class TestDashboardFailure:
         assert failed_count >= 1
 
     async def test_deep_search_dashboards_per_dashboard_failure_counts(self) -> None:
-        """Per-dashboard config-fetch failures are each counted; the
+        """Per-dashboard config-fetch failures (raised) are each counted; the
         registry-list itself succeeded (no list_failed)."""
 
         async def _ws(msg):
@@ -155,6 +155,33 @@ class TestDashboardFailure:
         assert results == []
         # default + lovelace-extra both fail their config fetch; list ok.
         assert failed_count == 2
+
+    async def test_deep_search_dashboards_per_dashboard_soft_failure_counts(
+        self,
+    ) -> None:
+        """A per-dashboard *soft* failure (non-dict config, returned as
+        ``(..., True)`` rather than raised) is counted via the gather's tuple
+        branch — pins ``if dash_failed: failed_count += 1`` distinctly from the
+        Exception branch. One dashboard soft-fails, the other is clean → 1."""
+
+        async def _ws(msg):
+            if msg.get("type") == "lovelace/dashboards/list":
+                return {"result": [{"url_path": "lovelace-extra", "title": "Extra"}]}
+            # lovelace/config: the extra dashboard returns a non-dict (soft
+            # fail); the default dashboard returns a clean empty config.
+            if msg.get("url_path") == "lovelace-extra":
+                return "not-a-dict"
+            return {"result": {"views": []}}
+
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(side_effect=_ws)
+        tools = _make_tools(client)
+        results, failed_count = await tools._deep_search_dashboards(
+            "zzznomatch", True, asyncio.Semaphore(4)
+        )
+        assert results == []
+        # Only the extra dashboard soft-failed; default clean; list ok.
+        assert failed_count == 1
 
 
 # --------------------------------------------------------------------------
@@ -234,4 +261,55 @@ class TestHelperDashboardPartialThroughDeepSearch:
             f"a failed dashboard backend must flag partial through deep_search; "
             f"got {result.get('partial')!r}"
         )
-        assert "dashboard(s) not scanned" in result["partial_reason"]
+        reason = result["partial_reason"]
+        assert "dashboard(s) not scanned" in reason
+        # The real count (1: the registry-list failure) must reach the reason,
+        # not a hardcoded slot — same guard the helper count tests apply.
+        assert re.search(r"\b1 dashboard\(s\)", reason), (
+            f"partial_reason must carry the real dashboard_failed count (1); "
+            f"got {reason!r}"
+        )
+
+    async def test_clean_helper_instance_stays_not_partial(self) -> None:
+        """All helper backends succeeding (empty results) must NOT flag
+        partial — guards against a counter that increments unconditionally and
+        false-reports a clean instance as incomplete."""
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client._request = AsyncMock(return_value=[])
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["helper"], limit=10
+        )
+
+        assert not result.get("partial"), (
+            f"a clean helper instance must not report partial; "
+            f"got {result.get('partial')!r} / {result.get('partial_reason')!r}"
+        )
+
+    async def test_clean_dashboard_instance_stays_not_partial(self) -> None:
+        """A clean dashboard instance (valid list, clean configs) must NOT
+        flag partial."""
+
+        async def _ws(msg):
+            if msg.get("type") == "lovelace/dashboards/list":
+                return {"result": []}
+            return {"result": {"views": []}}
+
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(side_effect=_ws)
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["dashboard"], limit=10
+        )
+
+        assert not result.get("partial"), (
+            f"a clean dashboard instance must not report partial; "
+            f"got {result.get('partial')!r} / {result.get('partial_reason')!r}"
+        )
