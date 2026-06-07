@@ -50,7 +50,7 @@ expected:
     - ha_eval_template
   description: >
     Canonical fit for `ha_eval_template` with
-    `{{ states('input_number.bat_t02_alpha')|float >
-    states('input_number.bat_t02_beta')|float }}`. Under-use classification:
+    `{{ states('input_number.bat_t02_alpha')|float(0) >
+    states('input_number.bat_t02_beta')|float(0) }}`. Under-use classification:
     agent calls `ha_get_state` ×2 and answers without invoking the template
     tool.

@@ -52,7 +52,7 @@ expected:
     - ha_eval_template
   description: >
     Canonical fit for `ha_eval_template` with
-    `{{ ((states('input_number.bat_t01_temp1')|float) +
-    (states('input_number.bat_t01_temp2')|float)) / 2 }}`. Under-use
+    `{{ ((states('input_number.bat_t01_temp1')|float(0)) +
+    (states('input_number.bat_t01_temp2')|float(0))) / 2 }}`. Under-use
     classification: agent calls `ha_get_state` ×2 and averages in-prose
     without invoking the tool.

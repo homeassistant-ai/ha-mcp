@@ -1109,7 +1109,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         into automation logic; for `condition:` / `trigger:` positions native
         constructs win (see "When NOT to use" below).
         - "average temperature across the bedroom sensors"
-          -> `{{ ([states('sensor.a'), states('sensor.b')] | map('float') | sum) / 2 }}`
+          -> `{{ ([states('sensor.a'), states('sensor.b')] | map('float', 0) | sum) / 2 }}`
         - "how many lights are on"
           -> `{{ states.light | selectattr('state', 'eq', 'on') | list | count }}`
         NOT for a plain single-entity value ("what's the state of X") — that is
