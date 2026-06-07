@@ -5,7 +5,7 @@ weight: 3
 description: >
   User asks "how many of X are currently in state Y" — a canonical Jinja
   `selectattr` filter use. The under-use failure mode: the agent calls
-  `ha_search_entities` to list, then iterates / filters in prose. Part of
+  `ha_search` to list, then iterates / filters in prose. Part of
   issue #1175 item 2 BAT (eval_template usage measurement).
 
 tags:
@@ -50,5 +50,5 @@ expected:
     Canonical fit for `ha_eval_template` with
     `{{ states.input_boolean | selectattr('entity_id','match','input_boolean.bat_t03_.*')
     | selectattr('state','eq','on') | list | count }}`. Under-use
-    classification: agent calls `ha_search_entities` and counts the "on"
+    classification: agent calls `ha_search` and counts the "on"
     results manually.
