@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 84+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 83+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -276,7 +276,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Replaces the full tool catalog (~84 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~83 tools, ~46K tokens) with search-based discovery (~4 proxy tools, ~5K tokens). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
 
@@ -440,7 +440,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 84+ MCP tools for controlling Home Assistant:
+The add-on provides 83+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -549,10 +549,9 @@ The add-on provides 84+ MCP tools for controlling Home Assistant:
 - `ha_config_set_script` — Create or update a Home Assistant script. MUST call ha_get_skill_guide first.
 
 ### Search & Discovery
-- `ha_deep_search` — Search inside automation, script, scene, helper, and dashboard *configurations* — not for finding entity IDs.
 - `ha_get_overview` — Get AI-friendly system overview with intelligent categorization.
 - `ha_get_state` — Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
-- `ha_search_entities` — Search for entities (lights, sensors, switches, etc.) by name, domain, or area.
+- `ha_search` — Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
 
 ### Service & Device Control
 - `ha_bulk_control` — Control multiple devices with bulk operation support and WebSocket tracking.
