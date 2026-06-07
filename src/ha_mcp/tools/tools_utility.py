@@ -1147,8 +1147,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Numeric Operations:**
         ```jinja2
         {{ states('sensor.temperature') | float(0) }}   # Convert to float with default
-        {{ states('sensor.humidity') | int }}           # Convert to integer
-        {{ (states('sensor.temp') | float + 5) | round(1) }} # Math operations
+        {{ states('sensor.humidity') | int(0) }}        # Convert to integer with default
+        {{ (states('sensor.temp') | float(0) + 5) | round(1) }} # Math operations
         ```
 
         **Time and Date:**
@@ -1218,7 +1218,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **Test mathematical operations:**
         ```python
-        ha_eval_template("{{ (states('sensor.temperature') | float + 5) | round(1) }}")
+        ha_eval_template("{{ (states('sensor.temperature') | float(0) + 5) | round(1) }}")
         ```
 
         **Test entity counting:**
