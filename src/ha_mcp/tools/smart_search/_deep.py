@@ -537,7 +537,10 @@ class DeepSearchMixin(SceneSearchMixin):
                 resp = await self.client.send_websocket_message(
                     {"type": f"{helper_type}/list"}
                 )
-                if not resp.get("success"):
+                # A soft failure (``{"success": False, "error": ...}``) does not
+                # raise; match that documented shape explicitly so it surfaces
+                # as a backend failure instead of a clean zero-match.
+                if isinstance(resp, dict) and resp.get("success") is False:
                     logger.debug(f"{helper_type}/list returned non-success: {resp!r}")
                     return [], True
 
@@ -655,10 +658,11 @@ class DeepSearchMixin(SceneSearchMixin):
         """Search a single dashboard's config for the query.
 
         Returns ``(matches, failed)``. ``failed`` is True when the
-        ``lovelace/config`` fetch raised or returned a non-dict shape (a
-        backend failure for this dashboard) — distinct from a successful
-        no-match. Surfacing it lets ``ha_search(search_types=["dashboard"])``
-        report ``partial`` instead of a complete-looking empty result.
+        ``lovelace/config`` fetch raised, returned a non-success response, or
+        returned a non-dict shape (a backend failure for this dashboard) —
+        distinct from a successful no-match. Surfacing it lets
+        ``ha_search(search_types=["dashboard"])`` report ``partial`` instead
+        of a complete-looking empty result.
         """
         async with semaphore:
             try:
@@ -669,6 +673,20 @@ class DeepSearchMixin(SceneSearchMixin):
                     self.client.send_websocket_message(get_data),
                     timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                 )
+                # A soft failure does NOT raise: send_websocket_message returns
+                # {"success": False, "error": ...} on a 403-after-retries or a
+                # command error. Without this guard that error envelope is a
+                # dict, so it passes the isinstance check below and gets
+                # searched as if it were a config — reporting a clean no-match
+                # for what is really a backend failure (the same class the
+                # scene registry walk handles). Match the documented failure
+                # shape explicitly (``success is False``) so a missing-success
+                # raw response still falls through to the ``result`` fallback.
+                if isinstance(resp, dict) and resp.get("success") is False:
+                    logger.debug(
+                        f"Dashboard config returned non-success ({url_path}): {resp!r}"
+                    )
+                    return [], True
                 config = resp.get("result", resp) if isinstance(resp, dict) else resp
                 if not isinstance(config, dict):
                     logger.debug(

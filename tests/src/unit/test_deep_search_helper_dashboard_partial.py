@@ -98,6 +98,23 @@ class TestDashboardFailure:
         assert matches == []
         assert failed is True
 
+    async def test_one_dashboard_soft_non_success_signals_failed(self) -> None:
+        """A soft websocket failure (``{"success": False}`` — does NOT raise,
+        e.g. a 403-after-retries) is a backend failure, not a clean no-match.
+        Without the guard it would be searched as an error envelope and report
+        ``failed=False`` — the same silent-incompleteness class the scene
+        registry walk handles."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "WebSocket request blocked (403)"}
+        )
+        tools = _make_tools(client)
+        matches, failed = await tools._search_one_dashboard(
+            "default", "Default", "x", True, asyncio.Semaphore(4)
+        )
+        assert matches == []
+        assert failed is True
+
     async def test_one_dashboard_raise_signals_failed(self) -> None:
         """A raised config fetch returns ``failed=True`` rather than swallowing
         to a silent empty list."""
