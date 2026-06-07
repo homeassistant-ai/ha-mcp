@@ -260,6 +260,91 @@ class TestHelperDashboardPartialThroughDeepSearch:
         # Only the flow-helper surface failed → exactly one.
         assert re.search(r"\b1 helper backend\(s\)", result["partial_reason"])
 
+    async def test_flow_helper_options_probe_failure_surfaces_partial(self) -> None:
+        """A flow-helper whose options-flow probe FAILS (vs returns a
+        genuinely-empty options form) must drive ``partial`` through
+        deep_search — even when the entry does not match the query. Without it
+        a user searching for content inside a template/group helper whose
+        options endpoint is down gets a false "no match" with no incompleteness
+        signal. Pins the per-entry probe failure forward: ``_score_flow_entry``
+        → ``_search_flow_helpers`` count → ``helper_failed`` → partial."""
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        # input_*/list → clean empty success (no helper-type failures).
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        # flow-helper config-entries list → one template helper that won't match
+        # the query, forcing the options probe (title score < 100).
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXPROBEFAIL",
+                    "domain": "template",
+                    "title": "Some Template",
+                    "supports_options": True,
+                }
+            ]
+        )
+        # The options-flow probe raises → probe failure (not an empty form).
+        client.start_options_flow = AsyncMock(
+            side_effect=RuntimeError("options flow down")
+        )
+        client.abort_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["helper"], limit=10
+        )
+
+        assert result["partial"] is True, (
+            f"a failed options-flow probe must flag partial through deep_search; "
+            f"got {result.get('partial')!r}"
+        )
+        reason = result["partial_reason"]
+        assert "helper backend(s) not scanned" in reason
+        # Exactly one flow-helper probe failed; input_* lists were clean.
+        assert re.search(r"\b1 helper backend\(s\)", reason), (
+            f"partial_reason must carry the real probe-failure count (1); "
+            f"got {reason!r}"
+        )
+
+    async def test_flow_helper_empty_options_form_stays_not_partial(self) -> None:
+        """A flow-helper whose options probe SUCCEEDS but yields an empty form
+        (``{}`` options — a genuinely-empty read) must NOT flag partial. Guards
+        the failure/empty distinction ``fetch_entry_options_with_status`` draws:
+        an empty form is a clean read, not a backend failure."""
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client._request = AsyncMock(
+            return_value=[
+                {
+                    "entry_id": "01HXEMPTYFORM",
+                    "domain": "template",
+                    "title": "Some Template",
+                    "supports_options": True,
+                }
+            ]
+        )
+        # A form first-step with no harvestable fields → options {} but ok=True.
+        client.start_options_flow = AsyncMock(
+            return_value={"flow_id": "f1", "type": "form", "data_schema": []}
+        )
+        client.abort_options_flow = AsyncMock()
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["helper"], limit=10
+        )
+
+        assert not result.get("partial"), (
+            f"a genuinely-empty options form is a clean read, not a failure; "
+            f"got {result.get('partial')!r} / {result.get('partial_reason')!r}"
+        )
+
     async def test_dashboard_list_failure_surfaces_partial(self) -> None:
         """A failed dashboard registry-list driven through ``deep_search``
         must flag ``partial`` and name the dashboard gap — pins the
@@ -282,6 +367,44 @@ class TestHelperDashboardPartialThroughDeepSearch:
         assert "dashboard(s) not scanned" in reason
         # The real count (1: the registry-list failure) must reach the reason,
         # not a hardcoded slot — same guard the helper count tests apply.
+        assert re.search(r"\b1 dashboard\(s\)", reason), (
+            f"partial_reason must carry the real dashboard_failed count (1); "
+            f"got {reason!r}"
+        )
+
+    async def test_dashboard_per_config_soft_failure_surfaces_partial(self) -> None:
+        """The per-dashboard soft ``{"success": False}`` config failure must
+        surface ``partial`` through the public ``deep_search`` seam — not just
+        at the component level. The registry list succeeds (one entry); that
+        entry's ``lovelace/config`` soft-fails while the default dashboard is
+        clean. Pins the per-dashboard config-threading distinctly from the
+        list-failure path, so a regression there can't ship green."""
+
+        async def _ws(msg):
+            if msg.get("type") == "lovelace/dashboards/list":
+                return {"result": [{"url_path": "lovelace-extra", "title": "Extra"}]}
+            # lovelace/config: the extra dashboard soft-fails (403-after-retries
+            # shape); the default dashboard returns a clean empty config.
+            if msg.get("url_path") == "lovelace-extra":
+                return {"success": False, "error": "WebSocket request blocked (403)"}
+            return {"result": {"views": []}}
+
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        client.send_websocket_message = AsyncMock(side_effect=_ws)
+        tools = _make_tools(client)
+
+        result = await tools.deep_search(
+            query="zzznomatch", search_types=["dashboard"], limit=10
+        )
+
+        assert result["partial"] is True, (
+            f"a per-dashboard soft config failure must flag partial through "
+            f"deep_search; got {result.get('partial')!r}"
+        )
+        reason = result["partial_reason"]
+        assert "dashboard(s) not scanned" in reason
+        # Only the extra dashboard's config soft-failed → exactly one.
         assert re.search(r"\b1 dashboard\(s\)", reason), (
             f"partial_reason must carry the real dashboard_failed count (1); "
             f"got {reason!r}"

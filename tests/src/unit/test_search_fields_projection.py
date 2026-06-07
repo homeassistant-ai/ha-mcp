@@ -311,14 +311,20 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
 
     @pytest.mark.asyncio
     async def test_area_plus_query_branch_projects(self, search_tool_populated):
-        """The end-pass projects the area+query branch: ``fields=["search_type"]``
-        keeps that key and drops the (non-always-keep) ``entities`` bucket."""
-        data = await search_tool_populated(
+        """The end-pass honors ``fields=`` on the area+query branch for a
+        *non-always-keep* key: ``entities`` is retained when requested and
+        dropped when not. ``search_type`` is in ``_ALWAYS_KEEP_PROJECTION``, so
+        asserting it survives can't witness projection — only a non-always-keep
+        key can (PR #1529 R8)."""
+        retained = await search_tool_populated(
+            query="kitchen", area_filter="kitchen", fields=["entities"]
+        )
+        assert "entities" in retained
+        dropped = await search_tool_populated(
             query="kitchen", area_filter="kitchen", fields=["search_type"]
         )
-        assert "success" in data
-        assert "search_type" in data
-        assert "entities" not in data
+        assert "success" in dropped
+        assert "entities" not in dropped
 
     @pytest.mark.asyncio
     async def test_area_plus_query_branch_unprojected_baseline(
@@ -332,13 +338,18 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
 
     @pytest.mark.asyncio
     async def test_area_only_populated_branch_projects(self, search_tool_populated):
-        """The end-pass projects the area-only populated branch."""
-        data = await search_tool_populated(
+        """The end-pass projects the area-only populated branch: the
+        non-always-keep ``entities`` bucket is retained when requested and
+        dropped when not."""
+        retained = await search_tool_populated(
+            area_filter="kitchen", fields=["entities"]
+        )
+        assert "entities" in retained
+        dropped = await search_tool_populated(
             area_filter="kitchen", fields=["search_type"]
         )
-        assert "success" in data
-        assert "search_type" in data
-        assert "entities" not in data
+        assert "success" in dropped
+        assert "entities" not in dropped
 
     @pytest.mark.asyncio
     async def test_area_only_populated_branch_unprojected_baseline(
@@ -353,12 +364,18 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
 
     @pytest.mark.asyncio
     async def test_area_only_empty_branch_projects(self, search_tool_empty):
-        """The end-pass projects the area-only empty branch. ``message`` (set on
-        the zero-match branch) is selected and kept; ``entities`` is dropped."""
-        data = await search_tool_empty(area_filter="nonexistent", fields=["message"])
-        assert "success" in data
-        assert "message" in data
-        assert "entities" not in data
+        """The end-pass projects the area-only empty branch: the non-always-keep
+        ``entities`` bucket (``[]`` on this branch) is retained when requested
+        and dropped when not. ``message`` is always-keep, so requesting it can't
+        witness projection — it survives either way."""
+        retained = await search_tool_empty(
+            area_filter="nonexistent", fields=["entities"]
+        )
+        assert "entities" in retained
+        dropped = await search_tool_empty(area_filter="nonexistent", fields=["message"])
+        assert "success" in dropped
+        assert "message" in dropped
+        assert "entities" not in dropped
 
     @pytest.mark.asyncio
     async def test_area_only_empty_branch_unprojected_baseline(self, search_tool_empty):
@@ -371,13 +388,17 @@ class TestHaSearchEntitiesFieldsProjectionAreaBranches:
     @pytest.mark.asyncio
     async def test_domain_listing_branch_projects(self, search_tool_populated):
         """The end-pass projects the domain-listing branch (empty query +
-        domain_filter; client.get_states drives the result)."""
-        data = await search_tool_populated(
+        domain_filter; client.get_states drives the result): the non-always-keep
+        ``entities`` bucket is retained when requested and dropped when not."""
+        retained = await search_tool_populated(
+            domain_filter="light", fields=["entities"]
+        )
+        assert "entities" in retained
+        dropped = await search_tool_populated(
             domain_filter="light", fields=["search_type"]
         )
-        assert "success" in data
-        assert "search_type" in data
-        assert "entities" not in data
+        assert "success" in dropped
+        assert "entities" not in dropped
 
     @pytest.mark.asyncio
     async def test_domain_listing_branch_unprojected_baseline(
