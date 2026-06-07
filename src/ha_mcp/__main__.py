@@ -290,16 +290,24 @@ def _setup_standard_mode() -> None:
 
 
 def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict:
-    """Build common run_async kwargs for HTTP-based transports."""
-    return {
+    """Build common run_async kwargs for HTTP-based transports.
+
+    ``stateless_http`` is only meaningful for the Streamable-HTTP transport;
+    passing it alongside ``transport="sse"`` causes fastmcp's ``run_async``
+    to no-op and return immediately, which the calling ``_run_entrypoint``
+    surfaces as a silent ``sys.exit(0)``. See #1544 for the bisection.
+    """
+    kwargs: dict[str, Any] = {
         "transport": transport,
         "host": host,
         "port": port,
         "path": path,
         "show_banner": _get_show_banner(),
-        "stateless_http": True,
         "uvicorn_config": {"log_config": _get_timestamped_uvicorn_log_config()},
     }
+    if transport != "sse":
+        kwargs["stateless_http"] = True
+    return kwargs
 
 
 def _create_server() -> "HomeAssistantSmartMCPServer":
