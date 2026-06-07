@@ -677,6 +677,92 @@ class TestApplyScenePartialFlag:
             f"scene partial_reason fragments must be joined with ' ; '; got {reason!r}"
         )
 
+    def test_registry_failed_alone_does_not_promote_to_partial(self) -> None:
+        """``registry_failed`` is an explanatory rider on a real failure,
+        never a partial condition on its own. With no per-id failures or
+        budget skips, toggling ``registry_failed`` must produce the
+        *identical* (no-partial) response — it has zero independent effect.
+
+        Guards against a future edit that folds ``registry_failed`` into the
+        partial-trigger gate (the ``if not (failed or skipped)`` early return
+        in ``_apply_scene_partial_flag``): that would flag ``partial`` on
+        every transient registry hiccup that lost no data and re-noise the
+        Hue case this whole branch exists to quiet. Asserting the delta
+        (False vs True → same output) rather than just the True-case outcome
+        is what makes it tight — a test checking only the True case passes
+        even if ``registry_failed`` is the gate's only trigger.
+        """
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        base = {"failed": 0, "skipped": 0, "integration_skipped": 0}
+        without_rf: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            without_rf, {**base, "registry_failed": False}
+        )
+        with_rf: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            with_rf, {**base, "registry_failed": True}
+        )
+
+        # Zero independent effect: True is byte-for-byte the False output,
+        # and that output carries no partial flag.
+        assert with_rf == without_rf == {"success": True}
+        assert "partial" not in with_rf
+        assert "partial_reason" not in with_rf
+
+    def test_informational_clauses_omit_unknown_triad(self) -> None:
+        """The ``integration_skipped`` and ``registry_failed`` clauses are
+        deliberately informational: their match status is *known*, so they
+        must NOT carry the "not scanned / match status is unknown / not
+        exhaustive" triad the real-failure clause carries. A future edit
+        that appended any triad element to the integration clause would
+        silently re-introduce the Hue "everything failed" false alarm that
+        clause exists to prevent.
+
+        Asserted clause-by-clause (split on the ``" ; "`` separator) so the
+        negative checks target the informational clauses specifically. The
+        failure clause is asserted to STILL carry all three triad elements,
+        so the negatives can't pass vacuously on a triad-free reason.
+        """
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 2,
+                "skipped": 0,
+                "integration_skipped": 5,
+                "registry_failed": True,
+            },
+        )
+        assert response["partial"] is True
+        clauses = response["partial_reason"].split(" ; ")
+
+        failure_clause = next(c for c in clauses if "per-id fetch raised" in c)
+        integration_clause = next(c for c in clauses if "scored by attribute only" in c)
+        registry_clause = next(
+            c for c in clauses if "entity-registry fetch failed" in c.lower()
+        )
+
+        # Two-sided anchor: the real-failure clause carries all three
+        # triad elements.
+        assert "not scanned" in failure_clause
+        assert "match status is unknown" in failure_clause
+        assert "not exhaustive" in failure_clause
+
+        # The informational clauses must carry NONE of them.
+        for clause in (integration_clause, registry_clause):
+            assert "not scanned" not in clause, (
+                f"informational clause must not claim entities were not scanned: {clause!r}"
+            )
+            assert "match status is unknown" not in clause, (
+                f"informational clause must not claim unknown match status: {clause!r}"
+            )
+            assert "not exhaustive" not in clause, (
+                f"informational clause must not claim non-exhaustive: {clause!r}"
+            )
+
 
 class TestIndexSceneRegistryEntry:
     """Direct unit coverage of ``_index_scene_registry_entry``.

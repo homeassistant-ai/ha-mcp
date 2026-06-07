@@ -7,6 +7,7 @@ ensures entities referenced only inside automation/script conditions/actions
 """
 
 import asyncio
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -377,15 +378,20 @@ class TestAttemptCScriptParallelFetch:
 
 
 class TestYamlSkippedClassification:
-    """End-to-end coverage of the 404 → ``yaml_skipped`` classification.
+    """Component-level coverage of the 404 → ``yaml_skipped`` classification.
+
+    These tests drive ``_deep_search_automations`` / ``_deep_search_scripts``
+    directly and assert on their returned 4-tuple, pinning the
+    FETCH→CLASSIFY→COUNT path *inside* each per-type helper (wrong exception
+    type, wrong status-code attribute, wrong return slot) so a regression
+    surfaces here rather than silently misclassifying YAML-defined entities
+    as generic ``failed``. They stop at the helper return; the
+    public-entrypoint seam (``deep_search`` forwarding the 4th tuple slot
+    through ``_paginate_and_build_response`` into ``partial`` /
+    ``partial_reason``) is covered by ``TestYamlSkippedThroughDeepSearch``.
 
     The companion unit tests for ``_apply_per_type_partial_flag`` in
-    ``test_ha_search_merge.py`` cover the warning-assembly side. These
-    tests close the FETCH→CLASSIFY→COUNT structural gap so a regression
-    in the 404-detection branch (wrong exception type, wrong status
-    code attribute, wrong return slot, dropped counter through the
-    4-tuple unpack) surfaces here rather than silently misclassifying
-    YAML-defined entities as generic ``failed``.
+    ``test_ha_search_merge.py`` cover the warning-assembly side.
 
     The classification matters for find-references honesty: only the
     ``yaml_skipped`` warning explains the gap is *structural* (the
@@ -528,6 +534,49 @@ class TestYamlSkippedClassification:
         )
 
     @pytest.mark.asyncio
+    async def test_automation_none_status_code_classifies_as_failed(
+        self, mock_client, smart_tools
+    ):
+        """A ``HomeAssistantAPIError`` with the constructor-default
+        ``status_code=None`` must classify as ``failed`` — only an exact
+        404 triggers the structural ``yaml_skipped`` class, never any
+        ``HomeAssistantAPIError`` (a status-less API error is transient,
+        not a YAML-defined-entity signal)."""
+        automations = [
+            {
+                "entity_id": "automation.none_status",
+                "state": "on",
+                "attributes": {"friendly_name": "None Status", "id": "uid_none"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _per_id_none_status(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            # status_code defaults to None — not an explicit 404.
+            raise HomeAssistantAPIError("API error: connection reset")
+
+        mock_client._request = AsyncMock(side_effect=_per_id_none_status)
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            yaml_skipped_count,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {"automation.none_status": "uid_none"},
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert failed_count == 1, (
+            f"status_code=None must classify as failed, not yaml_skipped; got "
+            f"failed={failed_count}, yaml_skipped={yaml_skipped_count}"
+        )
+        assert yaml_skipped_count == 0
+
+    @pytest.mark.asyncio
     async def test_script_404_classifies_as_yaml_skipped(
         self, mock_client, smart_tools
     ):
@@ -578,9 +627,11 @@ class TestYamlSkippedClassification:
         self, mock_client, smart_tools
     ):
         """When some automations fetch successfully and others 404, only
-        the 404s count as ``yaml_skipped`` — the successful ones flow
-        into ``matches`` (or fall below threshold) without leaking into
-        any failure counter."""
+        the 404s count as ``yaml_skipped`` — and the successful UI-stored
+        automation flows into ``matches`` via its fetched config. The
+        query matches only inside ``ui_one``'s config body (not either
+        name), so a hit proves the success path fetched and scored the
+        config rather than name-matching."""
         automations = [
             {
                 "entity_id": "automation.ui_one",
@@ -602,7 +653,16 @@ class TestYamlSkippedClassification:
             if url.rstrip("/") == "/config/automation/config":
                 raise Exception("Bulk fetch unavailable")
             if url.endswith("uid_ui_one"):
-                return {"id": "uid_ui_one", "action": []}
+                # The query token lives only here, inside the config body.
+                return {
+                    "id": "uid_ui_one",
+                    "action": [
+                        {
+                            "service": "light.turn_on",
+                            "target": {"entity_id": "light.lockup_marker"},
+                        }
+                    ],
+                }
             raise HomeAssistantAPIError(
                 f"API error: 404 - Not Found ({url})", status_code=404
             )
@@ -610,7 +670,7 @@ class TestYamlSkippedClassification:
         mock_client._request = AsyncMock(side_effect=_mixed_per_id)
 
         (
-            _matches,
+            matches,
             skipped_count,
             failed_count,
             yaml_skipped_count,
@@ -620,7 +680,7 @@ class TestYamlSkippedClassification:
                 "automation.ui_one": "uid_ui_one",
                 "automation.yaml_one": "uid_yaml_one",
             },
-            query_lower="anything",
+            query_lower="lockup_marker",
             exact_match=False,
         )
         assert yaml_skipped_count == 1, (
@@ -629,3 +689,148 @@ class TestYamlSkippedClassification:
         )
         assert failed_count == 0
         assert skipped_count == 0
+        # Two-sided: the successful UI-stored automation must land in
+        # matches via its config body (the query matches nothing else).
+        matched_ids = [m["entity_id"] for m in matches]
+        assert matched_ids == ["automation.ui_one"], (
+            f"the UI-stored automation must match on its fetched config and "
+            f"the YAML 404 must not appear; got {matched_ids}"
+        )
+
+
+class TestYamlSkippedThroughDeepSearch:
+    """End-to-end coverage of the ``yaml_skipped`` seam through the public
+    ``deep_search`` entrypoint.
+
+    ``TestYamlSkippedClassification`` pins each per-type helper's returned
+    4-tuple; these tests pin the wiring *between* that return and the
+    response — ``deep_search`` unpacks the 4th slot (``_deep.py`` :130-133
+    / :151-154) and forwards it (:225-231) to ``_paginate_and_build_response``
+    → ``_apply_per_type_partial_flag``. A regression that unpacked the slot
+    but left ``automation_yaml_skipped=`` at its ``0`` default would ship a
+    ``partial: False`` response with no warning — the exact find-references
+    honesty bug this commit exists to fix — while every component-level test
+    still passed. These guard the gap by asserting the YAML fragment reaches
+    ``result["partial_reason"]`` via the public call.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        # Bulk fetch fails (triggers Tier 3 per-id fallback).
+        client._request = AsyncMock(side_effect=Exception("Bulk fetch unavailable"))
+        client.send_websocket_message = AsyncMock(
+            side_effect=Exception("WebSocket unavailable")
+        )
+        return client
+
+    @pytest.fixture
+    def smart_tools(self, mock_client):
+        return _make_tools(mock_client)
+
+    @pytest.mark.asyncio
+    async def test_automation_404_surfaces_partial_through_deep_search(
+        self, mock_client, smart_tools
+    ):
+        """An automation 404 driven through ``deep_search`` must set
+        ``result["partial"] is True`` and name the structural YAML gap in
+        ``result["partial_reason"]`` — pins the 4th-slot forward the
+        component tests can't see."""
+        automations = [
+            {
+                "entity_id": "automation.yaml_one",
+                "state": "on",
+                "attributes": {
+                    "friendly_name": "YAML One",
+                    "id": "uid_yaml_one",
+                },
+            },
+            {
+                "entity_id": "automation.yaml_two",
+                "state": "on",
+                "attributes": {
+                    "friendly_name": "YAML Two",
+                    "id": "uid_yaml_two",
+                },
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=automations)
+
+        async def _per_id_404(method: str, url: str) -> dict:
+            if url.rstrip("/") == "/config/automation/config":
+                raise Exception("Bulk fetch unavailable")
+            raise HomeAssistantAPIError(
+                f"API error: 404 - Not Found ({url})", status_code=404
+            )
+
+        mock_client._request = AsyncMock(side_effect=_per_id_404)
+
+        result = await smart_tools.deep_search(
+            query="anything",
+            search_types=["automation"],
+            limit=10,
+        )
+
+        assert result["partial"] is True, (
+            f"a YAML-defined automation 404 must flag partial through "
+            f"deep_search; got {result.get('partial')!r}"
+        )
+        reason = result["partial_reason"]
+        assert "likely YAML-defined automations" in reason, (
+            f"partial_reason must name the structural YAML gap; got {reason!r}"
+        )
+        # The count must flow through the seam too, not just the flag: two
+        # YAML automations 404, so the real yaml_skipped count (2) must
+        # reach the reason. Pins against a forward that hardcodes the slot
+        # (e.g. =1) instead of passing the actual count.
+        assert re.search(r"\b2 automation\(s\)", reason), (
+            f"partial_reason must carry the real yaml_skipped count (2) as a "
+            f"standalone token (not a substring of e.g. '12'); got {reason!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_script_404_surfaces_partial_through_deep_search(
+        self, mock_client, smart_tools
+    ):
+        """Mirror for the script fetch surface (``get_script_config``),
+        which forwards its own 4th slot (``script_yaml_skipped``)."""
+        scripts = [
+            {
+                "entity_id": "script.yaml_one",
+                "state": "off",
+                "attributes": {"friendly_name": "YAML One"},
+            },
+            {
+                "entity_id": "script.yaml_two",
+                "state": "off",
+                "attributes": {"friendly_name": "YAML Two"},
+            },
+        ]
+        mock_client.get_states = AsyncMock(return_value=scripts)
+
+        async def _script_404(sid: str) -> dict:
+            raise HomeAssistantAPIError(f"Script not found: {sid}", status_code=404)
+
+        mock_client.get_script_config = AsyncMock(side_effect=_script_404)
+
+        result = await smart_tools.deep_search(
+            query="anything",
+            search_types=["script"],
+            limit=10,
+        )
+
+        assert result["partial"] is True, (
+            f"a YAML-defined script 404 must flag partial through "
+            f"deep_search; got {result.get('partial')!r}"
+        )
+        reason = result["partial_reason"]
+        assert "likely YAML-defined scripts" in reason, (
+            f"partial_reason must name the structural YAML gap; got {reason!r}"
+        )
+        # The count must flow through the seam too (separate slot,
+        # script_yaml_skipped, via the get_script_config surface).
+        assert re.search(r"\b2 script\(s\)", reason), (
+            f"partial_reason must carry the real yaml_skipped count (2) as a "
+            f"standalone token (not a substring of e.g. '12'); got {reason!r}"
+        )
