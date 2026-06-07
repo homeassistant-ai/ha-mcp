@@ -43,6 +43,7 @@ verify:
 expected:
   tools_should_use:
     - ha_get_state
+    - ha_search
   description: >
     Plain state-lookup territory — `ha_get_state` (or `ha_search` with the
     exact entity_id) is the canonical pick. An agent that picks

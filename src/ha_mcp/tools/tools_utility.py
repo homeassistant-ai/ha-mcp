@@ -1099,6 +1099,22 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Home Assistant automations, scripts, and configurations. It provides real-time evaluation with
         access to all Home Assistant states, functions, and template variables.
 
+        **When to use (reach for this tool, don't compute it yourself):**
+        Any one-shot question whose answer is DERIVED from current HA state — an
+        average/sum/min/max across sensors, a count of entities matching a
+        condition, a boolean comparison, or a rendered message with live values.
+        One render call beats fetching N states and doing the math yourself, and
+        it is the canonical way to *test* a template before embedding it. This is
+        for one-shot answers and template testing only — NOT for putting templates
+        into automation logic; for `condition:` / `trigger:` positions native
+        constructs win (see "When NOT to use" below).
+        - "average temperature across the bedroom sensors"
+          -> `{{ ([states('sensor.a'), states('sensor.b')] | map('float') | sum) / 2 }}`
+        - "how many lights are on"
+          -> `{{ states.light | selectattr('state', 'eq', 'on') | list | count }}`
+        NOT for a plain single-entity value ("what's the state of X") — that is
+        `ha_get_state` / `ha_search`; rendering `{{ states('X') }}` there is over-use.
+
         **Parameters:**
         - template: The Jinja2 template string to evaluate
         - timeout: Maximum evaluation time in seconds (default: 3)

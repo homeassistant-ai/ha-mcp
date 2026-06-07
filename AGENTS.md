@@ -503,7 +503,7 @@ src/ha_mcp/
 `ha_<verb>_<noun>`:
 - `get` — single item (`ha_get_state`)
 - `list` — collections (`ha_list_services`)
-- `search` — filtered queries (`ha_search_entities`)
+- `search` — filtered queries (`ha_search`)
 - `set` — create/update (`ha_config_set_helper`)
 - `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
 - `remove` — remove registry items (`ha_remove_entity`, `ha_remove_area_or_floor`)
@@ -516,7 +516,7 @@ src/ha_mcp/
 **Accepted exceptions**: A small set of tools name a single, distinct operation where forcing a `<verb>_<noun>` shape would read worse than the natural name. These are accepted as-is and should not be flagged:
 - `ha_restart`, `ha_reload_core`, `ha_eval_template`
 - `ha_report_issue`, `ha_import_blueprint`
-- `ha_read_file`, `ha_write_file`, `ha_deep_search`, `ha_bulk_control`
+- `ha_read_file`, `ha_write_file`, `ha_bulk_control`
 - `ha_install_mcp_tools`
 
 **Adding new verbs**: When no existing verb fits a new tool's purpose, add the verb to the approved-verbs list above rather than forcing a poor fit. `.gemini/styleguide.md` points back to this section as the single source of truth, so updates here propagate automatically.
@@ -561,7 +561,7 @@ The single-line template is the default -- extend it only where it genuinely hel
 - One sentence describing what the tool does (not how)
 
 **Add `RELATED TOOLS` when** the tool is a workflow entry point and the natural next step is not obvious.
-Example: `ha_search_entities` hints at `ha_get_state`.
+Example: `ha_search` hints at `ha_get_state`.
 
 **Add `EXAMPLES` when** the tool has multiple modes or non-obvious parameters.
 Omit when a single required parameter makes the call self-evident.
