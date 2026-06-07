@@ -43,7 +43,7 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_search_entities
+    - ha_search
     - ha_config_set_dashboard
   description: >
     Agent should first search for light and climate entities, then create a

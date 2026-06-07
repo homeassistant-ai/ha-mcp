@@ -41,7 +41,7 @@ verify:
 expected:
   tools_should_use:
     - ha_list_floors_areas
-    - ha_search_entities
+    - ha_search
   description: >
     Agent should use area listing and entity search to build a comprehensive
     overview. Should report on multiple domains (lights, sensors, climate,

@@ -43,7 +43,7 @@ expected:
   tools_should_use:
     - ha_config_set_label
     - ha_config_get_label
-    - ha_search_entities
+    - ha_search
   description: >
     Agent should create two labels with the specified properties, then
     list labels to verify, and search for light entities to suggest

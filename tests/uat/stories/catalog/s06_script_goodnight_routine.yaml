@@ -39,7 +39,7 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_search_entities
+    - ha_search
     - ha_config_set_script
   description: >
     Agent should search for lights and climate entities, then create a script
