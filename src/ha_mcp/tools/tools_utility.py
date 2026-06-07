@@ -1099,6 +1099,20 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Home Assistant automations, scripts, and configurations. It provides real-time evaluation with
         access to all Home Assistant states, functions, and template variables.
 
+        **When NOT to use this for automation/script logic:**
+        Templates have legitimate uses (notification bodies, dynamic `data.*` values,
+        debugging existing templates), but `condition:` / `trigger:` positions and
+        action service names are better expressed as native HA constructs — they
+        validate at config load, fail loudly, and avoid silent runtime failures.
+        Prefer:
+        - `condition: numeric_state` over `{{ states('x') | float > N }}`
+        - `condition: state` over `{{ is_state(...) }}`
+        - `condition: time` / `condition: sun` over `now().hour` / `is_state('sun.sun', ...)`
+        - Native `for:` field on state/numeric_state triggers and state conditions over
+          `{{ now() - X.last_changed > timedelta(...) }}` duration math
+        - `choose` action over templated `service:` / `action:` strings
+        See `ha_get_skill_guide` (best-practices skill) for the full anti-pattern list.
+
         **When to use (reach for this tool, don't compute it yourself):**
         Any one-shot question whose answer is DERIVED from current HA state — an
         average/sum/min/max across sensors, a count of entities matching a
@@ -1107,7 +1121,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         it is the canonical way to *test* a template before embedding it. This is
         for one-shot answers and template testing only — NOT for putting templates
         into automation logic; for `condition:` / `trigger:` positions native
-        constructs win (see "When NOT to use" below).
+        constructs win (see "When NOT to use" above).
         - "average temperature across the bedroom sensors"
           -> `{{ ([states('sensor.a'), states('sensor.b')] | map('float', 0) | sum) / 2 }}`
         - "how many lights are on"
@@ -1178,20 +1192,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         {{ area_entities('living_room') }}             # Get entities in area
         {{ device_id('light.bedroom') }}               # Get device ID for entity
         ```
-
-        **When NOT to use this for automation/script logic:**
-        Templates have legitimate uses (notification bodies, dynamic `data.*` values,
-        debugging existing templates), but `condition:` / `trigger:` positions and
-        action service names are better expressed as native HA constructs — they
-        validate at config load, fail loudly, and avoid silent runtime failures.
-        Prefer:
-        - `condition: numeric_state` over `{{ states('x') | float > N }}`
-        - `condition: state` over `{{ is_state(...) }}`
-        - `condition: time` / `condition: sun` over `now().hour` / `is_state('sun.sun', ...)`
-        - Native `for:` field on state/numeric_state triggers and state conditions over
-          `{{ now() - X.last_changed > timedelta(...) }}` duration math
-        - `choose` action over templated `service:` / `action:` strings
-        See `ha_get_skill_guide` (best-practices skill) for the full anti-pattern list.
 
         **Common Use Cases (legitimate template positions):**
 
