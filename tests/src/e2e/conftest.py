@@ -1741,7 +1741,8 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             # Container cleanup runs via the enclosing ``with container:``
             # block's ``__exit__`` (calls ``stop()`` which removes the
             # container). With ``TESTCONTAINERS_RYUK_DISABLED=true`` set in
-            # the CI workflow env (see .github/workflows/{pr,e2e-tests}.yml)
+            # the CI workflow env (see
+            # .github/workflows/{pr,e2e-tests,performance-tests}.yml)
             # the with-block exit IS the only cleanup mechanism — Python's
             # context-manager protocol guarantees ``__exit__`` fires on
             # both normal and exception flows, so the Ryuk reaper safety
