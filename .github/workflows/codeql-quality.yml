@@ -6,9 +6,12 @@ name: CodeQL Code Quality
 # (--source-root .):
 #   - python      vendored fixtures under tests/initial_test_state/ are dropped
 #                 by scripts/codeql_quality_gate.py's PATHS_IGNORE.
-#   - javascript  covers first-party server JS (src/), the Astro docs site
-#                 (site/), and test JS; the same PATHS_IGNORE drops the vendored
-#                 fixture tree.
+#   - javascript  scans the JS/TS family (.js/.mjs/.cjs/.ts/.tsx/.jsx) across the
+#                 whole tree — first-party src/, the Astro site's .mjs config,
+#                 and test JS; the same PATHS_IGNORE drops the vendored fixture
+#                 tree. (CodeQL does not extract .astro component scripts, but
+#                 .astro is in the path triggers below so site/ edits still run
+#                 the gate.)
 #
 # Why a custom workflow instead of GitHub's Code Quality page:
 #   - GitHub Code Quality (Preview) is gated to Team/Enterprise Cloud org plans;
@@ -28,6 +31,12 @@ on:
     paths:
       - '**.py'
       - '**.js'
+      - '**.mjs'
+      - '**.cjs'
+      - '**.jsx'
+      - '**.ts'
+      - '**.tsx'
+      - '**.astro'
       - '.github/workflows/codeql-quality.yml'
       - 'scripts/codeql_quality_gate.py'
   push:
@@ -35,6 +44,12 @@ on:
     paths:
       - '**.py'
       - '**.js'
+      - '**.mjs'
+      - '**.cjs'
+      - '**.jsx'
+      - '**.ts'
+      - '**.tsx'
+      - '**.astro'
   workflow_dispatch:
 
 concurrency:
