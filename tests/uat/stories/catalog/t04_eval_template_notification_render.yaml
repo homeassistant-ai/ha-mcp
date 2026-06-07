@@ -10,11 +10,13 @@ description: >
   template would do without actually rendering it, or rewrites the template
   speculatively. Part of issue #1175 item 2 BAT.
 
-  Caveat: `trigger.*` / `this.*` / loop-vars render as undefined outside
-  automation runtime context. A good response acknowledges this and renders
-  the `now()` / `states(...)` parts that DO have context. See KP13's
-  research note on issue #1175 (comment 4597070298) for the runtime-context
-  edge case.
+  Caveat: `trigger.*` / `this.*` / loop-vars are undefined outside automation
+  runtime context — and accessing an attribute on undefined `trigger` *raises*
+  in `ha_eval_template` (verified live) unless guarded, so the template wraps it
+  as `(trigger | default({})).entity_id | default(...)` to render at all. A good
+  response renders successfully, with the `trigger` part falling back to the
+  default while `now()` / `states(...)` have real context. See KP13's research
+  note on issue #1175 (comment 4597070298) for the runtime-context edge case.
 
 tags:
   - template
@@ -31,7 +33,7 @@ setup:
 prompt: >
   Before I put this in an automation, what does this notification template
   render to right now?
-  `Door {{ trigger.entity_id | default('input_boolean.bat_t04_door') }} is
+  `Door {{ (trigger | default({})).entity_id | default('input_boolean.bat_t04_door') }} is
   {{ states('input_boolean.bat_t04_door') }} as of {{ now().strftime('%H:%M') }}`
 
 teardown: []
