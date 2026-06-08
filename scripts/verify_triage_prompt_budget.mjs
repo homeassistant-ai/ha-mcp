@@ -117,6 +117,14 @@ console.log("Triage prompt budget checks (self-imposed target", TOKEN_BUDGET, "t
   check("changelog trimmed before body, body untouched", r.log.length < 60000 && r.body.length === 4000, `log ${r.log.length}, body ${r.body.length}`);
 }
 
+// 3b. Changelog-floor clamp exercised: framing alone dominates the budget, so
+//     changelog is trimmed down to exactly CHANGELOG_FLOOR. Pins the constant
+//     the same way 1c/2b pin the author and body floors.
+{
+  const r = fitToBudget({ staticText: x(40000), issueBody: x(2000), changelog: x(50000) });
+  check("changelog clamped exactly to floor when framing dominates", r.log.length === CHANGELOG_FLOOR, `got ${r.log.length} chars`);
+}
+
 // 4. Ordering: duplicates are dropped before the body or changelog is touched,
 //    and the body survives intact when dropping duplicates alone suffices.
 {

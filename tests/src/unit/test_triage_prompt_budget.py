@@ -114,8 +114,8 @@ def _assemble_framing_chars(text: str) -> int:
     the static string literals in its array plus the ``jsonSchema`` it
     references, joined by newlines. The per-issue and trimmable variable
     sections (issueBody/authorSection/duplicateSection/changelog, number,
-    title, type, keywords) are excluded — they are inputs the budgeter trims,
-    not fixed framing.
+    title, type, keywords) are excluded — they are per-issue variable values
+    (some trimmed by the budgeter, some bounded upstream), not fixed framing.
     """
     block = re.search(r"const assemble = \(o = \{\}\) => \[(.*?)\]\.join", text, re.S)
     assert block, "could not locate assemble() array in workflow"
@@ -135,11 +135,19 @@ def test_static_framing_within_harness_assumption() -> None:
     harness's "worst case fits budget" guarantee — the workflow only warns
     about it at runtime, after the prompt has already shipped over budget.
     """
-    assumed = re.search(r"staticText:\s*x\((\d+)\)", _HARNESS.read_text())
-    assert assumed, "could not find staticText worst-case stand-in in harness"
+    # The worst-case "fits budget" check uses the SMALLEST staticText stand-in;
+    # the larger ones (checks 1c/2b/3b) are inflated on purpose to force the
+    # floor clamps and must not be mistaken for the framing assumption. Bind to
+    # min() rather than the first match so a future reorder of the harness
+    # checks can't silently relax this guard.
+    stand_ins = [
+        int(n) for n in re.findall(r"staticText:\s*x\((\d+)\)", _HARNESS.read_text())
+    ]
+    assert stand_ins, "could not find any staticText stand-in in harness"
+    assumed = min(stand_ins)
     framing = _assemble_framing_chars(_WORKFLOW.read_text())
-    assert framing <= int(assumed.group(1)), (
+    assert framing <= assumed, (
         f"assemble() fixed framing is ~{framing} chars but the harness worst-case "
-        f"assumes staticText <= {assumed.group(1)}; trim the framing or raise the "
-        f"harness staticText (and re-check the budget headroom)."
+        f"assumes staticText <= {assumed}; trim the framing or raise the harness "
+        f"staticText (and re-check the budget headroom)."
     )
