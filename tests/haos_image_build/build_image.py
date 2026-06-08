@@ -644,30 +644,47 @@ _ADDON_INSTALL_RETRY_DELAY = 20.0
 def _install_addon_with_retry(
     ws: HAWebSocket, slug: str, *, timeout: float, attempts: int = 2
 ) -> None:
-    """POST an add-on install, retrying once on a transient Supervisor build failure.
+    """POST an add-on install, retrying once on a transient build/connection failure.
 
-    Heavy add-on images build inside Supervisor and occasionally fail with a
-    generic ``unknown_error`` ("...while trying to build the image...") when a
+    Heavy add-on images build inside Supervisor and occasionally fail when a
     base-image pull, an apt mirror, or the npm registry hiccups mid-build.
     balloob's Puppet add-on (apt-installs Chromium + ``npm ci`` from
     ``debian:bullseye-slim``) is the usual victim — it has failed ~13 s into the
-    build right after a WS reconnect, while the very same version builds cleanly
-    on a re-run. That is transient, so reload the store and retry once rather
-    than failing the whole ~25 min bake. A genuinely broken add-on fails again
-    and the error propagates unchanged.
+    build, while the very same version builds cleanly on a re-run. The failure
+    surfaces two ways and we retry both: Supervisor returns a ``WSCommandError``,
+    OR — because the build can outlast a flaky link (the motivating failure also
+    logged a Bad-file-descriptor WS drop mid-bake) — the WS connection drops and
+    ``supervisor_api`` raises a transport error (``OSError`` / ``TimeoutError`` /
+    a ``websockets`` ``ConnectionClosed``). We re-establish the session before
+    retrying so a dead connection doesn't doom the retry, rather than failing the
+    whole ~25 min bake. A genuinely broken add-on fails again and propagates.
     """
+    # websockets lives only in the build venv (imported lazily elsewhere for the
+    # same reason), so fold its drop exception into the retry tuple lazily.
+    try:
+        from websockets.exceptions import WebSocketException
+
+        transient: tuple[type[BaseException], ...] = (
+            WSCommandError,
+            OSError,
+            TimeoutError,
+            WebSocketException,
+        )
+    except ImportError:
+        transient = (WSCommandError, OSError, TimeoutError)
+
     for attempt in range(1, attempts + 1):
         try:
             ws.supervisor_api(
                 f"/store/addons/{slug}/install", method="post", timeout=timeout
             )
             return
-        except WSCommandError as e:
+        except transient as e:
             if attempt >= attempts:
                 raise
             LOG.warning(
-                "add-on %s install attempt %d/%d failed (%s); reloading store "
-                "and retrying in %.0fs",
+                "add-on %s install attempt %d/%d failed (%s); reconnecting, "
+                "reloading store and retrying in %.0fs",
                 slug,
                 attempt,
                 attempts,
@@ -675,7 +692,18 @@ def _install_addon_with_retry(
                 _ADDON_INSTALL_RETRY_DELAY,
             )
             time.sleep(_ADDON_INSTALL_RETRY_DELAY)
-            _reload_store(ws)
+            # The build may have outlasted a flaky WS link, so re-establish the
+            # session before retrying. Best-effort: a reconnect/reload hiccup
+            # must not pre-empt the retry — the next attempt surfaces any real
+            # failure, and exhausting ``attempts`` re-raises.
+            try:
+                ws.reconnect()
+                _reload_store(ws)
+            except transient + (RuntimeError, AssertionError) as prep_err:
+                LOG.warning(
+                    "reconnect/store-reload before retry failed (%r); retrying anyway",
+                    prep_err,
+                )
 
 
 def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
@@ -1132,7 +1160,7 @@ def stage_puppet_addon_source(qcow2: Path) -> None:
         raise RuntimeError(
             f"Vendored Puppet add-on source not found at {src} — the "
             f"home-assistant-addons submodule is not checked out. Run "
-            f"`git submodule update --init --recursive`."
+            f"`git submodule update --init`."
         )
 
     LOG.info(
@@ -1765,9 +1793,9 @@ def build(work_dir: Path, output: Path) -> None:
             # Supervisor auto-discovery (slug-suffix match on _ha_mcp_dev)
             # finds a target on first start.
             install_webhook_proxy_addon(ws)
-            # Screenshot engine = balloob's Puppet, installed from its add-on
-            # repository (boot=manual, empty token; the runtime fixture injects
-            # a real HA access token and starts it).
+            # Screenshot engine = balloob's Puppet, staged as a local add-on
+            # from the pinned submodule (boot=manual, empty token; the runtime
+            # fixture injects a real HA access token and starts it).
             install_puppet_addon(ws)
             install_advanced_ssh(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED

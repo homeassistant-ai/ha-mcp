@@ -1,11 +1,11 @@
 """Dashboard screenshot-engine addon runtime E2E for the HAOS test tier.
 
-The screenshot engine is balloob's **Puppet** add-on, installed from its
-add-on repository into the qcow2 with ``boot: manual`` and an empty
-``access_token`` (see
-``tests/haos_image_build/build_image.py::install_puppet_addon``). The bake
-validates that the addon installs cleanly and pre-builds its Chromium Docker
-image.
+The screenshot engine is balloob's **Puppet** add-on, vendored as a pinned
+submodule and staged as a local add-on (``local_puppet``) into the qcow2 with
+``boot: manual`` and an empty ``access_token`` (see
+``tests/haos_image_build/build_image.py::stage_puppet_addon_source`` /
+``install_puppet_addon``). The bake validates that the addon installs cleanly
+and pre-builds its Chromium Docker image.
 
 The engine authenticates the headless browser with a Home Assistant
 long-lived/user access token — the add-on's Supervisor token is NOT a valid

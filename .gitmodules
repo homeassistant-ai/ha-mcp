@@ -4,5 +4,5 @@
 	branch = main
 [submodule "tests/haos_image_build/vendor/home-assistant-addons"]
 	path = tests/haos_image_build/vendor/home-assistant-addons
-	url = https://github.com/balloob/home-assistant-addons
+	url = https://github.com/balloob/home-assistant-addons.git
 	branch = main
