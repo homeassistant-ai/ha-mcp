@@ -837,15 +837,14 @@ async def wait_for_entities_registered_via_ws(
     entity_id in ``expected_entity_ids`` is either in that sample or has
     produced a ``state_changed`` event. The sample-after-subscribe order
     mirrors the other event-driven waiters in this module
-    (``_ws_wait_for_predicate``). Avoids the chronic 10s
-    ``ha_list_states`` polling burn observed in the HAOS bulk-fixture
-    wait (#1349 audit) and the full-timeout stall when callers create
-    entities before waiting (#1515).
+    (``_ws_wait_for_predicate``). Avoids the chronic 10s REST polling
+    burn observed in the HAOS bulk-fixture wait (#1349 audit) and the
+    full-timeout stall when callers create entities before waiting
+    (#1515).
 
-    Pairs with a subsequent ``ha_list_states`` call (or per-entity
-    ``ha_get_state``) for a final correctness check — this helper only
-    confirms HA has published the entity to the state machine; the
-    caller does the authoritative read.
+    Pairs with a subsequent per-entity ``ha_get_state`` call for a final
+    correctness check — this helper only confirms HA has published the
+    entity to the state machine; the caller does the authoritative read.
 
     Args:
         expected_entity_ids: The set of entity_ids whose registration we

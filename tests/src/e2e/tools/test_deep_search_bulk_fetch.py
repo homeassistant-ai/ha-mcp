@@ -133,11 +133,19 @@ async def bulk_automations(mcp_client):
                     return False
             return True
 
-        await wait_for_condition(
+        registered = await wait_for_condition(
             all_entities_registered,
             condition_name=f"All {len(created_ids)} bulk automations registered (fallback)",
             timeout=10,
         )
+        if not registered:
+            # Fail loudly at setup rather than yielding unregistered entities,
+            # which would surface as a confusing search-assertion failure
+            # downstream instead of a clear "setup couldn't register" error.
+            pytest.fail(
+                f"bulk automations never registered after WS + REST waits "
+                f"(WS saw {len(seen)}/{len(created_ids)})"
+            )
 
     yield created_ids
 
@@ -195,11 +203,16 @@ async def bulk_scripts(mcp_client):
                     return False
             return True
 
-        await wait_for_condition(
+        registered = await wait_for_condition(
             all_scripts_registered,
             condition_name=f"All {len(created_ids)} bulk scripts registered (fallback)",
             timeout=10,
         )
+        if not registered:
+            pytest.fail(
+                f"bulk scripts never registered after WS + REST waits "
+                f"(WS saw {len(seen)}/{len(expected_entity_ids)})"
+            )
 
     yield created_ids
 

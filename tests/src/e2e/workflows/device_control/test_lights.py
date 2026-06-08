@@ -419,8 +419,11 @@ class TestDeviceControl:
         assert_mcp_success(temp_result, "set temperature")
         logger.info("✅ Temperature setting command executed")
 
-        # Test HVAC mode setting (wait=False for the same reason — see above;
-        # this test asserts only on final attributes, not verified state).
+        # Test HVAC mode setting. wait=False here because this test asserts
+        # only on the final attributes read below, never the verified state, so
+        # the post-call state-change wait is pure overhead. (Unlike
+        # set_temperature, set_hvac_mode does move the primary state, so its
+        # wait would usually resolve quickly — but it's still unneeded here.)
         mode_result = await mcp_client.call_tool(
             "ha_call_service",
             {

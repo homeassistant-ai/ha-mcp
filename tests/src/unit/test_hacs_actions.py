@@ -15,9 +15,18 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.tools_hacs import (
     HACS_ADD_REGISTRATION_TIMEOUT,
+    HACS_REPO_REGISTRATION_TIMEOUT,
     HACS_RESOLVE_REGISTRATION_TIMEOUT,
     HacsTools,
 )
+
+
+def test_resolve_budget_is_shorter_than_post_add_budget() -> None:
+    """The resolve budget must stay materially shorter than the 30s post-add
+    registration budget; a regression back to the slow value would re-open the
+    #1515 not-found stall, which the equality assertion below would not catch."""
+    assert HACS_RESOLVE_REGISTRATION_TIMEOUT < HACS_REPO_REGISTRATION_TIMEOUT
+    assert HACS_RESOLVE_REGISTRATION_TIMEOUT <= 10
 
 
 async def _identity_timezone(_client, data):
