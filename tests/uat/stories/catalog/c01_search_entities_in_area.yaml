@@ -3,8 +3,9 @@ title: "Enumerate entities of a domain in a specific area (ha_search registry-li
 category: entity
 weight: 3
 description: >
-  Routing probe for #1175 BAT. The user asks for entities of a given domain in
-  a given area — a pure entity-registry question ("what entities exist"). After
+  Mode-discrimination probe for #1175 BAT. The user asks for entities of a
+  given domain in a given area — a pure entity-registry question ("what
+  entities exist"). After
   #1529 folded the former ha_search_entities and ha_deep_search into a single
   ha_search, the discrimination is no longer which TOOL to pick but which MODE
   of ha_search the agent drives it in:
@@ -30,7 +31,7 @@ tags:
   - search
   - entities
   - area_filter
-  - routing_1175
+  - mode_discrimination_1175
 
 setup: []
   # Read-only — no writes against the target HA instance.
