@@ -93,10 +93,16 @@ _STATE_CHANGING_SERVICES = {
     "media_stop",
 }
 
-# Domains where service calls don't produce entity state changes
+# Domains where a service call does not move the TARGET entity's own primary
+# state to a value the verifier can wait for. ``scene`` belongs here with
+# ``automation``/``script``: activating a scene changes the member entities,
+# but the scene entity's own state is a last-activated timestamp that never
+# becomes "on"/"off" — so waiting for ``turn_on`` -> "on" always times out and
+# only appends a spurious "could not be verified" warning (~10s wasted).
 _NON_STATE_CHANGING_DOMAINS = {
     "automation",
     "script",
+    "scene",
     "homeassistant",
     "notify",
     "tts",

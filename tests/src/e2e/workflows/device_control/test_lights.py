@@ -312,9 +312,15 @@ class TestDeviceControl:
 
             for i, operation_id in enumerate(operation_ids):
                 try:
+                    # Status here is purely informational (asserted nowhere
+                    # below). WS-resolvable ops complete sub-second; an op
+                    # whose target equals the light's current state never emits
+                    # a state_changed event and would otherwise sit PENDING for
+                    # the full timeout. 3s caps that waste without losing the
+                    # informational snapshot (#1515).
                     status_result = await mcp_client.call_tool(
                         "ha_get_operation_status",
-                        {"operation_id": operation_id, "timeout_seconds": 10},
+                        {"operation_id": operation_id, "timeout_seconds": 3},
                     )
 
                     status_data = parse_mcp_result(status_result)
@@ -394,7 +400,11 @@ class TestDeviceControl:
         entity_data = validate_entity_state(initial_data, climate_entity)
         logger.info(f"🌡️ Initial climate state: {entity_data['state']}")
 
-        # Test temperature setting
+        # Test temperature setting. wait=False: set_temperature only moves the
+        # `temperature` ATTRIBUTE, not the entity's primary state, so the
+        # tool's state-change verifier would wait out its full 10s timeout for
+        # a change that never comes (the test only inspects attributes below,
+        # never the verified state) — #1515.
         temp_result = await mcp_client.call_tool(
             "ha_call_service",
             {
@@ -402,13 +412,18 @@ class TestDeviceControl:
                 "service": "set_temperature",
                 "entity_id": climate_entity,
                 "data": {"temperature": 22},
+                "wait": False,
             },
         )
 
         assert_mcp_success(temp_result, "set temperature")
         logger.info("✅ Temperature setting command executed")
 
-        # Test HVAC mode setting
+        # Test HVAC mode setting. wait=False here because this test asserts
+        # only on the final attributes read below, never the verified state, so
+        # the post-call state-change wait is pure overhead. (Unlike
+        # set_temperature, set_hvac_mode does move the primary state, so its
+        # wait would usually resolve quickly — but it's still unneeded here.)
         mode_result = await mcp_client.call_tool(
             "ha_call_service",
             {
@@ -416,6 +431,7 @@ class TestDeviceControl:
                 "service": "set_hvac_mode",
                 "entity_id": climate_entity,
                 "data": {"hvac_mode": "heat"},
+                "wait": False,
             },
         )
 
