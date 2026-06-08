@@ -35,13 +35,18 @@ DISCOVERY_PATHS = [
 
 
 @pytest.fixture
-def oauth_app():
+def oauth_app(tmp_path, monkeypatch):
     """Assemble the real OAuth-enabled ASGI app (FastMCP + our provider).
 
     Mirrors ``_run_oauth_server``: construct the server, attach the provider to
     ``mcp.auth``, then build the HTTP app. ``stateless_http=True`` avoids needing
     the MCP session lifespan, which the plain well-known GET routes do not require.
+
+    Constructing the provider persists an HMAC secret (and any registered
+    clients) under ``get_data_dir()``, so redirect it to a temp dir to keep the
+    test hermetic — mirrors the ``isolate_data_dir`` fixture in ``test_oauth.py``.
     """
+    monkeypatch.setattr("ha_mcp.auth.provider.get_data_dir", lambda: tmp_path)
     server = FastMCP("test")
     server.auth = HomeAssistantOAuthProvider(base_url=BASE_URL)
     return server.http_app(path="/mcp", stateless_http=True)
