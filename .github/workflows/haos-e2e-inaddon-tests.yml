@@ -94,6 +94,13 @@ jobs:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
 
+      - name: Report image-acquisition path
+        # Surfaces whether this run hit the (master-primed) Actions cache or
+        # falls through to the GHCR pull — so the cache-prime's effect is
+        # observable in the run summary. See build-haos-test-image.yml.
+        run: |
+          echo "::notice title=HAOS image cache::cache-hit=${{ steps.restore-cache.outputs.cache-hit }} key=${{ steps.key.outputs.cache-key }}"
+
       - name: Install QEMU + OVMF + libguestfs
         run: |
           sudo apt-get update

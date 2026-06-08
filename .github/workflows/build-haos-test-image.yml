@@ -267,3 +267,48 @@ jobs:
           oras tag "$versioned" "${HAOS_VERSION}-${TAG_SUFFIX}"
           echo "Pushed $versioned"
           echo "Pushed $moving"
+
+      # --- Warm the shared Actions cache (master only) -----------------------
+      # The E2E lanes (haos-e2e-tests.yml / haos-e2e-inaddon-tests.yml) restore
+      # the qcow2 from the Actions cache and fall back to this GHCR image on a
+      # miss. Today nothing primes that cache except a PR run's lazy save, which
+      # is branch-scoped — so every new PR branch starts cold and pays the GHCR
+      # pull (and the ~6.8 GB blob is ~68% of the 10 GB repo cache cap, so it
+      # LRU-evicts fast). Saving the same blob under the same key here, on the
+      # default branch, lets PR runs restore it via GitHub's default-branch
+      # cache scope and skip the GHCR pull. Purely additive: on a miss/eviction
+      # the lanes fall back to GHCR exactly as before (#1515).
+      - name: Compute E2E image cache key (master only)
+        id: e2e_cache_key
+        if: github.ref == 'refs/heads/master'
+        # Best-effort: the GHCR push above already published the image, so a
+        # prime hiccup must not fail the publish job — PRs just fall back to
+        # GHCR as before.
+        continue-on-error: true
+        # INVARIANT: this git ls-tree MUST stay byte-identical to the
+        # "Compute image cache key" step in BOTH haos-e2e-tests.yml and
+        # haos-e2e-inaddon-tests.yml — otherwise this warms a key the lanes
+        # never restore (a wasted prime, not a stale test: the lanes still
+        # recompute their own correct key). Keep all three (plus this file's
+        # push-trigger paths) in sync.
+        run: |
+          hash=$(git ls-tree -r HEAD \
+            tests/haos_image_build \
+            tests/initial_test_state \
+            custom_components/ha_mcp_tools \
+            homeassistant-addon-webhook-proxy \
+            | sha256sum | cut -d' ' -f1 | head -c16)
+          echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
+          # Move to the exact path the lanes restore to. /tmp and the workspace
+          # share the runner's root filesystem, so this is a rename (no extra
+          # disk). The artifact upload + GHCR push above already consumed the
+          # workspace copy, so nothing later needs it.
+          mv haos-test-image.qcow2 /tmp/haos-test-image.qcow2
+
+      - name: Warm shared Actions cache for E2E lanes (master only)
+        if: github.ref == 'refs/heads/master' && steps.e2e_cache_key.outputs.cache-key != ''
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: /tmp/haos-test-image.qcow2
+          key: ${{ steps.e2e_cache_key.outputs.cache-key }}
