@@ -69,6 +69,11 @@ define what ha-mcp does and doesn't defend against (trusted MCP clients, local
 network boundary, OAuth Bearer token design, single-tenant standard mode, HA
 permission scope).
 
+**Security advisories:** The API exposes an advisory's body but not its
+discussion thread, where the maintainer disposition (dismiss-vs-fix and the
+agreed fix scope) lives. Confirm the scope from that thread (GitHub UI or ask a
+maintainer) before writing the fix.
+
 ## External Documentation
 
 When implementing features or debugging, consult these resources:
