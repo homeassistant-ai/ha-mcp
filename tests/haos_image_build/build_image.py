@@ -629,6 +629,48 @@ def _reload_store(ws: HAWebSocket) -> None:
     ws.supervisor_api("/store/reload", method="post", timeout=120.0)
 
 
+# Wall-clock pause before retrying a transient add-on build failure, giving a
+# flaky apt mirror / npm registry / base-image pull a moment to recover.
+_ADDON_INSTALL_RETRY_DELAY = 20.0
+
+
+def _install_addon_with_retry(
+    ws: HAWebSocket, slug: str, *, timeout: float, attempts: int = 2
+) -> None:
+    """POST an add-on install, retrying once on a transient Supervisor build failure.
+
+    Heavy add-on images build inside Supervisor and occasionally fail with a
+    generic ``unknown_error`` ("...while trying to build the image...") when a
+    base-image pull, an apt mirror, or the npm registry hiccups mid-build.
+    balloob's Puppet add-on (apt-installs Chromium + ``npm ci`` from
+    ``debian:bullseye-slim``) is the usual victim — it has failed ~13 s into the
+    build right after a WS reconnect, while the very same version builds cleanly
+    on a re-run. That is transient, so reload the store and retry once rather
+    than failing the whole ~25 min bake. A genuinely broken add-on fails again
+    and the error propagates unchanged.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            ws.supervisor_api(
+                f"/store/addons/{slug}/install", method="post", timeout=timeout
+            )
+            return
+        except WSCommandError as e:
+            if attempt >= attempts:
+                raise
+            LOG.warning(
+                "add-on %s install attempt %d/%d failed (%s); reloading store "
+                "and retrying in %.0fs",
+                slug,
+                attempt,
+                attempts,
+                e,
+                _ADDON_INSTALL_RETRY_DELAY,
+            )
+            time.sleep(_ADDON_INSTALL_RETRY_DELAY)
+            _reload_store(ws)
+
+
 def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
     """Resolve an addon's Supervisor slug by name from the live store.
 
@@ -746,7 +788,7 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
         _reload_store(ws)
     slug = _discover_slug(ws, addon)
     LOG.info("Installing %s (slug=%s)", addon.name, slug)
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+    _install_addon_with_retry(ws, slug, timeout=900.0)
 
     overrides = _ADDON_OPTION_OVERRIDES.get(addon.name)
     if overrides:
@@ -1083,7 +1125,7 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
     """
     slug = _discover_slug(ws, ADVANCED_SSH_ADDON)
     LOG.info("Installing Advanced SSH (slug=%s) for inaddon CI diagnostics", slug)
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=600.0)
+    _install_addon_with_retry(ws, slug, timeout=600.0)
     # Schema: ssh.username, ssh.password, ssh.authorized_keys (list),
     # ssh.sftp (bool), ssh.compatibility_mode (bool); top-level:
     # apks (list), packages (list), init_commands (list)
@@ -1160,7 +1202,7 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     LOG.info("Installing ha-mcp dev addon (slug=%s) — building Docker image...", slug)
     # 900s install timeout matches the existing install_addons flow and
     # covers the worst-case from-scratch uv sync + image build.
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+    _install_addon_with_retry(ws, slug, timeout=900.0)
 
     # Pre-set every dev-channel flag the test suite relies on so the addon
     # exposes the full tool surface (mirrors the env-var setup in conftest's
@@ -1258,7 +1300,7 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
     # 900s matches the dev-addon timeout. Webhook-proxy build is much
     # cheaper (no uv sync, stdlib-only start.py) but keep the headroom in
     # case the python:3.13-slim base layer pull is slow on first install.
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+    _install_addon_with_retry(ws, slug, timeout=900.0)
 
     # Pin mcp_server_url to the dev addon's host-network URL so the
     # addon skips auto-discovery on subsequent starts (no race against
@@ -1319,7 +1361,7 @@ def install_puppet_addon(ws: HAWebSocket) -> str:
     )
     # Generous timeout: Debian + Chromium + Node + npm-ci is the heaviest
     # addon build in the bake.
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=1800.0)
+    _install_addon_with_retry(ws, slug, timeout=1800.0)
 
     LOG.info("Setting Puppet addon options (boot=manual, empty token)")
     ws.supervisor_api(
