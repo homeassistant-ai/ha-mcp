@@ -6,6 +6,10 @@ on:
     paths:
       - 'src/ha_mcp/tools/**'
       - 'scripts/extract_tools.py'
+  # Allow a manual resync against the current master tip — e.g. to recover
+  # after a push race dropped a sync commit — without having to land an
+  # unrelated tool change just to re-trigger.
+  workflow_dispatch:
 
 # Restrict permissions by default
 permissions:
@@ -51,7 +55,25 @@ jobs:
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add site/src/data/tools.json README.md homeassistant-addon/DOCS.md
-        if ! git diff --staged --quiet; then
-          git commit -m "chore(internal): sync tool docs after merge [skip ci]"
-          git push
+        if git diff --staged --quiet; then
+          echo "No tool-doc changes to sync."
+          exit 0
         fi
+        git commit -m "chore(internal): sync tool docs after merge [skip ci]"
+        # master can advance between this job's checkout and its push whenever
+        # any unrelated PR merges in the same window, which rejects a bare push
+        # as a non-fast-forward (the concurrency group only serialises sync runs
+        # against each other, not against ordinary merges). Rebase onto the
+        # latest master and retry before giving up. cancel-in-progress guarantees
+        # no competing sync run, so the only thing to rebase over is unrelated
+        # commits that do not touch the generated files — never a conflict.
+        for attempt in 1 2 3 4 5; do
+          if git push; then
+            echo "Synced tool docs (attempt ${attempt})."
+            exit 0
+          fi
+          echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
+          git pull --rebase origin master
+        done
+        echo "::error::Could not push tool-doc sync after 5 attempts."
+        exit 1
