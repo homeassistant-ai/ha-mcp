@@ -2400,7 +2400,11 @@ const ADVANCED_FIELD_META = {
   verify_ssl:          { label: "Verify SSL certificates",     help: "Skip TLS verification only on trusted networks (self-signed certs, hostname mismatch). Restart required." },
   fuzzy_threshold:     { label: "Fuzzy-search threshold",      help: "Lower = looser entity match. Range 0–100." },
   entity_search_limit: { label: "Entity search result limit",  help: "Max entities returned by ha_search_entities. Range 1–1000." },
+  automation_config_time_budget: { label: "Automation config time budget (s)", help: "Max seconds ha_search/ha_deep_search spends fetching automation configs before returning a partial result. Raise on instances with many automations. Range 1–600. Restart required." },
+  script_config_time_budget:     { label: "Script config time budget (s)",     help: "Max seconds ha_search/ha_deep_search spends fetching script configs before returning a partial result. Range 1–600. Restart required." },
+  scene_config_time_budget:      { label: "Scene config time budget (s)",      help: "Max seconds ha_search/ha_deep_search spends fetching scene configs before returning a partial result. Range 1–600. Restart required." },
   backup_hint:         { label: "Backup-hint level",           help: "Tunes how strongly the LLM is prompted to take a full-HA snapshot before risky writes." },
+  dashboard_screenshot_engine_url: { label: "Dashboard screenshot engine URL", help: "Base URL of the screenshot engine (e.g. http://puppet:10000). Leave blank to auto-discover the Puppet add-on via the Supervisor (HA OS / Supervised). Only used when the Dashboard Screenshot beta feature is enabled. Takes effect without a restart." },
   enable_websocket:    { label: "Enable WebSocket",            help: "WebSocket-based state monitoring. Disabling falls back to polling — many tools degrade. Restart required." },
   enabled_tool_modules: { label: "Enabled tool modules",       help: "Comma-separated module names, or 'all'. Restricts which tool registry modules load at startup. Restart required." },
   enable_dashboard_partial_tools: { label: "Dashboard partial-update tools", help: "Token-efficient partial dashboard tools. Disable for clients with programmatic tool use." },
@@ -2430,6 +2434,12 @@ const ADVANCED_RESTART_REQUIRED = new Set([
   // lazy-init singleton (tools/smart_search.py) — changes
   // need restart to rebuild the searcher.
   "fuzzy_threshold",
+  // The three smart-search time budgets are read once at import by
+  // SmartSearchTools' _config module (singleton), so a change needs a
+  // restart. dashboard_screenshot_engine_url is intentionally absent —
+  // it is resolved live per capture, so it takes effect immediately.
+  "automation_config_time_budget", "script_config_time_budget",
+  "scene_config_time_budget",
   "code_mode_max_duration", "code_mode_max_memory",
   "code_mode_max_recursion", "code_mode_max_invocations",
   "code_mode_saved_tools_path",

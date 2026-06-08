@@ -903,8 +903,9 @@ class DeepSearchMixin(SceneSearchMixin):
                 f"{automation_skipped} automation(s) not scanned (time budget "
                 "exhausted) — their match status is unknown; this result is "
                 "not exhaustive. Pass `config_time_budget=` on `ha_search` to "
-                "raise the per-call limit (or set "
-                "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET for the default)."
+                "raise the per-call limit (or, for the default, set "
+                "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET or the matching field in "
+                "the web Settings UI's Advanced section)."
             )
         if automation_failed:
             reasons.append(
@@ -925,8 +926,9 @@ class DeepSearchMixin(SceneSearchMixin):
                 f"{script_skipped} script(s) not scanned (time budget "
                 "exhausted) — their match status is unknown; this result is "
                 "not exhaustive. Pass `config_time_budget=` on `ha_search` to "
-                "raise the per-call limit (or set "
-                "HAMCP_SCRIPT_CONFIG_TIME_BUDGET for the default)."
+                "raise the per-call limit (or, for the default, set "
+                "HAMCP_SCRIPT_CONFIG_TIME_BUDGET or the matching field in "
+                "the web Settings UI's Advanced section)."
             )
         if script_failed:
             reasons.append(

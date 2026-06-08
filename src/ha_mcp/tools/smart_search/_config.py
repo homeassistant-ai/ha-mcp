@@ -5,11 +5,7 @@ smart-search mixins and the public ``smart_search`` shell can both depend
 on it without creating an import cycle.
 """
 
-import logging
-import os
-
-logger = logging.getLogger(__name__)
-
+from ha_mcp.config import get_global_settings
 
 # Default concurrency limit for parallel operations
 DEFAULT_CONCURRENCY_LIMIT = 20
@@ -20,22 +16,17 @@ BULK_WEBSOCKET_TIMEOUT = 3.0  # Timeout for bulk WebSocket calls
 INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
 
 
-# Time budgets for fallback individual fetching (in seconds).
-# Configurable via env vars for instances with many automations/scripts.
-def _env_float(key: str, default: float) -> float:
-    raw = os.environ.get(key)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except (ValueError, TypeError):
-        logger.warning(f"Invalid value for {key}={raw!r}, using default {default}")
-        return default
-
-
-AUTOMATION_CONFIG_TIME_BUDGET = _env_float("HAMCP_AUTOMATION_CONFIG_TIME_BUDGET", 30.0)
-SCRIPT_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCRIPT_CONFIG_TIME_BUDGET", 20.0)
-SCENE_CONFIG_TIME_BUDGET = _env_float("HAMCP_SCENE_CONFIG_TIME_BUDGET", 20.0)
+# Time budgets for fallback individual fetching (in seconds). Sourced from
+# the resolved Settings (issue #1538) so the env var, the web Settings UI
+# override file, and the field defaults all flow through one precedence path
+# — and so add-on users (who cannot set raw env vars) can tune them from the
+# Advanced panel. Read once at import as module-level constants; a change
+# takes effect on the next MCP-host restart (advanced settings already
+# carry a restart-required notice in the UI).
+_settings = get_global_settings()
+AUTOMATION_CONFIG_TIME_BUDGET = _settings.automation_config_time_budget
+SCRIPT_CONFIG_TIME_BUDGET = _settings.script_config_time_budget
+SCENE_CONFIG_TIME_BUDGET = _settings.scene_config_time_budget
 
 # Batch size for parallel individual config fetches (Attempt C fallback)
 INDIVIDUAL_FETCH_BATCH_SIZE = 10
