@@ -201,11 +201,18 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # ``_ha_mcp`` / ``_ha_mcp_dev``, so the dev addon installed just before this
 # one (slug=``local_ha_mcp_dev``) is the discovery target.
 HA_MCP_WEBHOOK_PROXY_ADDON_SLUG = "local_ha_mcp_webhook_proxy"
-# Screenshot engine = balloob's Puppet add-on, installed from its add-on
-# repository during the bake (no longer vendored in-repo). The slug is
-# SHA-derived from the repo URL, so it's resolved at install time by name.
-PUPPET_REPO_URL = "https://github.com/balloob/home-assistant-addons"
-PUPPET_ADDON = Addon(repo=PUPPET_REPO_URL, name="Puppet", start=False)
+# Screenshot engine = balloob's Puppet add-on, VENDORED as a pinned git
+# submodule (tests/haos_image_build/vendor/home-assistant-addons) rather than
+# registering balloob's live add-on repo in Supervisor. Pinning decouples the
+# bake from balloob's repo HEAD / availability and makes a transient repo-side
+# issue a Renovate-PR failure instead of a random master-build failure;
+# Renovate's git-submodules manager bumps the pin via reviewed, CI-gated PRs.
+# Staged into the qcow2 as a LOCAL add-on (stage_puppet_addon_source), so
+# Supervisor assigns slug ``local_<config-slug>`` -> ``local_puppet``.
+PUPPET_VENDOR_DIR = (
+    Path(__file__).resolve().parent / "vendor" / "home-assistant-addons" / "puppet"
+)
+PUPPET_ADDON_SLUG = "local_puppet"
 # Advanced SSH addon user/password set at install time so the runtime
 # helper (``haos_runtime.ssh_exec``) can authenticate non-interactively.
 # CI-test-only credential — overridable via env so the value never has
@@ -629,6 +636,76 @@ def _reload_store(ws: HAWebSocket) -> None:
     ws.supervisor_api("/store/reload", method="post", timeout=120.0)
 
 
+# Wall-clock pause before retrying a transient add-on build failure, giving a
+# flaky apt mirror / npm registry / base-image pull a moment to recover.
+_ADDON_INSTALL_RETRY_DELAY = 20.0
+
+
+def _install_addon_with_retry(
+    ws: HAWebSocket, slug: str, *, timeout: float, attempts: int = 2
+) -> None:
+    """POST an add-on install, retrying once on a transient build/connection failure.
+
+    Heavy add-on images build inside Supervisor and occasionally fail when a
+    base-image pull, an apt mirror, or the npm registry hiccups mid-build.
+    balloob's Puppet add-on (apt-installs Chromium + ``npm ci`` from
+    ``debian:bullseye-slim``) is the usual victim — it has failed ~13 s into the
+    build, while the very same version builds cleanly on a re-run. The failure
+    surfaces two ways and we retry both: Supervisor returns a ``WSCommandError``,
+    OR — because the build can outlast a flaky link (the motivating failure also
+    logged a Bad-file-descriptor WS drop mid-bake) — the WS connection drops and
+    ``supervisor_api`` raises a transport error (``OSError`` / ``TimeoutError`` /
+    a ``websockets`` ``ConnectionClosed``). We re-establish the session before
+    retrying so a dead connection doesn't doom the retry, rather than failing the
+    whole ~25 min bake. A genuinely broken add-on fails again and propagates.
+    """
+    # websockets lives only in the build venv (imported lazily elsewhere for the
+    # same reason), so fold its drop exception into the retry tuple lazily.
+    try:
+        from websockets.exceptions import WebSocketException
+
+        transient: tuple[type[BaseException], ...] = (
+            WSCommandError,
+            OSError,
+            TimeoutError,
+            WebSocketException,
+        )
+    except ImportError:
+        transient = (WSCommandError, OSError, TimeoutError)
+
+    for attempt in range(1, attempts + 1):
+        try:
+            ws.supervisor_api(
+                f"/store/addons/{slug}/install", method="post", timeout=timeout
+            )
+            return
+        except transient as e:
+            if attempt >= attempts:
+                raise
+            LOG.warning(
+                "add-on %s install attempt %d/%d failed (%s); reconnecting, "
+                "reloading store and retrying in %.0fs",
+                slug,
+                attempt,
+                attempts,
+                e,
+                _ADDON_INSTALL_RETRY_DELAY,
+            )
+            time.sleep(_ADDON_INSTALL_RETRY_DELAY)
+            # The build may have outlasted a flaky WS link, so re-establish the
+            # session before retrying. Best-effort: a reconnect/reload hiccup
+            # must not pre-empt the retry — the next attempt surfaces any real
+            # failure, and exhausting ``attempts`` re-raises.
+            try:
+                ws.reconnect()
+                _reload_store(ws)
+            except transient + (RuntimeError, AssertionError) as prep_err:
+                LOG.warning(
+                    "reconnect/store-reload before retry failed (%r); retrying anyway",
+                    prep_err,
+                )
+
+
 def _discover_slug(ws: HAWebSocket, addon: Addon) -> str:
     """Resolve an addon's Supervisor slug by name from the live store.
 
@@ -746,7 +823,7 @@ def _install_one(ws: HAWebSocket, addon: Addon) -> str:
         _reload_store(ws)
     slug = _discover_slug(ws, addon)
     LOG.info("Installing %s (slug=%s)", addon.name, slug)
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+    _install_addon_with_retry(ws, slug, timeout=900.0)
 
     overrides = _ADDON_OPTION_OVERRIDES.get(addon.name)
     if overrides:
@@ -1066,6 +1143,74 @@ def stage_webhook_proxy_addon_source(qcow2: Path) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def stage_puppet_addon_source(qcow2: Path) -> None:
+    """Bake the vendored Puppet screenshot add-on into the qcow2 as a local add-on.
+
+    Runs BEFORE first start_qemu so HAOS boots with the local add-on visible to
+    Supervisor's local store (slug ``local_puppet``). The source is the pinned
+    ``home-assistant-addons`` submodule's ``puppet/`` directory, copied verbatim:
+    its config.yaml has no ``image:`` field (so Supervisor builds from the local
+    Dockerfile) and the Dockerfile's ``COPY ha-puppet/ ...`` paths are already
+    addon-dir-relative, so unlike the ha-mcp dev add-on no Dockerfile patch or
+    ``image:`` strip is needed. ``install_puppet_addon`` builds it during the
+    running phase, so the heavy Chromium build is cached into the qcow2 once.
+    """
+    src = PUPPET_VENDOR_DIR
+    if not (src / "config.yaml").exists() or not (src / "Dockerfile").exists():
+        raise RuntimeError(
+            f"Vendored Puppet add-on source not found at {src} — the "
+            f"home-assistant-addons submodule is not checked out. Run "
+            f"`git submodule update --init`."
+        )
+
+    LOG.info(
+        "Staging vendored Puppet add-on source into qcow2 "
+        "/supervisor/addons/local/puppet/"
+    )
+    workdir = Path(tempfile.mkdtemp(prefix="haos-puppet-addon-"))
+    try:
+        staging = workdir / "puppet"
+        shutil.copytree(src, staging)
+
+        seed_tar = workdir / "puppet.tar"
+        _run(
+            [
+                "tar",
+                "--numeric-owner",
+                "--owner=0",
+                "--group=0",
+                "-C",
+                str(workdir),
+                "-cf",
+                str(seed_tar),
+                "puppet",
+            ]
+        )
+        _run(
+            [
+                "guestfish",
+                "--rw",
+                "-a",
+                str(qcow2),
+                "run",
+                ":",
+                "mount",
+                "/dev/sda8",
+                "/",
+                ":",
+                "mkdir-p",
+                "/supervisor/addons/local",
+                ":",
+                "tar-in",
+                str(seed_tar),
+                "/supervisor/addons/local",
+            ]
+        )
+        LOG.info("Puppet add-on source staged at /supervisor/addons/local/puppet/")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def install_advanced_ssh(ws: HAWebSocket) -> str:
     """Install + configure Advanced SSH & Web Terminal for CI diagnostics.
 
@@ -1083,7 +1228,7 @@ def install_advanced_ssh(ws: HAWebSocket) -> str:
     """
     slug = _discover_slug(ws, ADVANCED_SSH_ADDON)
     LOG.info("Installing Advanced SSH (slug=%s) for inaddon CI diagnostics", slug)
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=600.0)
+    _install_addon_with_retry(ws, slug, timeout=600.0)
     # Schema: ssh.username, ssh.password, ssh.authorized_keys (list),
     # ssh.sftp (bool), ssh.compatibility_mode (bool); top-level:
     # apks (list), packages (list), init_commands (list)
@@ -1160,7 +1305,7 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
     LOG.info("Installing ha-mcp dev addon (slug=%s) — building Docker image...", slug)
     # 900s install timeout matches the existing install_addons flow and
     # covers the worst-case from-scratch uv sync + image build.
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+    _install_addon_with_retry(ws, slug, timeout=900.0)
 
     # Pre-set every dev-channel flag the test suite relies on so the addon
     # exposes the full tool surface (mirrors the env-var setup in conftest's
@@ -1258,7 +1403,7 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
     # 900s matches the dev-addon timeout. Webhook-proxy build is much
     # cheaper (no uv sync, stdlib-only start.py) but keep the headroom in
     # case the python:3.13-slim base layer pull is slow on first install.
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=900.0)
+    _install_addon_with_retry(ws, slug, timeout=900.0)
 
     # Pin mcp_server_url to the dev addon's host-network URL so the
     # addon skips auto-discovery on subsequent starts (no race against
@@ -1292,12 +1437,14 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
 
 
 def install_puppet_addon(ws: HAWebSocket) -> str:
-    """Install balloob's Puppet screenshot engine from its add-on repository.
+    """Install the vendored Puppet screenshot engine as a LOCAL add-on.
 
-    Registers balloob's add-on repository, then installs the Puppet add-on so
-    Supervisor builds its Chromium image into the cached qcow2 (the heavy build
-    is paid once per cache-key change). The slug is SHA-derived from the repo
-    URL, so it's resolved by name from the live store after registration.
+    The add-on source is staged into /supervisor/addons/local/puppet/ before
+    first boot (``stage_puppet_addon_source``), so Supervisor's local-store
+    scanner picks it up as ``local_puppet``. We reload the store to be explicit,
+    then install — which builds the Chromium image into the cached qcow2 (the
+    heavy build is paid once per cache-key change). No balloob repo is
+    registered; the pinned submodule is the only source.
 
     Install-only — ``boot`` is set to ``manual`` so the cached qcow2 doesn't
     auto-start it on resume (the haos_only test starts it via a module
@@ -1307,19 +1454,18 @@ def install_puppet_addon(ws: HAWebSocket) -> str:
     the addon then. The other required options are seeded with defaults so the
     runtime fixture only has to update the token.
 
-    Returns the installed slug (``<repo-hash>_puppet``).
+    Returns the installed slug (``local_puppet``).
     """
-    _add_repository(ws, PUPPET_REPO_URL)
     _reload_store(ws)
-    slug = _discover_slug(ws, PUPPET_ADDON)
+    slug = PUPPET_ADDON_SLUG
     LOG.info(
-        "Installing Puppet screenshot engine (slug=%s) — building the Chromium "
-        "Docker image; this is the slowest addon build, cached in the qcow2...",
+        "Installing vendored Puppet screenshot engine (slug=%s) — building the "
+        "Chromium Docker image; this is the slowest addon build, cached in the qcow2...",
         slug,
     )
     # Generous timeout: Debian + Chromium + Node + npm-ci is the heaviest
     # addon build in the bake.
-    ws.supervisor_api(f"/store/addons/{slug}/install", method="post", timeout=1800.0)
+    _install_addon_with_retry(ws, slug, timeout=1800.0)
 
     LOG.info("Setting Puppet addon options (boot=manual, empty token)")
     ws.supervisor_api(
@@ -1627,10 +1773,11 @@ def build(work_dir: Path, output: Path) -> None:
     # independent), but the install order below DOES — the webhook-proxy's
     # auto-discovery needs the dev addon present at first start.
     stage_webhook_proxy_addon_source(qcow2)
-    # The screenshot engine (balloob's Puppet) is NOT staged — it's installed
-    # from balloob's add-on repository during the running phase below
-    # (install_puppet_addon), which builds its Chromium image into the cached
-    # qcow2.
+    # The screenshot engine (balloob's Puppet) is staged from the pinned
+    # home-assistant-addons submodule as a local add-on; install_puppet_addon
+    # builds its Chromium image into the cached qcow2 during the running phase
+    # below.
+    stage_puppet_addon_source(qcow2)
     qemu = start_qemu(qcow2, work_dir)
     base_url = f"http://127.0.0.1:{HA_HOST_PORT}"
     try:
@@ -1646,9 +1793,9 @@ def build(work_dir: Path, output: Path) -> None:
             # Supervisor auto-discovery (slug-suffix match on _ha_mcp_dev)
             # finds a target on first start.
             install_webhook_proxy_addon(ws)
-            # Screenshot engine = balloob's Puppet, installed from its add-on
-            # repository (boot=manual, empty token; the runtime fixture injects
-            # a real HA access token and starts it).
+            # Screenshot engine = balloob's Puppet, staged as a local add-on
+            # from the pinned submodule (boot=manual, empty token; the runtime
+            # fixture injects a real HA access token and starts it).
             install_puppet_addon(ws)
             install_advanced_ssh(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED

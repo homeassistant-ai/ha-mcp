@@ -77,11 +77,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Required for tests/src/e2e/tools/test_skills_resources.py — the
-          # skills bundle lives at src/ha_mcp/resources/skills-vendor. Kept
-          # in parity with haos-e2e-tests.yml even though the publish bake
-          # itself doesn't touch the submodule, so the two checkout shapes
-          # don't drift.
+          # Required for the bake's submodules: the skills bundle at
+          # src/ha_mcp/resources/skills-vendor (test_skills_resources.py) AND
+          # the vendored Puppet add-on at
+          # tests/haos_image_build/vendor/home-assistant-addons, which
+          # stage_puppet_addon_source bakes into the qcow2 (it hard-fails
+          # without the submodule checked out).
           submodules: true
 
       - name: Install build dependencies
