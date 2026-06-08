@@ -98,3 +98,42 @@ def test_trim_order_in_sync() -> None:
     harness_order = _trim_order(_HARNESS.read_text(), _HARNESS_TRIM_MARKERS)
     assert workflow_order == _CANONICAL_TRIM_ORDER, workflow_order
     assert harness_order == _CANONICAL_TRIM_ORDER, harness_order
+
+
+_LITERAL = re.compile(r"'((?:[^'\\]|\\.)*)'")
+
+
+def _assemble_framing_chars(text: str) -> int:
+    """Approximate the fixed framing build_prompt's ``assemble()`` always emits:
+    the static string literals in its array plus the ``jsonSchema`` it
+    references, joined by newlines. The per-issue and trimmable variable
+    sections (issueBody/authorSection/duplicateSection/changelog, number,
+    title, type, keywords) are excluded — they are inputs the budgeter trims,
+    not fixed framing.
+    """
+    block = re.search(r"const assemble = \(o = \{\}\) => \[(.*?)\]\.join", text, re.S)
+    assert block, "could not locate assemble() array in workflow"
+    framing = sum(len(s) for s in _LITERAL.findall(block.group(1)))
+    schema = re.search(r"const jsonSchema =(.*?);", text, re.S)
+    assert schema, "could not locate jsonSchema in workflow"
+    framing += sum(len(s) for s in _LITERAL.findall(schema.group(1)))
+    # join('\n') inserts a newline between array elements; counting source lines
+    # in the block is a conservative (over-)estimate of those newlines.
+    framing += block.group(1).count("\n")
+    return framing
+
+
+def test_static_framing_within_harness_assumption() -> None:
+    """Fail if the real assemble() framing outgrows the harness's worst-case
+    ``staticText`` stand-in. Otherwise framing growth silently invalidates the
+    harness's "worst case fits budget" guarantee — the workflow only warns
+    about it at runtime, after the prompt has already shipped over budget.
+    """
+    assumed = re.search(r"staticText:\s*x\((\d+)\)", _HARNESS.read_text())
+    assert assumed, "could not find staticText worst-case stand-in in harness"
+    framing = _assemble_framing_chars(_WORKFLOW.read_text())
+    assert framing <= int(assumed.group(1)), (
+        f"assemble() fixed framing is ~{framing} chars but the harness worst-case "
+        f"assumes staticText <= {assumed.group(1)}; trim the framing or raise the "
+        f"harness staticText (and re-check the budget headroom)."
+    )

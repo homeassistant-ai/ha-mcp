@@ -62,7 +62,7 @@ const check = (name, cond, detail = "") => {
 
 const x = (n) => "x".repeat(n);
 
-console.log("Triage prompt budget checks (cap 8000 tokens, target", TOKEN_BUDGET, "):");
+console.log("Triage prompt budget checks (self-imposed target", TOKEN_BUDGET, "tokens, under the 8000 model cap):");
 
 // 1. Real worst case: full framing + 4 BM25 candidates @ ~1200 chars + a
 //    16000-char body + a large release-context block + long author comments.
@@ -84,6 +84,14 @@ console.log("Triage prompt budget checks (cap 8000 tokens, target", TOKEN_BUDGET
   const r = fitToBudget({ staticText: x(7000), issueBody: x(4000), authorSection: x(80000) });
   check("long author comments trimmed to fit", r.tokens <= TOKEN_BUDGET, `got ${r.tokens} tokens`);
   check("author trimmed before body, body untouched", r.author.length < 80000 && r.body.length === 4000, `author ${r.author.length}, body ${r.body.length}`);
+}
+
+// 1c. Author-floor clamp exercised: framing alone dominates the budget, so
+//     authorSection is trimmed down to exactly AUTHOR_FLOOR (the Math.max
+//     clamp). Pins the constant the same way 2b pins the body floor.
+{
+  const r = fitToBudget({ staticText: x(40000), issueBody: x(2000), authorSection: x(50000) });
+  check("author clamped exactly to floor when framing dominates", r.author.length === AUTHOR_FLOOR, `got ${r.author.length} chars`);
 }
 
 // 2. Huge body alone fits (body truncated, floor not yet binding).
