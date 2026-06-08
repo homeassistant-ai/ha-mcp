@@ -31,11 +31,6 @@ ALLOWLIST: set[str] = {
     # Advanced Settings or Feature Flags panels.
     "DISABLED_TOOLS",
     "PINNED_TOOLS",
-    # Screenshot-engine URL is a deployment-environment connection string
-    # (the Docker/Container sidecar path), not a user-facing UI toggle — it
-    # is deliberately env/.env-only and absent from every override registry.
-    # See the comment on dashboard_screenshot_engine_url in config.py.
-    "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL",
 }
 
 
@@ -367,6 +362,45 @@ def test_scanner_detects_all_direct_read_forms() -> None:
         "J_SETDEFAULT",
         "M_POP",
     }
+
+
+def test_every_advanced_field_has_a_settings_js_label() -> None:
+    """The Advanced GET handler is data-driven over ADVANCED_SETTINGS_FIELDS,
+    but settings.js looks up each row's label/help in ``ADVANCED_FIELD_META``
+    (falling back to the raw snake_case field name). A row added to config.py
+    without a matching JS entry silently degrades the UI — guard against that
+    drift (issue #1538 added three rows that initially lacked entries)."""
+    import re
+
+    js = (_package_dir() / "settings.js").read_text(encoding="utf-8")
+    m = re.search(r"const ADVANCED_FIELD_META = \{(.*?)\n\};", js, re.S)
+    assert m, "ADVANCED_FIELD_META object not found in settings.js"
+    meta_keys = set(
+        re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{", m.group(1), re.M)
+    )
+    missing = sorted({f.field for f in ADVANCED_SETTINGS_FIELDS} - meta_keys)
+    assert not missing, (
+        "ADVANCED_SETTINGS_FIELDS rows missing an ADVANCED_FIELD_META entry in "
+        f"settings.js (they would render with a raw field-name label): {missing}."
+    )
+
+
+def test_screenshot_engine_url_is_surfaced_as_editable_advanced_field() -> None:
+    """#1538: the screenshot engine URL is env-settable (docker/.env) but was
+    invisible to add-on users. It must now be an editable Advanced row, no
+    longer on the env-only ALLOWLIST."""
+    row = next(
+        (
+            r
+            for r in ADVANCED_SETTINGS_FIELDS
+            if r.field == "dashboard_screenshot_engine_url"
+        ),
+        None,
+    )
+    assert row is not None, "dashboard_screenshot_engine_url must be an advanced field"
+    assert row.ftype is str
+    assert row.editable is True
+    assert "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL" not in ALLOWLIST
 
 
 def test_advanced_registries_are_name_disjoint() -> None:
