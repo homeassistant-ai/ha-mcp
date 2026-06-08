@@ -160,14 +160,15 @@ jobs:
             | tar -xz -C /tmp oras
 
           dest=/tmp/haos-pull
-          # Retry ONLY on a genuine hang — zero download progress for 7 full
-          # minutes. A slow-but-moving pull (legit pulls have taken ~10 min) is
-          # never interrupted; only a dead-connection stall (the ~17 min
-          # zero-progress hang in #1515) is killed and re-pulled. 2 tries keeps
-          # even the both-stall -> local-build worst case well under the 45-min
-          # job cap, which stays the hard backstop.
-          stall_secs=420
-          attempts=2
+          # Bail to the local build on a genuine hang — zero download progress
+          # for 4 minutes. A slow-but-moving pull (legit pulls have taken
+          # ~10 min) is never interrupted; only a dead-connection stall (the
+          # ~17 min zero-progress hang in #1515) is killed. We do NOT re-pull:
+          # the local-build fallback is only ~10 min (build_image.py), so on a
+          # stall deferring to it is cheaper and more reliable than gambling on
+          # a same-runner re-pull that may just stall again. The 45-min job cap
+          # stays the hard backstop.
+          stall_secs=240
 
           pull_once() {
             rm -rf "$dest"; mkdir -p "$dest"
@@ -181,7 +182,7 @@ jobs:
               if [ "$size" -gt "$last" ]; then
                 last=$size; last_progress=$SECONDS          # any growth resets the clock
               elif [ $(( SECONDS - last_progress )) -ge "$stall_secs" ]; then
-                echo "::warning::oras pull made zero progress for ${stall_secs}s (stuck at ${size} bytes) — killing to retry"
+                echo "::warning::oras pull made zero progress for ${stall_secs}s (stuck at ${size} bytes) — using local build"
                 kill "$pid" 2>/dev/null || true
                 wait "$pid" 2>/dev/null || true
                 return 1
@@ -190,14 +191,8 @@ jobs:
             wait "$pid"                                       # propagate oras's own exit code
           }
 
-          ok=
-          for a in $(seq 1 "$attempts"); do
-            echo "GHCR pull attempt ${a}/${attempts}"
-            if pull_once; then ok=1; break; fi
-            echo "::warning::GHCR pull attempt ${a} did not complete; retrying"
-          done
-          if [ -z "$ok" ]; then
-            echo "::warning::all ${attempts} GHCR pull attempts stalled/failed — using local build"
+          if ! pull_once; then
+            echo "::warning::GHCR pull stalled/failed — falling through to the local build"
             exit 1
           fi
           # Explicit source path so a future oras layout change that drops
