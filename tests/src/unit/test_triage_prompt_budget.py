@@ -98,3 +98,56 @@ def test_trim_order_in_sync() -> None:
     harness_order = _trim_order(_HARNESS.read_text(), _HARNESS_TRIM_MARKERS)
     assert workflow_order == _CANONICAL_TRIM_ORDER, workflow_order
     assert harness_order == _CANONICAL_TRIM_ORDER, harness_order
+
+
+# Match a JS string literal in any quote style (', ", or `). The backreference
+# requires the same quote to close, so a quote of a different style inside the
+# literal (e.g. the double quotes inside the single-quoted jsonSchema) is body,
+# not a new literal — finditer's non-overlapping scan then counts each string
+# once. Single-quote-only would silently under-count if framing ever switched
+# quote style.
+_LITERAL = re.compile(r"""(['"`])((?:(?!\1)[^\\]|\\.)*)\1""")
+
+
+def _assemble_framing_chars(text: str) -> int:
+    """Approximate the fixed framing build_prompt's ``assemble()`` always emits:
+    the static string literals in its array plus the ``jsonSchema`` it
+    references, joined by newlines. The per-issue and trimmable variable
+    sections (issueBody/authorSection/duplicateSection/changelog, number,
+    title, type, keywords) are excluded — they are per-issue variable values
+    (some trimmed by the budgeter, some bounded upstream), not fixed framing.
+    """
+    block = re.search(r"const assemble = \(o = \{\}\) => \[(.*?)\]\.join", text, re.S)
+    assert block, "could not locate assemble() array in workflow"
+    framing = sum(len(m.group(2)) for m in _LITERAL.finditer(block.group(1)))
+    schema = re.search(r"const jsonSchema =(.*?);", text, re.S)
+    assert schema, "could not locate jsonSchema in workflow"
+    framing += sum(len(m.group(2)) for m in _LITERAL.finditer(schema.group(1)))
+    # join('\n') inserts a newline between array elements; counting source lines
+    # in the block is a conservative (over-)estimate of those newlines.
+    framing += block.group(1).count("\n")
+    return framing
+
+
+def test_static_framing_within_harness_assumption() -> None:
+    """Fail if the real assemble() framing outgrows the harness's worst-case
+    ``staticText`` stand-in. Otherwise framing growth silently invalidates the
+    harness's "worst case fits budget" guarantee — the workflow only warns
+    about it at runtime, after the prompt has already shipped over budget.
+    """
+    # The worst-case "fits budget" check uses the SMALLEST staticText stand-in;
+    # the larger ones (checks 1c/2b/3b) are inflated on purpose to force the
+    # floor clamps and must not be mistaken for the framing assumption. Bind to
+    # min() rather than the first match so a future reorder of the harness
+    # checks can't silently relax this guard.
+    stand_ins = [
+        int(n) for n in re.findall(r"staticText:\s*x\((\d+)\)", _HARNESS.read_text())
+    ]
+    assert stand_ins, "could not find any staticText stand-in in harness"
+    assumed = min(stand_ins)
+    framing = _assemble_framing_chars(_WORKFLOW.read_text())
+    assert framing <= assumed, (
+        f"assemble() fixed framing is ~{framing} chars but the harness worst-case "
+        f"assumes staticText <= {assumed}; trim the framing or raise the harness "
+        f"staticText (and re-check the budget headroom)."
+    )

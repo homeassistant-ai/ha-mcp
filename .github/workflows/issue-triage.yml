@@ -790,7 +790,8 @@ jobs:
               return { status: resp.status, data };
             };
 
-            // gpt-4o-mini: 16K input token free-tier limit (vs 8K for gpt-4.1).
+            // gpt-4o-mini on GitHub Models enforces an 8000-token input cap (issue #1514);
+            // build_prompt budgets the prompt under it. gpt-4o shares the same cap.
             // Retry on 5xx with exponential backoff; fall back to gpt-4o on 429;
             // on 413 (prompt over the model's input cap) retry once with the
             // minimal prompt. The prompt is already budgeted in build_prompt.
