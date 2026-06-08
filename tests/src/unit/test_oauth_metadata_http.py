@@ -161,4 +161,27 @@ async def test_metadata_endpoint_allows_cors_preflight(oauth_app, discovery_path
         )
 
     assert resp.status_code in (200, 204)
-    assert resp.headers.get("access-control-allow-origin") in ("*", "https://claude.ai")
+    # cors_middleware configures allow_origins="*", so the preflight echoes "*".
+    # Pin it exactly: a regression that narrowed or dropped CORS should fail here.
+    assert resp.headers.get("access-control-allow-origin") == "*"
+    # The preflight must advertise GET, or the browser blocks the discovery fetch.
+    assert "GET" in resp.headers.get("access-control-allow-methods", "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("discovery_path", DISCOVERY_PATHS)
+async def test_metadata_endpoint_rejects_non_get(oauth_app, discovery_path):
+    """Non-GET methods are rejected — the routes advertise only GET/OPTIONS.
+
+    Pins the method contract declared in ``provider.get_routes()`` so a refactor
+    that widened the allowed methods (or made the route a catch-all) is caught.
+    """
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=oauth_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(discovery_path, json={})
+
+    assert resp.status_code == 405, (
+        f"POST {discovery_path} returned {resp.status_code}, expected 405 "
+        "(discovery routes should allow only GET/OPTIONS)"
+    )
