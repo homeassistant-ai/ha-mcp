@@ -81,7 +81,10 @@ _STATE_CHANGING_SERVICES = {
     "set_temperature",
     "set_hvac_mode",
     "set_fan_mode",
-    "set_speed",
+    # fan.set_speed was removed in the HA percentage migration (gone in 2026.6);
+    # its state-changing successors are set_percentage / set_preset_mode.
+    "set_percentage",
+    "set_preset_mode",
     "select_option",
     "set_value",
     "set_datetime",

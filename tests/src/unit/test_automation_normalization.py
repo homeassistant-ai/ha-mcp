@@ -1,42 +1,66 @@
-"""Unit tests for automation configuration normalization."""
+"""Unit tests for automation configuration normalization.
 
-from ha_mcp.tools.tools_config_automations import _normalize_automation_config
+HA's 2024.10+ canonical automation shape uses the plural root list keys
+('triggers', 'actions', 'conditions') with per-trigger 'trigger:' type keys.
+``_normalize_automation_config`` canonicalizes to that plural form at the root
+level only; the singular forms remain accepted as silent aliases on input.
+"""
+
+from ha_mcp.tools.tools_config_automations import (
+    _detect_conflicting_root_keys,
+    _normalize_automation_config,
+    _normalize_config_for_roundtrip,
+    _normalize_trigger_keys,
+)
 
 
 class TestAutomationNormalization:
     """Tests for _normalize_automation_config function."""
 
-    def test_normalize_root_level_plural_to_singular(self):
-        """Test that root-level plural keys are normalized to singular."""
+    def test_normalize_root_level_singular_to_plural(self):
+        """Root-level singular keys are normalized to the canonical plural."""
         config = {
-            "triggers": [{"platform": "state"}],
-            "conditions": [{"condition": "state"}],
-            "actions": [{"service": "light.turn_on"}],
+            "trigger": [{"trigger": "state"}],
+            "condition": [{"condition": "state"}],
+            "action": [{"action": "light.turn_on"}],
         }
 
         result = _normalize_automation_config(config)
 
-        assert "trigger" in result
-        assert "condition" in result
-        assert "action" in result
-        assert "triggers" not in result
-        assert "conditions" not in result
-        assert "actions" not in result
+        assert "triggers" in result
+        assert "conditions" in result
+        assert "actions" in result
+        assert "trigger" not in result
+        assert "condition" not in result
+        assert "action" not in result
+
+    def test_idempotent_on_canonical_plural(self):
+        """Already-canonical plural root keys pass through unchanged."""
+        config = {
+            "triggers": [{"trigger": "state"}],
+            "conditions": [{"condition": "state"}],
+            "actions": [{"action": "light.turn_on"}],
+        }
+
+        result = _normalize_automation_config(config)
+
+        assert set(result) == {"triggers", "conditions", "actions"}
+        assert result == config
 
     def test_preserve_conditions_in_choose_blocks(self):
-        """Test that 'conditions' (plural) is preserved inside choose blocks."""
+        """'conditions' (plural) is preserved inside choose blocks."""
         config = {
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "action": [
                 {
                     "choose": [
                         {
                             "conditions": [{"condition": "trigger", "id": "trigger_1"}],
-                            "sequence": [{"service": "light.turn_on"}],
+                            "sequence": [{"action": "light.turn_on"}],
                         },
                         {
                             "conditions": [{"condition": "trigger", "id": "trigger_2"}],
-                            "sequence": [{"service": "light.turn_off"}],
+                            "sequence": [{"action": "light.turn_off"}],
                         },
                     ]
                 }
@@ -45,21 +69,19 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # Root level should have singular forms
-        assert "trigger" in result
-        assert "action" in result
+        # Root level should use the canonical plural forms.
+        assert "triggers" in result
+        assert "actions" in result
 
-        # Inside choose blocks, 'conditions' should remain plural
-        choose_block = result["action"][0]["choose"]
+        # Inside choose blocks, 'conditions' should remain plural.
+        choose_block = result["actions"][0]["choose"]
         assert "conditions" in choose_block[0]
-        assert "condition" not in choose_block[0]
         assert "conditions" in choose_block[1]
-        assert "condition" not in choose_block[1]
 
     def test_preserve_conditions_in_if_blocks(self):
-        """Test that 'conditions' (plural) is preserved inside if action blocks."""
+        """'conditions' (plural) is preserved inside if action blocks."""
         config = {
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "action": [
                 {
                     "if": [
@@ -69,25 +91,24 @@ class TestAutomationNormalization:
                             ]
                         }
                     ],
-                    "then": [{"service": "light.turn_on"}],
-                    "else": [{"service": "light.turn_off"}],
+                    "then": [{"action": "light.turn_on"}],
+                    "else": [{"action": "light.turn_off"}],
                 }
             ],
         }
 
         result = _normalize_automation_config(config)
 
-        # Inside if blocks, 'conditions' should remain plural
-        if_block = result["action"][0]["if"]
+        # Inside if blocks, 'conditions' should remain plural.
+        if_block = result["actions"][0]["if"]
         assert "conditions" in if_block[0]
-        assert "condition" not in if_block[0]
 
     def test_nested_choose_with_multiple_conditions(self):
-        """Test complex nested choose blocks with multiple conditions."""
+        """Complex nested choose blocks with multiple conditions."""
         config = {
             "triggers": [
-                {"platform": "template", "id": "trigger_1"},
-                {"platform": "template", "id": "trigger_2"},
+                {"trigger": "template", "id": "trigger_1"},
+                {"trigger": "template", "id": "trigger_2"},
             ],
             "actions": [
                 {
@@ -97,7 +118,7 @@ class TestAutomationNormalization:
                                 {"condition": "trigger", "id": "trigger_1"},
                                 {"condition": "state", "entity_id": "light.test"},
                             ],
-                            "sequences": [{"service": "light.turn_on"}],
+                            "sequences": [{"action": "light.turn_on"}],
                         },
                     ]
                 }
@@ -106,94 +127,95 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # Root level normalization
-        assert "trigger" in result
-        assert "action" in result
+        # Root level stays canonical plural.
+        assert "triggers" in result
+        assert "actions" in result
 
-        # Inside choose, 'conditions' (plural) should be preserved
-        choose_option = result["action"][0]["choose"][0]
+        # Inside choose, 'conditions' (plural) should be preserved.
+        choose_option = result["actions"][0]["choose"][0]
         assert "conditions" in choose_option
         assert len(choose_option["conditions"]) == 2
 
-        # 'sequences' should be normalized to 'sequence'
+        # 'sequences' should be normalized to the canonical singular 'sequence'.
         assert "sequence" in choose_option
         assert "sequences" not in choose_option
 
     def test_default_action_in_choose(self):
-        """Test that choose blocks with default actions work correctly."""
+        """choose blocks with default actions work correctly."""
         config = {
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "action": [
                 {
                     "choose": [
                         {
                             "conditions": [{"condition": "trigger", "id": "trigger_1"}],
-                            "sequence": [{"service": "light.turn_on"}],
+                            "sequence": [{"action": "light.turn_on"}],
                         }
                     ],
-                    "default": [{"service": "light.turn_off"}],
+                    "default": [{"action": "light.turn_off"}],
                 }
             ],
         }
 
         result = _normalize_automation_config(config)
 
-        # Verify choose structure
-        choose_action = result["action"][0]
+        # Verify choose structure.
+        choose_action = result["actions"][0]
         assert "choose" in choose_action
         assert "default" in choose_action
         assert "conditions" in choose_action["choose"][0]
 
-    def test_mixed_singular_and_plural_prefers_singular(self):
-        """Test that when both singular and plural exist, singular is preferred."""
+    def test_mixed_singular_and_plural_prefers_plural(self):
+        """When both singular and plural exist, the canonical plural is preferred."""
         config = {
-            "trigger": [{"platform": "state", "entity_id": "test.entity"}],
-            "triggers": [{"platform": "time"}],  # Should be removed
+            "trigger": [
+                {"trigger": "state", "entity_id": "test.entity"}
+            ],  # alias, dropped
+            "triggers": [{"trigger": "time"}],
         }
 
         result = _normalize_automation_config(config)
 
-        assert "trigger" in result
-        assert "triggers" not in result
-        # Original singular value should be preserved
-        assert result["trigger"][0]["platform"] == "state"
+        assert "triggers" in result
+        assert "trigger" not in result
+        # The canonical plural value is preserved; the singular alias is dropped.
+        assert result["triggers"][0]["trigger"] == "time"
 
     def test_primitives_and_lists_unchanged(self):
-        """Test that primitive values and non-config lists are unchanged."""
+        """Primitive values and non-config lists are unchanged."""
         config = {
             "alias": "Test Automation",
             "description": "A test",
-            "trigger": [{"platform": "state"}],
-            "action": [{"service": "test.service", "data": {"param": [1, 2, 3]}}],
+            "trigger": [{"trigger": "state"}],
+            "action": [{"action": "test.service", "data": {"param": [1, 2, 3]}}],
         }
 
         result = _normalize_automation_config(config)
 
         assert result["alias"] == "Test Automation"
         assert result["description"] == "A test"
-        assert result["action"][0]["data"]["param"] == [1, 2, 3]
+        assert result["actions"][0]["data"]["param"] == [1, 2, 3]
 
     def test_empty_config(self):
-        """Test that empty configurations are handled gracefully."""
+        """Empty configurations are handled gracefully."""
         assert _normalize_automation_config({}) == {}
         assert _normalize_automation_config([]) == []
         assert _normalize_automation_config(None) is None
         assert _normalize_automation_config("string") == "string"
         assert _normalize_automation_config(123) == 123
 
-    def test_normalize_conditions_in_sequence_of_choose_block(self):
-        """Test that 'conditions' is normalized inside a sequence of a choose block."""
+    def test_nested_conditions_not_touched_below_root(self):
+        """A 'conditions' list below the root is never rewritten (only root is normalized)."""
         config = {
-            "action": [
+            "actions": [
                 {
                     "choose": [
                         {
-                            "conditions": [
-                                {"condition": "state"}
-                            ],  # Should be preserved
+                            "conditions": [{"condition": "state"}],  # preserved
                             "sequence": [
                                 {
-                                    # This 'conditions' block is a condition action, and should be normalized
+                                    # A nested 'conditions' block deeper in the tree
+                                    # must also be left untouched.
                                     "conditions": [
                                         {
                                             "condition": "state",
@@ -211,21 +233,19 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        choose_option = result["action"][0]["choose"][0]
+        choose_option = result["actions"][0]["choose"][0]
         action_in_sequence = choose_option["sequence"][0]
 
-        # Verify 'conditions' is preserved at the choose option level
+        # 'conditions' is preserved at the choose option level.
         assert "conditions" in choose_option
-        assert "condition" not in choose_option
-
-        # Verify 'conditions' is normalized to 'condition' inside the sequence
-        assert "condition" in action_in_sequence
-        assert "conditions" not in action_in_sequence
+        # 'conditions' deeper in the sequence is also preserved (never singularized).
+        assert "conditions" in action_in_sequence
+        assert "condition" not in action_in_sequence
 
     def test_preserve_conditions_in_or_blocks(self):
-        """Test that 'conditions' (plural) is preserved inside 'or' condition blocks."""
+        """'conditions' (plural) is preserved inside 'or' condition blocks."""
         config = {
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "condition": [
                 {
                     "condition": "or",
@@ -247,20 +267,21 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # Root level should have singular form
-        assert "condition" in result
-        assert "conditions" not in result
+        # Root level uses the canonical plural form.
+        assert "conditions" in result
+        assert "condition" not in result
 
-        # Inside 'or' block, 'conditions' should remain plural
-        or_condition = result["condition"][0]
+        # Inside 'or' block, 'conditions' should remain plural and 'condition'
+        # is the type discriminator (string).
+        or_condition = result["conditions"][0]
         assert or_condition["condition"] == "or"
         assert "conditions" in or_condition
         assert len(or_condition["conditions"]) == 2
 
     def test_preserve_conditions_in_and_blocks(self):
-        """Test that 'conditions' (plural) is preserved inside 'and' condition blocks."""
+        """'conditions' (plural) is preserved inside 'and' condition blocks."""
         config = {
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "condition": [
                 {
                     "condition": "and",
@@ -282,16 +303,15 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # Inside 'and' block, 'conditions' should remain plural
-        and_condition = result["condition"][0]
+        and_condition = result["conditions"][0]
         assert and_condition["condition"] == "and"
         assert "conditions" in and_condition
         assert len(and_condition["conditions"]) == 2
 
     def test_preserve_conditions_in_not_blocks(self):
-        """Test that 'conditions' (plural) is preserved inside 'not' condition blocks."""
+        """'conditions' (plural) is preserved inside 'not' condition blocks."""
         config = {
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "condition": [
                 {
                     "condition": "not",
@@ -304,16 +324,15 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # Inside 'not' block, 'conditions' should remain plural
-        not_condition = result["condition"][0]
+        not_condition = result["conditions"][0]
         assert not_condition["condition"] == "not"
         assert "conditions" in not_condition
         assert len(not_condition["conditions"]) == 1
 
     def test_nested_compound_conditions(self):
-        """Test deeply nested compound conditions (or inside and, etc.)."""
+        """Deeply nested compound conditions (or inside and, etc.)."""
         config = {
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "conditions": [
                 {
                     "condition": "and",
@@ -345,26 +364,26 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # Root level: conditions -> condition
-        assert "condition" in result
-        assert "conditions" not in result
+        # Root level uses canonical plural 'conditions'.
+        assert "conditions" in result
+        assert "condition" not in result
 
-        # First level: 'and' block should preserve 'conditions'
-        and_condition = result["condition"][0]
+        # First level: 'and' block preserves 'conditions'.
+        and_condition = result["conditions"][0]
         assert and_condition["condition"] == "and"
         assert "conditions" in and_condition
         assert len(and_condition["conditions"]) == 2
 
-        # Second level: nested 'or' block should preserve 'conditions'
+        # Second level: nested 'or' block preserves 'conditions'.
         or_condition = and_condition["conditions"][1]
         assert or_condition["condition"] == "or"
         assert "conditions" in or_condition
         assert len(or_condition["conditions"]) == 2
 
     def test_compound_conditions_in_choose_block(self):
-        """Test compound conditions inside choose block conditions."""
+        """Compound conditions inside choose block conditions."""
         config = {
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "action": [
                 {
                     "choose": [
@@ -387,7 +406,7 @@ class TestAutomationNormalization:
                                     ],
                                 },
                             ],
-                            "sequence": [{"service": "light.turn_on"}],
+                            "sequence": [{"action": "light.turn_on"}],
                         }
                     ]
                 }
@@ -396,22 +415,22 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # Verify choose block preserves 'conditions' at top level
-        choose_option = result["action"][0]["choose"][0]
+        # Verify choose block preserves 'conditions' at top level.
+        choose_option = result["actions"][0]["choose"][0]
         assert "conditions" in choose_option
         assert len(choose_option["conditions"]) == 2
 
-        # Verify nested 'or' block preserves 'conditions'
+        # Verify nested 'or' block preserves 'conditions'.
         or_condition = choose_option["conditions"][1]
         assert or_condition["condition"] == "or"
         assert "conditions" in or_condition
         assert len(or_condition["conditions"]) == 2
 
-    def test_root_level_plural_normalization_with_compound_conditions(self):
-        """Test that root level 'conditions' is normalized even with compound conditions."""
+    def test_root_level_normalization_with_compound_conditions(self):
+        """Root-level singular keys are pluralized even with compound conditions."""
         config = {
-            "triggers": [{"platform": "state"}],
-            "conditions": [
+            "trigger": [{"trigger": "state"}],
+            "condition": [
                 {
                     "condition": "or",
                     "conditions": [
@@ -423,34 +442,34 @@ class TestAutomationNormalization:
                     ],
                 }
             ],
-            "actions": [{"service": "light.turn_on"}],
+            "action": [{"action": "light.turn_on"}],
         }
 
         result = _normalize_automation_config(config)
 
-        # Root level should be normalized to singular
-        assert "trigger" in result
-        assert "condition" in result
-        assert "action" in result
-        assert "triggers" not in result
-        assert "conditions" not in result
-        assert "actions" not in result
+        # Root level normalized to canonical plural.
+        assert "triggers" in result
+        assert "conditions" in result
+        assert "actions" in result
+        assert "trigger" not in result
+        assert "condition" not in result
+        assert "action" not in result
 
-        # Inside compound condition, 'conditions' should be preserved
-        or_condition = result["condition"][0]
+        # Inside compound condition, 'conditions' should be preserved.
+        or_condition = result["conditions"][0]
         assert "conditions" in or_condition
 
-    def test_no_normalize_actions_inside_delay_object(self):
-        """Test that 'actions' is NOT normalized to 'action' inside nested structures.
+    def test_no_normalize_singular_action_inside_delay_object(self):
+        """A singular 'action' key below the root is NOT pluralized.
 
-        Regression test for issue #498: AI models sometimes include an 'actions'
-        key inside a delay object or other nested structure. The normalizer should
-        NOT convert it to 'action' because that produces a key HA rejects as
-        'extra keys not allowed'.
+        Regression for issue #498 (inverted direction): the root list key is
+        pluralized, but a singular 'action:' deeper in the tree (e.g. a service
+        call inside a sequence step) is a discriminator, not a list key, and
+        must be left untouched.
         """
         config = {
             "alias": "Test",
-            "trigger": [{"platform": "state", "entity_id": "sensor.test"}],
+            "trigger": [{"trigger": "state", "entity_id": "sensor.test"}],
             "action": [
                 {
                     "choose": [
@@ -459,7 +478,7 @@ class TestAutomationNormalization:
                             "sequence": [
                                 {
                                     "delay": {"seconds": 5},
-                                    "actions": [{"service": "light.turn_on"}],
+                                    "action": "light.turn_on",
                                 },
                             ],
                         }
@@ -470,25 +489,27 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # The erroneous 'actions' key inside the delay step should NOT be
-        # normalized to 'action' — it should be left as-is so that HA can
-        # return a clear validation error about the malformed structure.
-        delay_step = result["action"][0]["choose"][0]["sequence"][0]
-        assert "actions" in delay_step
-        assert "action" not in delay_step
+        # The singular 'action:' service call inside the sequence step must stay
+        # singular (it is not a root list key).
+        delay_step = result["actions"][0]["choose"][0]["sequence"][0]
+        assert delay_step["action"] == "light.turn_on"
+        assert "actions" not in delay_step
 
-    def test_no_normalize_triggers_inside_nested_structure(self):
-        """Test that 'triggers' is NOT normalized to 'trigger' inside nested structures."""
+    def test_no_normalize_plural_actions_inside_nested_structure(self):
+        """A stray 'actions' key below the root is left untouched (issue #498)."""
         config = {
             "alias": "Test",
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "action": [
                 {
                     "choose": [
                         {
                             "conditions": [{"condition": "trigger", "id": "t1"}],
                             "sequence": [
-                                {"service": "light.turn_on", "triggers": ["fake"]},
+                                {
+                                    "delay": {"seconds": 5},
+                                    "actions": [{"action": "light.turn_on"}],
+                                },
                             ],
                         }
                     ]
@@ -498,57 +519,56 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # 'triggers' inside a service call should NOT be normalized
-        service_step = result["action"][0]["choose"][0]["sequence"][0]
-        assert "triggers" in service_step
-        assert "trigger" not in service_step
+        # A malformed nested 'actions' key is left as-is so HA can surface a
+        # clear validation error rather than the normalizer silently rewriting it.
+        delay_step = result["actions"][0]["choose"][0]["sequence"][0]
+        assert "actions" in delay_step
 
-    def test_no_normalize_actions_inside_then_block(self):
-        """Test that 'actions' inside if/then blocks is NOT normalized (issue #498)."""
+    def test_no_normalize_triggers_inside_nested_structure(self):
+        """A stray 'triggers' key below the root is left untouched."""
         config = {
             "alias": "Test",
-            "trigger": [{"platform": "state"}],
+            "trigger": [{"trigger": "state"}],
             "action": [
                 {
-                    "if": [
-                        {"condition": "state", "entity_id": "light.test", "state": "on"}
-                    ],
-                    "then": [
-                        {"delay": {"seconds": 10}},
-                        {"actions": [{"service": "light.turn_off"}]},
-                    ],
+                    "choose": [
+                        {
+                            "conditions": [{"condition": "trigger", "id": "t1"}],
+                            "sequence": [
+                                {"action": "light.turn_on", "triggers": ["fake"]},
+                            ],
+                        }
+                    ]
                 }
             ],
         }
 
         result = _normalize_automation_config(config)
 
-        # 'actions' inside then block should NOT be normalized to 'action'
-        then_steps = result["action"][0]["then"]
-        step_with_actions = then_steps[1]
-        assert "actions" in step_with_actions
-        assert "action" not in step_with_actions
+        # 'triggers' inside a service call should NOT be touched.
+        service_step = result["actions"][0]["choose"][0]["sequence"][0]
+        assert "triggers" in service_step
 
-    def test_root_level_actions_still_normalized(self):
-        """Test that root-level 'actions' is still normalized to 'action'."""
+    def test_root_level_singular_still_pluralized(self):
+        """Root-level singular 'trigger'/'action' are pluralized to the canonical form."""
         config = {
             "alias": "Test",
-            "triggers": [{"platform": "state"}],
-            "actions": [{"service": "light.turn_on"}],
+            "trigger": [{"trigger": "state"}],
+            "action": [{"action": "light.turn_on"}],
         }
 
         result = _normalize_automation_config(config)
 
-        assert "trigger" in result
-        assert "triggers" not in result
-        assert "action" in result
-        assert "actions" not in result
+        assert "triggers" in result
+        assert "trigger" not in result
+        assert "actions" in result
+        assert "action" not in result
 
     def test_complex_nested_choose_if_then_with_delays(self):
-        """Test the exact scenario from issue #498 — complex nested choose/if/then with delays."""
+        """The exact scenario from issue #498 — complex nested choose/if/then with delays."""
         config = {
             "alias": "Complex Automation",
-            "triggers": [{"platform": "state", "entity_id": "sensor.test"}],
+            "triggers": [{"trigger": "state", "entity_id": "sensor.test"}],
             "actions": [
                 {
                     "choose": [
@@ -556,7 +576,7 @@ class TestAutomationNormalization:
                             "conditions": [{"condition": "trigger", "id": "t1"}],
                             "sequence": [
                                 {
-                                    "service": "notify.mobile",
+                                    "action": "notify.mobile",
                                     "data": {"message": "Step 1"},
                                 },
                                 {"delay": {"minutes": 2}},
@@ -571,7 +591,7 @@ class TestAutomationNormalization:
                                     "then": [
                                         {"delay": {"seconds": 30}},
                                         {
-                                            "service": "light.turn_off",
+                                            "action": "light.turn_off",
                                             "target": {"entity_id": "light.test"},
                                         },
                                     ],
@@ -583,14 +603,14 @@ class TestAutomationNormalization:
                             "sequence": [
                                 {"delay": {"seconds": 5}},
                                 {
-                                    "service": "light.turn_on",
+                                    "action": "light.turn_on",
                                     "target": {"entity_id": "light.test"},
                                 },
                             ],
                         },
                     ],
                     "default": [
-                        {"service": "notify.mobile", "data": {"message": "Default"}}
+                        {"action": "notify.mobile", "data": {"message": "Default"}}
                     ],
                 }
             ],
@@ -598,19 +618,111 @@ class TestAutomationNormalization:
 
         result = _normalize_automation_config(config)
 
-        # Root level should be normalized
-        assert "trigger" in result
-        assert "action" in result
-        assert "triggers" not in result
-        assert "actions" not in result
+        # Root level stays canonical plural.
+        assert "triggers" in result
+        assert "actions" in result
+        assert "trigger" not in result
+        assert "action" not in result
 
-        # Choose conditions should be preserved as plural
-        choose_block = result["action"][0]["choose"]
+        # Choose conditions should be preserved as plural.
+        choose_block = result["actions"][0]["choose"]
         assert "conditions" in choose_block[0]
         assert "conditions" in choose_block[1]
 
-        # Nested if/then structure should be intact
+        # Nested if/then structure should be intact.
         if_block = choose_block[0]["sequence"][2]
         assert "if" in if_block
         assert "then" in if_block
         assert len(if_block["then"]) == 2
+
+
+class TestRoundtripNormalization:
+    """Tests for the GET->SET round-trip helpers (_normalize_config_for_roundtrip).
+
+    These canonicalize a config fetched from HA into the modern 2024.10+ shape:
+    plural root list keys and per-trigger 'trigger:' type keys.
+    """
+
+    def test_normalize_trigger_keys_platform_to_trigger(self):
+        """Legacy per-trigger 'platform' is canonicalized to modern 'trigger'."""
+        triggers = [
+            {"platform": "state", "entity_id": "binary_sensor.motion"},
+            {"trigger": "time", "at": "07:00:00"},  # already modern, untouched
+        ]
+
+        result = _normalize_trigger_keys(triggers)
+
+        assert result[0]["trigger"] == "state"
+        assert "platform" not in result[0]
+        assert result[1]["trigger"] == "time"
+
+    def test_normalize_trigger_keys_drops_platform_when_trigger_present(self):
+        """When both 'platform' and 'trigger' exist, 'trigger' wins and the legacy
+        'platform' alias is dropped (HA strict schema rejects extra keys)."""
+        triggers = [{"platform": "state", "trigger": "time"}]
+
+        result = _normalize_trigger_keys(triggers)
+
+        assert result[0]["trigger"] == "time"
+        assert "platform" not in result[0]
+
+    def test_normalize_trigger_keys_passes_non_dict_through(self):
+        """Malformed non-dict trigger items pass through untouched (no AttributeError)."""
+        # Deliberately malformed input to exercise the defensive guard.
+        result = _normalize_trigger_keys([{"platform": "state"}, "oops", None])  # type: ignore[list-item]
+        assert result[0] == {"trigger": "state"}
+        assert result[1] == "oops"
+        assert result[2] is None
+
+    def test_roundtrip_produces_plural_roots_and_modern_trigger_keys(self):
+        """A GET-shaped config is canonicalized to plural roots + 'trigger:' keys."""
+        config = {
+            "alias": "Morning",
+            "trigger": [{"platform": "time", "at": "07:00:00"}],
+            "condition": [{"condition": "state", "entity_id": "x", "state": "on"}],
+            "action": [{"action": "light.turn_on"}],
+        }
+
+        result = _normalize_config_for_roundtrip(config)
+
+        assert "triggers" in result and "trigger" not in result
+        assert "conditions" in result and "condition" not in result
+        assert "actions" in result and "action" not in result
+        # Per-trigger key canonicalized to modern 'trigger:'.
+        assert result["triggers"][0]["trigger"] == "time"
+        assert "platform" not in result["triggers"][0]
+
+
+class TestConflictingRootKeys:
+    """_detect_conflicting_root_keys surfaces a warning when a config carries both
+    a singular alias and its canonical plural with different values (normalization
+    keeps the plural and would otherwise silently drop the singular)."""
+
+    def test_detects_conflict_with_differing_values(self):
+        warnings = _detect_conflicting_root_keys(
+            {"trigger": [{"trigger": "state"}], "triggers": []}
+        )
+        assert len(warnings) == 1
+        assert "trigger" in warnings[0] and "triggers" in warnings[0]
+
+    def test_no_conflict_when_values_equal(self):
+        assert _detect_conflicting_root_keys({"trigger": [], "triggers": []}) == []
+
+    def test_no_conflict_for_single_form(self):
+        assert _detect_conflicting_root_keys({"triggers": [{"trigger": "state"}]}) == []
+
+    def test_detects_all_three_pairs(self):
+        warnings = _detect_conflicting_root_keys(
+            {
+                "trigger": [1],
+                "triggers": [2],
+                "action": [1],
+                "actions": [2],
+                "condition": [1],
+                "conditions": [2],
+            }
+        )
+        assert len(warnings) == 3
+
+    def test_non_dict_returns_empty(self):
+        assert _detect_conflicting_root_keys(["not", "a", "dict"]) == []

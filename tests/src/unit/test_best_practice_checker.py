@@ -2256,3 +2256,51 @@ class TestDurationMathDetector:
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "last_changed/last_updated", "for:")
+
+
+class TestPluralKeyTolerance:
+    """check_automation_config reads HA 2024.10+ canonical plural root keys.
+
+    In production the config is pre-normalized to plural before this checker runs,
+    so the plural-first read (config.get("triggers", config.get("trigger", [])) etc.)
+    is the live path. These pin that contract — the rest of the suite only feeds the
+    singular fallback.
+    """
+
+    def test_condition_template_warning_on_plural_conditions(self):
+        """The condition-template anti-pattern fires when conditions are under the
+        canonical plural 'conditions' key (covers the plural-first condition read)."""
+        config = {
+            "triggers": [],
+            "conditions": [
+                {
+                    "condition": "template",
+                    "value_template": "{{ states('sensor.temp') | float > 25 }}",
+                }
+            ],
+            "actions": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(
+            warnings, "float/int comparison", "numeric_state"
+        )
+
+    def test_mode_motion_warning_on_plural_keys(self):
+        """The mode:single motion+delay warning fires on plural 'triggers'/'actions'
+        (covers the plural-first trigger and action reads in _check_mode_motion)."""
+        config = {
+            "triggers": [
+                {
+                    "trigger": "state",
+                    "entity_id": "binary_sensor.hallway_motion",
+                    "to": "on",
+                }
+            ],
+            "actions": [
+                {"action": "light.turn_on", "target": {"entity_id": "light.hallway"}},
+                {"delay": {"minutes": 5}},
+                {"action": "light.turn_off", "target": {"entity_id": "light.hallway"}},
+            ],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "motion", "mode: restart")

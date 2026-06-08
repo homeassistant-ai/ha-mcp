@@ -74,7 +74,10 @@ DOMAIN_HANDLERS = {
     },
     "fan": {
         "valid_actions": ["on", "off", "toggle", "set"],
-        "parameters": ["speed", "percentage", "preset_mode", "direction"],
+        # HA removed the legacy `speed` param / `fan.set_speed` service in the
+        # 2021-2022 percentage migration (absent in 2026.6). Use percentage
+        # (fan.set_percentage) and preset_mode (fan.set_preset_mode).
+        "parameters": ["percentage", "preset_mode", "direction"],
         "quick_actions": ["toggle", "speed_up", "speed_down"],
         "state_attributes": ["percentage", "preset_mode"],
         "supports_speed": True,

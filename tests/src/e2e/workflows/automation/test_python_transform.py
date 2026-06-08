@@ -40,7 +40,7 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
         {
             "identifier": entity_id,
             "config_hash": config_hash,
-            "python_transform": "config['action'][0]['data']['brightness'] = 255",
+            "python_transform": "config['actions'][0]['data']['brightness'] = 255",
         },
     )
 
@@ -51,7 +51,7 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
     verify = await mcp.call_tool_success(
         "ha_config_get_automation", {"identifier": entity_id}
     )
-    assert verify["config"]["action"][0]["data"]["brightness"] == 255
+    assert verify["config"]["actions"][0]["data"]["brightness"] == 255
 
 
 @pytest.mark.asyncio
@@ -101,7 +101,7 @@ async def test_python_transform_pattern_update(mcp_client, ha_client):
             "identifier": entity_id,
             "config_hash": config_hash,
             "python_transform": """
-for a in config['action']:
+for a in config['actions']:
     if a.get('action') == 'light.turn_on':
         a['data']['brightness'] = 200
 """,
@@ -113,7 +113,7 @@ for a in config['action']:
     verify = await mcp.call_tool_success(
         "ha_config_get_automation", {"identifier": entity_id}
     )
-    actions = verify["config"]["action"]
+    actions = verify["config"]["actions"]
     assert actions[0]["data"]["brightness"] == 200
     assert actions[1]["data"]["brightness"] == 200
     assert actions[2]["data"]["temperature"] == 22
@@ -142,7 +142,7 @@ async def test_python_transform_requires_config_hash(mcp_client, ha_client):
         "ha_config_set_automation",
         {
             "identifier": entity_id,
-            "python_transform": "config['action'] = []",
+            "python_transform": "config['actions'] = []",
         },
     )
     error_msg = extract_error_message(result)
@@ -158,7 +158,7 @@ async def test_python_transform_requires_identifier(mcp_client, ha_client):
         "ha_config_set_automation",
         {
             "config_hash": "fakehash",
-            "python_transform": "config['action'] = []",
+            "python_transform": "config['actions'] = []",
         },
     )
     error_msg = extract_error_message(result)
@@ -175,7 +175,7 @@ async def test_python_transform_mutual_exclusivity(mcp_client, ha_client):
         {
             "identifier": "automation.test",
             "config": {"alias": "test", "trigger": [], "action": []},
-            "python_transform": "config['action'] = []",
+            "python_transform": "config['actions'] = []",
         },
     )
     error_msg = extract_error_message(result)
@@ -225,7 +225,7 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
         {
             "identifier": entity_id,
             "config_hash": config_hash,
-            "python_transform": "config['action'][0]['data'] = {'brightness': 100}",
+            "python_transform": "config['actions'][0]['data'] = {'brightness': 100}",
         },
     )
     error_msg = extract_error_message(result)
@@ -301,7 +301,7 @@ async def test_chained_transforms(mcp_client, ha_client):
         {
             "identifier": entity_id,
             "config_hash": get_result["config_hash"],
-            "python_transform": "config['action'][0]['data']['brightness'] = 100",
+            "python_transform": "config['actions'][0]['data']['brightness'] = 100",
         },
     )
     assert result1["success"] is True
@@ -312,7 +312,7 @@ async def test_chained_transforms(mcp_client, ha_client):
         {
             "identifier": entity_id,
             "config_hash": result1["config_hash"],
-            "python_transform": "config['action'][0]['data']['brightness'] = 200",
+            "python_transform": "config['actions'][0]['data']['brightness'] = 200",
         },
     )
     assert result2["success"] is True
@@ -386,7 +386,7 @@ async def test_transform_invalid_config_rejected(mcp_client, ha_client):
         {
             "identifier": entity_id,
             "config_hash": get_result["config_hash"],
-            "python_transform": "del config['action']",
+            "python_transform": "del config['actions']",
         },
     )
     error_msg = extract_error_message(result)
@@ -427,10 +427,11 @@ async def test_config_hash_stable_across_reads(mcp_client, ha_client):
 
 @pytest.mark.asyncio
 async def test_plural_key_hash_stability(mcp_client, ha_client):
-    """Test that plural keys (triggers/actions) don't cause hash instability.
+    """Test that plural-key input doesn't cause hash instability.
 
-    HA REST API returns plural keys which get normalized to singular.
-    Hash must be stable across this normalization.
+    The tool canonicalizes automation configs to HA's 2024.10+ plural root
+    keys. The normalized (plural) shape — and therefore the hash — must be
+    stable across reads.
     """
     mcp = MCPAssertions(mcp_client)
 
@@ -614,7 +615,7 @@ async def test_categorized_automation_transform_preserves_category(
         {
             "identifier": entity_id,
             "config_hash": config_hash,
-            "python_transform": "config['action'][0]['data']['brightness'] = 200",
+            "python_transform": "config['actions'][0]['data']['brightness'] = 200",
         },
     )
 
@@ -622,5 +623,5 @@ async def test_categorized_automation_transform_preserves_category(
     verify = await mcp.call_tool_success(
         "ha_config_get_automation", {"identifier": entity_id}
     )
-    assert verify["config"]["action"][0]["data"]["brightness"] == 200
+    assert verify["config"]["actions"][0]["data"]["brightness"] == 200
     assert verify["config"].get("category") == category_id
