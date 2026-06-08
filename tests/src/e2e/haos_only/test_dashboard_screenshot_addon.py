@@ -57,11 +57,11 @@ LOG = logging.getLogger(__name__)
 # constraint the port= proxy test documents in test_manage_addon_modes.py.
 pytestmark = [pytest.mark.haos_only, pytest.mark.inaddon_only]
 
-# balloob's Puppet add-on (installed from its repo by the bake — see
-# build_image.py install_puppet_addon). The Supervisor slug prefix is a stable
-# hash of the repository URL (https://github.com/balloob/home-assistant-addons
-# → 0f1cc410), deterministic across HAOS installs that register that exact repo.
-SCREENSHOT_ADDON_SLUG = "0f1cc410_puppet"
+# balloob's Puppet add-on, vendored as a pinned submodule and staged as a LOCAL
+# add-on by the bake (see build_image.py stage_puppet_addon_source /
+# install_puppet_addon). Supervisor assigns local add-ons the slug
+# ``local_<config-slug>``; Puppet's config slug is ``puppet`` → ``local_puppet``.
+SCREENSHOT_ADDON_SLUG = "local_puppet"
 DEFAULT_DASHBOARD_PATH = "lovelace/0"
 
 STOPPED_STATES: frozenset[str] = frozenset({"stopped", "boot_fail", "unknown", "error"})
