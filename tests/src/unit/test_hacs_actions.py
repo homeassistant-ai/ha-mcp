@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_hacs import HACS_ADD_REGISTRATION_TIMEOUT, HacsTools
+from ha_mcp.tools.tools_hacs import (
+    HACS_ADD_REGISTRATION_TIMEOUT,
+    HACS_RESOLVE_REGISTRATION_TIMEOUT,
+    HacsTools,
+)
 
 
 async def _identity_timezone(_client, data):
@@ -93,6 +97,33 @@ class TestManageHacsDownload:
         assert result["repository"] == "441028036"  # numeric id resolves to itself
         assert "Successfully installed" in result["message"]
         assert ws.send_command.await_args.args[0] == "hacs/repository/download"
+
+    async def test_owner_repo_resolve_uses_fast_fail_budget(self, tools):
+        # A GitHub-path download resolves owner/repo -> numeric id via
+        # wait_for_repo_registration. That lookup targets an already-registered
+        # repo, so it must use the short HACS_RESOLVE_REGISTRATION_TIMEOUT, not
+        # the 30 s post-add registration budget — otherwise a not-found path
+        # stalls the caller (and the E2E suite, #1515) for 30 s.
+        ws = _ws({"status": "ok"})
+        registered = {"id": "555", "full_name": "owner/repo", "name": "Repo"}
+        with (
+            _patched_hacs(ws),
+            patch(
+                "ha_mcp.tools.tools_hacs.wait_for_repo_registration",
+                new_callable=AsyncMock,
+            ) as wait_mock,
+        ):
+            wait_mock.return_value = registered
+            result = await tools.ha_manage_hacs(
+                action="download", repository_id="owner/repo"
+            )
+
+        assert result["success"] is True
+        assert result["repository"] == "Repo"  # resolved display name
+        assert (
+            wait_mock.await_args.kwargs.get("timeout")
+            == HACS_RESOLVE_REGISTRATION_TIMEOUT
+        )
 
 
 class TestManageHacsAddRepository:

@@ -704,6 +704,21 @@ HACS_REPO_BACKSTOP_POLL_INTERVAL = 5.0
 # 30 s resolve budget does not apply here.
 HACS_ADD_REGISTRATION_TIMEOUT = 10.0
 
+# Wall-clock budget for ``_resolve_hacs_repo_id`` (the ``owner/repo`` lookup
+# behind read-only ``ha_get_hacs_info(action="info")`` and
+# ``ha_manage_hacs(action="download")``). Unlike ``ha_install_mcp_tools`` —
+# which adds a repo and then waits the full ``HACS_REPO_REGISTRATION_TIMEOUT``
+# for that fresh registration to land — a plain info/download lookup targets a
+# repo that should ALREADY be in HACS's index: default repos always are, and
+# ``add_repository`` blocks until registration is confirmed before returning.
+# So the post-subscribe sample resolves an existing repo instantly, and the
+# dispatch-signal wait only ever burns wall-clock when the repo is genuinely
+# absent. The old 30 s budget made every not-found lookup a 30 s stall (the
+# dominant cost in the HAOS E2E suite per #1515); 10 s still leaves event-driven
+# headroom for the rare mid-registration race while failing a genuinely-missing
+# lookup ~3x faster.
+HACS_RESOLVE_REGISTRATION_TIMEOUT = 10.0
+
 
 async def _find_repo_in_list_by_full_name(
     ws_client: Any, full_name_lower: str
@@ -919,7 +934,9 @@ async def _resolve_hacs_repo_id(ws_client: Any, repository_id: str) -> tuple[str
     if "/" not in repository_id:
         return repository_id, repository_id
 
-    repo = await wait_for_repo_registration(ws_client, repository_id)
+    repo = await wait_for_repo_registration(
+        ws_client, repository_id, timeout=HACS_RESOLVE_REGISTRATION_TIMEOUT
+    )
 
     if repo is not None:
         return str(repo.get("id")), repo.get("name") or repository_id
