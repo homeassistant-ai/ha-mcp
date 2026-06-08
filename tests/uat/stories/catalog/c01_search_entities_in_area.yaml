@@ -1,31 +1,36 @@
 id: c01
-title: "Enumerate entities of a domain in a specific area (search_entities-only territory)"
+title: "Enumerate entities of a domain in a specific area (ha_search registry-listing mode)"
 category: entity
 weight: 3
 description: >
-  Confusion-pair story for #1175 BAT. The user asks for entities of a given
-  domain in a given area — a pure entity-registry query. Right pick is
-  ha_search_entities (variant: ha_search) with domain_filter + area_filter.
-  ha_deep_search would search config bodies and return nothing useful here
-  (sensors that exist are not necessarily referenced in any automation),
-  so picking deep_search is the wrong tool. Pairs with s14 (deep_search-
-  only territory) to form a flip-flop-detecting pair: on the baseline, the
-  agent must choose correctly between the two; on the variant (merged
-  ha_search), one tool spans both surfaces and the choice disappears.
+  Routing probe for #1175 BAT. The user asks for entities of a given domain in
+  a given area — a pure entity-registry question ("what entities exist"). After
+  #1529 folded the former ha_search_entities and ha_deep_search into a single
+  ha_search, the discrimination is no longer which TOOL to pick but which MODE
+  of ha_search the agent drives it in:
 
-  Right-pick rationale from docstrings: ha_search_entities is documented
-  as the entity-registry path ("Search for entities (lights, sensors,
-  switches, etc.) by name, domain, or area"); ha_deep_search is documented
-  as the config-body path ("not for finding entity IDs ... use
-  ha_search_entities instead"). The story's prompt is "list sensor
-  entities in the bathroom" — purely "what entities exist", not "what
-  configurations contain something".
+  Right pick — structured registry-listing mode: pass domain_filter +
+  area_filter with NO free-text query. ha_search then enumerates the entity
+  registry and skips the config-body backend entirely (the tool documents this
+  as "registry-listing mode" and gates config-body search off whenever an
+  entity-only filter is present).
+
+  Wrong pick — drop the structured filters and pass a free-text query instead
+  (e.g. query="sensors in the Bathroom"). With no entity-intent filter the
+  config-body branch runs, scanning automation/script/scene/helper bodies — the
+  wrong surface for "what entities exist", since a sensor that exists is not
+  necessarily referenced in any configuration — and it trades precise
+  domain+area scoping for fuzzy free-text matching.
+
+  Pre-#1529 this was a confusion-pair against ha_deep_search (the config-body
+  path); that surface now lives inside ha_search's query mode, so the wrong-pick
+  illustration is preserved as a mode rather than a separate tool.
 
 tags:
   - search
   - entities
   - area_filter
-  - confusion_pair_1175
+  - routing_1175
 
 setup: []
   # Read-only — no writes against the target HA instance.
@@ -51,14 +56,15 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_search_entities
     - ha_search
   description: >
-    Agent should call ha_search_entities (or, on the variant arm, ha_search)
-    with domain_filter='sensor' and area_filter='Bathroom' (or equivalent
-    case/locale variant). ha_deep_search is the WRONG pick here — it
-    searches configuration bodies (automations/scripts/scenes/helpers),
-    which does not answer "which sensor entities exist in this area";
-    that's a registry-list question. Picking ha_deep_search counts as a
-    wrong-tool mis-pick for this story. A flip-flop (one then the other)
-    is also a mis-pick on the baseline arm.
+    Agent should call ha_search in registry-listing mode — domain_filter='sensor'
+    and area_filter='Bathroom' (or an equivalent case/locale variant), with NO
+    free-text query. Passing a free-text query instead of the structured filters
+    makes ha_search run config-body search (automations/scripts/scenes/helpers),
+    which is the wrong surface for a registry-list question and counts as an
+    over-reach mis-pick for this story. Because both modes invoke the single
+    ha_search tool, the mis-pick is observable only by inspecting the call's
+    arguments (structured domain/area filter vs free-text query) in the agent
+    trace — the tool-name sequence and the response checks pass either way, so
+    this is a manual A/B benchmark signal, not an automated pass/fail.

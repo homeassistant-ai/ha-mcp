@@ -54,8 +54,9 @@ The filename prefix determines whether a story runs in automated discovery:
   path: `run_story.py --all`, `conftest.discover_stories()` (the
   `test_stories.py` pytest parametrization), and the `bat-story-eval` skill — all
   glob `s*.yaml`.
-- **`t*` / `c*` — on-demand probes.** A/B routing probes (`t*`) and confusion-pair
-  probes (`c*`) for one-off architectural comparisons. **Excluded** from `--all`
+- **`t*` / `c*` — on-demand probes.** A/B routing probes (`t*`) and confusion /
+  mode-discrimination probes (`c*`) for one-off architectural comparisons.
+  **Excluded** from `--all`
   and pytest discovery (the `s*.yaml` glob does not match them); run them by
   explicit path, e.g. `run_story.py catalog/t01_eval_template_average_calc.yaml`.
 
