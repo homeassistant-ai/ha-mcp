@@ -503,6 +503,21 @@ class TestServiceCallWaitParameter:
             assert result["success"] is True
             mock_wait.assert_not_called()
 
+    async def test_call_service_no_wait_for_scene(self, tools, mock_client):
+        """scene.turn_on doesn't wait: a scene's own state is a last-activated
+        timestamp, never "on", so the wait would always time out (#1515)."""
+        with patch(
+            "ha_mcp.tools.tools_service.wait_for_state_change", new_callable=AsyncMock
+        ) as mock_wait:
+            result = await tools.ha_call_service(
+                domain="scene",
+                service="turn_on",
+                entity_id="scene.movie_night",
+            )
+            assert result["success"] is True
+            assert "verified_state" not in result
+            mock_wait.assert_not_called()
+
     async def test_call_service_no_wait_without_entity(self, tools, mock_client):
         """Services without entity_id don't wait."""
         with patch(
