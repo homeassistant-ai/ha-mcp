@@ -3,16 +3,19 @@
 The route-existence tests in ``test_oauth.py`` (``TestOAuthRoutes``) only assert
 that ``provider.get_routes()`` *lists* the well-known routes. They do not boot the
 assembled ASGI app or make a real request, so they cannot catch a regression where
-a framework change mounts a competing ``/.well-known/openid-configuration`` route
-that shadows ours, nor verify the served body.
+our metadata route is shadowed or replaced by a framework default (or a duplicate
+route is mounted for the same path), nor verify the served body.
 
-These tests close that gap: they build the real app the way ``_run_oauth_server``
-does (``FastMCP`` with ``mcp.auth`` set, then ``http_app()``) and drive it over
-HTTP via ``httpx.ASGITransport``. The discriminator is the *enhanced* metadata our
+These tests close that gap: they assemble an OAuth-enabled ASGI app the way the
+production server does in the ways that matter for discovery — ``mcp.auth`` set to
+our provider and ``stateless_http=True`` — and drive it over HTTP via
+``httpx.ASGITransport``. The content discriminator is the *enhanced* metadata our
 handler injects — ``response_modes_supported`` and the ``"none"`` token-endpoint
-auth method (needed by Claude.ai public PKCE clients). If our handler were ever
-shadowed by a framework-supplied variant, those fields would disappear and these
-tests would fail.
+auth method (needed by Claude.ai public PKCE clients): if our handler were replaced
+by a framework default those fields would disappear. A separate test asserts each
+discovery path resolves to exactly one route, so a shadowing/duplicate route (which,
+under Starlette's first-match-wins routing, would not change the served body) is
+also caught.
 """
 
 import httpx
@@ -36,11 +39,14 @@ DISCOVERY_PATHS = [
 
 @pytest.fixture
 def oauth_app(tmp_path, monkeypatch):
-    """Assemble the real OAuth-enabled ASGI app (FastMCP + our provider).
+    """Assemble an OAuth-enabled ASGI app (FastMCP + our provider).
 
-    Mirrors ``_run_oauth_server``: construct the server, attach the provider to
-    ``mcp.auth``, then build the HTTP app. ``stateless_http=True`` avoids needing
-    the MCP session lifespan, which the plain well-known GET routes do not require.
+    Builds the app the way the production server does in the ways that matter for
+    metadata discovery: attach the provider to ``mcp.auth`` and build with
+    ``stateless_http=True`` (which avoids needing the MCP session lifespan that the
+    plain well-known GET routes do not use). The production entrypoint
+    (``_run_oauth_server``) reaches the same assembled app via ``run_async``; the
+    extra wiring it adds — HA client, landing/settings routes — is irrelevant here.
 
     Constructing the provider persists an HMAC secret (and any registered
     clients) under ``get_data_dir()``, so redirect it to a temp dir to keep the
@@ -66,7 +72,7 @@ async def test_metadata_endpoint_serves_enhanced_metadata(oauth_app, discovery_p
     )
     data = resp.json()
 
-    # Standard OAuth 2.1 / OIDC discovery fields, all anchored at our base_url.
+    # The standard OAuth 2.1 / OIDC discovery fields we assert are anchored at base_url.
     assert data["issuer"].rstrip("/") == BASE_URL
     assert data["authorization_endpoint"].startswith(BASE_URL)
     assert data["token_endpoint"].startswith(BASE_URL)
@@ -84,11 +90,14 @@ async def test_metadata_endpoint_serves_enhanced_metadata(oauth_app, discovery_p
 
 @pytest.mark.asyncio
 async def test_discovery_endpoints_serve_identical_metadata(oauth_app):
-    """All three discovery paths serve byte-identical metadata.
+    """All discovery paths serve identical metadata (parsed-JSON equality).
 
-    Per RFC 8414 the openid-configuration aliases must mirror the
-    oauth-authorization-server document; this guards against one path drifting
-    (e.g. a shadowing route serving a different body on only one alias).
+    The openid-configuration aliases are served with metadata identical to the
+    oauth-authorization-server document; this guards against one alias drifting
+    from the canonical body. The canonical body is also re-checked for an enhanced
+    field so a *uniform* regression (all paths shadowed at once) still fails here
+    rather than passing vacuously — without it the three aliases share one handler
+    closure and would always compare equal.
     """
     bodies = {}
     async with httpx.AsyncClient(
@@ -100,10 +109,40 @@ async def test_discovery_endpoints_serve_identical_metadata(oauth_app):
             bodies[path] = resp.json()
 
     canonical = bodies["/.well-known/oauth-authorization-server"]
+    # Non-vacuous guard: confirm the canonical body is actually our enhanced
+    # document, so a uniform shadow across all paths trips this test too.
+    assert canonical.get("response_modes_supported") == ["query"]
     for path, body in bodies.items():
         assert body == canonical, (
             f"{path} metadata diverged from the canonical document"
         )
+
+
+def _iter_route_paths(routes):
+    """Yield every Route ``path`` in an assembled app, descending into mounts."""
+    for route in routes:
+        subroutes = getattr(route, "routes", None)
+        if subroutes:
+            yield from _iter_route_paths(subroutes)
+        path = getattr(route, "path", None)
+        if path is not None:
+            yield path
+
+
+@pytest.mark.parametrize("discovery_path", DISCOVERY_PATHS)
+def test_discovery_path_registered_exactly_once(oauth_app, discovery_path):
+    """Each discovery path resolves to exactly one route in the assembled app.
+
+    The body tests prove the *first* matching route is ours; this proves there is
+    no second one. Starlette routes first-match-wins, so a duplicate/shadowing
+    route mounted by a dependency would not change the served body and would
+    otherwise go uncaught — this is the regression class the module guards.
+    """
+    count = list(_iter_route_paths(oauth_app.routes)).count(discovery_path)
+    assert count == 1, (
+        f"{discovery_path} is registered {count} time(s) in the assembled app "
+        "(expected exactly 1 — a duplicate or shadowing route may exist)"
+    )
 
 
 @pytest.mark.asyncio
