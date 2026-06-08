@@ -196,9 +196,7 @@ async def _cleanup_test_source(mcp_client, stat_energy_from: str) -> None:
     """Remove any energy_sources entry matching ``stat_energy_from`` via a
     fresh read + mode='set' rewrite. Idempotent; safe to call when the
     source is already absent."""
-    get_result = await mcp_client.call_tool(
-        "ha_manage_energy_prefs", {"mode": "get"}
-    )
+    get_result = await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
     assert_mcp_success(get_result)
     sources = get_result.data["config"]["energy_sources"]
     if not any(s.get("stat_energy_from") == stat_energy_from for s in sources):
@@ -265,7 +263,7 @@ def _non_grid_source_payload(source_type: str, stat: str) -> dict:
     """Build a server-schema-conformant source payload per type.
 
     The local ``_shape_check`` only requires ``stat_energy_from`` for
-    solar/battery/gas, but HA Core's voluptuous schema requires more for
+    solar/battery/gas/water, but HA Core's voluptuous schema requires more for
     some types (battery requires ``stat_energy_to`` and rejects None).
     These payloads track what the server actually accepts, not what the
     local check passes — the asymmetry is intentional (see B1 in the
@@ -282,9 +280,9 @@ def _non_grid_source_payload(source_type: str, stat: str) -> dict:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source_type", ["solar", "battery", "gas"])
+@pytest.mark.parametrize("source_type", ["solar", "battery", "gas", "water"])
 async def test_energy_add_source_non_grid_roundtrip(mcp_client, source_type):
-    """mode='add_source' atomically appends solar/battery/gas entries.
+    """mode='add_source' atomically appends solar/battery/gas/water entries.
 
     Each non-grid type only requires ``stat_energy_from`` for the local
     shape check; the post-save validate may surface ``stat not found``
@@ -357,14 +355,12 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
             "chained writes without an intermediate get"
         )
 
-        verify = await mcp_client.call_tool(
-            "ha_manage_energy_prefs", {"mode": "get"}
-        )
+        verify = await mcp_client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
         assert_mcp_success(verify)
         verify_dc = verify.data["config"]["device_consumption"]
-        assert any(
-            d.get("stat_consumption") == test_stat for d in verify_dc
-        ), f"Per-key set must persist; got device_consumption={verify_dc}"
+        assert any(d.get("stat_consumption") == test_stat for d in verify_dc), (
+            f"Per-key set must persist; got device_consumption={verify_dc}"
+        )
     finally:
         # Restore original device_consumption under a fresh per-key hash.
         cleanup_initial = await mcp_client.call_tool(
@@ -379,9 +375,7 @@ async def test_energy_prefs_per_key_config_hash_roundtrip(mcp_client):
                         "mode": "set",
                         "config": {"device_consumption": original_dc},
                         "config_hash": {
-                            "device_consumption": cleanup_per_key[
-                                "device_consumption"
-                            ],
+                            "device_consumption": cleanup_per_key["device_consumption"],
                         },
                     },
                 )
