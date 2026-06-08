@@ -4,6 +4,10 @@ Covers:
 - _validate_required_fields: missing-field errors and the ha_config_set_script hint
 - _parse_and_validate_config: VALIDATION_INVALID_JSON error message and suggestions
 - _validate_required_fields: sun trigger event pre-validation
+
+The validators run on *normalized* configs (post ``_normalize_automation_config``),
+so the inputs here use HA's canonical plural root list keys
+('triggers'/'actions'/'conditions').
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ class TestParseAndValidateConfig:
         # (e.g. unquoted key, which is a common model mistake)
         with pytest.raises(ToolError) as exc_info:
             AutomationConfigTools._parse_and_validate_config(
-                '{alias: "x", "trigger": []}'  # unquoted key — invalid JSON
+                '{alias: "x", "triggers": []}'  # unquoted key — invalid JSON
             )
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "VALIDATION_INVALID_JSON"
@@ -46,7 +50,7 @@ class TestValidateRequiredFields:
     def test_valid_automation_passes(self) -> None:
         """Complete automation config raises nothing."""
         AutomationConfigTools._validate_required_fields(
-            {"alias": "x", "trigger": [], "action": []},
+            {"alias": "x", "triggers": [], "actions": []},
             identifier=None,
         )
 
@@ -54,21 +58,21 @@ class TestValidateRequiredFields:
         """Missing fields without a 'sequence' key emit the default suggestions."""
         with pytest.raises(ToolError) as exc_info:
             AutomationConfigTools._validate_required_fields(
-                {"alias": "x", "action": []},
+                {"alias": "x", "actions": []},
                 identifier=None,
             )
         error = _error_from_tool_error(exc_info.value)
         assert error["code"] == "CONFIG_MISSING_REQUIRED_FIELDS"
-        assert "trigger" in error["message"]
+        assert "triggers" in error["message"]
         # The generic suggestion should NOT mention ha_config_set_script.
         all_text = json.dumps(error)
         assert "ha_config_set_script" not in all_text
 
     def test_sequence_in_config_hints_at_set_script(self) -> None:
-        """A config with 'sequence' and missing trigger/action hints at ha_config_set_script."""
+        """A config with 'sequence' and missing triggers/actions hints at ha_config_set_script."""
         with pytest.raises(ToolError) as exc_info:
             AutomationConfigTools._validate_required_fields(
-                {"alias": "Goodnight", "sequence": [{"service": "light.turn_off"}]},
+                {"alias": "Goodnight", "sequence": [{"action": "light.turn_off"}]},
                 identifier=None,
             )
         error = _error_from_tool_error(exc_info.value)
@@ -80,13 +84,13 @@ class TestValidateRequiredFields:
         assert "sequence" in all_text
 
     def test_sequence_in_config_with_trigger_but_no_action_still_hints(self) -> None:
-        """Sequence + trigger but no action still triggers the script hint."""
+        """Sequence + triggers but no actions still triggers the script hint."""
         with pytest.raises(ToolError) as exc_info:
             AutomationConfigTools._validate_required_fields(
                 {
                     "alias": "x",
-                    "trigger": [],
-                    "sequence": [{"service": "light.turn_off"}],
+                    "triggers": [],
+                    "sequence": [{"action": "light.turn_off"}],
                 },
                 identifier=None,
             )
@@ -97,13 +101,14 @@ class TestValidateRequiredFields:
 class TestValidateConditionBlocks:
     """Pre-validation of condition blocks for platform vs condition confusion.
 
-    Triggers use 'platform'; conditions use 'condition'. Models familiar with
-    trigger syntax often write {'platform': 'state', ...} in condition lists,
-    which HA accepts without a 400 but then crashes with an unhelpful 500.
+    Triggers use 'trigger' (legacy 'platform'); conditions use 'condition'.
+    Models familiar with trigger syntax often write {'platform': 'state', ...}
+    in condition lists, which HA accepts without a 400 but then crashes with an
+    unhelpful 500.
     """
 
     def _base_config(self, conditions: object) -> dict:
-        return {"alias": "x", "trigger": [], "action": [], "condition": conditions}
+        return {"alias": "x", "triggers": [], "actions": [], "conditions": conditions}
 
     def test_valid_state_condition_passes(self) -> None:
         AutomationConfigTools._validate_required_fields(
@@ -171,8 +176,8 @@ class TestEmptyTriggerSceneCreateDefense:
             AutomationConfigTools._validate_required_fields(
                 {
                     "alias": "Movie Snapshot",
-                    "trigger": [],
-                    "action": [
+                    "triggers": [],
+                    "actions": [
                         {
                             "service": "scene.create",
                             "data": {
@@ -201,8 +206,8 @@ class TestEmptyTriggerSceneCreateDefense:
             AutomationConfigTools._validate_required_fields(
                 {
                     "alias": "Movie Snapshot",
-                    "trigger": [],
-                    "action": [
+                    "triggers": [],
+                    "actions": [
                         {
                             "action": "scene.create",
                             "data": {"scene_id": "movie_night"},
@@ -217,7 +222,7 @@ class TestEmptyTriggerSceneCreateDefense:
         assert "ha_config_set_scene" in suggestions_blob
 
     def test_trigger_none_with_scene_create_rejected(self) -> None:
-        """R1 blocker 1: ``trigger: null`` reaches the gate. The
+        """R1 blocker 1: ``triggers: null`` reaches the gate. The
         missing-fields check uses ``not in config_dict`` so present-but-null
         slips through to here, where the gate normalises both ``[]`` and
         ``None`` as empty-trigger."""
@@ -225,8 +230,8 @@ class TestEmptyTriggerSceneCreateDefense:
             AutomationConfigTools._validate_required_fields(
                 {
                     "alias": "Movie",
-                    "trigger": None,
-                    "action": [{"service": "scene.create", "data": {"scene_id": "x"}}],
+                    "triggers": None,
+                    "actions": [{"service": "scene.create", "data": {"scene_id": "x"}}],
                 },
                 identifier=None,
             )
@@ -299,8 +304,8 @@ class TestEmptyTriggerSceneCreateDefense:
             AutomationConfigTools._validate_required_fields(
                 {
                     "alias": f"Nested-{case_name}",
-                    "trigger": [],
-                    "action": [wrapper_action],
+                    "triggers": [],
+                    "actions": [wrapper_action],
                 },
                 identifier=None,
             )
@@ -310,7 +315,7 @@ class TestEmptyTriggerSceneCreateDefense:
         assert "ha_config_set_scene" in suggestions_blob
 
     def test_action_as_single_dict_caught(self) -> None:
-        """R1 while-you're-in: ``action`` accepted as a single dict (not a
+        """R1 while-you're-in: ``actions`` accepted as a single dict (not a
         list) — ``coerce_to_list`` lifts it; the gate must still catch
         this shape so a regression that drops the coerce wouldn't silently
         re-open the gate."""
@@ -318,9 +323,9 @@ class TestEmptyTriggerSceneCreateDefense:
             AutomationConfigTools._validate_required_fields(
                 {
                     "alias": "Single dict action",
-                    "trigger": [],
+                    "triggers": [],
                     # NB: dict, not list-of-dict
-                    "action": {"service": "scene.create", "data": {"scene_id": "x"}},
+                    "actions": {"service": "scene.create", "data": {"scene_id": "x"}},
                 },
                 identifier=None,
             )
@@ -334,9 +339,9 @@ class TestEmptyTriggerSceneCreateDefense:
         AutomationConfigTools._validate_required_fields(
             {
                 "alias": "Draft",
-                "trigger": [],
-                "action": [
-                    {"service": "light.turn_on", "target": {"entity_id": "light.x"}}
+                "triggers": [],
+                "actions": [
+                    {"action": "light.turn_on", "target": {"entity_id": "light.x"}}
                 ],
             },
             identifier=None,
@@ -348,14 +353,14 @@ class TestEmptyTriggerSceneCreateDefense:
         AutomationConfigTools._validate_required_fields(
             {
                 "alias": "Snapshot on guest mode",
-                "trigger": [
+                "triggers": [
                     {
-                        "platform": "state",
+                        "trigger": "state",
                         "entity_id": "input_boolean.guest_mode",
                         "to": "on",
                     }
                 ],
-                "action": [
+                "actions": [
                     {
                         "service": "scene.create",
                         "data": {"scene_id": "before_guests"},
@@ -367,7 +372,7 @@ class TestEmptyTriggerSceneCreateDefense:
 
     def test_use_blueprint_empty_trigger_strip_preserved(self) -> None:
         """Backwards-compat: ``use_blueprint`` configs that pass empty
-        ``trigger: []`` have those stripped before validation (the
+        ``triggers: []`` have those stripped before validation (the
         blueprint provides the trigger). The misroute gate must not
         break that path."""
         AutomationConfigTools._validate_required_fields(
@@ -382,8 +387,8 @@ class TestEmptyTriggerSceneCreateDefense:
                 },
                 # These should be stripped by the use_blueprint pre-pass and
                 # never reach the misroute gate.
-                "trigger": [],
-                "action": [],
+                "triggers": [],
+                "actions": [],
             },
             identifier=None,
         )
@@ -395,8 +400,8 @@ class TestEmptyTriggerSceneCreateDefense:
             AutomationConfigTools._validate_required_fields(
                 {
                     "alias": "Multi",
-                    "trigger": [],
-                    "action": [
+                    "triggers": [],
+                    "actions": [
                         {"service": "light.turn_on"},
                         {"service": "scene.create", "data": {"scene_id": "a"}},
                         {"action": "scene.create", "data": {"scene_id": "b"}},

@@ -197,14 +197,24 @@ def check_automation_config(
 
     warnings = BestPracticeCheckResult()
 
+    # Read the canonical 2024.10+ plural root keys, tolerating the singular
+    # aliases too (HA accepts both, and this checker may see raw user input that
+    # has not been through _normalize_automation_config). Mirrors _check_triggers'
+    # existing platform/trigger tolerance below.
     # Condition templates
-    _check_condition_templates(config.get("condition", []), warnings, skill_prefix)
+    _check_condition_templates(
+        config.get("conditions", config.get("condition", [])), warnings, skill_prefix
+    )
 
     # Action tree (wait_template + nested conditions + target templates)
-    _check_action_tree(config.get("action", []), warnings, skill_prefix)
+    _check_action_tree(
+        config.get("actions", config.get("action", [])), warnings, skill_prefix
+    )
 
     # Trigger templates + device_id
-    _check_triggers(config.get("trigger", []), warnings, skill_prefix)
+    _check_triggers(
+        config.get("triggers", config.get("trigger", [])), warnings, skill_prefix
+    )
 
     # Mode vs motion pattern
     _check_mode_motion(config, warnings, skill_prefix)
@@ -738,7 +748,7 @@ def _check_mode_motion(
     if mode != "single":
         return
 
-    triggers = _as_list(config.get("trigger", []))
+    triggers = _as_list(config.get("triggers", config.get("trigger", [])))
     has_motion = any(
         isinstance(t, dict)
         and any(
@@ -750,7 +760,7 @@ def _check_mode_motion(
     if not has_motion:
         return
 
-    if _has_delay_or_wait(config.get("action", [])):
+    if _has_delay_or_wait(config.get("actions", config.get("action", []))):
         _emit(
             warnings,
             "Automation uses motion trigger with delay/wait but "
