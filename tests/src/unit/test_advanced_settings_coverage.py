@@ -13,9 +13,9 @@ e.g. fields populated from package metadata).
 """
 
 import ast
+import sys
 from pathlib import Path
 
-import ha_mcp
 from ha_mcp.config import (
     ADVANCED_SETTINGS_FIELDS,
     BACKUP_OVERRIDE_FIELDS,
@@ -187,7 +187,10 @@ def test_validate_registries_rejects_beta_field_not_in_feature_flags(
 # This guard scans the shipped source for *direct, string-literal* env
 # reads and requires each to be either a registered ``Settings`` alias
 # (and therefore covered by the gate above) or on the explicit
-# ``ENV_ONLY`` list below. Registry-driven reads (``os.environ.get(var)``
+# ``ENV_ONLY`` list below. It resolves the relevant import aliases per
+# file, so both the attribute forms (``os.environ[...]`` / ``os.getenv``)
+# and the ``from os import environ, getenv`` forms — including ``as``
+# aliases — are caught. Registry-driven reads (``os.environ.get(var)``
 # with a non-literal argument, as in ``config.py`` / ``settings_ui.py``)
 # carry no literal to inspect and are correctly skipped — those iterate
 # the registries themselves.
@@ -213,53 +216,89 @@ ENV_ONLY: dict[str, str] = {
 }
 
 
+def _package_dir() -> Path:
+    cfg = sys.modules["ha_mcp.config"]
+    assert cfg.__file__ is not None  # regular module always has __file__
+    return Path(cfg.__file__).resolve().parent
+
+
+def _first_literal(args: list[ast.expr]) -> str | None:
+    if args and isinstance(args[0], ast.Constant) and isinstance(args[0].value, str):
+        return args[0].value
+    return None
+
+
+def _env_reads_in_tree(tree: ast.Module) -> set[str]:
+    """Resolve per-file aliases for the ``os`` module and the ``environ`` /
+    ``getenv`` names, then collect every literal env var read through them."""
+    os_aliases: set[str] = set()  # names bound to the ``os`` module
+    environ_aliases: set[str] = set()  # names bound to ``os.environ``
+    getenv_aliases: set[str] = set()  # names bound to ``os.getenv``
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "os":
+                    os_aliases.add(alias.asname or "os")
+        elif isinstance(node, ast.ImportFrom) and node.module == "os":
+            for alias in node.names:
+                if alias.name == "environ":
+                    environ_aliases.add(alias.asname or "environ")
+                elif alias.name == "getenv":
+                    getenv_aliases.add(alias.asname or "getenv")
+
+    def _is_environ(node: ast.expr) -> bool:
+        # ``os.environ`` (attribute on the os module) or a bare ``environ``
+        # imported via ``from os import environ``.
+        if isinstance(node, ast.Name):
+            return node.id in environ_aliases
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "environ"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in os_aliases
+        )
+
+    def _is_getenv(node: ast.expr) -> bool:
+        # ``os.getenv`` or a bare ``getenv`` imported via ``from os import``.
+        if isinstance(node, ast.Name):
+            return node.id in getenv_aliases
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == "getenv"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in os_aliases
+        )
+
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        name: str | None = None
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if _is_getenv(fn) or (
+                isinstance(fn, ast.Attribute)
+                and fn.attr in {"get", "setdefault"}
+                and _is_environ(fn.value)
+            ):
+                name = _first_literal(node.args)
+        elif isinstance(node, ast.Subscript) and _is_environ(node.value):
+            sl = node.slice
+            if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+                name = sl.value
+        if name is not None:
+            names.add(name)
+    return names
+
+
 def _literal_env_reads() -> dict[str, set[str]]:
     """Map ``ENV_VAR -> {relative source paths}`` for every direct
     string-literal ``os.environ`` / ``os.getenv`` read in the package."""
-    pkg_dir = Path(ha_mcp.__file__).resolve().parent
-
-    def _is_os_attr(node: ast.expr, attr: str) -> bool:
-        return (
-            isinstance(node, ast.Attribute)
-            and node.attr == attr
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "os"
-        )
-
-    def _is_os_environ(node: ast.expr) -> bool:
-        return _is_os_attr(node, "environ")
-
-    def _first_literal(args: list[ast.expr]) -> str | None:
-        if (
-            args
-            and isinstance(args[0], ast.Constant)
-            and isinstance(args[0].value, str)
-        ):
-            return args[0].value
-        return None
-
+    pkg_dir = _package_dir()
     found: dict[str, set[str]] = {}
     for py in pkg_dir.rglob("*.py"):
         tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
         rel = py.relative_to(pkg_dir).as_posix()
-        for node in ast.walk(tree):
-            name: str | None = None
-            if isinstance(node, ast.Call):
-                fn = node.func
-                if _is_os_attr(fn, "getenv"):
-                    name = _first_literal(node.args)
-                elif isinstance(fn, ast.Attribute) and fn.attr in {
-                    "get",
-                    "setdefault",
-                }:
-                    if _is_os_environ(fn.value):
-                        name = _first_literal(node.args)
-            elif isinstance(node, ast.Subscript) and _is_os_environ(node.value):
-                sl = node.slice
-                if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
-                    name = sl.value
-            if name is not None:
-                found.setdefault(name, set()).add(rel)
+        for name in _env_reads_in_tree(tree):
+            found.setdefault(name, set()).add(rel)
     return found
 
 
@@ -291,6 +330,41 @@ def test_env_only_list_has_no_dead_entries() -> None:
         name for name in ENV_ONLY if name not in reads and name not in aliases
     )
     assert not dead, f"ENV_ONLY lists vars no longer read in src: {dead}"
+
+
+def test_scanner_detects_all_direct_read_forms() -> None:
+    """Guard the guard: the scanner must catch every direct-read form,
+    including the ``from os import ...`` and ``as``-aliased variants, and
+    must skip non-literal (registry-driven) reads."""
+    src = (
+        "import os\n"
+        "import os as _os\n"
+        "from os import environ, getenv\n"
+        "from os import environ as _env, getenv as _ge\n"
+        "a = os.environ['A_ATTR_SUBSCRIPT']\n"
+        "b = os.environ.get('B_ATTR_GET')\n"
+        "c = os.getenv('C_ATTR_GETENV')\n"
+        "d = _os.environ['D_OS_ALIAS']\n"
+        "e = environ['E_FROM_SUBSCRIPT']\n"
+        "f = environ.get('F_FROM_GET')\n"
+        "g = getenv('G_FROM_GETENV')\n"
+        "h = _env.get('H_FROM_ALIAS')\n"
+        "i = _ge('I_GETENV_ALIAS')\n"
+        "os.environ.setdefault('J_SETDEFAULT', 'x')\n"
+        "k = os.environ.get(some_var)\n"  # non-literal -> skipped
+    )
+    assert _env_reads_in_tree(ast.parse(src)) == {
+        "A_ATTR_SUBSCRIPT",
+        "B_ATTR_GET",
+        "C_ATTR_GETENV",
+        "D_OS_ALIAS",
+        "E_FROM_SUBSCRIPT",
+        "F_FROM_GET",
+        "G_FROM_GETENV",
+        "H_FROM_ALIAS",
+        "I_GETENV_ALIAS",
+        "J_SETDEFAULT",
+    }
 
 
 def test_advanced_registries_are_name_disjoint() -> None:

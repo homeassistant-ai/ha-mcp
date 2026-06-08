@@ -106,18 +106,24 @@ def test_invalid_env_value_falls_back_to_default(field, env, default, monkeypatc
     assert getattr(Settings(), field) == default
 
 
-def test_smart_search_constants_track_settings_defaults():
+def test_smart_search_constants_track_settings_field_defaults():
     """The module-level constants the smart-search mixins import must be
-    sourced from the resolved Settings, not a private env read."""
+    sourced from ``Settings`` (issue #1538), not re-hardcoded.
+
+    The constants are read once at import (restart-required by design — the
+    consuming ``SmartSearchTools`` is a startup singleton), so this asserts
+    against the static ``Settings`` field defaults rather than a live
+    ``get_global_settings()`` value. That keeps the check deterministic
+    regardless of any settings rebuild / caching elsewhere in the session,
+    while still catching a constant that drifts away from the Settings
+    default (e.g. someone re-hardcoding it)."""
     from ha_mcp.tools.smart_search import _config
 
-    _reset_global_settings()
-    try:
-        settings = get_global_settings()
-        assert (
-            settings.automation_config_time_budget
-        ) == _config.AUTOMATION_CONFIG_TIME_BUDGET
-        assert settings.script_config_time_budget == _config.SCRIPT_CONFIG_TIME_BUDGET
-        assert settings.scene_config_time_budget == _config.SCENE_CONFIG_TIME_BUDGET
-    finally:
-        _reset_global_settings()
+    constants = {
+        "automation_config_time_budget": _config.AUTOMATION_CONFIG_TIME_BUDGET,
+        "script_config_time_budget": _config.SCRIPT_CONFIG_TIME_BUDGET,
+        "scene_config_time_budget": _config.SCENE_CONFIG_TIME_BUDGET,
+    }
+    for field, _env, default in BUDGET_FIELDS:
+        assert constants[field] == default
+        assert constants[field] == Settings.model_fields[field].default
