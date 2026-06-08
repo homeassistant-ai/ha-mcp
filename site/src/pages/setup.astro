@@ -1299,6 +1299,13 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
             <p class="text-red-300 text-sm font-medium">Security Warning</p>
             <p class="text-red-200/80 text-xs mt-1">When exposing to the internet, <strong>always use a secret path</strong> to prevent unauthorized access. Keep this path private!</p>
           </div>` : '';
+      // For LAN (network) direct runs, the default /mcp is reachable from other machines at a predictable URL.
+      // The local network is trusted by design, so this is a softer "recommended" note, not the red internet warning.
+      const lanHardeningNote = (isNetwork && (derivedDeployment === 'uvx' || derivedDeployment === 'docker')) ? `
+          <div class="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 mt-3">
+            <p class="text-amber-300 text-sm font-medium">Recommended: secret path on the LAN</p>
+            <p class="text-amber-200/80 text-xs mt-1">The local network is treated as trusted, so the default <code>/mcp</code> works for LAN use. For defense-in-depth, set a high-entropy <code>MCP_SECRET_PATH</code> so the endpoint isn't at a predictable URL — or bind <code>MCP_HOST=127.0.0.1</code> if only this machine connects. See the <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/SECURITY.md#local-network-is-the-trusted-zone-for-standard-mode" target="_blank" class="text-amber-300 hover:underline">threat model</a>.</p>
+          </div>` : '';
 
       if (derivedDeployment === 'uvx') {
         const useSecretPath = isRemote && state.proxy !== 'webhook-proxy';
@@ -1311,7 +1318,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <pre class="code-block"><code>$env:HOMEASSISTANT_URL="{{HOMEASSISTANT_URL}}"
 $env:HOMEASSISTANT_TOKEN="{{HOMEASSISTANT_TOKEN}}"
 ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${secretPathNote}
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${secretPathNote}${lanHardeningNote}
         </div>`;
         } else {
           const secretPathEnv = useSecretPath ? `export MCP_SECRET_PATH=/private_{{RANDOM_STRING}}  # Keep this secret!\n` : '';
@@ -1320,7 +1327,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           <pre class="code-block"><code>export HOMEASSISTANT_URL={{HOMEASSISTANT_URL}}
 export HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}
 ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${secretPathNote}
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${portNote}${secretPathNote}${lanHardeningNote}
         </div>`;
         }
       } else if (derivedDeployment === 'docker') {
@@ -1334,7 +1341,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         deployInstr = `<div class="instruction-block">
           <h4 class="instruction-title">Start Docker Container</h4>
           <pre class="code-block"><code>docker run -d --name ha-mcp -p 8086:8086 -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}}${secretPathEnv ? ' ' + secretPathEnv : ''} ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web</code></pre>
-          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${secretPathNote}
+          <p class="text-sm text-slate-400 mt-2">Server will be at: <code>http://YOUR_IP:8086${serverPath}</code></p>${dockerPortNote}${secretPathNote}${lanHardeningNote}
           <details class="mt-3">
             <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Production hardening (docker compose)</summary>
             <p class="text-slate-300 text-sm mt-3 mb-2">A minimum-viable compose paired with an <code>.env</code> file:</p>
