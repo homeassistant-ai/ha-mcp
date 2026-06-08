@@ -603,8 +603,8 @@ class TestHTTPEntryPoints:
             "_get_http_runtime",
             lambda default_port=8086: ("0.0.0.0", default_port, "/mcp"),
         )
-        monkeypatch.setattr(main_module, "_get_mcp", lambda: object())
-        monkeypatch.setattr(main_module, "_get_server", lambda: object())
+        monkeypatch.setattr(main_module, "_get_mcp", object)
+        monkeypatch.setattr(main_module, "_get_server", object)
         monkeypatch.setattr(
             main_module, "register_browser_landing", lambda *a, **kw: None
         )
