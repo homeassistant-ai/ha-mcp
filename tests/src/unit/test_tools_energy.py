@@ -132,6 +132,51 @@ class TestShapeCheck:
         )
         assert any("type" in e["message"] for e in errors)
 
+    def test_water_source_is_valid(self):
+        # Issue #1530: 'water' is a valid HA Core energy SourceType and must
+        # not be rejected by the local shape check.
+        assert (
+            _shape_check(
+                {
+                    "energy_sources": [
+                        {"type": "water", "stat_energy_from": "sensor.water_meter"}
+                    ],
+                }
+            )
+            == []
+        )
+
+    def test_water_source_missing_stat_energy_from(self):
+        # Water requires stat_energy_from, mirroring solar/battery/gas.
+        errors = _shape_check({"energy_sources": [{"type": "water"}]})
+        assert any(
+            "water entries require 'stat_energy_from'" in e["message"] for e in errors
+        )
+
+    def test_water_source_accepts_optional_name(self):
+        # Every source type accepts an optional display 'name'.
+        assert (
+            _shape_check(
+                {
+                    "energy_sources": [
+                        {
+                            "type": "water",
+                            "stat_energy_from": "sensor.water_meter",
+                            "name": "Garden tap",
+                        }
+                    ],
+                }
+            )
+            == []
+        )
+
+    def test_invalid_type_message_lists_water(self):
+        # The enum error message advertises 'water' as an accepted type.
+        errors = _shape_check(
+            {"energy_sources": [{"type": "wind", "stat_energy_from": "sensor.x"}]}
+        )
+        assert any("water" in e["message"] for e in errors)
+
     def test_device_consumption_missing_stat_consumption(self):
         errors = _shape_check(
             {
@@ -407,9 +452,9 @@ class TestDryRun:
         assert any("type" in e["message"] for e in result["shape_errors"])
 
     async def test_shape_errors_energy_sources_enum_and_conditional(self, tools):
-        """G1b + G1c coverage:
+        """G1b + G1c coverage (mode='set' write path):
         - invalid type reports as '.type' path with enum message
-        - solar/battery/gas without stat_energy_from reports required
+        - solar/battery/gas/water without stat_energy_from reports required
         - grid without stat_energy_from is valid (HA core schema: Optional)
         """
         tools._client.send_websocket_message.return_value = {
@@ -464,6 +509,32 @@ class TestDryRun:
             "gas entries require 'stat_energy_from'" in e["message"]
             for e in result["shape_errors"]
         )
+
+        # Water without stat_energy_from (issue #1530: water is a valid type
+        # and, like solar/battery/gas, requires stat_energy_from).
+        result = await tools.ha_manage_energy_prefs(
+            mode="set",
+            config={"energy_sources": [{"type": "water"}]},
+            dry_run=True,
+        )
+        assert result["success"] is False
+        assert any(
+            "water entries require 'stat_energy_from'" in e["message"]
+            for e in result["shape_errors"]
+        )
+
+        # Water WITH stat_energy_from is accepted on the set path (no shape
+        # errors) — the regression at the heart of issue #1530.
+        result = await tools.ha_manage_energy_prefs(
+            mode="set",
+            config={
+                "energy_sources": [
+                    {"type": "water", "stat_energy_from": "sensor.water_meter"}
+                ]
+            },
+            dry_run=True,
+        )
+        assert result["shape_errors"] == []
 
         # Grid without stat_energy_from (valid per HA core schema)
         result = await tools.ha_manage_energy_prefs(
@@ -1699,9 +1770,9 @@ class TestAddSource:
         err = json.loads(str(exc_info.value))
         assert err["error"]["code"] == "VALIDATION_FAILED"
 
-    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas"])
+    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas", "water"])
     async def test_non_grid_missing_stat_energy_from_raises(self, tools, source_type):
-        """solar/battery/gas all require stat_energy_from; grid does not."""
+        """solar/battery/gas/water all require stat_energy_from; grid does not."""
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(
                 mode="add_source",
@@ -1732,9 +1803,9 @@ class TestAddSource:
         assert "device_consumption" not in save_payload
         assert save_payload["energy_sources"][-1] == new_grid
 
-    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas"])
+    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas", "water"])
     async def test_non_grid_happy_path(self, tools, source_type):
-        """solar/battery/gas append to energy_sources just like grid does."""
+        """solar/battery/gas/water append to energy_sources just like grid does."""
         current_prefs = _sample_prefs()
         tools._client.send_websocket_message.side_effect = [
             {"success": True, "result": current_prefs},
@@ -1756,9 +1827,9 @@ class TestAddSource:
         save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
         assert save_payload["energy_sources"][-1] == new_source
 
-    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas"])
+    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas", "water"])
     async def test_non_grid_duplicate_raises_already_exists(self, tools, source_type):
-        """solar/battery/gas reject duplicates by (type, stat_energy_from)."""
+        """solar/battery/gas/water reject duplicates by (type, stat_energy_from)."""
         stat = f"sensor.{source_type}_existing"
         current_prefs = {
             **_sample_prefs(),
@@ -1811,6 +1882,35 @@ class TestAddSource:
         # Two grid entries now (caller's choice).
         assert len(save_payload["energy_sources"]) == 2
 
+    async def test_cross_type_same_stat_is_not_a_duplicate(self, tools):
+        """The de-dup key is the (type, stat_energy_from) tuple, not
+        stat_energy_from alone: an existing solar source must NOT block adding a
+        water source that happens to reuse the same stat_energy_from."""
+        shared_stat = "sensor.shared_meter"
+        current_prefs = {
+            **_sample_prefs(),
+            "energy_sources": [
+                {"type": "solar", "stat_energy_from": shared_stat},
+            ],
+        }
+        tools._client.send_websocket_message.side_effect = [
+            {"success": True, "result": current_prefs},
+            {"success": True, "result": None},
+            {"success": True, "result": _empty_validate_result()},
+        ]
+        result = await tools.ha_manage_energy_prefs(
+            mode="add_source",
+            source={"type": "water", "stat_energy_from": shared_stat},
+        )
+        assert result["success"] is True
+        save_payload = tools._client.send_websocket_message.call_args_list[1].args[0]
+        # Both sources coexist — the differing type makes them distinct.
+        assert len(save_payload["energy_sources"]) == 2
+        assert save_payload["energy_sources"][-1] == {
+            "type": "water",
+            "stat_energy_from": shared_stat,
+        }
+
     async def test_dry_run_does_not_write(self, tools):
         current_prefs = _sample_prefs()
         tools._client.send_websocket_message.side_effect = [
@@ -1824,13 +1924,15 @@ class TestAddSource:
         assert result["dry_run"] is True
         assert tools._client.send_websocket_message.call_count == 1
 
-    async def test_dry_run_raises_on_duplicate_non_grid(self, tools):
-        """dry_run on a duplicate solar/battery/gas raises before the
+    @pytest.mark.parametrize("source_type", ["solar", "battery", "gas", "water"])
+    async def test_dry_run_raises_on_duplicate_non_grid(self, tools, source_type):
+        """dry_run on a duplicate solar/battery/gas/water raises before the
         dry-run short-circuit, matching the add_device dry_run semantic."""
+        stat = f"sensor.{source_type}_panel"
         current_prefs = {
             **_sample_prefs(),
             "energy_sources": [
-                {"type": "solar", "stat_energy_from": "sensor.solar_panel"},
+                {"type": source_type, "stat_energy_from": stat},
             ],
         }
         tools._client.send_websocket_message.side_effect = [
@@ -1839,7 +1941,7 @@ class TestAddSource:
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_manage_energy_prefs(
                 mode="add_source",
-                source={"type": "solar", "stat_energy_from": "sensor.solar_panel"},
+                source={"type": source_type, "stat_energy_from": stat},
                 dry_run=True,
             )
         err = json.loads(str(exc_info.value))

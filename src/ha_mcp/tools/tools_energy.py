@@ -59,6 +59,33 @@ _PREFS_TOP_LEVEL_KEYS: tuple[_PrefsKey, ...] = (
     "device_consumption_water",
 )
 
+# Energy source ``type`` values accepted by HA Core's ``SourceType`` union
+# (homeassistant/components/energy/data.py). ``_EnergySourceType`` names the
+# domain (mirroring the ``_PrefsKey`` pattern above) and ``_ENERGY_SOURCE_TYPES``
+# is its ordered realization — the single source of truth for the local shape
+# check. A type missing here is spuriously rejected even though
+# ``energy/save_prefs`` would accept it; when HA Core adds a source type, add it
+# in both places. Ordered (not a ``set``) to match the upstream union and to
+# keep error messages deterministic. See issue #1530.
+_EnergySourceType = Literal["grid", "solar", "battery", "gas", "water"]
+_ENERGY_SOURCE_TYPES: tuple[_EnergySourceType, ...] = (
+    "grid",
+    "solar",
+    "battery",
+    "gas",
+    "water",
+)
+
+# Non-grid source types. Each requires a ``stat_energy_from`` consumption
+# statistic and is de-duplicated by this tool on ``(type, stat_energy_from)``
+# (used for both the shape check's required-field rule and
+# ``_append_unique_source`` de-duplication). ``grid`` is excluded: its
+# ``stat_energy_from`` is optional and a hub can legitimately carry multiple grid
+# variants, so it has no single uniqueness key.
+_STAT_FROM_SOURCE_TYPES: frozenset[str] = frozenset(
+    t for t in _ENERGY_SOURCE_TYPES if t != "grid"
+)
+
 
 def _default_prefs() -> dict[str, Any]:
     """Return the default empty prefs structure used by HA Core.
@@ -196,25 +223,25 @@ def _shape_check(
                 )
                 continue
             if key == "energy_sources":
-                valid_types = {"grid", "solar", "battery", "gas"}
-                requires_stat_from = {"solar", "battery", "gas"}
+                valid_types = "|".join(_ENERGY_SOURCE_TYPES)
                 entry_type = entry.get("type")
                 if entry_type is None:
                     errors.append(
                         {
                             "path": f"{key}[{idx}]",
-                            "message": "energy_sources entries require 'type' (grid|solar|battery|gas)",
+                            "message": f"energy_sources entries require 'type' ({valid_types})",
                         }
                     )
-                elif entry_type not in valid_types:
+                elif entry_type not in _ENERGY_SOURCE_TYPES:
                     errors.append(
                         {
                             "path": f"{key}[{idx}].type",
-                            "message": f"invalid type '{entry_type}' (must be one of grid|solar|battery|gas)",
+                            "message": f"invalid type '{entry_type}' (must be one of {valid_types})",
                         }
                     )
                 elif (
-                    entry_type in requires_stat_from and "stat_energy_from" not in entry
+                    entry_type in _STAT_FROM_SOURCE_TYPES
+                    and "stat_energy_from" not in entry
                 ):
                     errors.append(
                         {
@@ -354,7 +381,7 @@ class EnergyTools:
                     "the mutation against a fresh read and reports what would "
                     "change without writing — but still raises "
                     "RESOURCE_ALREADY_EXISTS (duplicate add_device, or duplicate "
-                    "add_source for solar/battery/gas), RESOURCE_NOT_FOUND "
+                    "add_source for solar/battery/gas/water), RESOURCE_NOT_FOUND "
                     "(missing remove_device), or VALIDATION_FAILED (post-mutator "
                     "shape error) when the proposed mutation is not applicable. "
                     "Default False."
@@ -414,11 +441,14 @@ class EnergyTools:
             Field(
                 description=(
                     "Single energy_sources entry for mode='add_source'. Must "
-                    "contain 'type' (one of grid|solar|battery|gas) and the "
-                    "type-specific required fields (e.g. solar/battery/gas "
-                    "require 'stat_energy_from'). Note: HA Core's voluptuous "
-                    "schema for grid sources requires the full field set "
-                    "(cost_adjustment_day, stat_energy_to, stat_cost, "
+                    "contain 'type' (one of grid|solar|battery|gas|water) and "
+                    "the type-specific required fields (e.g. "
+                    "solar/battery/gas/water require 'stat_energy_from'). Every "
+                    "source type also accepts an optional 'name' (display label "
+                    "in the energy graphs); battery additionally accepts "
+                    "'stat_soc' (state-of-charge statistic). Note: HA Core's "
+                    "voluptuous schema for grid sources requires the full field "
+                    "set (cost_adjustment_day, stat_energy_to, stat_cost, "
                     "entity_energy_price, number_energy_price, "
                     "entity_energy_price_export, number_energy_price_export, "
                     "stat_compensation) — the local shape check is narrower, "
@@ -434,11 +464,11 @@ class EnergyTools:
         """
         Manage the Home Assistant Energy Dashboard preferences.
 
-        The Energy Dashboard configuration (grid/solar/battery/gas sources,
-        individual device consumption sensors, cost tariffs, water) is stored
-        in ``.storage/energy`` and not otherwise reachable via REST, services,
-        or helper flows — this tool is the only way for agents to inspect or
-        modify it.
+        The Energy Dashboard configuration (grid/solar/battery/gas/water energy
+        sources, individual device consumption sensors for electricity and
+        water, cost tariffs) is stored in ``.storage/energy`` and not otherwise
+        reachable via REST, services, or helper flows — this tool is the only
+        way for agents to inspect or modify it.
 
         WHEN TO USE:
         - mode='get' / 'set': inspect or replace the full Energy Dashboard
@@ -449,7 +479,8 @@ class EnergyTools:
           internally; the caller does NOT manage config_hash. Use ``water=True``
           to target the water meter list instead of electricity.
         - mode='add_source': append a single entry to ``energy_sources`` (grid,
-          solar, battery, or gas). Same atomic read-modify-write semantics.
+          solar, battery, gas, or water). Same atomic read-modify-write
+          semantics.
 
         WHEN NOT TO USE:
         - To create the underlying statistics themselves — they must already
@@ -491,7 +522,7 @@ class EnergyTools:
         - Convenience modes are NOT idempotent: 'add_device' on an existing
           ``stat_consumption`` returns RESOURCE_ALREADY_EXISTS; 'remove_device'
           on a missing entry returns RESOURCE_NOT_FOUND. 'add_source' rejects
-          duplicates by ``(type, stat_energy_from)`` for solar/battery/gas
+          duplicates by ``(type, stat_energy_from)`` for solar/battery/gas/water
           (RESOURCE_ALREADY_EXISTS); grid entries are appended without a
           duplicate check (multiple grid variants are legitimate, and grid
           has no single canonical uniqueness key) — the caller is responsible
@@ -1094,15 +1125,15 @@ class EnergyTools:
 
         The ``source`` dict is wrapped into a synthetic single-entry config
         for ``_shape_check`` reuse, which validates the type-specific
-        required fields (e.g. ``stat_energy_from`` for solar/battery/gas).
+        required fields (e.g. ``stat_energy_from`` for solar/battery/gas/water).
 
         Duplicate semantics are asymmetric to ``_add_device`` because
         ``energy_sources`` does not expose a single uniqueness key across
-        types: solar/battery/gas are keyed on ``stat_energy_from``, but
+        types: solar/battery/gas/water are keyed on ``stat_energy_from``, but
         ``grid`` entries can legitimately have multiple variants
         (different tariffs, multiple meters) where ``stat_energy_from``
         alone does not identify duplicates. We therefore reject duplicates
-        by ``(type, stat_energy_from)`` for solar/battery/gas only and
+        by ``(type, stat_energy_from)`` for solar/battery/gas/water only and
         leave grid de-duplication to the caller.
         """
         if source is None:
@@ -1112,7 +1143,7 @@ class EnergyTools:
                     "'source' is required when mode='add_source'",
                     context={"mode": "add_source"},
                     suggestions=[
-                        "Pass source={'type': 'grid'|'solar'|'battery'|'gas', ...}",
+                        "Pass source={'type': 'grid'|'solar'|'battery'|'gas'|'water', ...}",
                     ],
                 )
             )
@@ -1132,7 +1163,7 @@ class EnergyTools:
                     },
                     suggestions=[
                         "Fix the listed errors and retry",
-                        "solar/battery/gas need 'stat_energy_from'; grid needs "
+                        "solar/battery/gas/water need 'stat_energy_from'; grid needs "
                         + "only 'type' for the local check, but HA Core's voluptuous "
                         + "schema requires the full grid field set "
                         + "(cost_adjustment_day, stat_energy_to, stat_cost, "
@@ -1189,7 +1220,7 @@ class EnergyTools:
         """Append ``new_source`` to ``existing`` with type-aware duplicate
         detection.
 
-        Solar/battery/gas entries are keyed on
+        Solar/battery/gas/water entries are keyed on
         ``(type, stat_energy_from)`` — duplicates raise
         ``RESOURCE_ALREADY_EXISTS``. Grid entries are appended without a
         duplicate check (multiple grid variants are legitimate, and grid
@@ -1199,7 +1230,7 @@ class EnergyTools:
         backstop for whatever HA Core flags.
         """
         source_type = new_source.get("type")
-        if source_type in {"solar", "battery", "gas"}:
+        if source_type in _STAT_FROM_SOURCE_TYPES:
             stat = new_source.get("stat_energy_from")
             for entry in existing:
                 if (
