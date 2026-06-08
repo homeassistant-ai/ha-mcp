@@ -1102,8 +1102,11 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **When NOT to use this for automation/script logic:**
         Templates have legitimate uses (notification bodies, dynamic `data.*` values,
         debugging existing templates), but `condition:` / `trigger:` positions and
-        action service names are better expressed as native HA constructs — they
-        validate at config load, fail loudly, and avoid silent runtime failures.
+        action service names are better expressed as native HA constructs:
+        native constructs are schema-validated at config load and surface
+        structural errors loudly, whereas equivalent template logic only errors
+        at runtime — and a template that renders a non-truthy value is silently
+        treated as false.
         Prefer:
         - `condition: numeric_state` over `{{ states('x') | float > N }}`
         - `condition: state` over `{{ is_state(...) }}`
@@ -1121,7 +1124,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         it is the canonical way to *test* a template before embedding it. This is
         for one-shot answers and template testing only — NOT for putting templates
         into automation logic; for `condition:` / `trigger:` positions native
-        constructs win (see "When NOT to use" above).
+        constructs win.
         - "average temperature across the bedroom sensors"
           -> `{{ ([states('sensor.a'), states('sensor.b')] | map('float', 0) | sum) / 2 }}`
         - "how many lights are on"

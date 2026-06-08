@@ -44,8 +44,8 @@ verify:
     - "Did the agent compute or report the value 22?"
     - "Did the agent call a template-rendering tool, or did it average two get_state results manually?"
   ha_checks:
-    - type: response_contains
-      value: "22"
+    - type: response_matches
+      pattern: '(?i)\b22\b'
 
 expected:
   tools_should_use:

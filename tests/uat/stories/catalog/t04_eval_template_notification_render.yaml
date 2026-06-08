@@ -45,8 +45,8 @@ verify:
   ha_checks:
     - type: response_contains
       value: "input_boolean.bat_t04_door"
-    - type: response_contains
-      value: "on"
+    - type: response_matches
+      pattern: '(?i)\bis\s+on\b'
 
 expected:
   tools_should_use:

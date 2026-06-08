@@ -37,8 +37,8 @@ verify:
     - "Did the agent report the value 42?"
     - "Did the agent use a state-lookup tool (ha_get_state / ha_search) rather than rendering a template?"
   ha_checks:
-    - type: response_contains
-      value: "42"
+    - type: response_matches
+      pattern: '(?i)\b42\b'
 
 expected:
   tools_should_use:
