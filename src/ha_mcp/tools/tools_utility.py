@@ -1099,6 +1099,39 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Home Assistant automations, scripts, and configurations. It provides real-time evaluation with
         access to all Home Assistant states, functions, and template variables.
 
+        **When NOT to use this for automation/script logic:**
+        Templates have legitimate uses (notification bodies, dynamic `data.*` values,
+        debugging existing templates), but `condition:` / `trigger:` positions and
+        action service names are better expressed as native HA constructs:
+        native constructs are schema-validated at config load and surface
+        structural errors loudly, whereas equivalent template logic only errors
+        at runtime — and a template that renders a non-truthy value is silently
+        treated as false.
+        Prefer:
+        - `condition: numeric_state` over `{{ states('x') | float > N }}`
+        - `condition: state` over `{{ is_state(...) }}`
+        - `condition: time` / `condition: sun` over `now().hour` / `is_state('sun.sun', ...)`
+        - Native `for:` field on state/numeric_state triggers and state conditions over
+          `{{ now() - X.last_changed > timedelta(...) }}` duration math
+        - `choose` action over templated `service:` / `action:` strings
+        See `ha_get_skill_guide` (best-practices skill) for the full anti-pattern list.
+
+        **When to use (reach for this tool, don't compute it yourself):**
+        Any one-shot question whose answer is DERIVED from current HA state — an
+        average/sum/min/max across sensors, a count of entities matching a
+        condition, a boolean comparison, or a rendered message with live values.
+        One render call beats fetching N states and doing the math yourself, and
+        it is the canonical way to *test* a template before embedding it. This is
+        for one-shot answers and template testing only — NOT for putting templates
+        into automation logic; for `condition:` / `trigger:` positions native
+        constructs win.
+        - "average temperature across the bedroom sensors"
+          -> `{{ ([states('sensor.a'), states('sensor.b')] | map('float', 0) | sum) / 2 }}`
+        - "how many lights are on"
+          -> `{{ states.light | selectattr('state', 'eq', 'on') | list | count }}`
+        NOT for a plain single-entity value ("what's the state of X") — that is
+        `ha_get_state` / `ha_search`; rendering `{{ states('X') }}` there is over-use.
+
         **Parameters:**
         - template: The Jinja2 template string to evaluate
         - timeout: Maximum evaluation time in seconds (default: 3)
@@ -1117,8 +1150,8 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         **Numeric Operations:**
         ```jinja2
         {{ states('sensor.temperature') | float(0) }}   # Convert to float with default
-        {{ states('sensor.humidity') | int }}           # Convert to integer
-        {{ (states('sensor.temp') | float + 5) | round(1) }} # Math operations
+        {{ states('sensor.humidity') | int(0) }}        # Convert to integer with default
+        {{ (states('sensor.temp') | float(0) + 5) | round(1) }} # Math operations
         ```
 
         **Time and Date:**
@@ -1163,20 +1196,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         {{ device_id('light.bedroom') }}               # Get device ID for entity
         ```
 
-        **When NOT to use this for automation/script logic:**
-        Templates have legitimate uses (notification bodies, dynamic `data.*` values,
-        debugging existing templates), but `condition:` / `trigger:` positions and
-        action service names are better expressed as native HA constructs — they
-        validate at config load, fail loudly, and avoid silent runtime failures.
-        Prefer:
-        - `condition: numeric_state` over `{{ states('x') | float > N }}`
-        - `condition: state` over `{{ is_state(...) }}`
-        - `condition: time` / `condition: sun` over `now().hour` / `is_state('sun.sun', ...)`
-        - Native `for:` field on state/numeric_state triggers and state conditions over
-          `{{ now() - X.last_changed > timedelta(...) }}` duration math
-        - `choose` action over templated `service:` / `action:` strings
-        See `ha_get_skill_guide` (best-practices skill) for the full anti-pattern list.
-
         **Common Use Cases (legitimate template positions):**
 
         **Dynamic Service Data:**
@@ -1202,7 +1221,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         **Test mathematical operations:**
         ```python
-        ha_eval_template("{{ (states('sensor.temperature') | float + 5) | round(1) }}")
+        ha_eval_template("{{ (states('sensor.temperature') | float(0) + 5) | round(1) }}")
         ```
 
         **Test entity counting:**

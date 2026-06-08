@@ -43,7 +43,7 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_search_entities
+    - ha_search
     - ha_config_set_automation
   description: >
     Agent should create an automation with state trigger on the motion sensor,

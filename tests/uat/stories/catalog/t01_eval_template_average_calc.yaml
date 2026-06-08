@@ -1,0 +1,58 @@
+id: t01
+title: "Compute the average across two numeric entities (eval_template under-use probe)"
+category: template
+weight: 3
+description: >
+  User asks for an arithmetic combination of two entity states. The canonical
+  pick is `ha_eval_template` with a Jinja expression that floats both states
+  and averages them. The under-use failure mode: the agent calls
+  `ha_get_state` twice and averages "in its head" without using a tool —
+  workable for trivial cases but skips the deterministic tool path the user
+  expected. Part of issue #1175 item 2 BAT (eval_template usage measurement).
+
+tags:
+  - template
+  - eval_template
+  - eval_template_bat
+
+setup:
+  - tool: ha_config_set_helper
+    args:
+      helper_type: input_number
+      name: "bat t01 temp1"
+      initial: 20
+      min: -50
+      max: 50
+      step: 0.1
+  - tool: ha_config_set_helper
+    args:
+      helper_type: input_number
+      name: "bat t01 temp2"
+      initial: 24
+      min: -50
+      max: 50
+      step: 0.1
+
+prompt: >
+  What's the average value of `input_number.bat_t01_temp1` and
+  `input_number.bat_t01_temp2` right now?
+
+teardown: []
+
+verify:
+  questions:
+    - "Did the agent compute or report the value 22?"
+    - "Did the agent call a template-rendering tool, or did it average two get_state results manually?"
+  ha_checks:
+    - type: response_matches
+      pattern: '(?i)\b22\b'
+
+expected:
+  tools_should_use:
+    - ha_eval_template
+  description: >
+    Canonical fit for `ha_eval_template` with
+    `{{ ((states('input_number.bat_t01_temp1')|float(0)) +
+    (states('input_number.bat_t01_temp2')|float(0))) / 2 }}`. Under-use
+    classification: agent calls `ha_get_state` ×2 and averages in-prose
+    without invoking the tool.

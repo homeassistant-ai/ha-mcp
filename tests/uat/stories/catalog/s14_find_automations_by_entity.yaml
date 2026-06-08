@@ -12,7 +12,6 @@ tags:
   - search
   - automation
   - script
-  - deep_search
 
 setup:
   - tool: ha_config_set_automation
@@ -50,8 +49,8 @@ verify:
 
 expected:
   tools_should_use:
-    - ha_deep_search
+    - ha_search
   description: >
-    Agent should use ha_deep_search to search inside automation/script
+    Agent should use ha_search to search inside automation/script
     configurations for references to light.bed_light. A good agent will
     report the automation name, its purpose, and how it uses the entity.
