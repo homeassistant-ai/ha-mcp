@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated:** May 2026
+**Last updated:** June 2026
 
 ## Scope
 
@@ -12,7 +12,7 @@ Ha-mcp runs on your local machine and communicates with your own Home Assistant 
 
 ## Anonymous Usage Statistics
 
-Anonymous usage statistics are a planned future feature and are **not currently collected or transmitted** as of May 2026. When this feature is implemented, it will respect your Home Assistant analytics/telemetry setting by default, and you will be able to override that choice (opt out). Users will be notified in the release notes — and through a prominent in-app notice — before it becomes active.
+Anonymous usage statistics are a planned future feature and are **not currently collected or transmitted** as of June 2026. When this feature is implemented, it will respect your Home Assistant analytics/telemetry setting by default, and you will be able to override that choice (opt out). The change will be announced prominently in the release notes — shown in the README, on the GitHub releases page, and in the web Settings UI — at least one month before it takes effect.
 
 When enabled in a future release, anonymous usage statistics would include:
 
@@ -59,7 +59,7 @@ When you use ha-mcp, your MCP client accesses data from your Home Assistant inst
 
 ## Changes to This Policy
 
-We may update this privacy policy to reflect changes in our practices. Significant changes will be noted in release notes.
+We may update this privacy policy to reflect changes in our practices. Any change that affects what data is collected or transmitted will be announced prominently in the release notes — shown in the README, on the GitHub releases page, and in the web Settings UI — at least one month before it takes effect.
 
 ## Contact
 
