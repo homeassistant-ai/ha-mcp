@@ -100,7 +100,13 @@ def test_trim_order_in_sync() -> None:
     assert harness_order == _CANONICAL_TRIM_ORDER, harness_order
 
 
-_LITERAL = re.compile(r"'((?:[^'\\]|\\.)*)'")
+# Match a JS string literal in any quote style (', ", or `). The backreference
+# requires the same quote to close, so a quote of a different style inside the
+# literal (e.g. the double quotes inside the single-quoted jsonSchema) is body,
+# not a new literal — finditer's non-overlapping scan then counts each string
+# once. Single-quote-only would silently under-count if framing ever switched
+# quote style.
+_LITERAL = re.compile(r"""(['"`])((?:(?!\1)[^\\]|\\.)*)\1""")
 
 
 def _assemble_framing_chars(text: str) -> int:
@@ -113,10 +119,10 @@ def _assemble_framing_chars(text: str) -> int:
     """
     block = re.search(r"const assemble = \(o = \{\}\) => \[(.*?)\]\.join", text, re.S)
     assert block, "could not locate assemble() array in workflow"
-    framing = sum(len(s) for s in _LITERAL.findall(block.group(1)))
+    framing = sum(len(m.group(2)) for m in _LITERAL.finditer(block.group(1)))
     schema = re.search(r"const jsonSchema =(.*?);", text, re.S)
     assert schema, "could not locate jsonSchema in workflow"
-    framing += sum(len(s) for s in _LITERAL.findall(schema.group(1)))
+    framing += sum(len(m.group(2)) for m in _LITERAL.finditer(schema.group(1)))
     # join('\n') inserts a newline between array elements; counting source lines
     # in the block is a conservative (over-)estimate of those newlines.
     framing += block.group(1).count("\n")
