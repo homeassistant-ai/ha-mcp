@@ -12,6 +12,10 @@ allow-list is for things that genuinely have no place in the panel,
 e.g. fields populated from package metadata).
 """
 
+import ast
+from pathlib import Path
+
+import ha_mcp
 from ha_mcp.config import (
     ADVANCED_SETTINGS_FIELDS,
     BACKUP_OVERRIDE_FIELDS,
@@ -168,6 +172,125 @@ def test_validate_registries_rejects_beta_field_not_in_feature_flags(
     monkeypatch.setattr(cfg, "BETA_FEATURE_FIELDS", patched_beta)
     with pytest.raises(RuntimeError, match="BETA_FEATURE_FIELDS contains names not in"):
         cfg._validate_registries()
+
+
+# ---------------------------------------------------------------------------
+# Guard against env-var drift bypassing config.py (issue #1538)
+# ---------------------------------------------------------------------------
+#
+# The coverage gate above only sees env vars that are ``Settings`` fields.
+# A tunable knob read directly via ``os.environ`` / ``os.getenv`` never
+# becomes a Settings field, so it stays invisible to the web Settings UI
+# and unreachable for add-on users. That is exactly how the three
+# ``HAMCP_*_TIME_BUDGET`` knobs drifted out of the panel before #1538.
+#
+# This guard scans the shipped source for *direct, string-literal* env
+# reads and requires each to be either a registered ``Settings`` alias
+# (and therefore covered by the gate above) or on the explicit
+# ``ENV_ONLY`` list below. Registry-driven reads (``os.environ.get(var)``
+# with a non-literal argument, as in ``config.py`` / ``settings_ui.py``)
+# carry no literal to inspect and are correctly skipped — those iterate
+# the registries themselves.
+
+# Env vars deliberately read straight from the environment with no panel
+# home. Each is a bind / secret / bootstrap / path value that must be set
+# before (or independently of) the UI that would otherwise edit it.
+ENV_ONLY: dict[str, str] = {
+    "SUPERVISOR_TOKEN": "Injected by Supervisor; identifies add-on mode (secret/bootstrap)",
+    "SUPERVISOR_BASE_URL": "Supervisor API base; bootstrap before any settings exist",
+    "HAMCP_ENV_FILE": "Selects which .env file to load — read before Settings is built",
+    "HA_MCP_CONFIG_DIR": "Resolves the data dir that *holds* the override files (path)",
+    "XDG_DATA_HOME": "Data-dir fallback root (path)",
+    "HA_MCP_BUILD_VERSION": "Build metadata stamped at image build (bootstrap)",
+    "HA_MCP_DISABLE_SETTINGS_UI": "Kill-switch for the settings sidecar itself (chicken-and-egg)",
+    "MCP_HOST": "HTTP listener bind address — configured before the server is up",
+    "MCP_PORT": "HTTP listener port — configured before the server is up",
+    "MCP_HTTP_PORT": "HTTP listener port (alt name) — bind config",
+    "MCP_BASE_URL": "Externally advertised base URL — bind/deployment config",
+    "MCP_SECRET_PATH": "Secret URL path component for the MCP endpoint (secret)",
+    "FASTMCP_PORT": "FastMCP transport bind port",
+    "FASTMCP_TRANSPORT": "FastMCP transport selection — bootstrap",
+}
+
+
+def _literal_env_reads() -> dict[str, set[str]]:
+    """Map ``ENV_VAR -> {relative source paths}`` for every direct
+    string-literal ``os.environ`` / ``os.getenv`` read in the package."""
+    pkg_dir = Path(ha_mcp.__file__).resolve().parent
+
+    def _is_os_attr(node: ast.expr, attr: str) -> bool:
+        return (
+            isinstance(node, ast.Attribute)
+            and node.attr == attr
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "os"
+        )
+
+    def _is_os_environ(node: ast.expr) -> bool:
+        return _is_os_attr(node, "environ")
+
+    def _first_literal(args: list[ast.expr]) -> str | None:
+        if (
+            args
+            and isinstance(args[0], ast.Constant)
+            and isinstance(args[0].value, str)
+        ):
+            return args[0].value
+        return None
+
+    found: dict[str, set[str]] = {}
+    for py in pkg_dir.rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+        rel = py.relative_to(pkg_dir).as_posix()
+        for node in ast.walk(tree):
+            name: str | None = None
+            if isinstance(node, ast.Call):
+                fn = node.func
+                if _is_os_attr(fn, "getenv"):
+                    name = _first_literal(node.args)
+                elif isinstance(fn, ast.Attribute) and fn.attr in {
+                    "get",
+                    "setdefault",
+                }:
+                    if _is_os_environ(fn.value):
+                        name = _first_literal(node.args)
+            elif isinstance(node, ast.Subscript) and _is_os_environ(node.value):
+                sl = node.slice
+                if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+                    name = sl.value
+            if name is not None:
+                found.setdefault(name, set()).add(rel)
+    return found
+
+
+def test_no_unregistered_direct_env_reads() -> None:
+    """Every direct ``os.environ`` read of a literal var name must be a
+    registered ``Settings`` alias or an explicitly documented ENV_ONLY var."""
+    reads = _literal_env_reads()
+    aliases = _all_env_aliases()
+    offenders = {
+        name: sorted(paths)
+        for name, paths in reads.items()
+        if name not in aliases and name not in ENV_ONLY
+    }
+    assert not offenders, (
+        "Direct os.environ reads of unregistered env vars (invisible to the "
+        f"Settings UI): {offenders}. Promote each to a Settings field (and a "
+        "registry: ADVANCED_SETTINGS_FIELDS / FEATURE_FLAG_FIELDS / "
+        "BACKUP_OVERRIDE_FIELDS), or add it to ENV_ONLY with a one-line reason."
+    )
+
+
+def test_env_only_list_has_no_dead_entries() -> None:
+    """Keep ENV_ONLY honest — an entry no longer read anywhere (and not a
+    Settings alias) is dead and should be removed so the list documents
+    reality."""
+    reads = _literal_env_reads()
+    aliases = _all_env_aliases()
+    dead = sorted(
+        name for name in ENV_ONLY if name not in reads and name not in aliases
+    )
+    assert not dead, f"ENV_ONLY lists vars no longer read in src: {dead}"
 
 
 def test_advanced_registries_are_name_disjoint() -> None:

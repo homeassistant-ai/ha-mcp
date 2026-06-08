@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
 from dotenv import load_dotenv
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ha_mcp._version import get_version
@@ -64,6 +64,24 @@ class Settings(BaseSettings):
     # Tool configuration
     fuzzy_threshold: int = Field(60, alias="FUZZY_THRESHOLD")
     entity_search_limit: int = Field(20, alias="ENTITY_SEARCH_LIMIT")
+
+    # Smart-search config-fetch time budgets (seconds). Bound how long
+    # ha_search / ha_deep_search spends fetching automation/script/scene
+    # definitions during the per-id fallback before reporting a partial
+    # result. Surfaced in the Advanced settings panel (issue #1538) so
+    # add-on users — who cannot set raw env vars — can tune them. Consumed
+    # as import-time module constants in tools/smart_search/_config.py, so
+    # a change requires an MCP-host restart to take effect (the same
+    # restart-required behavior the Advanced panel already advertises).
+    automation_config_time_budget: float = Field(
+        30.0, alias="HAMCP_AUTOMATION_CONFIG_TIME_BUDGET"
+    )
+    script_config_time_budget: float = Field(
+        20.0, alias="HAMCP_SCRIPT_CONFIG_TIME_BUDGET"
+    )
+    scene_config_time_budget: float = Field(
+        20.0, alias="HAMCP_SCENE_CONFIG_TIME_BUDGET"
+    )
 
     # Backup tool configuration
     backup_hint: str = Field("normal", alias="BACKUP_HINT")
@@ -292,6 +310,34 @@ class Settings(BaseSettings):
         if isinstance(v, str) and not v.strip():
             return False
         return v
+
+    @field_validator(
+        "automation_config_time_budget",
+        "script_config_time_budget",
+        "scene_config_time_budget",
+        mode="before",
+    )
+    @classmethod
+    def _lenient_time_budget(cls, v: object, info: ValidationInfo) -> object:
+        """Preserve the legacy ``_env_float`` contract for the three smart-
+        search time budgets: an empty or unparseable value falls back to
+        the field default (with a warning) instead of crashing startup with
+        a ``ValidationError``. Mirrors the tolerance the override-file path
+        already applies via ``_ADVANCED_SETTINGS_BOUNDS``."""
+        assert info.field_name is not None
+        default = cls.model_fields[info.field_name].default
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return default
+        try:
+            return float(v)  # type: ignore[arg-type]
+        except (ValueError, TypeError):
+            logger.warning(
+                "Invalid value for %s=%r; using default %s",
+                info.field_name,
+                v,
+                default,
+            )
+            return default
 
     @property
     def env_file_name(self) -> str:
@@ -598,6 +644,29 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     # Search & matching.
     AdvancedField("fuzzy_threshold", "FUZZY_THRESHOLD", int, "search", True),
     AdvancedField("entity_search_limit", "ENTITY_SEARCH_LIMIT", int, "search", True),
+    # Smart-search config-fetch time budgets (#1538). Restart-required
+    # (consumed as import-time constants in smart_search/_config.py).
+    AdvancedField(
+        "automation_config_time_budget",
+        "HAMCP_AUTOMATION_CONFIG_TIME_BUDGET",
+        float,
+        "search",
+        True,
+    ),
+    AdvancedField(
+        "script_config_time_budget",
+        "HAMCP_SCRIPT_CONFIG_TIME_BUDGET",
+        float,
+        "search",
+        True,
+    ),
+    AdvancedField(
+        "scene_config_time_budget",
+        "HAMCP_SCENE_CONFIG_TIME_BUDGET",
+        float,
+        "search",
+        True,
+    ),
     # Operations.
     AdvancedField("backup_hint", "BACKUP_HINT", str, "operations", True),
     AdvancedField("enable_websocket", "ENABLE_WEBSOCKET", bool, "operations", True),
@@ -660,6 +729,9 @@ _ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
     "max_retries": (0, 20),
     "fuzzy_threshold": (0, 100),
     "entity_search_limit": (1, 1000),
+    "automation_config_time_budget": (1.0, 600.0),
+    "script_config_time_budget": (1.0, 600.0),
+    "scene_config_time_budget": (1.0, 600.0),
     "code_mode_max_duration": (1.0, 300.0),
     "code_mode_max_memory": (1_048_576, 268_435_456),
     "code_mode_max_recursion": (1, 10_000),
