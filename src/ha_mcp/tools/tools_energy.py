@@ -60,19 +60,28 @@ _PREFS_TOP_LEVEL_KEYS: tuple[_PrefsKey, ...] = (
 )
 
 # Energy source ``type`` values accepted by HA Core's ``SourceType`` union
-# (homeassistant/components/energy/data.py). This is the single source of truth
-# for the local shape check — a type missing here is spuriously rejected even
-# though ``energy/save_prefs`` would accept it. When HA Core adds a source type,
-# add it here. Ordered (not a ``set``) to match the upstream union and to keep
-# error messages deterministic. See issue #1530.
-_ENERGY_SOURCE_TYPES: tuple[str, ...] = ("grid", "solar", "battery", "gas", "water")
+# (homeassistant/components/energy/data.py). ``_EnergySourceType`` names the
+# domain (mirroring the ``_PrefsKey`` pattern above) and ``_ENERGY_SOURCE_TYPES``
+# is its ordered realization — the single source of truth for the local shape
+# check. A type missing here is spuriously rejected even though
+# ``energy/save_prefs`` would accept it; when HA Core adds a source type, add it
+# in both places. Ordered (not a ``set``) to match the upstream union and to
+# keep error messages deterministic. See issue #1530.
+_EnergySourceType = Literal["grid", "solar", "battery", "gas", "water"]
+_ENERGY_SOURCE_TYPES: tuple[_EnergySourceType, ...] = (
+    "grid",
+    "solar",
+    "battery",
+    "gas",
+    "water",
+)
 
 # Non-grid source types. Each requires a ``stat_energy_from`` consumption
-# statistic and is uniquely identified by ``(type, stat_energy_from)`` (used for
-# both the shape check's required-field rule and ``_append_unique_source``
-# de-duplication). ``grid`` is excluded: its ``stat_energy_from`` is optional and
-# a hub can legitimately carry multiple grid variants, so it has no single
-# uniqueness key.
+# statistic and is de-duplicated by this tool on ``(type, stat_energy_from)``
+# (used for both the shape check's required-field rule and
+# ``_append_unique_source`` de-duplication). ``grid`` is excluded: its
+# ``stat_energy_from`` is optional and a hub can legitimately carry multiple grid
+# variants, so it has no single uniqueness key.
 _STAT_FROM_SOURCE_TYPES: frozenset[str] = frozenset(
     t for t in _ENERGY_SOURCE_TYPES if t != "grid"
 )
