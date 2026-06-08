@@ -71,8 +71,8 @@ class Settings(BaseSettings):
     # result. Surfaced in the Advanced settings panel (issue #1538) so
     # add-on users — who cannot set raw env vars — can tune them. Consumed
     # as import-time module constants in tools/smart_search/_config.py, so
-    # a change requires an MCP-host restart to take effect (the same
-    # restart-required behavior the Advanced panel already advertises).
+    # a change requires an MCP-host restart to take effect (advanced
+    # settings already carry a restart-required notice in the UI).
     automation_config_time_budget: float = Field(
         30.0, alias="HAMCP_AUTOMATION_CONFIG_TIME_BUDGET"
     )
@@ -319,25 +319,42 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _lenient_time_budget(cls, v: object, info: ValidationInfo) -> object:
-        """Preserve the legacy ``_env_float`` contract for the three smart-
-        search time budgets: an empty or unparseable value falls back to
-        the field default (with a warning) instead of crashing startup with
-        a ``ValidationError``. Mirrors the tolerance the override-file path
-        already applies via ``_ADVANCED_SETTINGS_BOUNDS``."""
-        assert info.field_name is not None
-        default = cls.model_fields[info.field_name].default
+        """Coerce the three smart-search time budgets, falling back to the
+        field default (with a warning) instead of crashing startup.
+
+        Preserves the parse-tolerance of the removed ``_env_float`` helper
+        (empty / unparseable -> default) and additionally enforces the same
+        ``_ADVANCED_SETTINGS_BOUNDS`` range as the override-file / UI-POST
+        path, so the env-var path can't smuggle in an out-of-range or
+        non-finite budget. A ``<= 0`` budget would silently disable the
+        per-id config-fetch scan, and ``inf`` / ``nan`` would uncap it; the
+        ``lo <= val <= hi`` test rejects all three (NaN comparisons are
+        False), keeping the env and override-file paths consistent."""
+        field_name = info.field_name
+        if field_name is None:  # always set for field_validator; defensive
+            return v
+        default = cls.model_fields[field_name].default
         if v is None or (isinstance(v, str) and not v.strip()):
             return default
         try:
-            return float(v)  # type: ignore[arg-type]
+            val = float(v)  # type: ignore[arg-type]
         except (ValueError, TypeError):
             logger.warning(
-                "Invalid value for %s=%r; using default %s",
-                info.field_name,
+                "Invalid value for %s=%r; using default %s", field_name, v, default
+            )
+            return default
+        lo, hi = _ADVANCED_SETTINGS_BOUNDS[field_name]
+        if not (lo <= val <= hi):
+            logger.warning(
+                "%s=%r is outside %s-%s; using default %s",
+                field_name,
                 v,
+                lo,
+                hi,
                 default,
             )
             return default
+        return val
 
     @property
     def env_file_name(self) -> str:

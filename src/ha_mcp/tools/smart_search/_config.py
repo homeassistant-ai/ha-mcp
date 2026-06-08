@@ -21,8 +21,8 @@ INDIVIDUAL_CONFIG_TIMEOUT = 5.0  # Timeout for individual config fetches
 # override file, and the field defaults all flow through one precedence path
 # — and so add-on users (who cannot set raw env vars) can tune them from the
 # Advanced panel. Read once at import as module-level constants; a change
-# takes effect on the next MCP-host restart (the Advanced panel advertises
-# this restart-required behavior).
+# takes effect on the next MCP-host restart (advanced settings already
+# carry a restart-required notice in the UI).
 _settings = get_global_settings()
 AUTOMATION_CONFIG_TIME_BUDGET = _settings.automation_config_time_budget
 SCRIPT_CONFIG_TIME_BUDGET = _settings.script_config_time_budget

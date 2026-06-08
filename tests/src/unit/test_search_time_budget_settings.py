@@ -98,12 +98,49 @@ def test_override_file_value_is_applied(
 
 
 @pytest.mark.parametrize("field,env,default", BUDGET_FIELDS)
-def test_invalid_env_value_falls_back_to_default(field, env, default, monkeypatch):
-    """Preserve the lenient ``_env_float`` contract: an unparseable env
-    value must fall back to the default, not raise at startup."""
+@pytest.mark.parametrize("bad_value", [9999.0, 0.0, -5.0])
+def test_out_of_range_override_file_value_is_rejected(
+    field, env, default, bad_value, isolated_data_dir, monkeypatch
+):
+    """An override-file value outside 1.0-600.0 is ignored; the field stays
+    at its default (``_apply_advanced_overrides`` bounds check)."""
+    import json
+
     _clear_budget_envs(monkeypatch)
-    monkeypatch.setenv(env, "not-a-number")
+    (isolated_data_dir / "feature_flags.json").write_text(
+        json.dumps({field: bad_value})
+    )
+    _reset_global_settings()
+    try:
+        assert getattr(get_global_settings(), field) == default
+    finally:
+        _reset_global_settings()
+
+
+@pytest.mark.parametrize("field,env,default", BUDGET_FIELDS)
+@pytest.mark.parametrize(
+    "bad_value", ["not-a-number", "", "   ", "0", "-5", "9999", "nan", "inf"]
+)
+def test_invalid_or_out_of_range_env_value_falls_back_to_default(
+    field, env, default, bad_value, monkeypatch
+):
+    """Lenient contract: an empty, unparseable, or out-of-range (incl.
+    non-finite) env value falls back to the default rather than crashing
+    startup or smuggling a budget past _ADVANCED_SETTINGS_BOUNDS. A ``<= 0``
+    budget would silently disable the per-id config-fetch scan."""
+    _clear_budget_envs(monkeypatch)
+    monkeypatch.setenv(env, bad_value)
     assert getattr(Settings(), field) == default
+
+
+@pytest.mark.parametrize("field,env,default", BUDGET_FIELDS)
+@pytest.mark.parametrize("good_value", ["1", "45", "600"])
+def test_in_range_env_value_is_honored(field, env, default, good_value, monkeypatch):
+    """In-range env values (including the inclusive 1.0 / 600.0 bounds) are
+    parsed and kept."""
+    _clear_budget_envs(monkeypatch)
+    monkeypatch.setenv(env, good_value)
+    assert getattr(Settings(), field) == float(good_value)
 
 
 def test_smart_search_constants_track_settings_field_defaults():

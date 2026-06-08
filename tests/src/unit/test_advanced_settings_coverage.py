@@ -276,7 +276,7 @@ def _env_reads_in_tree(tree: ast.Module) -> set[str]:
             fn = node.func
             if _is_getenv(fn) or (
                 isinstance(fn, ast.Attribute)
-                and fn.attr in {"get", "setdefault"}
+                and fn.attr in {"get", "setdefault", "pop"}
                 and _is_environ(fn.value)
             ):
                 name = _first_literal(node.args)
@@ -351,6 +351,7 @@ def test_scanner_detects_all_direct_read_forms() -> None:
         "h = _env.get('H_FROM_ALIAS')\n"
         "i = _ge('I_GETENV_ALIAS')\n"
         "os.environ.setdefault('J_SETDEFAULT', 'x')\n"
+        "m = os.environ.pop('M_POP', None)\n"
         "k = os.environ.get(some_var)\n"  # non-literal -> skipped
     )
     assert _env_reads_in_tree(ast.parse(src)) == {
@@ -364,6 +365,7 @@ def test_scanner_detects_all_direct_read_forms() -> None:
         "H_FROM_ALIAS",
         "I_GETENV_ALIAS",
         "J_SETDEFAULT",
+        "M_POP",
     }
 
 
