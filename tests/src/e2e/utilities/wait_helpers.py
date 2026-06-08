@@ -826,13 +826,21 @@ async def wait_for_entities_registered_via_ws(
     ha_url: str | None = None,
     token: str | None = None,
 ) -> set[str]:
-    """Block until ``state_changed`` arrives for every expected entity_id, via HA WS.
+    """Block until every expected entity_id is registered in HA, via HA WS.
 
     Opens a fresh WebSocket connection to HA, authenticates with the
-    test token, subscribes to ``state_changed``, and resolves as soon as
-    each entity_id in ``expected_entity_ids`` has produced at least one
-    state_changed event. Avoids the chronic 10s ``ha_list_states`` polling
-    burn observed in the HAOS bulk-fixture wait (#1349 audit).
+    test token, subscribes to ``state_changed``, takes a single
+    ``get_states`` sample over the same connection (so entities that
+    registered BEFORE the subscribe landed are caught immediately rather
+    than waiting out the full timeout — they never re-fire a
+    ``state_changed`` we could observe), then resolves as soon as every
+    entity_id in ``expected_entity_ids`` is either in that sample or has
+    produced a ``state_changed`` event. The sample-after-subscribe order
+    mirrors the other event-driven waiters in this module
+    (``_ws_wait_for_predicate``). Avoids the chronic 10s
+    ``ha_list_states`` polling burn observed in the HAOS bulk-fixture
+    wait (#1349 audit) and the full-timeout stall when callers create
+    entities before waiting (#1515).
 
     Pairs with a subsequent ``ha_list_states`` call (or per-entity
     ``ha_get_state``) for a final correctness check — this helper only
@@ -922,6 +930,20 @@ async def wait_for_entities_registered_via_ws(
             ):
                 raise RuntimeError(f"subscribe_events failed: {sub_result!r}")
 
+            # Post-subscribe sample: an entity that registered BEFORE our
+            # subscribe landed never fires a ``state_changed`` event we can
+            # observe, so the event loop alone would wait out the FULL timeout
+            # for it. That was the dominant cost in the deep-search bulk
+            # fixtures — the entities were already registered (created with the
+            # per-call registration wait) by the time this helper subscribed,
+            # so every run burned the entire 30s budget then fell back to REST
+            # (#1515). Query the current state set once over the SAME
+            # connection and mark any already-present entity as seen. Mirrors
+            # the sample-after-subscribe pattern the other event-driven waiters
+            # in this module use (``_ws_wait_for_predicate``).
+            states_msg_id = 2
+            await ws.send(json.dumps({"id": states_msg_id, "type": "get_states"}))
+
             while seen != expected:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -931,7 +953,19 @@ async def wait_for_entities_registered_via_ws(
                 except TimeoutError:
                     break
                 payload = json.loads(raw)
-                if payload.get("type") != "event":
+                ptype = payload.get("type")
+                if ptype == "result" and payload.get("id") == states_msg_id:
+                    # Response to our post-subscribe ``get_states``. Mark every
+                    # expected entity already in the state machine as seen so a
+                    # before-subscribe registration doesn't stall the wait.
+                    for state in payload.get("result") or []:
+                        eid = (
+                            state.get("entity_id") if isinstance(state, dict) else None
+                        )
+                        if eid in expected:
+                            seen.add(eid)
+                    continue
+                if ptype != "event":
                     continue
                 event = payload.get("event") or {}
                 data = event.get("data") or {}

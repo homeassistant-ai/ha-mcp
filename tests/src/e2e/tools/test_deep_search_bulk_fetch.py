@@ -89,9 +89,12 @@ async def bulk_automations(mcp_client):
     created_ids = []
 
     for i in range(_AUTOMATION_COUNT):
+        # wait=False: skip the per-call registration poll and batch-verify all
+        # registrations in one WS wait below. The documented bulk pattern, and
+        # it avoids N sequential per-create registration waits (#1515).
         result = await mcp_client.call_tool(
             "ha_config_set_automation",
-            {"config": _automation_config(i)},
+            {"config": _automation_config(i), "wait": False},
         )
         data = assert_mcp_success(result, f"Create bulk automation {i}")
         # Use the actual entity_id returned by HA (handles conflicts with _2 suffix)
@@ -156,9 +159,11 @@ async def bulk_scripts(mcp_client):
 
     for i in range(_SCRIPT_COUNT):
         script_id = f"{_MARKER}_script_{i}"
+        # wait=False: batch-verify registrations in one WS wait below rather
+        # than paying a per-create registration poll each iteration (#1515).
         result = await mcp_client.call_tool(
             "ha_config_set_script",
-            {"script_id": script_id, "config": _script_config(i)},
+            {"script_id": script_id, "config": _script_config(i), "wait": False},
         )
         assert_mcp_success(result, f"Create bulk script {i}")
         created_ids.append(script_id)
