@@ -2331,7 +2331,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 default=None,
                 description=(
                     "Return only the specified keys from each entity's attributes dict "
-                    '(e.g. ["brightness", "color_temp"] for lights). '
+                    '(e.g. ["brightness", "color_temp_kelvin"] for lights). '
                     "None = full attributes (default). "
                     "Unknown keys are silently dropped. "
                     'Requires "attributes" to be present in fields= (or fields=None).'

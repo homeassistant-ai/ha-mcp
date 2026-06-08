@@ -91,9 +91,12 @@ def _normalize_automation_config(
     """
     Recursively normalize automation config field names to HA API format.
 
-    Home Assistant accepts both singular ('trigger', 'action', 'condition')
-    and plural ('triggers', 'actions', 'conditions') field names in YAML,
-    but the API expects singular forms at the root level.
+    Home Assistant's 2024.10+ canonical form uses the plural root keys
+    ('triggers', 'actions', 'conditions'); the singular forms ('trigger',
+    'action', 'condition') remain fully accepted as silent aliases. This tool
+    normalizes to the singular root forms internally so the config-API
+    round-trip and the downstream validators / best-practice checker all see
+    one stable shape (HA accepts whichever we send).
 
     IMPORTANT: 'triggers' -> 'trigger' and 'actions' -> 'action' normalization
     is ONLY applied at the root level. Deeper in the tree these keys are either
@@ -181,8 +184,10 @@ def _normalize_trigger_keys(triggers: list[dict[str, Any]]) -> list[dict[str, An
     """
     Normalize trigger objects for round-trip compatibility.
 
-    Home Assistant GET API returns triggers with 'trigger' key for the platform type,
-    but the SET API expects 'platform' key. This function converts between formats.
+    Home Assistant's GET API returns triggers with the modern 'trigger' key for
+    the platform type. This tool canonicalizes each trigger to the legacy
+    'platform' key so its internal pipeline sees one stable shape; HA accepts
+    either form on the SET side.
 
     Args:
         triggers: List of trigger configuration dicts
@@ -420,8 +425,8 @@ class AutomationConfigTools:
         config: Annotated[
             dict[str, Any] | None,
             Field(
-                description="Complete automation configuration with required fields: 'alias', 'trigger', 'action'. "
-                "Optional: 'description', 'condition', 'mode', 'max', 'initial_state', 'variables'. "
+                description="Complete automation configuration with required fields: 'alias', 'triggers', 'actions'. "
+                "Optional: 'description', 'conditions', 'mode', 'max', 'initial_state', 'variables'. "
                 "Mutually exclusive with python_transform.",
                 default=None,
             ),
@@ -527,7 +532,8 @@ class AutomationConfigTools:
 
         IMPORTANT: python_transform requires 'identifier' and 'config_hash' from ha_config_get_automation().
 
-        PYTHON TRANSFORM EXAMPLES:
+        PYTHON TRANSFORM EXAMPLES (operate on the fetched config, which uses the
+        singular root keys 'trigger'/'action'/'condition' with per-trigger 'platform'):
         - Update action: python_transform="config['action'][0]['data']['brightness'] = 255"
         - Add trigger: python_transform="config['trigger'].append({'platform': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})"
         - Remove last action: python_transform="config['action'].pop()"
@@ -541,8 +547,8 @@ class AutomationConfigTools:
 
         REQUIRED FIELDS (Regular Automations):
         - alias: Human-readable automation name
-        - trigger: List of trigger conditions (time, state, event, etc.)
-        - action: List of actions to execute
+        - triggers: List of triggers (time, state, event, etc.)
+        - actions: List of actions to execute
 
         REQUIRED FIELDS (Blueprint Automations):
         - alias: Human-readable automation name
@@ -553,7 +559,7 @@ class AutomationConfigTools:
         OPTIONAL CONFIG FIELDS (Regular Automations):
         - description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)
         - category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)
-        - condition: Additional conditions that must be met
+        - conditions: Additional conditions that must be met
         - mode: 'single' (default), 'restart', 'queued', 'parallel'
         - max: Maximum concurrent executions (for queued/parallel modes)
         - initial_state: Whether automation starts enabled (true/false)
@@ -565,19 +571,19 @@ class AutomationConfigTools:
         ha_config_set_automation(config={
             "alias": "Morning Lights",
             "description": "Turn on bedroom lights at 7 AM to help wake up",
-            "trigger": [{"platform": "time", "at": "07:00:00"}],
-            "action": [{"action": "light.turn_on", "target": {"area_id": "bedroom"}}]
+            "triggers": [{"trigger": "time", "at": "07:00:00"}],
+            "actions": [{"action": "light.turn_on", "target": {"area_id": "bedroom"}}]
         })
 
         Motion-activated lighting — `for:` on the off-transition replaces action-delay:
         ha_config_set_automation(config={
             "alias": "Motion Light",
-            "trigger": [
-                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "on", "id": "motion_on"},
-                {"platform": "state", "entity_id": "binary_sensor.motion", "to": "off",
+            "triggers": [
+                {"trigger": "state", "entity_id": "binary_sensor.motion", "to": "on", "id": "motion_on"},
+                {"trigger": "state", "entity_id": "binary_sensor.motion", "to": "off",
                  "for": {"minutes": 5}, "id": "motion_off"}
             ],
-            "action": [
+            "actions": [
                 {"choose": [
                     {"conditions": [
                         {"condition": "trigger", "id": "motion_on"},
@@ -595,8 +601,8 @@ class AutomationConfigTools:
             identifier="automation.morning_routine",
             config={
                 "alias": "Updated Morning Routine",
-                "trigger": [{"platform": "time", "at": "06:30:00"}],
-                "action": [
+                "triggers": [{"trigger": "time", "at": "06:30:00"}],
+                "actions": [
                     {"action": "light.turn_on", "target": {"area_id": "bedroom"}},
                     {"action": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
                 ]
