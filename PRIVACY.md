@@ -12,7 +12,7 @@ Ha-mcp runs on your local machine and communicates with your own Home Assistant 
 
 ## Anonymous Usage Statistics
 
-Anonymous usage statistics are a planned future feature and are **not currently collected or transmitted** as of May 2026. When this feature is implemented, users will be notified in the release notes and it will be **opt-in only**.
+Anonymous usage statistics are a planned future feature and are **not currently collected or transmitted** as of May 2026. When this feature is implemented, it will respect your Home Assistant analytics/telemetry setting by default, and you will be able to override that choice (opt out). Users will be notified in the release notes — and through a prominent in-app notice — before it becomes active.
 
 When enabled in a future release, anonymous usage statistics would include:
 
@@ -49,7 +49,7 @@ When you use ha-mcp, your MCP client accesses data from your Home Assistant inst
 
 - **Your Home Assistant instance** — via the URL and token you provide
 - **Your MCP client** — the application that runs ha-mcp
-- **A telemetry server** — *planned future feature, not currently active*; would only receive data if you opt in
+- **A telemetry server** — *planned future feature, not currently active*; when active it would follow your Home Assistant analytics/telemetry setting, which you can override (opt out)
 
 ## Data Security
 
@@ -72,7 +72,7 @@ For privacy-related questions or concerns:
 
 | Aspect | Status |
 |--------|--------|
-| Anonymous telemetry | Not currently implemented (planned future feature, opt-in only) |
+| Anonymous telemetry | Not currently implemented (planned; will follow your Home Assistant analytics/telemetry setting, override-able) |
 | Personal data collected | None |
 | Bug reports | User-approved only |
 | Local processing | Yes |
