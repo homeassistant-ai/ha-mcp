@@ -7,6 +7,7 @@ level only; the singular forms remain accepted as silent aliases on input.
 """
 
 from ha_mcp.tools.tools_config_automations import (
+    _detect_conflicting_root_keys,
     _normalize_automation_config,
     _normalize_config_for_roundtrip,
     _normalize_trigger_keys,
@@ -690,3 +691,38 @@ class TestRoundtripNormalization:
         # Per-trigger key canonicalized to modern 'trigger:'.
         assert result["triggers"][0]["trigger"] == "time"
         assert "platform" not in result["triggers"][0]
+
+
+class TestConflictingRootKeys:
+    """_detect_conflicting_root_keys surfaces a warning when a config carries both
+    a singular alias and its canonical plural with different values (normalization
+    keeps the plural and would otherwise silently drop the singular)."""
+
+    def test_detects_conflict_with_differing_values(self):
+        warnings = _detect_conflicting_root_keys(
+            {"trigger": [{"trigger": "state"}], "triggers": []}
+        )
+        assert len(warnings) == 1
+        assert "trigger" in warnings[0] and "triggers" in warnings[0]
+
+    def test_no_conflict_when_values_equal(self):
+        assert _detect_conflicting_root_keys({"trigger": [], "triggers": []}) == []
+
+    def test_no_conflict_for_single_form(self):
+        assert _detect_conflicting_root_keys({"triggers": [{"trigger": "state"}]}) == []
+
+    def test_detects_all_three_pairs(self):
+        warnings = _detect_conflicting_root_keys(
+            {
+                "trigger": [1],
+                "triggers": [2],
+                "action": [1],
+                "actions": [2],
+                "condition": [1],
+                "conditions": [2],
+            }
+        )
+        assert len(warnings) == 3
+
+    def test_non_dict_returns_empty(self):
+        assert _detect_conflicting_root_keys(["not", "a", "dict"]) == []

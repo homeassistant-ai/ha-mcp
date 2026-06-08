@@ -251,6 +251,36 @@ def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], normalized)
 
 
+def _detect_conflicting_root_keys(config: Any) -> list[str]:
+    """Warn when a config carries BOTH a singular alias and its canonical plural
+    root key with *different* values.
+
+    ``_normalize_automation_config`` keeps the canonical plural and silently drops
+    the singular alias, so a caller that set, say, ``config['trigger']`` on a
+    config that already has ``triggers`` would have that change discarded. The
+    config is malformed (a caller should send one form), but surfacing the
+    conflict beats dropping data silently.
+    """
+    if not isinstance(config, dict):
+        return []
+    warnings: list[str] = []
+    for singular, plural in (
+        ("trigger", "triggers"),
+        ("action", "actions"),
+        ("condition", "conditions"),
+    ):
+        if (
+            singular in config
+            and plural in config
+            and config[singular] != config[plural]
+        ):
+            warnings.append(
+                f"Config contains both '{singular}' and '{plural}' with different "
+                f"values; using the canonical '{plural}' and ignoring '{singular}'."
+            )
+    return warnings
+
+
 def _strip_redundant_identifier_echo(
     result: dict[str, Any],
     *,
@@ -701,6 +731,10 @@ class AutomationConfigTools:
             config_category = config_dict.pop("category", None)
             effective_category = category if category is not None else config_category
 
+            # Detect conflicting singular+plural root keys BEFORE normalization
+            # drops the singular alias (surface rather than silently discard).
+            conflict_warnings = _detect_conflicting_root_keys(config_dict)
+
             # Normalize field names to HA's canonical plural root keys
             # (trigger -> triggers, action -> actions, condition -> conditions).
             config_dict = _normalize_automation_config(config_dict)
@@ -723,6 +757,7 @@ class AutomationConfigTools:
                 bp_warnings,
                 validation_meta,
                 MandatoryBPS,
+                conflict_warnings,
             )
 
         except ToolError as te:
@@ -832,6 +867,11 @@ class AutomationConfigTools:
         transform_category = transformed_config.pop("category", None)
         effective_category = category if category is not None else transform_category
 
+        # Detect conflicting singular+plural root keys (e.g. a transform that set
+        # the singular 'trigger' on a fetched plural config) before normalization
+        # drops the singular alias.
+        conflict_warnings = _detect_conflicting_root_keys(transformed_config)
+
         transformed_config = _normalize_automation_config(transformed_config)
         self._validate_required_fields(transformed_config, identifier)
         bp_warnings = _check_best_practices(transformed_config)
@@ -839,6 +879,8 @@ class AutomationConfigTools:
         result = await self._client.upsert_automation_config(
             transformed_config, identifier
         )
+        for warning in conflict_warnings:
+            result.setdefault("warnings", []).append(warning)
         refetched = await self._get_automation_config_internal(identifier)
         new_config_hash = refetched[1]
 
@@ -883,9 +925,13 @@ class AutomationConfigTools:
         bp_warnings: BestPracticeCheckResult,
         validation_meta: dict[str, Any],
         MandatoryBPS: bool,
+        conflict_warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         """Execute config-replacement mode and return the tool response."""
         result = await self._client.upsert_automation_config(config_dict, identifier)
+
+        for warning in conflict_warnings or []:
+            result.setdefault("warnings", []).append(warning)
 
         if result.get("entity_not_verified"):
             result.setdefault("warnings", []).append(
