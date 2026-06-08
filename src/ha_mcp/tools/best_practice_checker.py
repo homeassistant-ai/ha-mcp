@@ -197,10 +197,10 @@ def check_automation_config(
 
     warnings = BestPracticeCheckResult()
 
-    # Read the canonical 2024.10+ plural root keys, tolerating the singular
-    # aliases too (HA accepts both, and this checker may see raw user input that
-    # has not been through _normalize_automation_config). Mirrors _check_triggers'
-    # existing platform/trigger tolerance below.
+    # Read the canonical 2024.10+ plural root keys, falling back to the singular
+    # aliases. The internal pipeline always pre-normalizes to plural, so the
+    # fallback is defensive for direct/public callers of check_automation_config
+    # (HA accepts both forms). Mirrors _check_triggers' platform/trigger tolerance.
     # Condition templates
     _check_condition_templates(
         config.get("conditions", config.get("condition", [])), warnings, skill_prefix

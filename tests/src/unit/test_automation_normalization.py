@@ -655,14 +655,23 @@ class TestRoundtripNormalization:
         assert "platform" not in result[0]
         assert result[1]["trigger"] == "time"
 
-    def test_normalize_trigger_keys_prefers_existing_trigger(self):
-        """When both 'platform' and 'trigger' exist, 'trigger' wins and 'platform' is left."""
+    def test_normalize_trigger_keys_drops_platform_when_trigger_present(self):
+        """When both 'platform' and 'trigger' exist, 'trigger' wins and the legacy
+        'platform' alias is dropped (HA strict schema rejects extra keys)."""
         triggers = [{"platform": "state", "trigger": "time"}]
 
         result = _normalize_trigger_keys(triggers)
 
-        # Existing 'trigger' is not overwritten by 'platform'.
         assert result[0]["trigger"] == "time"
+        assert "platform" not in result[0]
+
+    def test_normalize_trigger_keys_passes_non_dict_through(self):
+        """Malformed non-dict trigger items pass through untouched (no AttributeError)."""
+        # Deliberately malformed input to exercise the defensive guard.
+        result = _normalize_trigger_keys([{"platform": "state"}, "oops", None])  # type: ignore[list-item]
+        assert result[0] == {"trigger": "state"}
+        assert result[1] == "oops"
+        assert result[2] is None
 
     def test_roundtrip_produces_plural_roots_and_modern_trigger_keys(self):
         """A GET-shaped config is canonicalized to plural roots + 'trigger:' keys."""

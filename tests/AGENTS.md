@@ -25,7 +25,7 @@ await mcp.call_tool("ha_config_get_script", {})
 await mcp.call_tool("ha_config_get_script", {"script_id": "nonexistent"})
 ```
 
-**HA API uses singular field names:** `trigger` not `triggers`, `action` not `actions`.
+**HA automation config uses plural root keys (HA 2024.10+):** `triggers`/`actions`/`conditions` (singular `trigger`/`action`/`condition` are still accepted as aliases). The tool canonicalizes to plural, so `ha_config_get_automation` returns the plural shape and `python_transform` operates on it.
 
 **Poll after creating entities.** After creating an entity (automation, script, helper, etc.), HA needs time to register it. Never search/query immediately — use polling helpers from `tests/src/e2e/utilities/wait_helpers.py`:
 ```python

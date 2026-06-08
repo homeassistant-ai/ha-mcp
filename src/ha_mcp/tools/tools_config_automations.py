@@ -168,11 +168,19 @@ def _normalize_trigger_keys(triggers: list[dict[str, Any]]) -> list[dict[str, An
     """
     normalized_triggers = []
     for trigger in triggers:
+        # Defensive: a malformed (e.g. LLM-generated) item may not be a dict.
+        if not isinstance(trigger, dict):
+            normalized_triggers.append(trigger)
+            continue
         normalized_trigger = trigger.copy()
-        # Convert legacy 'platform' key to modern 'trigger' if present and
-        # 'trigger' is not already set.
-        if "platform" in normalized_trigger and "trigger" not in normalized_trigger:
-            normalized_trigger["trigger"] = normalized_trigger.pop("platform")
+        # Convert legacy 'platform' to modern 'trigger'. If both are present,
+        # drop the legacy alias so HA's strict schema doesn't reject the config
+        # with "extra keys not allowed" (mirrors _normalize_automation_config).
+        if "platform" in normalized_trigger:
+            if "trigger" not in normalized_trigger:
+                normalized_trigger["trigger"] = normalized_trigger.pop("platform")
+            else:
+                del normalized_trigger["platform"]
         normalized_triggers.append(normalized_trigger)
     return normalized_triggers
 
@@ -223,7 +231,8 @@ def _normalize_config_for_roundtrip(config: dict[str, Any]) -> dict[str, Any]:
     directly passed to ha_config_set_automation without modification.
 
     Transformations:
-    1. Field names: canonicalized to plural root keys (triggers/actions/conditions)
+    1. Field names: canonicalized to plural root keys (triggers/actions/conditions);
+       a stray `sequences` key is normalized to `sequence`.
     2. Trigger keys: platform -> trigger (inside each trigger object)
 
     Args:
@@ -692,7 +701,8 @@ class AutomationConfigTools:
             config_category = config_dict.pop("category", None)
             effective_category = category if category is not None else config_category
 
-            # Normalize field names (triggers -> trigger, actions -> action, etc.)
+            # Normalize field names to HA's canonical plural root keys
+            # (trigger -> triggers, action -> actions, condition -> conditions).
             config_dict = _normalize_automation_config(config_dict)
 
             # Optional hash check for full config updates
@@ -728,7 +738,7 @@ class AutomationConfigTools:
             error_text = str(e)
             suggestions = [
                 "Check automation configuration format",
-                "Ensure required fields: alias, trigger, action",
+                "Ensure required fields: alias, triggers, actions",
                 "Use entity_id format: automation.morning_routine or unique_id",
                 "Use ha_search(domain_filter='automation') to find automations",
                 "Use ha_get_skill_guide for automation examples",
