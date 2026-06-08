@@ -145,9 +145,50 @@ jobs:
             -u ${{ github.actor }} --password-stdin
           curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
             | tar -xz -C /tmp oras
-          mkdir -p /tmp/haos-pull
-          (cd /tmp/haos-pull && /tmp/oras pull "$tag")
-          mv /tmp/haos-pull/haos-test-image.qcow2 /tmp/haos-test-image.qcow2
+          dest=/tmp/haos-pull
+          # Retry ONLY on a genuine hang — zero download progress for 7 full
+          # minutes. A slow-but-moving pull (legit pulls have taken ~10 min) is
+          # never interrupted; only a dead-connection stall (the ~17 min
+          # zero-progress hang in #1515) is killed and re-pulled. 2 tries keeps
+          # even the both-stall -> local-build worst case well under the 45-min
+          # job cap, which stays the hard backstop.
+          stall_secs=420
+          attempts=2
+
+          pull_once() {
+            rm -rf "$dest"; mkdir -p "$dest"
+            # exec => $! is the oras PID, so the kill below reaches oras itself.
+            ( cd "$dest" && exec /tmp/oras pull "$tag" ) &
+            local pid=$! last=0 last_progress=$SECONDS size
+            while kill -0 "$pid" 2>/dev/null; do
+              sleep 30
+              size=$(du -sb "$dest" 2>/dev/null | cut -f1) || size=0
+              size=${size:-0}
+              if [ "$size" -gt "$last" ]; then
+                last=$size; last_progress=$SECONDS          # any growth resets the clock
+              elif [ $(( SECONDS - last_progress )) -ge "$stall_secs" ]; then
+                echo "::warning::oras pull made zero progress for ${stall_secs}s (stuck at ${size} bytes) — killing to retry"
+                kill "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+                return 1
+              fi
+            done
+            wait "$pid"                                       # propagate oras's own exit code
+          }
+
+          ok=
+          for a in $(seq 1 "$attempts"); do
+            echo "GHCR pull attempt ${a}/${attempts}"
+            if pull_once; then ok=1; break; fi
+            echo "::warning::GHCR pull attempt ${a} did not complete; retrying"
+          done
+          if [ -z "$ok" ]; then
+            echo "::warning::all ${attempts} GHCR pull attempts stalled/failed — using local build"
+            exit 1
+          fi
+          # Explicit source path so a future oras layout change that drops
+          # files into a subdirectory of pwd doesn't silently no-op the mv.
+          mv "$dest"/haos-test-image.qcow2 /tmp/haos-test-image.qcow2
 
       - name: Free disk space for local build (cache miss + GHCR miss only)
         # See ``haos-e2e-tests.yml`` for the full rationale — same prune
