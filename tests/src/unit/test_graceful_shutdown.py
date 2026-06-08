@@ -585,3 +585,46 @@ class TestHTTPEntryPoints:
             main_module._get_http_runtime()
 
         assert exc_info.value.code == 1
+
+    def test_run_http_server_invokes_path_warning(self, monkeypatch):
+        """HTTP/SSE startup must invoke _warn_if_default_path_exposed, so a
+        future refactor that moves, reorders, or accidentally drops the
+        call still fails CI. OAuth startup does not run this path, so the
+        warning stays scoped to the standard-mode HTTP entrypoints."""
+        import ha_mcp.__main__ as main_module
+
+        called_with: list[tuple[str, int, str]] = []
+
+        monkeypatch.setattr(
+            main_module,
+            "_warn_if_default_path_exposed",
+            lambda host, port, path: called_with.append((host, port, path)),
+        )
+        monkeypatch.setattr(
+            main_module,
+            "_get_http_runtime",
+            lambda default_port=8086: ("0.0.0.0", default_port, "/mcp"),
+        )
+        monkeypatch.setattr(main_module, "_get_mcp", object)
+        monkeypatch.setattr(main_module, "_get_server", object)
+        monkeypatch.setattr(
+            main_module, "register_browser_landing", lambda *a, **kw: None
+        )
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui.register_settings_routes",
+            lambda *a, **kw: None,
+        )
+        # Stub the async runner BEFORE _run_entrypoint so no real coroutine
+        # is created — otherwise the un-awaited coroutine triggers a
+        # PytestUnraisableExceptionWarning even though _run_entrypoint
+        # itself is a no-op here.
+        monkeypatch.setattr(
+            main_module,
+            "_run_http_with_graceful_shutdown",
+            lambda *a, **kw: None,
+        )
+        monkeypatch.setattr(main_module, "_run_entrypoint", lambda *a, **kw: None)
+
+        main_module._run_http_server("http", default_port=8086)
+
+        assert called_with == [("0.0.0.0", 8086, "/mcp")]
