@@ -8,6 +8,26 @@ DOMAIN = "ha_mcp_tools"
 ALLOWED_READ_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 
+# NON-OVERRIDABLE deny floor for the user-configurable extra read/write
+# directories (issue #1567). The custom allowlist is applied ON TOP of the
+# built-in ALLOWED_*_DIRS, but a custom directory can NEVER grant access to
+# these. The floor is re-checked before any allow decision on every read,
+# write, list, and delete, so neither a stored entry nor an in-flight one can
+# punch through it.
+#
+# .storage holds HA's auth database (refresh/access tokens), hashed passwords,
+# and every integration's cleartext credentials (core.config_entries,
+# application_credentials, cloud) — including this component's OWN caller
+# token (.storage/ha_mcp_tools_auth). Letting a custom dir reach it would both
+# leak secrets and hand out the key to this component's own auth gate.
+DENY_PATH_SEGMENTS = frozenset({".storage"})
+
+# secrets.yaml is reachable ONLY as the canonical config-root file, where the
+# read handler masks its values. Any OTHER secrets.yaml surfaced via a custom
+# dir would be returned UNMASKED (masking keys off the literal root path), so
+# the floor blocks the basename everywhere except that one canonical location.
+DENY_READ_BASENAMES = frozenset({"secrets.yaml"})
+
 # Files allowed for managed YAML editing
 ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]
 # Also allows packages/*.yaml via pattern matching

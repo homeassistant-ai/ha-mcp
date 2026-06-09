@@ -4,6 +4,7 @@ These tests focus on the pure Python utility functions that don't require
 Home Assistant dependencies.
 """
 
+import os
 import shutil
 import sys
 import tempfile
@@ -30,10 +31,13 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _delete_file_sync,
     _is_path_allowed_for_dir,
     _is_path_allowed_for_read,
+    _is_within_config_dir,
     _list_files_sync,
     _mask_secrets_content,
     _migrate_legacy_backup_dir,
+    _normalize_extra_dir,
     _read_file_sync,
+    _violates_deny_floor,
     _write_file_sync,
 )
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
@@ -688,3 +692,203 @@ class TestMigrateLegacyBackupDir:
         assert "GHSA-g39v-cvjh-8fpf" in src, (
             "persistent notification must reference the security advisory"
         )
+
+
+class TestDenyFloor:
+    """The non-overridable deny floor (issue #1567): a user-configured extra
+    directory can NEVER reach .storage or an unmasked secrets file, even when
+    the directory is explicitly present in the extra-dirs list."""
+
+    def test_storage_blocked_for_read_even_as_extra_dir(self, tmp_path):
+        assert (
+            _is_path_allowed_for_read(tmp_path, ".storage/auth", [".storage"]) is False
+        )
+        assert _is_path_allowed_for_read(tmp_path, ".storage", [".storage"]) is False
+
+    def test_storage_blocked_for_dir_even_as_extra_dir(self, tmp_path):
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, ".storage/auth", ALLOWED_WRITE_DIRS, [".storage"]
+            )
+            is False
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, ".storage", ALLOWED_READ_DIRS, [".storage"]
+            )
+            is False
+        )
+
+    def test_violates_deny_floor_storage(self, tmp_path):
+        assert _violates_deny_floor(tmp_path, ".storage") is True
+        assert _violates_deny_floor(tmp_path, ".storage/auth") is True
+
+    def test_root_secrets_yaml_not_a_violation(self, tmp_path):
+        # The canonical config-root secrets.yaml passes the floor; the read
+        # handler masks it. Only OTHER secrets.yaml files are blocked.
+        assert _violates_deny_floor(tmp_path, "secrets.yaml") is False
+        assert _is_path_allowed_for_read(tmp_path, "secrets.yaml") is True
+
+    def test_nested_secrets_yaml_blocked(self, tmp_path):
+        # A secrets.yaml surfaced via a custom dir would be returned UNMASKED.
+        assert _violates_deny_floor(tmp_path, "pyscript/secrets.yaml") is True
+        assert (
+            _is_path_allowed_for_read(tmp_path, "pyscript/secrets.yaml", ["pyscript"])
+            is False
+        )
+
+    def test_symlink_into_storage_blocked(self, tmp_path):
+        (tmp_path / ".storage").mkdir()
+        (tmp_path / "evil").symlink_to(tmp_path / ".storage")
+        assert _violates_deny_floor(tmp_path, "evil/auth") is True
+        assert _is_path_allowed_for_read(tmp_path, "evil/auth", ["evil"]) is False
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "evil/auth", ALLOWED_WRITE_DIRS, ["evil"]
+            )
+            is False
+        )
+
+    def test_renamed_symlink_to_secrets_blocked(self, tmp_path):
+        # A symlink with an innocuous name pointing at secrets.yaml must not
+        # leak it UNMASKED — masking keys off the literal 'secrets.yaml' path,
+        # so the floor must catch the resolved target's basename.
+        (tmp_path / "secrets.yaml").write_text("api_key: SECRET\n")
+        (tmp_path / "www").mkdir()
+        (tmp_path / "www" / "notes.txt").symlink_to(tmp_path / "secrets.yaml")
+        assert _violates_deny_floor(tmp_path, "www/notes.txt") is True
+        assert _is_path_allowed_for_read(tmp_path, "www/notes.txt") is False
+
+    def test_case_insensitive_storage_blocked(self, tmp_path):
+        # On a case-insensitive FS '.STORAGE' opens the real '.storage'; the
+        # floor must match case-insensitively so it can't be bypassed.
+        assert _violates_deny_floor(tmp_path, ".STORAGE") is True
+        assert _violates_deny_floor(tmp_path, ".Storage/auth") is True
+
+    def test_case_insensitive_secrets_blocked(self, tmp_path):
+        assert _violates_deny_floor(tmp_path, "pyscript/SECRETS.YAML") is True
+        # The canonical lowercase root file still passes (it is masked).
+        assert _violates_deny_floor(tmp_path, "secrets.yaml") is False
+
+
+class TestExtraDirsReadWrite:
+    """A user-configured extra directory grants BOTH read and write."""
+
+    def test_extra_dir_allows_read(self, tmp_path):
+        assert (
+            _is_path_allowed_for_read(tmp_path, "pyscript/foo.py", ["pyscript"]) is True
+        )
+        assert (
+            _is_path_allowed_for_read(tmp_path, "pyscript/sub/bar.py", ["pyscript"])
+            is True
+        )
+
+    def test_extra_dir_allows_write_and_list(self, tmp_path):
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "pyscript/foo.py", ALLOWED_WRITE_DIRS, ["pyscript"]
+            )
+            is True
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "pyscript", ALLOWED_READ_DIRS, ["pyscript"]
+            )
+            is True
+        )
+
+    def test_dir_not_in_extra_still_blocked(self, tmp_path):
+        assert (
+            _is_path_allowed_for_read(tmp_path, "esphome/x.yaml", ["pyscript"]) is False
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "esphome/x.yaml", ALLOWED_WRITE_DIRS, ["pyscript"]
+            )
+            is False
+        )
+
+    def test_no_extra_dirs_preserves_builtin_behavior(self, tmp_path):
+        # Default (no extra dirs) — built-in allowlist behavior unchanged.
+        assert _is_path_allowed_for_read(tmp_path, "www/x.css") is True
+        assert _is_path_allowed_for_read(tmp_path, "pyscript/foo.py") is False
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "www/x.css", ALLOWED_WRITE_DIRS) is True
+        )
+
+    def test_nested_extra_dir_grants_read_write(self, tmp_path):
+        # A multi-segment entry grants the dir itself and paths under it
+        # (the normalizer accepts nested entries, so enforcement must honor
+        # them — not silently store a dead entry).
+        extra = ["foo/bar"]
+        assert _is_path_allowed_for_read(tmp_path, "foo/bar", extra) is True
+        assert _is_path_allowed_for_read(tmp_path, "foo/bar/x.py", extra) is True
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "foo/bar/x.py", ALLOWED_WRITE_DIRS, extra
+            )
+            is True
+        )
+
+    def test_nested_extra_dir_respects_path_boundary(self, tmp_path):
+        extra = ["foo/bar"]
+        # A sibling and the parent itself are NOT granted by 'foo/bar'.
+        assert _is_path_allowed_for_read(tmp_path, "foo/other/x.py", extra) is False
+        assert _is_path_allowed_for_read(tmp_path, "foo/x.py", extra) is False
+        # Prefix must respect the separator boundary: 'foo/barbaz' is not under
+        # 'foo/bar'.
+        assert _is_path_allowed_for_read(tmp_path, "foo/barbaz/x.py", extra) is False
+
+
+class TestNormalizeExtraDir:
+    """Validation/normalization applied by set_allowed_paths before persisting."""
+
+    def test_accepts_simple_dir(self, tmp_path):
+        assert _normalize_extra_dir("pyscript", tmp_path) == "pyscript"
+        assert _normalize_extra_dir("python_scripts", tmp_path) == "python_scripts"
+
+    def test_strips_whitespace_and_trailing_slash(self, tmp_path):
+        assert _normalize_extra_dir("  pyscript/  ", tmp_path) == "pyscript"
+
+    def test_accepts_nested_dir(self, tmp_path):
+        assert _normalize_extra_dir("foo/bar", tmp_path) == "foo/bar"
+
+    def test_rejects_empty_and_root(self, tmp_path):
+        assert _normalize_extra_dir("", tmp_path) is None
+        assert _normalize_extra_dir("   ", tmp_path) is None
+        assert _normalize_extra_dir(".", tmp_path) is None
+
+    def test_rejects_traversal(self, tmp_path):
+        assert _normalize_extra_dir("..", tmp_path) is None
+        assert _normalize_extra_dir("../etc", tmp_path) is None
+        assert _normalize_extra_dir("www/../../etc", tmp_path) is None
+
+    def test_rejects_absolute(self, tmp_path):
+        assert _normalize_extra_dir("/etc/passwd", tmp_path) is None
+        assert _normalize_extra_dir("/pyscript", tmp_path) is None
+
+    def test_rejects_deny_floor(self, tmp_path):
+        assert _normalize_extra_dir(".storage", tmp_path) is None
+        assert _normalize_extra_dir(".storage/auth", tmp_path) is None
+        # Collapses to .storage after normpath — still rejected.
+        assert _normalize_extra_dir("www/../.storage", tmp_path) is None
+
+    def test_rejects_non_string(self, tmp_path):
+        assert _normalize_extra_dir(123, tmp_path) is None  # type: ignore[arg-type]
+
+
+class TestIsWithinConfigDir:
+    """The symlink-aware containment check (fixes the prior str-prefix bug)."""
+
+    def test_sibling_prefix_not_treated_as_inside(self, tmp_path):
+        # A sibling dir sharing a name prefix must NOT count as inside config.
+        config = tmp_path / "config"
+        config.mkdir()
+        (tmp_path / "config-evil").mkdir()
+        # '../config-evil' normalizes outside config and must be rejected.
+        assert (
+            _is_within_config_dir(config, os.path.normpath("../config-evil")) is False
+        )
+
+    def test_plain_subpath_is_inside(self, tmp_path):
+        assert _is_within_config_dir(tmp_path, "www/x.css") is True

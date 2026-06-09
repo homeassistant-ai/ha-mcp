@@ -3412,3 +3412,127 @@ class TestIngressGateApplied:
         # Secret-path handlers are raw (no ingress IP gate).
         secret = captured[("/private_x/api/policy/config", ("PUT",))]
         assert not hasattr(secret, "__wrapped__")
+
+
+class TestFsCustomPathsEndpoints:
+    """/api/settings/fs-custom-paths GET+POST handlers (issue #1567).
+
+    These proxy to the ha_mcp_tools component's get/set_allowed_paths
+    services; the component (not these handlers) owns enforcement. The
+    handlers are tested with ``call_mcp_tools_service`` /
+    ``is_filesystem_tools_enabled`` patched on the tools_filesystem module
+    (they are imported lazily inside the handler).
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_unavailable_when_filesystem_tools_disabled(self, monkeypatch):
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: False)
+        handlers = build_settings_handlers(server=MagicMock())
+        resp = await handlers["get_fs_custom_paths"](MagicMock())
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["available"] is False
+        assert "disabled" in body["reason"].lower()
+
+    @pytest.mark.asyncio
+    async def test_get_happy_path(self, monkeypatch):
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        async def fake_call(client, service, data):
+            assert service == "get_allowed_paths"
+            return {
+                "service_response": {
+                    "success": True,
+                    "paths": ["pyscript"],
+                    "deny_floor": [".storage", "secrets.yaml"],
+                    "builtin_read_dirs": ["www"],
+                    "builtin_write_dirs": ["www"],
+                }
+            }
+
+        monkeypatch.setattr(tf, "call_mcp_tools_service", fake_call)
+        handlers = build_settings_handlers(server=MagicMock())
+        resp = await handlers["get_fs_custom_paths"](MagicMock())
+        body = json.loads(resp.body)
+        assert body["available"] is True
+        assert body["paths"] == ["pyscript"]
+        assert ".storage" in body["deny_floor"]
+
+    @pytest.mark.asyncio
+    async def test_get_degrades_on_component_error(self, monkeypatch):
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        async def boom(client, service, data):
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(tf, "call_mcp_tools_service", boom)
+        handlers = build_settings_handlers(server=MagicMock())
+        resp = await handlers["get_fs_custom_paths"](MagicMock())
+        # Degrades to an "unavailable" envelope, never a 500.
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["available"] is False
+        assert "connection refused" in body["reason"]
+
+    @pytest.mark.asyncio
+    async def test_save_disabled_returns_409(self, monkeypatch):
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: False)
+        handlers = build_settings_handlers(server=MagicMock())
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"paths": ["pyscript"]})
+        resp = await handlers["save_fs_custom_paths"](req)
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_save_rejects_non_list_paths(self, monkeypatch):
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+        handlers = build_settings_handlers(server=MagicMock())
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"paths": "not-a-list"})
+        resp = await handlers["save_fs_custom_paths"](req)
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_save_happy_path_surfaces_rejected(self, monkeypatch):
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        async def fake_call(client, service, data):
+            assert service == "set_allowed_paths"
+            assert data == {"paths": ["pyscript", ".storage"]}
+            # The component validates and drops the deny-floor entry.
+            return {
+                "service_response": {
+                    "success": True,
+                    "paths": ["pyscript"],
+                    "rejected": [".storage"],
+                }
+            }
+
+        monkeypatch.setattr(tf, "call_mcp_tools_service", fake_call)
+        handlers = build_settings_handlers(server=MagicMock())
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"paths": ["pyscript", ".storage"]})
+        resp = await handlers["save_fs_custom_paths"](req)
+        body = json.loads(resp.body)
+        assert body["success"] is True
+        assert body["paths"] == ["pyscript"]
+        assert body["rejected"] == [".storage"]
+        assert body["restart_required"] is False

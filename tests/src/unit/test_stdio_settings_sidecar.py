@@ -101,6 +101,9 @@ class TestBuildSettingsHandlers:
             # Advanced settings handlers.
             "get_advanced_settings",
             "save_advanced_settings",
+            # Custom filesystem directories (issue #1567).
+            "get_fs_custom_paths",
+            "save_fs_custom_paths",
         }
 
     def test_get_tools_reads_cache_when_server_is_none(

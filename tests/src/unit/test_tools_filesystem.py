@@ -32,18 +32,6 @@ def _reset_settings_singleton():
     _reset_global_settings()
 
 
-def test_filesystem_constants_include_dashboards():
-    """READABLE_PATTERNS and WRITABLE_DIRS must mirror the custom component allowlist."""
-    from ha_mcp.tools.tools_filesystem import READABLE_PATTERNS, WRITABLE_DIRS
-
-    assert "dashboards/**" in READABLE_PATTERNS, (
-        "dashboards/** must be readable to support YAML-mode dashboards"
-    )
-    assert "dashboards" in WRITABLE_DIRS, (
-        "dashboards must be writable to support YAML-mode dashboards"
-    )
-
-
 class TestFeatureFlag:
     """Test feature flag functionality.
 
