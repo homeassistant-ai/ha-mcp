@@ -9,7 +9,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -769,6 +769,73 @@ class TestDenyFloor:
         assert _violates_deny_floor(tmp_path, "pyscript/SECRETS.YAML") is True
         # The canonical lowercase root file still passes (it is masked).
         assert _violates_deny_floor(tmp_path, "secrets.yaml") is False
+
+    def test_config_dir_under_storage_is_not_blanket_banned(self, tmp_path):
+        # Regression (patch76 nit): if the HA config dir itself lives below a
+        # ".storage" component (e.g. /var/.storage/config), normal access must
+        # NOT be denied — the floor only scans the config-RELATIVE portion of
+        # the resolved path, mirroring the pre-PR allowlist model.
+        config_dir = tmp_path / ".storage" / "config"
+        config_dir.mkdir(parents=True)
+        assert _violates_deny_floor(config_dir, "www/x.css") is False
+        assert _is_path_allowed_for_read(config_dir, "www/x.css") is True
+        assert (
+            _is_path_allowed_for_dir(config_dir, "www/x.css", ALLOWED_WRITE_DIRS)
+            is True
+        )
+        # A real .storage UNDER this config is still denied (relative-input scan).
+        assert _violates_deny_floor(config_dir, ".storage/auth") is True
+        assert _is_path_allowed_for_read(config_dir, ".storage/auth") is False
+
+
+class TestLoadAllowedPaths:
+    """_load_allowed_paths re-validates the persisted store and fails safe.
+
+    Store is mocked (HA is stubbed at import), so async_load is an AsyncMock.
+    Runs under asyncio_mode=auto (no explicit marker needed).
+    """
+
+    async def _load(self, monkeypatch, tmp_path, *, load_return=None, load_exc=None):
+        import custom_components.ha_mcp_tools as comp
+
+        hass = MagicMock()
+        hass.config.config_dir = str(tmp_path)
+        store = MagicMock()
+        if load_exc is not None:
+            store.async_load = AsyncMock(side_effect=load_exc)
+        else:
+            store.async_load = AsyncMock(return_value=load_return)
+        monkeypatch.setattr(comp, "Store", lambda *a, **k: store)
+        return await comp._load_allowed_paths(hass)
+
+    async def test_revalidates_and_drops_invalid_stored_entries(
+        self, monkeypatch, tmp_path
+    ):
+        # Traversal, deny-floor, non-string, and a duplicate are all dropped;
+        # the one valid entry survives (deduped).
+        result = await self._load(
+            monkeypatch,
+            tmp_path,
+            load_return={"paths": ["pyscript", "../etc", ".storage", "pyscript", 123]},
+        )
+        assert result == ["pyscript"]
+
+    async def test_corrupt_store_load_fails_safe(self, monkeypatch, tmp_path):
+        # A raising async_load (corrupt blob) must not propagate — fall back to [].
+        result = await self._load(
+            monkeypatch, tmp_path, load_exc=ValueError("corrupt json")
+        )
+        assert result == []
+
+    async def test_non_list_paths_ignored(self, monkeypatch, tmp_path):
+        result = await self._load(
+            monkeypatch, tmp_path, load_return={"paths": "not-a-list"}
+        )
+        assert result == []
+
+    async def test_first_run_returns_empty(self, monkeypatch, tmp_path):
+        result = await self._load(monkeypatch, tmp_path, load_return=None)
+        assert result == []
 
 
 class TestExtraDirsReadWrite:

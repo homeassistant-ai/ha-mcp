@@ -205,7 +205,19 @@ async def _load_allowed_paths(hass: HomeAssistant) -> list[str]:
     store: Store = Store(
         hass, _ALLOWED_PATHS_STORAGE_VERSION, _ALLOWED_PATHS_STORAGE_KEY
     )
-    data = await store.async_load()
+    try:
+        data = await store.async_load()
+    except Exception:
+        # Honour the documented fail-safe contract: a corrupt/unreadable
+        # allowed-paths blob must NOT propagate out of async_setup_entry and
+        # take down the integration. Log loudly and fall back to no extra
+        # access.
+        _LOGGER.warning(
+            "ha_mcp_tools: could not load the allowed-paths store; ignoring it "
+            "and granting no extra directories.",
+            exc_info=True,
+        )
+        return []
     if not isinstance(data, dict):
         return []
     raw = data.get("paths")
@@ -336,15 +348,20 @@ def _violates_deny_floor(config_dir: Path, normalized: str) -> bool:
     if any(p.lower() in DENY_PATH_SEGMENTS for p in parts):
         return True
     # Symlink defence: resolve and reject if the real target passes THROUGH a
-    # denied segment (e.g. an in-config symlink pointing at .storage). A segment
-    # scan of the resolved path is robust to platform symlink-canonicalization
-    # quirks that make a prefix/``is_relative_to`` comparison unreliable. Fail
-    # closed on any resolution error.
+    # denied segment (e.g. an in-config symlink pointing at .storage). Scan ONLY
+    # the portion of the resolved path that is *under the config dir* — not the
+    # full absolute path — so the floor doesn't blanket-ban every access when the
+    # config dir itself happens to live below a ".storage" component (e.g.
+    # ``/var/.storage/config``). This mirrors the pre-PR allowlist model, which
+    # likewise only ever reasons about the config-relative path. ``relative_to``
+    # raising ValueError means the resolved target escaped the config dir (e.g. a
+    # symlink out) — fail closed. Fail closed on any resolution error too.
     try:
         resolved = (config_dir / normalized).resolve()
+        rel_parts = resolved.relative_to(config_dir.resolve()).parts
     except (OSError, ValueError):
         return True
-    if any(seg.lower() in DENY_PATH_SEGMENTS for seg in resolved.parts):
+    if any(seg.lower() in DENY_PATH_SEGMENTS for seg in rel_parts):
         return True
     # secrets.yaml — by basename of BOTH the requested path AND the resolved
     # target, so a renamed symlink (``www/notes.txt`` → ``secrets.yaml``) can't
