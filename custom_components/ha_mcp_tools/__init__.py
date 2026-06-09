@@ -179,9 +179,23 @@ async def _load_or_create_caller_token(hass: HomeAssistant) -> str:
     The token authorizes a caller as ha-mcp. It's stored under
     ``.storage/ha_mcp_tools_auth`` and remains stable across restarts so the
     ha-mcp server can re-bootstrap without user intervention.
+
+    A corrupt/unreadable store must NOT propagate out of async_setup_entry and
+    take down the integration: on a load failure we log and fall through to
+    generating a fresh token (same path as first run), overwriting the bad
+    blob. ha-mcp transparently re-bootstraps the new token via its
+    unauthorized-retry, so the only cost is a one-time token rotation.
     """
     store: Store = Store(hass, _TOKEN_STORAGE_VERSION, _TOKEN_STORAGE_KEY)
-    data = await store.async_load()
+    try:
+        data = await store.async_load()
+    except Exception:
+        _LOGGER.warning(
+            "ha_mcp_tools: could not load the caller-token store; generating a "
+            "fresh token and overwriting it.",
+            exc_info=True,
+        )
+        data = None
     if isinstance(data, dict):
         existing = data.get("token")
         if isinstance(existing, str) and existing:

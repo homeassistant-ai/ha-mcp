@@ -838,6 +838,36 @@ class TestLoadAllowedPaths:
         assert result == []
 
 
+class TestLoadCallerToken:
+    """_load_or_create_caller_token must fail safe on a corrupt store rather
+    than propagating out of async_setup_entry and bricking the integration."""
+
+    async def test_corrupt_load_regenerates_token(self, monkeypatch):
+        import custom_components.ha_mcp_tools as comp
+
+        hass = MagicMock()
+        store = MagicMock()
+        store.async_load = AsyncMock(side_effect=ValueError("corrupt blob"))
+        store.async_save = AsyncMock()
+        monkeypatch.setattr(comp, "Store", lambda *a, **k: store)
+        token = await comp._load_or_create_caller_token(hass)
+        # A fresh token is generated and persisted (overwriting the bad blob).
+        assert isinstance(token, str) and token
+        store.async_save.assert_awaited_once()
+
+    async def test_existing_token_returned(self, monkeypatch):
+        import custom_components.ha_mcp_tools as comp
+
+        hass = MagicMock()
+        store = MagicMock()
+        store.async_load = AsyncMock(return_value={"token": "existing-tok"})
+        store.async_save = AsyncMock()
+        monkeypatch.setattr(comp, "Store", lambda *a, **k: store)
+        token = await comp._load_or_create_caller_token(hass)
+        assert token == "existing-tok"
+        store.async_save.assert_not_awaited()
+
+
 class TestExtraDirsReadWrite:
     """A user-configured extra directory grants BOTH read and write."""
 
