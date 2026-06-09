@@ -194,19 +194,49 @@ async def _load_or_create_caller_token(hass: HomeAssistant) -> str:
 async def _load_allowed_paths(hass: HomeAssistant) -> list[str]:
     """Return the persisted user-configurable extra directories.
 
-    Empty list on first run, a missing/corrupt store, or any non-string
-    entries — fail safe to "no extra access" rather than raising, mirroring
-    the defensive shape of :func:`_load_or_create_caller_token`.
+    Each stored entry is re-validated through :func:`_normalize_extra_dir`, so a
+    hand-edited or corrupted store can never load a traversal / deny-floor /
+    out-of-config entry into ``hass.data`` (defense in depth — the deny floor is
+    also re-checked at enforcement time). Anything dropped is logged so a
+    "my custom directories disappeared" case is one grep away. Empty list on
+    first run or a malformed store — fail safe to "no extra access" rather than
+    raising, mirroring :func:`_load_or_create_caller_token`.
     """
     store: Store = Store(
         hass, _ALLOWED_PATHS_STORAGE_VERSION, _ALLOWED_PATHS_STORAGE_KEY
     )
     data = await store.async_load()
-    if isinstance(data, dict):
-        paths = data.get("paths")
-        if isinstance(paths, list):
-            return [p for p in paths if isinstance(p, str)]
-    return []
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("paths")
+    if not isinstance(raw, list):
+        if raw is not None:
+            _LOGGER.warning(
+                "ha_mcp_tools allowed-paths store is malformed (paths is %s, "
+                "expected list); ignoring it.",
+                type(raw).__name__,
+            )
+        return []
+    config_dir = Path(hass.config.config_dir)
+    normalized: list[str] = []
+    dropped: list[Any] = []
+    for entry in raw:
+        norm = (
+            _normalize_extra_dir(entry, config_dir) if isinstance(entry, str) else None
+        )
+        if norm is None:
+            dropped.append(entry)
+        elif norm not in normalized:
+            normalized.append(norm)
+    if dropped:
+        _LOGGER.warning(
+            "ha_mcp_tools: dropped %d invalid entr%s from the persisted "
+            "allowed-paths store: %r",
+            len(dropped),
+            "y" if len(dropped) == 1 else "ies",
+            dropped,
+        )
+    return normalized
 
 
 async def _save_allowed_paths(hass: HomeAssistant, paths: list[str]) -> None:

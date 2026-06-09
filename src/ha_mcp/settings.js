@@ -893,7 +893,9 @@ async function saveBackupConfig() {
 // proxy to it via authenticated HA service calls. Cached so the sub-form
 // re-renders synchronously when the beta master / filesystem-tools toggle
 // flips, without re-fetching.
-let _fsCustomPathsData = null; // {available, paths, deny_floor, reason} | null
+// Consumed fields of the GET response: {available, paths, deny_floor, reason}
+// (the endpoint also returns builtin_read_dirs/builtin_write_dirs, unused here).
+let _fsCustomPathsData = null;
 
 async function loadFsCustomPaths() {
   try {

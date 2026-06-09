@@ -3536,3 +3536,113 @@ class TestFsCustomPathsEndpoints:
         assert body["paths"] == ["pyscript"]
         assert body["rejected"] == [".storage"]
         assert body["restart_required"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_unavailable_on_component_non_success(self, monkeypatch):
+        # The component answered but with success=false (e.g. admin gate
+        # rejected) — degrade to available:false with the component's reason,
+        # not a false available:true.
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        async def fake_call(client, service, data):
+            return {
+                "service_response": {
+                    "success": False,
+                    "error_code": "unauthorized",
+                    "error": "ha_mcp_tools.get_allowed_paths requires admin auth.",
+                }
+            }
+
+        monkeypatch.setattr(tf, "call_mcp_tools_service", fake_call)
+        handlers = build_settings_handlers(server=MagicMock())
+        resp = await handlers["get_fs_custom_paths"](MagicMock())
+        assert resp.status_code == 200
+        body = json.loads(resp.body)
+        assert body["available"] is False
+        assert "admin" in body["reason"].lower()
+
+    @pytest.mark.asyncio
+    async def test_save_502_on_component_non_success(self, monkeypatch):
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        async def fake_call(client, service, data):
+            return {
+                "service_response": {
+                    "success": False,
+                    "error": "ha_mcp_tools.set_allowed_paths requires admin auth.",
+                }
+            }
+
+        monkeypatch.setattr(tf, "call_mcp_tools_service", fake_call)
+        handlers = build_settings_handlers(server=MagicMock())
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"paths": ["pyscript"]})
+        resp = await handlers["save_fs_custom_paths"](req)
+        assert resp.status_code == 502
+
+    @pytest.mark.asyncio
+    async def test_save_502_on_component_unreachable(self, monkeypatch):
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        async def boom(client, service, data):
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(tf, "call_mcp_tools_service", boom)
+        handlers = build_settings_handlers(server=MagicMock())
+        req = MagicMock()
+        req.json = AsyncMock(return_value={"paths": ["pyscript"]})
+        resp = await handlers["save_fs_custom_paths"](req)
+        assert resp.status_code == 502
+
+    @pytest.mark.asyncio
+    async def test_save_400_on_invalid_json_body(self, monkeypatch):
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+        handlers = build_settings_handlers(server=MagicMock())
+        req = MagicMock()
+        req.json = AsyncMock(side_effect=ValueError("not json"))
+        resp = await handlers["save_fs_custom_paths"](req)
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_sidecar_builds_and_closes_transient_client(self, monkeypatch):
+        # In the stdio sidecar (server=None) the handler must build a transient
+        # HomeAssistantClient, use it, and close it.
+        import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
+
+        fake_client = MagicMock()
+        fake_client.close = AsyncMock()
+        seen = {}
+
+        def _make_client():
+            return fake_client
+
+        async def fake_call(client, service, data):
+            seen["client"] = client
+            return {
+                "service_response": {"success": True, "paths": [], "deny_floor": []}
+            }
+
+        monkeypatch.setattr(
+            "ha_mcp.client.rest_client.HomeAssistantClient", _make_client
+        )
+        monkeypatch.setattr(tf, "call_mcp_tools_service", fake_call)
+        handlers = build_settings_handlers(server=None, is_sidecar=True)
+        resp = await handlers["get_fs_custom_paths"](MagicMock())
+        assert json.loads(resp.body)["available"] is True
+        assert seen["client"] is fake_client
+        fake_client.close.assert_awaited_once()

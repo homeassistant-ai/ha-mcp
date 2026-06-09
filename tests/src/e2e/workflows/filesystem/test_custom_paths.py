@@ -133,11 +133,16 @@ class TestCustomFilesystemPaths:
         base_url = ha_container_with_fresh_config["base_url"]
         token = await _bootstrap_token(base_url)
         try:
-            sr = await _set_allowed_paths(base_url, token, [".storage", "pyscript"])
-            # The deny floor drops .storage; the valid entry is kept.
+            # Mixed batch: a deny-floor entry (dropped), a valid entry, and a
+            # duplicate-after-normalization of it ("pyscript/" -> "pyscript").
+            sr = await _set_allowed_paths(
+                base_url, token, [".storage", "pyscript", "pyscript/"]
+            )
+            # The deny floor drops .storage; the valid entry is kept once (the
+            # normalized duplicate is deduped, not stored twice).
             assert ".storage" in sr.get("rejected", []), sr
             assert ".storage" not in sr.get("paths", []), sr
-            assert "pyscript" in sr.get("paths", []), sr
+            assert sr.get("paths") == ["pyscript"], sr
 
             # Even with a valid custom dir configured, .storage stays blocked.
             data = await safe_call_tool(
