@@ -888,6 +888,149 @@ async function saveBackupConfig() {
   }
 }
 
+// ---- Custom filesystem directories (issue #1567) ---------------------------
+// The list lives in the ha_mcp_tools custom component; the GET/POST endpoints
+// proxy to it via authenticated HA service calls. Cached so the sub-form
+// re-renders synchronously when the beta master / filesystem-tools toggle
+// flips, without re-fetching.
+// Consumed fields of the GET response: {available, paths, deny_floor, reason}
+// (the endpoint also returns builtin_read_dirs/builtin_write_dirs, unused here).
+let _fsCustomPathsData = null;
+
+async function loadFsCustomPaths() {
+  try {
+    const resp = await fetch('./api/settings/fs-custom-paths');
+    if (!resp.ok) {
+      _fsCustomPathsData = {
+        available: false,
+        reason: `HTTP ${resp.status}`,
+        paths: [],
+        deny_floor: [],
+      };
+    } else {
+      _fsCustomPathsData = await resp.json();
+    }
+  } catch (err) {
+    _fsCustomPathsData = {
+      available: false,
+      reason: 'Network error: ' + String(err),
+      paths: [],
+      deny_floor: [],
+    };
+  }
+  // Re-render the feature panel so the sub-form reflects the loaded data.
+  if (Object.keys(_lastFeatureFlags).length) renderFeatureFlags(_lastFeatureFlags);
+}
+
+// Injected beneath the enable_filesystem_tools row in renderFeatureFlags.
+// Second-level nested (under filesystem tools, itself beta-sub-nested under
+// the master), dimmed when either the master beta or filesystem tools is off.
+function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
+  const lockedByGate = !masterOn || !fsOn;
+  const d = _fsCustomPathsData;
+  const row = document.createElement('div');
+  row.className =
+    'feature-row fs-custom-paths-sub' + (lockedByGate ? ' dimmed' : '');
+
+  const info = document.createElement('div');
+  info.className = 'feature-info';
+  const denyList =
+    d && Array.isArray(d.deny_floor) && d.deny_floor.length
+      ? d.deny_floor.join(', ')
+      : '.storage, secrets.yaml';
+  info.innerHTML =
+    `<div class="feature-name">Custom filesystem directories (advanced)</div>` +
+    `<div class="feature-help">Extra directories (one per line, relative to your config dir) that the file tools may READ and WRITE — e.g. <code>pyscript</code>, <code>python_scripts</code>. Each entry grants both read and write. Applies immediately; no restart needed.</div>` +
+    `<div class="feature-help">Always blocked (cannot be added): <code>${escapeHtml(denyList)}</code>, path traversal (<code>..</code>), and absolute paths.</div>`;
+
+  const control = document.createElement('div');
+  control.className = 'feature-control';
+
+  if (lockedByGate) {
+    const note = document.createElement('div');
+    note.className = 'feature-locked-note';
+    note.textContent =
+      'Enable beta features and filesystem tools above to edit.';
+    control.appendChild(note);
+  } else if (!d) {
+    const note = document.createElement('div');
+    note.className = 'feature-help';
+    note.textContent = 'Loading…';
+    control.appendChild(note);
+  } else if (!d.available) {
+    const note = document.createElement('div');
+    note.className = 'feature-locked-note';
+    note.textContent =
+      d.reason || 'Custom directories are currently unavailable.';
+    control.appendChild(note);
+  } else {
+    const ta = document.createElement('textarea');
+    ta.id = 'fsCustomPathsInput';
+    ta.rows = 4;
+    ta.value = (d.paths || []).join('\n');
+    const btn = document.createElement('button');
+    btn.id = 'fsCustomPathsSave';
+    btn.className = 'adv-save-btn';
+    btn.textContent = 'Save directories';
+    btn.addEventListener('click', saveFsCustomPaths);
+    const status = document.createElement('div');
+    status.id = 'fsCustomPathsStatus';
+    status.className = 'feature-help';
+    control.appendChild(ta);
+    control.appendChild(btn);
+    control.appendChild(status);
+  }
+
+  row.appendChild(info);
+  row.appendChild(control);
+  parentEl.appendChild(row);
+}
+
+async function saveFsCustomPaths() {
+  const ta = document.getElementById('fsCustomPathsInput');
+  const btn = document.getElementById('fsCustomPathsSave');
+  const statusEl = document.getElementById('fsCustomPathsStatus');
+  if (!ta || !btn || !statusEl) return;
+  const paths = ta.value
+    .split('\n')
+    .map(s => s.trim())
+    .filter(s => s.length);
+  btn.disabled = true;
+  statusEl.textContent = 'Saving…';
+  try {
+    const resp = await fetch('./api/settings/fs-custom-paths', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    });
+    const data = await resp.json();
+    btn.disabled = false;
+    if (!resp.ok || !data.success) {
+      let msg = 'Save failed';
+      if (data && data.error) {
+        if (typeof data.error === 'string') msg = data.error;
+        else if (data.error.message) msg = data.error.message;
+      }
+      statusEl.textContent = msg;
+      return;
+    }
+    // Reflect the component's canonical normalized list; drop any rejected.
+    _fsCustomPathsData = {
+      ...(_fsCustomPathsData || {}),
+      available: true,
+      paths: data.paths || [],
+    };
+    ta.value = (data.paths || []).join('\n');
+    const rejected = data.rejected || [];
+    statusEl.textContent = rejected.length
+      ? `Saved. Rejected (blocked or invalid): ${rejected.join(', ')}`
+      : 'Saved.';
+  } catch (err) {
+    btn.disabled = false;
+    statusEl.textContent = 'Network error: ' + String(err);
+  }
+}
+
 async function loadBackups() {
   const params = new URLSearchParams();
   const d = document.getElementById('backupDomain').value.trim();
@@ -1350,6 +1493,14 @@ function renderFeatureFlags(flags) {
     if (fieldName === 'enable_yaml_config_editing') {
       const parentOn = !!f.value;
       renderYamlPackagesSubRows(flags, targetBody, masterOn, parentOn);
+    }
+    // After the enable_filesystem_tools row, inject the custom-directories
+    // editor (issue #1567). Dimmed when either the master beta is off or
+    // filesystem tools itself is off. The list is component-owned and fetched
+    // separately via loadFsCustomPaths(); this renders from that cache.
+    if (fieldName === 'enable_filesystem_tools') {
+      const fsOn = !!f.value;
+      renderFsCustomPathsSubForm(targetBody, masterOn, fsOn);
     }
   });
 }
@@ -2718,6 +2869,7 @@ document.getElementById('advSaveBtn').addEventListener('click', saveAdvancedSett
 loadFeatureFlags();
 loadAdvancedSettings();
 loadTools();
+loadFsCustomPaths();
 
 // Auto-activate tab from ?tab=<name> query string (used by approval URLs
 // generated by the policy middleware: /settings?tab=tool-security-policies&token=...).

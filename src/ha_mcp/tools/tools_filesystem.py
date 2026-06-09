@@ -53,7 +53,7 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 # server-side behavior change requires it. Older components (no
 # ``version`` in the get_caller_token response, or a version below this)
 # get an actionable "update via HACS" error.
-MIN_COMPONENT_VERSION = "0.5.2"
+MIN_COMPONENT_VERSION = "0.7.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -265,25 +265,6 @@ def _reset_caller_token_cache() -> None:
     _CALLER_TOKEN_LOCKS.clear()
 
 
-# Security constants - mirrors the custom component config
-READABLE_PATTERNS = [
-    "configuration.yaml",
-    "automations.yaml",
-    "scripts.yaml",
-    "scenes.yaml",
-    "secrets.yaml",  # Content will be masked by the custom component
-    "packages/*.yaml",
-    "home-assistant.log",
-    "www/**",
-    "themes/**",
-    "custom_templates/**",
-    "dashboards/**",
-    "custom_components/**/*.py",
-]
-
-WRITABLE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
-
-
 def is_filesystem_tools_enabled() -> bool:
     """Check if the filesystem tools feature is enabled.
 
@@ -375,6 +356,7 @@ class FilesystemTools:
         - `themes/` - Theme files
         - `custom_templates/` - Jinja2 template files
         - `dashboards/` - YAML-mode dashboard files
+        - Plus any custom directories configured in the ha-mcp settings UI
 
         **Security:** Only directories in the allowed list can be accessed.
         Path traversal attempts (../) are blocked.
@@ -482,6 +464,7 @@ class FilesystemTools:
         - `home-assistant.log` (tail only)
         - `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`
         - `custom_components/**/*.py` (read-only)
+        - Plus any custom directories configured in the ha-mcp settings UI
 
         **Security:**
         - Path traversal (../) is blocked
@@ -604,6 +587,7 @@ class FilesystemTools:
         - `themes/` - Theme YAML files
         - `custom_templates/` - Jinja2 template files
         - `dashboards/` - YAML-mode dashboard files
+        - Plus any custom directories configured in the ha-mcp settings UI
 
         **Security:**
         - Only the directories above allow writes
@@ -718,6 +702,7 @@ class FilesystemTools:
         - `themes/` - Theme files
         - `custom_templates/` - Template files
         - `dashboards/` - YAML-mode dashboard files
+        - Plus any custom directories configured in the ha-mcp settings UI
 
         **Security:**
         - Only the directories above allow deletions

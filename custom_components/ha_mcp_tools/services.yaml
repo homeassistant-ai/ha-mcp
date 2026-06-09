@@ -156,3 +156,33 @@ get_caller_token:
     and persisted to .storage. Not intended for direct invocation from
     automations or scripts.
   fields: {}
+
+get_allowed_paths:
+  name: Get Allowed Filesystem Paths (Internal)
+  description: >-
+    Internal service used by the ha-mcp server settings UI. Returns the
+    user-configurable extra read/write directories, the built-in allowlists,
+    and the non-overridable deny floor. Restricted to the ha-mcp server
+    (requires the `_ha_mcp_token`) and admin auth. Not intended for direct
+    invocation from automations or scripts.
+  fields: {}
+
+set_allowed_paths:
+  name: Set Allowed Filesystem Paths (Internal)
+  description: >-
+    Internal service used by the ha-mcp server settings UI. Replaces the
+    user-configurable extra read/write directories (each granted both read and
+    write). Entries that use path traversal, are absolute, escape the config
+    directory, or hit the non-overridable deny floor (e.g. .storage) are
+    dropped. Restricted to the ha-mcp server (requires the `_ha_mcp_token`) and
+    admin auth.
+  fields:
+    paths:
+      name: Paths
+      description: >-
+        Directories relative to the config directory, each granted read and
+        write (e.g. "pyscript", "python_scripts"). Replaces the current list.
+      required: false
+      example: '["pyscript", "python_scripts"]'
+      selector:
+        object:

@@ -602,6 +602,21 @@ def _build_app(
             handlers["save_feature_flags"],
             methods=["POST"],
         ),
+        # Custom filesystem directories (issue #1567). The sub-form is rendered
+        # in the features panel, so the stdio sidecar must serve these too — its
+        # route list is hand-maintained and does NOT derive from
+        # register_settings_routes. The handler builds a transient HA client
+        # from the inherited env when server is None (sidecar mode).
+        Route(
+            f"{secret_prefix}/api/settings/fs-custom-paths",
+            handlers["get_fs_custom_paths"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/fs-custom-paths",
+            handlers["save_fs_custom_paths"],
+            methods=["POST"],
+        ),
         # Tool security policies endpoints (#966). Pending/approve/deny
         # are wired as stubs that return 503 in sidecar mode — the
         # in-memory ApprovalQueue lives in the main server process, so
