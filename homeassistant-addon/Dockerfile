@@ -5,7 +5,7 @@
 # No bashio needed - pure Python startup script
 
 # --- Build stage: install dependencies with uv ---
-FROM ghcr.io/astral-sh/uv:0.11.18-python3.13-trixie-slim@sha256:09fdd532aaaca60cf5159276003139650585cf7612193a84dfbc2f0d3c4b7ce8 AS builder
+FROM ghcr.io/astral-sh/uv:0.11.19-python3.13-trixie-slim@sha256:2d1f9176bcfbd00528f7e527557790307833b5d75c9825a88ed433ba3be6e356 AS builder
 
 WORKDIR /app
 
