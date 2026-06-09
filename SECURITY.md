@@ -149,10 +149,11 @@ networks and place it behind a TLS-terminating reverse proxy.
 Use the private reporting page at:
 **https://github.com/homeassistant-ai/ha-mcp/security/advisories/new**
 
-Reports are assessed within 48 hours; fixes may take an additional 24–48 hours.
-We aim for coordinated disclosure and will work with you to agree on a
-disclosure timeline, typically within 90 days of the initial report.
-Severity is assessed using CVSS base scores where applicable.
+We aim to acknowledge reports within 7 days and to provide an initial
+assessment shortly after. Remediation time depends on severity and complexity.
+We practice coordinated disclosure and will agree a timeline with you,
+typically within 90 days of the initial report. Severity is assessed using
+CVSS base scores where applicable.
 
 **Requirements for a valid report:**
 - Reports must be made in good faith
