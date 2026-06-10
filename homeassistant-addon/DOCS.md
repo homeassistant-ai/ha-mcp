@@ -327,6 +327,32 @@ Per-tool rules (including argument conditions like `args.domain in ['lock', 'ala
 
 *Inspired by [PolicyLayer](https://policylayer.com/)'s policy DSL shape, originally proposed in [#966](https://github.com/homeassistant-ai/ha-mcp/issues/966) by [@L1AD](https://github.com/L1AD).*
 
+### read_only_mode
+
+**Default:** `false`
+
+Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Write-capable tools disappear from the AI's tool list, and any write operation that still reaches the server (for example through the tool-search proxies) is blocked with a structured `READ_ONLY_MODE` error the AI understands.
+
+Mixed read/write tools whose read functionality exists nowhere else stay available with their write operations blocked:
+
+- `ha_manage_backup` — only listing and viewing per-edit backups
+- `ha_manage_addon` — only HTTP GET proxy reads of add-on APIs
+- `ha_manage_energy_prefs` — only `mode='get'`
+- `ha_manage_pipeline` — only `action='list'` / `'get'`
+- `ha_manage_custom_tool` — only `list_saved=true`
+
+**When to enable:**
+- Using the AI for analysis, audits, and suggestions only
+- Demos or shared setups where the assistant must never change anything
+
+The same toggle appears at the top of the **Tools** tab in the web UI. Off by default. Requires add-on restart to take effect.
+
+**Example Configuration:**
+
+```yaml
+read_only_mode: true
+```
+
 ---
 
 ## Tool Settings Web UI

@@ -187,6 +187,12 @@
     color: var(--text); font-size: 0.85rem; }
   .feature-control input[type="number"]:disabled { opacity: 0.4; cursor: not-allowed; }
   .feature-row.locked .feature-name { color: var(--text-secondary); }
+  /* Read Only Mode toggle row sits in the Tools tab between the summary
+     and the search box — card styling to match the tab's other blocks
+     (the bare .feature-row look is designed for the Server Settings
+     list, where rows separate with border-top). */
+  #readOnlyModeRow { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 16px; margin-bottom: 16px; }
   /* Beta master toggle + nested sub-rows. The master row
      ``.beta-master-row`` is visually distinguished as a section
      header. The 5 sub-rows ``.beta-sub`` are indented with a vertical

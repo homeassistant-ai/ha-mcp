@@ -47,6 +47,7 @@ options:
   enable_tool_search: false
   tool_search_max_results: 5
   enable_tool_security_policies: false
+  read_only_mode: false
   enable_mandatory_bps: true
   disabled_tools: ""
   pinned_tools: ""
@@ -60,6 +61,7 @@ schema:
   enable_tool_search: bool?
   tool_search_max_results: int(2,10)?
   enable_tool_security_policies: bool?
+  read_only_mode: bool?
   enable_mandatory_bps: bool?
   disabled_tools: str?
   pinned_tools: str?

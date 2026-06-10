@@ -128,6 +128,10 @@ class TestAddonStructure:
             "tool_search_max_results": ("int(2,10)?", 5),
             "disabled_tools": ("str?", ""),
             "pinned_tools": ("str?", ""),
+            # Read Only Mode (#1569) — non-beta safety toggle, default OFF
+            # (an on-by-default value would silently break every write
+            # tool on upgrade).
+            "read_only_mode": ("bool?", False),
         }
         for key, (schema_type, default) in expected.items():
             assert key in config["options"], f"{key!r} must be in stable options"
@@ -143,7 +147,12 @@ class TestAddonStructure:
         stable and dev add-ons — same defaults AND same schema types. Guards
         against future one-sided drift (the exact bug class this fix
         addresses: dev gains/changes an option, stable is forgotten)."""
-        keys = ("tool_search_max_results", "disabled_tools", "pinned_tools")
+        keys = (
+            "tool_search_max_results",
+            "disabled_tools",
+            "pinned_tools",
+            "read_only_mode",
+        )
         with open(f"{ADDON_DIR}/config.yaml") as f:
             stable = yaml.safe_load(f)
         with open("homeassistant-addon-dev/config.yaml") as f:

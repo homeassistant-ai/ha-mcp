@@ -25,6 +25,7 @@ options:
   backup_hint: "normal"
   enable_tool_search: false
   enable_tool_security_policies: false
+  read_only_mode: false
   # Master beta gate — also dev-only (stable's schema does not declare
   # this key; the stable web UI master remains the gate there). Default
   # ON in dev so the master is pre-unlocked; the user only has to
@@ -60,6 +61,7 @@ schema:
   secret_path: str?
   enable_tool_search: bool?
   enable_tool_security_policies: bool?
+  read_only_mode: bool?
   enable_beta_features: bool?
   enable_yaml_config_editing: bool?
   enable_yaml_packages_automation: bool?

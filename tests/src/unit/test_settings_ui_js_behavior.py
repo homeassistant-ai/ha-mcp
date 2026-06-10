@@ -77,6 +77,9 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # the global-settings save button writes wait_seconds / TTL.
     "policy-master-toggle",
     "policy-save-global-btn",
+    # Read Only Mode toggle (#1569) — Tools tab, above the search box.
+    # Same save-then-verify flow as the policy master toggle.
+    "read-only-mode-toggle",
     # Advanced settings panel — Save button + status text +
     # the 5 section containers that loadAdvancedSettings() writes to
     # via innerHTML. Without container divs in MIN_DOM, renderSection
@@ -141,8 +144,8 @@ def _build_min_dom() -> str:
             continue  # rendered as a child of restartNotice above
         elif el_id == "search":
             rows.append('<input id="search" />')
-        elif el_id == "policy-master-toggle":
-            rows.append('<input id="policy-master-toggle" type="checkbox" />')
+        elif el_id in ("policy-master-toggle", "read-only-mode-toggle"):
+            rows.append(f'<input id="{el_id}" type="checkbox" />')
         elif el_id == "policy-save-global-btn":
             rows.append('<button id="policy-save-global-btn"></button>')
         else:
@@ -3045,3 +3048,146 @@ class TestYamlPackagesSubFlagNesting:
         assert m.group(1) == "false", (
             "sub-row <input> must be interactive when both gates are on"
         )
+
+
+class TestReadOnlyModeToggle:
+    """Read Only Mode (#1569): the Tools-tab toggle posts to the
+    feature-flag endpoint, and render() forces write-capable tool rows
+    off (without rewriting saved states) while exempt mixed read/write
+    tools stay interactive."""
+
+    @staticmethod
+    def _tools_payload() -> dict:
+        return {
+            "status": 200,
+            "json": {
+                "tools": [
+                    {
+                        "name": "ha_get_history",
+                        "title": "Get History",
+                        "primary_tag": "Test",
+                        "annotations": {"readOnlyHint": True},
+                    },
+                    {
+                        "name": "ha_config_set_scene",
+                        "title": "Set Scene",
+                        "primary_tag": "Test",
+                        "annotations": {"destructiveHint": True},
+                    },
+                    {
+                        "name": "ha_manage_pipeline",
+                        "title": "Manage Pipeline",
+                        "primary_tag": "Test",
+                        "annotations": {"destructiveHint": True},
+                    },
+                ],
+                "states": {},
+                "env_pinned": {},
+                "read_only_exempt": ["ha_manage_pipeline"],
+            },
+        }
+
+    def _fetches(self, *, read_only: bool) -> dict:
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": self._tools_payload(),
+            "/api/settings/features": {
+                "status": 200,
+                "json": {"flags": {"read_only_mode": {"value": read_only}}},
+            },
+        }
+
+    @staticmethod
+    def _input_tag(dom: str, tool: str) -> str:
+        m = re.search(rf'<input[^>]*name="tool:{tool}:enabled"[^>]*>', dom)
+        assert m is not None, (
+            f"enabled input for {tool} missing; dom tail: {dom[-1500:]}"
+        )
+        return m.group(0)
+
+    def test_toggle_change_posts_to_features_endpoint(
+        self, settings_script: str
+    ) -> None:
+        """Flipping the Tools-tab toggle must POST
+        ``{flags: {read_only_mode: true}}`` to /api/settings/features —
+        the same endpoint and shape as every other feature flag."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "status": 200,
+                    "json": {"restart_required": True},
+                },
+            },
+            invoke="""
+              const cb = document.getElementById('read-only-mode-toggle');
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 50));
+            """,
+        )
+        _assert_clean_init(result)
+        flag_posts = [
+            f
+            for f in result.fetches
+            if f["method"] == "POST" and "/api/settings/features" in f["url"]
+        ]
+        assert flag_posts, (
+            f"expected POST to /api/settings/features; got {result.fetches}"
+        )
+        import json
+
+        matched = False
+        for f in flag_posts:
+            raw = f.get("body", "")
+            if not raw:
+                continue
+            try:
+                body = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            flags = body.get("flags") if isinstance(body, dict) else None
+            if isinstance(flags, dict) and flags.get("read_only_mode") is True:
+                matched = True
+        assert matched, f"no POST carried flags.read_only_mode=true: {flag_posts}"
+
+    def test_render_forces_write_tools_off_when_on(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(read_only=True),
+            invoke="await new Promise(r => setTimeout(r, 250));",
+        )
+        _assert_clean_init(result)
+        write_tag = self._input_tag(result.dom, "ha_config_set_scene")
+        assert "disabled" in write_tag, f"write tool must be locked: {write_tag}"
+        assert "checked" not in write_tag, f"write tool must render off: {write_tag}"
+        read_tag = self._input_tag(result.dom, "ha_get_history")
+        assert "checked" in read_tag, f"read tool must stay on: {read_tag}"
+        assert "disabled" not in read_tag, f"read tool must stay live: {read_tag}"
+        exempt_tag = self._input_tag(result.dom, "ha_manage_pipeline")
+        assert "checked" in exempt_tag, f"exempt tool must stay on: {exempt_tag}"
+        assert "disabled" not in exempt_tag, (
+            f"exempt tool toggle must stay live: {exempt_tag}"
+        )
+        assert "Read Only Mode is on; write tools are disabled" in result.dom
+        assert "write operations of this tool are blocked" in result.dom
+
+    def test_render_leaves_tools_alone_when_off(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(read_only=False),
+            invoke="await new Promise(r => setTimeout(r, 250));",
+        )
+        _assert_clean_init(result)
+        write_tag = self._input_tag(result.dom, "ha_config_set_scene")
+        assert "checked" in write_tag, (
+            f"write tool defaults on when mode off: {write_tag}"
+        )
+        assert "disabled" not in write_tag, (
+            f"write tool stays interactive when mode off: {write_tag}"
+        )
+        assert "Read Only Mode is on; write tools are disabled" not in result.dom

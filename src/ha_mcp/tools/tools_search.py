@@ -2147,6 +2147,22 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "base URL your client connects to."
                 )
 
+        # Surface Read Only Mode after projection (like settings_url) so
+        # the flag survives any fields= filter — the model must learn the
+        # mode is on even from a minimal overview call. Re-read the live
+        # settings: standalone-mode toggles flip without a restart and the
+        # `settings` local above may predate the flip.
+        if get_global_settings().read_only_mode:
+            projected["read_only_mode"] = True
+            projected["read_only_mode_hint"] = (
+                "Read Only Mode is ON: write-capable tools are disabled and "
+                "all write or destructive operations are blocked "
+                "server-side. You can search, read, and analyze freely. To "
+                "allow changes, the user must turn off Read Only Mode in "
+                "the ha-mcp settings UI (Tools tab) or the add-on "
+                "configuration."
+            )
+
         return projected
 
     async def ha_deep_search(

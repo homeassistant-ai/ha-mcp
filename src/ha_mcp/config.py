@@ -126,6 +126,14 @@ class Settings(BaseSettings):
         False, alias="ENABLE_TOOL_SECURITY_POLICIES"
     )
 
+    # Read Only Mode — global safety toggle (discussion #1569). When on,
+    # write-capable tools are hidden from the MCP catalog and every write
+    # operation is blocked at call time with a structured READ_ONLY_MODE
+    # error. Mixed read/write tools whose read surface has no pure-read
+    # duplicate stay available with their write actions blocked (see
+    # read_only.py:READ_ONLY_EXEMPT_TOOLS). Off by default.
+    read_only_mode: bool = Field(False, alias="READ_ONLY_MODE")
+
     # Master beta-features toggle. UI-only — intentionally not in any
     # addon config.yaml schema. Consumed by the master gate in
     # ``_apply_feature_flag_overrides``, which force-sets the
@@ -545,6 +553,11 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
     FeatureFlagField(
         "enable_tool_security_policies", "ENABLE_TOOL_SECURITY_POLICIES", bool
     ),
+    # Non-beta global safety toggle (discussion #1569). Lives here so the
+    # Tools-tab toggle and the Server Settings row share the same
+    # /api/settings/features plumbing, override-file persistence, and
+    # addon Supervisor routing as every other feature flag.
+    FeatureFlagField("read_only_mode", "READ_ONLY_MODE", bool),
     # Non-beta, default-ON master switch for write-tool skill_content
     # delivery (#1182). Grouped with the non-beta flags above the beta
     # run below; intentionally NOT in BETA_FEATURE_FIELDS (it must not be

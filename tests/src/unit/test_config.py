@@ -65,6 +65,48 @@ def test_enable_mandatory_bps_env_var_coercion_rejected(env_value):
         )
 
 
+def test_read_only_mode_disabled_by_default():
+    """read_only_mode defaults to False (opt-in safety toggle, #1569)."""
+    from ha_mcp.config import Settings
+
+    assert Settings().read_only_mode is False
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [
+        ("true", True),
+        ("TRUE", True),
+        ("1", True),
+        ("false", False),
+        ("0", False),
+    ],
+)
+def test_read_only_mode_env_var_coercion_accepted(env_value, expected):
+    """READ_ONLY_MODE accepts the documented boolean strings."""
+    from ha_mcp.config import Settings
+
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        READ_ONLY_MODE=env_value,
+    )
+    assert settings.read_only_mode is expected
+
+
+@pytest.mark.parametrize("env_value", ["garbage", "enable", ""])
+def test_read_only_mode_env_var_coercion_rejected(env_value):
+    """READ_ONLY_MODE rejects non-boolean strings at startup."""
+    import pydantic
+
+    from ha_mcp.config import Settings
+
+    with pytest.raises(pydantic.ValidationError):
+        Settings(
+            _env_file=None,  # type: ignore[call-arg]
+            READ_ONLY_MODE=env_value,
+        )
+
+
 @pytest.mark.slow
 class TestConfigErrorHandling:
     """Test configuration error handling and user-friendly messages."""

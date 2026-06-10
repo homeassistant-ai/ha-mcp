@@ -37,6 +37,14 @@ configuration:
       and click Approve before the call proceeds. Per-tool rules with
       optional argument conditions are configured in the Tool Security
       Policies tab. Off by default. Requires restart to take effect.
+  read_only_mode:
+    name: Read Only Mode
+    description: >-
+      Toggles all write tools off, and removes ability for tools to make
+      any write or destructive calls. Mixed read/write tools (backups,
+      add-ons, energy preferences, voice pipelines) stay available with
+      their write operations blocked. Same toggle as the web UI Tools
+      tab. Off by default. Requires restart to take effect.
   enable_beta_features:
     name: Enable beta features (master)
     description: >-

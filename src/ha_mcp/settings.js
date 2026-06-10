@@ -40,11 +40,28 @@ const policyState = {
   gatedTools: new Set(),
 };
 
+// Read Only Mode (read_only_mode feature flag) — same tri-state shape
+// as policyState. Mirrors the toggle above the Tools-tab search box and
+// the Server Settings row. While enabled, render() forces write-capable
+// tools off (visually, without rewriting toolStates — same
+// non-destructive semantics as the beta master gate) except the
+// server-provided READ_ONLY_EXEMPT mixed read/write tools.
+const readOnlyState = {
+  enabled: false,
+  enabledKnown: false,
+};
+
+// Mixed read/write tools that stay enabled in Read Only Mode (their
+// write operations are blocked server-side at call time). Populated
+// from data.read_only_exempt in loadTools().
+let READ_ONLY_EXEMPT = new Set();
+
 async function loadPolicyState() {
   // policyState.enabled mirrors the addon-config flag
   // (enable_tool_security_policies) — the single source of truth for
   // whether the middleware is active. Read it from /api/settings/features
-  // where it appears via FEATURE_FLAG_FIELDS.
+  // where it appears via FEATURE_FLAG_FIELDS. readOnlyState piggybacks
+  // on the same fetch (read_only_mode is in the same flags payload).
   try {
     const fresp = await fetch('./api/settings/features');
     if (fresp.ok) {
@@ -52,13 +69,20 @@ async function loadPolicyState() {
       const flag = (fdata.flags || {})['enable_tool_security_policies'];
       policyState.enabled = !!(flag && flag.value);
       policyState.enabledKnown = true;
+      const roFlag = (fdata.flags || {})['read_only_mode'];
+      readOnlyState.enabled = !!(roFlag && roFlag.value);
+      readOnlyState.enabledKnown = true;
     } else {
       policyState.enabled = false;
       policyState.enabledKnown = false;
+      readOnlyState.enabled = false;
+      readOnlyState.enabledKnown = false;
     }
   } catch (_e) {
     policyState.enabled = false;
     policyState.enabledKnown = false;
+    readOnlyState.enabled = false;
+    readOnlyState.enabledKnown = false;
   }
   try {
     const r = await fetch('./api/policy/config');
@@ -128,10 +152,12 @@ async function loadTools() {
   toolData = data.tools || [];
   toolStates = data.states || {};
   toolEnvPinned = data.env_pinned || {};
+  READ_ONLY_EXEMPT = new Set(data.read_only_exempt || []);
   // Load policy state before the first render so the "security gated"
   // toggle reflects current policy.rules. loadPolicyState() never throws
   // — it leaves gatedTools empty on failure.
   await loadPolicyState();
+  syncReadOnlyToggle();
   // /api/settings/info drives the restart-button mode, restart-notice
   // copy, and the version footer. Fetch it BEFORE the empty-tools
   // early return so a sidecar misconfig (toolData=[]) still gets the
@@ -434,6 +460,25 @@ function getState(name) {
   return DEFAULT_PINNED.includes(name) ? 'pinned' : 'enabled';
 }
 
+// True when Read Only Mode forces this tool's row off: write-capable
+// (readOnlyHint !== true, the same fail-closed rule the server applies),
+// not an exempt mixed read/write tool, not mandatory. Saved toolStates
+// are deliberately NOT rewritten — turning the mode off restores the
+// user's prior selections (beta-master semantics).
+function isReadOnlyForcedOff(t) {
+  if (!readOnlyState.enabled) return false;
+  const ann = t.annotations || {};
+  if (ann.readOnlyHint === true) return false;
+  if (READ_ONLY_EXEMPT.has(t.name)) return false;
+  if (MANDATORY.includes(t.name)) return false;
+  return true;
+}
+
+function syncReadOnlyToggle() {
+  const cb = document.getElementById('read-only-mode-toggle');
+  if (cb) cb.checked = !!readOnlyState.enabled;
+}
+
 // Escape HTML special characters before interpolating into innerHTML.
 // All interpolated values come from the server (tool docstrings, names,
 // FEATURE_GATED_TOOLS metadata) so this is defense-in-depth — but a
@@ -467,11 +512,15 @@ function render() {
     const group = document.createElement('div');
     group.className = 'group';
 
-    // Per-group toggle state: enabled if ANY non-mandatory/non-gated/non-env-pinned tool is enabled
+    // Per-group toggle state: enabled if ANY non-mandatory/non-gated/non-env-pinned
+    // tool is enabled. Tools forced off by Read Only Mode are excluded so the
+    // group master switch can't fight the mode.
     const toggleable = tools.filter(t =>
-      !MANDATORY.includes(t.name) && !t.disabled_by && !toolEnvPinned[t.name]);
+      !MANDATORY.includes(t.name) && !t.disabled_by && !toolEnvPinned[t.name] &&
+      !isReadOnlyForcedOff(t));
     const anyEnabled = toggleable.some(t => getState(t.name) !== 'disabled');
     const groupEnabled = tools.filter(t => {
+      if (isReadOnlyForcedOff(t)) return false;
       if (toolEnvPinned[t.name]) return toolEnvPinned[t.name] !== 'disabled';
       const s = getState(t.name);
       return MANDATORY.includes(t.name) || (!t.disabled_by && s !== 'disabled');
@@ -542,9 +591,15 @@ function render() {
       const ann = t.annotations || {};
       const isReadOnly = ann.readOnlyHint === true;
       const isDestructive = ann.destructiveHint === true;
+      // Read Only Mode force-off wins over every other state source —
+      // the server hides these tools from the catalog regardless of
+      // saved state or env pins while the mode is on.
+      const roForcedOff = isReadOnlyForcedOff(t);
+      const roExemptActive = readOnlyState.enabled && READ_ONLY_EXEMPT.has(t.name);
 
       total++;
-      if (isEnvPinned) {
+      if (roForcedOff) disabledCount++;
+      else if (isEnvPinned) {
         if (envPinKind === 'disabled') disabledCount++;
         else { enabledCount++; pinnedCount++; }
       } else if (isFeatureGated) disabledCount++;
@@ -552,14 +607,14 @@ function render() {
       else if (state === 'pinned') { enabledCount++; pinnedCount++; }
       else enabledCount++;
 
-      const isEnabled = isEnvPinned
+      const isEnabled = roForcedOff ? false : (isEnvPinned
         ? (envPinKind !== 'disabled')
-        : (isFeatureGated ? false : (isMandatory || state !== 'disabled'));
-      const isPinned = isEnvPinned
+        : (isFeatureGated ? false : (isMandatory || state !== 'disabled')));
+      const isPinned = roForcedOff ? false : (isEnvPinned
         ? (envPinKind === 'pinned')
-        : (isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name)));
-      const lockEnabled = isEnvPinned || isMandatory || isFeatureGated;
-      const lockPinned = isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
+        : (isFeatureGated ? false : (isMandatory || state === 'pinned' || DEFAULT_PINNED.includes(t.name))));
+      const lockEnabled = roForcedOff || isEnvPinned || isMandatory || isFeatureGated;
+      const lockPinned = roForcedOff || isEnvPinned || isMandatory || isFeatureGated || !isEnabled;
 
       const div = document.createElement('div');
       div.className = isEnvPinned ? 'tool env-pinned' : 'tool';
@@ -579,6 +634,11 @@ function render() {
       const envPinnedNote = isEnvPinned
         ? `<div class="feature-locked-note">env-pinned via <code>${envPinVar}</code> — unset the env var to edit here.</div>`
         : '';
+      const readOnlyNote = roForcedOff
+        ? '<div class="disabled-by-note">Off — Read Only Mode is on; write tools are disabled.</div>'
+        : (roExemptActive
+          ? '<div class="feature-locked-note">Read Only Mode: write operations of this tool are blocked; read operations stay available.</div>'
+          : '');
 
       div.innerHTML = `<div class="tool-info">` +
         `<div class="tool-name">${escapeHtml(title)}${badges}</div>` +
@@ -586,6 +646,7 @@ function render() {
         (desc ? `<div class="tool-desc">${escapeHtml(desc)}</div>` : '') +
         gatedNote +
         envPinnedNote +
+        readOnlyNote +
         `</div>` +
         `<div class="tool-toggles">` +
           `<div class="toggle-group">` +
@@ -1187,6 +1248,10 @@ const FEATURE_META = {
   enable_tool_security_policies: {
     label: "Enable Tool Security Policies",
     help: "Opt-in middleware that gates high-stakes MCP tool calls behind user approval. When enabled, tools that match a rule in the Tool Security Policies tab require you to click Approve in the web UI before they run. Off by default. Per-tool rules with optional argument conditions are configured in the Tool Security Policies tab. Requires restart to take effect.",
+  },
+  read_only_mode: {
+    label: "Read Only Mode",
+    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools (backups, add-ons, energy preferences, voice pipelines, code mode) stay listed with their write operations blocked server-side — the AI gets a clear READ_ONLY_MODE error if it tries. Mirrors the toggle at the top of the Tools tab. Off by default. Requires restart to take effect (applies live in standalone HTTP mode).",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
@@ -2500,6 +2565,23 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
   }
 });
 
+// Read Only Mode toggle (Tools tab, above the search box) — same flag
+// plumbing as the policy master toggle: persist via
+// /api/settings/features, re-read server truth, revert on failure.
+document.getElementById('read-only-mode-toggle').addEventListener('change', async (e) => {
+  const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
+  await saveFeatureFlag('read_only_mode', e.target.checked);
+  await loadPolicyState();
+  if (readOnlyState.enabledKnown) {
+    e.target.checked = !!readOnlyState.enabled;
+  } else {
+    e.target.checked = previous;
+    readOnlyState.enabled = previous;
+  }
+  // Re-render so write-tool rows reflect the forced-off state instantly.
+  render();
+});
+
 // Poll for pending approvals every 3s when Tool Security Policies tab is visible.
 setInterval(() => {
   const policiesTab = document.querySelector('.tab[data-panel="tool-security-policies"]');
@@ -2522,9 +2604,9 @@ function activateTab(target) {
   if (target === 'backups') { loadBackupConfig(); loadBackups(); }
   if (target === 'tool-security-policies') { policyLoadConfig(); policyLoadPending(); }
   if (target === 'tools') {
-    // Refresh gated-toggle state in case the user changed rules from
-    // the Tool Security Policies tab while it was active.
-    loadPolicyState().then(render).catch(() => {});
+    // Refresh gated-toggle + read-only state in case the user changed
+    // them from another tab while it was active.
+    loadPolicyState().then(() => { syncReadOnlyToggle(); render(); }).catch(() => {});
   }
 }
 

@@ -2360,6 +2360,21 @@ class TestEnvPinnedTools:
         assert body["states"].get("ha_foo") == "disabled"
         _reset_global_settings()
 
+    @pytest.mark.asyncio
+    async def test_get_tools_includes_read_only_exempt_list(self, monkeypatch):
+        """GET /api/settings/tools advertises the Read Only Mode exempt
+        tools so the JS keeps their rows live while force-disabling the
+        other write-capable rows when the mode is on."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_tools"](MagicMock())
+        body = json.loads(resp.body)
+        assert body["read_only_exempt"] == sorted(READ_ONLY_EXEMPT_TOOLS)
+        assert "ha_manage_backup" in body["read_only_exempt"]
+
 
 class TestAdvancedSettingsEndpoints:
     """/api/settings/advanced GET+POST handlers."""
