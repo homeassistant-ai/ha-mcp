@@ -149,13 +149,74 @@ pre {
   background: linear-gradient(135deg, rgba(15,23,42,0.04) 0%, rgba(15,23,42,0.02) 100%);
 }
 
-/* `.code-block` and inline `<code class="bg-slate-900 ... text-brand">`
-   containers in faq.astro / guide-*.astro keep the dark Tailwind
-   background even in light mode. Combined with the darkened --brand text
-   that yields contrast below WCAG AA. Flip the surface to --surface-2
-   (light slate) so text-brand hits AA in light mode. */
+/* Dark Tailwind slate backgrounds (#1572). The docs were authored
+   dark-only with hard-coded bg-slate-{700,800,900} utilities for both
+   inline code chips and structural cards. In light mode they kept the
+   dark fill while the text overrides below darkened the foreground —
+   yielding dark-on-dark (axe measured 1.41:1 on the bg-slate-800 code
+   chips, 103 nodes on the FAQ page alone). Remap the whole family to
+   light surfaces, preserving the original depth hierarchy:
+     - solid fills (inline code chips, .code-block) → surface-2 slate chip
+     - translucent fills (structural cards / insets) → surface-1 white card
+     - slate borders → the light --border token so card edges stay visible
+   The already-darkened text-slate-* / text-<color>-* overrides below then
+   read at AA-strong–AAA against these light fills. */
 :root[data-theme="light"] .code-block,
-:root[data-theme="light"] code.bg-slate-900 { background-color: rgb(var(--surface-2)); }
+:root[data-theme="light"] .bg-slate-700,
+:root[data-theme="light"] .bg-slate-800,
+:root[data-theme="light"] .bg-slate-900 { background-color: rgb(var(--surface-2)); }
+:root[data-theme="light"] .bg-slate-700\/50,
+:root[data-theme="light"] .bg-slate-800\/30,
+:root[data-theme="light"] .bg-slate-800\/50,
+:root[data-theme="light"] .bg-slate-800\/60,
+:root[data-theme="light"] .bg-slate-900\/50,
+:root[data-theme="light"] .bg-slate-900\/80 { background-color: rgb(var(--surface-1)); }
+:root[data-theme="light"] .border-slate-600\/50,
+:root[data-theme="light"] .border-slate-700,
+:root[data-theme="light"] .border-slate-700\/30,
+:root[data-theme="light"] .border-slate-700\/50 { border-color: var(--border); }
+
+/* Dark-slate structural cards built with @apply (#1572). Tailwind bakes
+   the slate color INTO these custom classes, so the utility-class
+   overrides above can't reach them — in light mode they'd render as
+   dark-grey slabs (axe-readable but visually half-migrated). Flip the
+   large content cards to a white surface + light border, the small solid
+   boxes to the slate-chip surface. Categorised, not blanket: classes that
+   set their OWN light text (.optional-badge → text-white,
+   .arch-boundary-label → text-green-400) are deliberately left dark so
+   their text stays legible. */
+:root[data-theme="light"] .faq-item,
+:root[data-theme="light"] .guide-step,
+:root[data-theme="light"] .wizard-section,
+:root[data-theme="light"] .instruction-block,
+:root[data-theme="light"] .architecture-diagram,
+:root[data-theme="light"] .arch-preview,
+:root[data-theme="light"] .option-card,
+:root[data-theme="light"] .option-card-large,
+:root[data-theme="light"] .path-card {
+  background-color: rgb(var(--surface-1));
+  border-color: var(--border);
+}
+:root[data-theme="light"] .option-card:hover,
+:root[data-theme="light"] .option-card-large:hover,
+:root[data-theme="light"] .path-card:hover { background-color: rgb(var(--surface-2)); }
+:root[data-theme="light"] .arch-box,
+:root[data-theme="light"] .arch-boundary span,
+:root[data-theme="light"] .complexity-badge {
+  background-color: rgb(var(--surface-2));
+  border-color: var(--border);
+}
+
+/* Semi-transparent colored pills (#1572) — the transport/status badges
+   (.transport-badge, used ~32× across the client cards) carry
+   bg-<color>-900/50 + text-<color>-400. The text is darkened to -700 by
+   the colored-text overrides above, but the translucent dark bg now
+   composites over the WHITE cards (above) into a mid-tone that drops the
+   pair to ~1.95:1. Flip the bg to the -50 tint so the darkened text lands
+   at AA (~4.8:1). bg-<color>-900/50 is badge-only here, so this is safe. */
+:root[data-theme="light"] .bg-green-900\/50 { background-color: rgb(240 253 244); }
+:root[data-theme="light"] .bg-blue-900\/50  { background-color: rgb(239 246 255); }
+:root[data-theme="light"] .bg-amber-900\/50 { background-color: rgb(255 251 235); }
 
 /* Tailwind utility classes that hard-code light slate / white text are
    used heavily across the pages. They read fine on the dark page bg but
@@ -166,11 +227,10 @@ pre {
      `text-white` on `bg-brand` / `bg-blue-600` button + list-bubble uses.
    - `text-slate-{100..400}` is body / muted text from the dark palette
      and turns light slate → invisible on a near-white page. Flip to
-     slate-700 (~7.7:1 on white, AAA) so it stays readable. Known gap:
-     these classes inside still-dark structural cards (`bg-slate-900/*`
-     uses in tools.astro / setup.astro / faq.astro) become dark-on-dark
-     under this rule. Those cards are a separate light-mode design
-     surface (a follow-up). */
+     slate-700 (~7.7:1 on white, AAA) so it stays readable. The structural
+     `bg-slate-{700,800,900}` cards these sit inside are remapped to light
+     surfaces by the rule above, so the darkened text lands on a light
+     fill (not dark-on-dark). */
 @layer utilities {
   :root[data-theme="light"] h1.text-white,
   :root[data-theme="light"] h2.text-white,
