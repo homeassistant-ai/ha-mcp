@@ -349,13 +349,13 @@
     .badge.readonly { background: #d4e7fc; color: #0049a8; }
     .badge.destructive { background: #fbe5e5; color: #a30000; }
     .badge.mandatory { background: #d4edda; color: #155724; }
-    .slider { background: #c7c7c7; }
+    .slider { background: #909090; }
     /* Switch knob inherits var(--text) as background; in light mode that's
-       near-black, which disappears on the blue active track (~2.5:1) and
-       clashes on the gray idle track. Use --surface (white) so the knob
-       stays light, plus a subtle drop shadow so it has definition against
-       both the light idle track and the blue active track (WCAG 1.4.11
-       wants ≥3:1 for adjacent UI). */
+       near-black, which disappears on the blue active track and clashes on
+       the gray idle track. Use --surface (white) so the knob stays light,
+       plus a subtle drop shadow for definition (WCAG 1.4.11 wants ≥3:1 for
+       adjacent UI components; the idle track sits just above that line
+       against a white knob, so the shadow is reinforcement, not the gate). */
     .slider::before { background: var(--surface);
       box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
     .pin-notice { background: #fff4d6; border-color: #c08a1a; color: #6b4500; }

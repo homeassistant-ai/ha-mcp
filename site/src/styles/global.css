@@ -123,8 +123,8 @@ pre {
 /* Light color-scheme override (#1572). Inverts surfaces, flips border
    opacity from white-on-dark to black-on-light, and darkens the brand
    triplet so `text-brand` link / heading uses stay readable on white
-   (the dark-base cyan #2FC1CF is ~2.18:1 on #fff). The darker shade
-   preserves the brand hue, just lower-luminance. */
+   (the dark-base brand is too light for AA contrast on a white page).
+   The darker shade preserves the brand hue, just lower-luminance. */
 @media (prefers-color-scheme: light) {
   :root {
     --brand: 14 91 106;
@@ -148,10 +148,27 @@ pre {
   }
 
   /* `.code-block` and inline `<code class="bg-slate-900 ... text-brand">`
-     containers in faq.astro / guide-*.astro keep the dark Tailwind background
-     even in light mode. Combined with the darkened --brand text (#0E5B6A),
-     that yields ~2.1:1 contrast — below WCAG AA. Flip the surface to
-     --surface-2 (light slate) so text-brand renders at ~8:1 in light mode. */
+     containers in faq.astro / guide-*.astro keep the dark Tailwind
+     background even in light mode. Combined with the darkened --brand text
+     that yields contrast below WCAG AA. Flip the surface to --surface-2
+     (light slate) so text-brand hits AA in light mode. */
   .code-block,
   code.bg-slate-900 { background-color: rgb(var(--surface-2)); }
+
+}
+
+/* Tailwind utility `text-white` is widely used on headings sitting on the
+   page background — which is now light in the new scheme. Flip the
+   heading-tag uses to --text-primary so they stay readable. Scope is
+   intentionally just the heading tags: `text-white` on `bg-brand`,
+   `bg-blue-600`, and other dark Tailwind backgrounds (buttons, list
+   bubbles, dark callouts) keeps the white text — a flat `.text-white`
+   override would break those. Wrapped in @layer utilities so Tailwind's
+   build pipeline preserves the compound selectors (raw rules at file end
+   get purged when their classes look like utility candidates). */
+@layer utilities {
+  @media (prefers-color-scheme: light) {
+    h1.text-white, h2.text-white, h3.text-white,
+    h4.text-white, h5.text-white, h6.text-white { color: var(--text-primary); }
+  }
 }
