@@ -146,4 +146,12 @@ pre {
   .glass-card {
     background: linear-gradient(135deg, rgba(15,23,42,0.04) 0%, rgba(15,23,42,0.02) 100%);
   }
+
+  /* `.code-block` and inline `<code class="bg-slate-900 ... text-brand">`
+     containers in faq.astro / guide-*.astro keep the dark Tailwind background
+     even in light mode. Combined with the darkened --brand text (#0E5B6A),
+     that yields ~2.1:1 contrast — below WCAG AA. Flip the surface to
+     --surface-2 (light slate) so text-brand renders at ~8:1 in light mode. */
+  .code-block,
+  code.bg-slate-900 { background-color: rgb(var(--surface-2)); }
 }
