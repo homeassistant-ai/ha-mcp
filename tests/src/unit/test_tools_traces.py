@@ -69,7 +69,11 @@ class TestFormatTraceList:
     def test_traces_limited_by_limit_param(self):
         """Traces are limited by the limit parameter."""
         traces = [
-            {"run_id": f"{i}.0", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"{i}.0",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(5)
         ]
 
@@ -86,7 +90,11 @@ class TestFormatTraceList:
         unreachable when stored_traces > limit.
         """
         traces = [
-            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"run_{i}",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(5)
         ]
 
@@ -102,7 +110,11 @@ class TestFormatTraceList:
     def test_returned_traces_are_newest_first(self):
         """Returned traces are ordered newest-first for user convenience."""
         traces = [
-            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"run_{i}",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(5)
         ]
 
@@ -114,7 +126,11 @@ class TestFormatTraceList:
     def test_order_oldest_returns_oldest_first(self):
         """order='oldest' returns the oldest N traces in chronological order."""
         traces = [
-            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"run_{i}",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(5)
         ]
 
@@ -127,7 +143,11 @@ class TestFormatTraceList:
     def test_offset_pages_through_newest_first(self):
         """offset skips past the most-recent traces when order='newest'."""
         traces = [
-            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"run_{i}",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(5)
         ]
 
@@ -140,11 +160,17 @@ class TestFormatTraceList:
     def test_offset_pages_through_oldest_first(self):
         """offset skips past the earliest traces when order='oldest'."""
         traces = [
-            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"run_{i}",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(5)
         ]
 
-        result = _format_trace_list("automation.test", traces, 2, offset=2, order="oldest")
+        result = _format_trace_list(
+            "automation.test", traces, 2, offset=2, order="oldest"
+        )
 
         run_ids = [t["run_id"] for t in result["traces"]]
         assert run_ids == ["run_2", "run_3"]
@@ -152,7 +178,11 @@ class TestFormatTraceList:
     def test_has_more_true_when_more_traces_remain(self):
         """has_more is True when the requested page does not cover the buffer."""
         traces = [
-            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"run_{i}",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(5)
         ]
 
@@ -163,7 +193,11 @@ class TestFormatTraceList:
     def test_has_more_false_when_buffer_exhausted(self):
         """has_more is False when offset+returned reaches total."""
         traces = [
-            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"run_{i}",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(3)
         ]
 
@@ -174,7 +208,11 @@ class TestFormatTraceList:
     def test_offset_equal_to_total_returns_empty(self):
         """offset == total returns no traces and has_more=False (boundary)."""
         traces = [
-            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"run_{i}",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(3)
         ]
 
@@ -187,7 +225,11 @@ class TestFormatTraceList:
     def test_offset_beyond_total_returns_empty(self):
         """offset >= total returns no traces and has_more=False."""
         traces = [
-            {"run_id": f"run_{i}", "timestamp": f"2025-11-30T15:0{i}:00Z", "state": "stopped"}
+            {
+                "run_id": f"run_{i}",
+                "timestamp": f"2025-11-30T15:0{i}:00Z",
+                "state": "stopped",
+            }
             for i in range(3)
         ]
 
@@ -361,9 +403,7 @@ class TestGatherDiagnostics:
             },
         }
 
-        result = await _gather_diagnostics(
-            ws_client, client, "script.test", "script"
-        )
+        result = await _gather_diagnostics(ws_client, client, "script.test", "script")
 
         assert result["automation_exists"] is True
         # For scripts, we should see "script" in suggestion, not "automation"

@@ -114,7 +114,12 @@ async def _check_filesystem_tools_available(mcp_client) -> tuple[bool, str | Non
         tools = await mcp_client.list_tools()
         tool_names = [t.name for t in tools]
 
-        filesystem_tools = ["ha_list_files", "ha_read_file", "ha_write_file", "ha_delete_file"]
+        filesystem_tools = [
+            "ha_list_files",
+            "ha_read_file",
+            "ha_write_file",
+            "ha_delete_file",
+        ]
         available = all(tool in tool_names for tool in filesystem_tools)
 
         if not available:
@@ -143,7 +148,10 @@ async def _check_mcp_tools_service_available(mcp_client) -> tuple[bool, str | No
         # Check if we got the "not installed" error
         error = data.get("error", {})
         if isinstance(error, dict) and error.get("code") == "COMPONENT_NOT_INSTALLED":
-            return False, "ha_mcp_tools custom component not installed in Home Assistant"
+            return (
+                False,
+                "ha_mcp_tools custom component not installed in Home Assistant",
+            )
 
         # Check for success
         inner_data = data
@@ -191,12 +199,16 @@ class TestFilesystemToolsAvailability:
 
             # If tools aren't even registered, that's expected (flag was off at server start)
             if "ha_list_files" not in tool_names:
-                logger.info("Filesystem tools not registered (feature flag disabled at startup)")
+                logger.info(
+                    "Filesystem tools not registered (feature flag disabled at startup)"
+                )
                 return
 
             # If tools are registered but flag is now off, they should still work
             # (the flag is checked at registration time, not call time)
-            logger.info("Filesystem tools are registered - flag was enabled at server startup")
+            logger.info(
+                "Filesystem tools are registered - flag was enabled at server startup"
+            )
 
         finally:
             # Restore original value
@@ -205,7 +217,9 @@ class TestFilesystemToolsAvailability:
 
     async def test_tools_registered_when_enabled(self, mcp_client_with_filesystem):
         """Verify filesystem tools ARE available when feature flag is enabled."""
-        available, error = await _check_filesystem_tools_available(mcp_client_with_filesystem)
+        available, error = await _check_filesystem_tools_available(
+            mcp_client_with_filesystem
+        )
 
         if not available:
             pytest.skip(f"Filesystem tools not available: {error}")
@@ -220,7 +234,9 @@ class TestListFiles:
     async def test_list_files_in_www_directory(self, mcp_client_with_filesystem):
         """Test listing files in the www directory."""
         # First check if component is available
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "List files in www")
 
         async with MCPAssertions(mcp_client_with_filesystem) as mcp:
@@ -249,7 +265,9 @@ class TestListFiles:
 
     async def test_list_files_with_pattern_filter(self, mcp_client_with_filesystem):
         """Test listing files with glob pattern filter."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "List files with pattern")
 
         async with MCPAssertions(mcp_client_with_filesystem) as mcp:
@@ -265,17 +283,23 @@ class TestListFiles:
             # All returned files should match the pattern
             files = data.get("files", [])
             for f in files:
-                assert f["name"].endswith(".jpg"), f"File doesn't match pattern: {f['name']}"
+                assert f["name"].endswith(".jpg"), (
+                    f"File doesn't match pattern: {f['name']}"
+                )
 
             logger.info(f"Found {len(files)} .jpg files in www/")
 
     async def test_list_files_disallowed_directory(self, mcp_client_with_filesystem):
         """Test that listing files in disallowed directories fails."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "List files in disallowed dir")
 
         # Try to list files in root config directory (not allowed)
-        data = await safe_call_tool(mcp_client_with_filesystem, "ha_list_files", {"path": "./"})
+        data = await safe_call_tool(
+            mcp_client_with_filesystem, "ha_list_files", {"path": "./"}
+        )
 
         # Should fail with security error
         assert data.get("success") is False, f"Should have failed: {data}"
@@ -287,11 +311,15 @@ class TestListFiles:
 
     async def test_list_files_path_traversal_blocked(self, mcp_client_with_filesystem):
         """Test that path traversal attempts are blocked."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Path traversal blocked")
 
         # Try path traversal
-        data = await safe_call_tool(mcp_client_with_filesystem, "ha_list_files", {"path": "www/../"})
+        data = await safe_call_tool(
+            mcp_client_with_filesystem, "ha_list_files", {"path": "www/../"}
+        )
 
         # Should fail with security error
         assert data.get("success") is False, f"Path traversal should fail: {data}"
@@ -304,7 +332,9 @@ class TestReadFile:
 
     async def test_read_configuration_yaml(self, mcp_client_with_filesystem):
         """Test reading configuration.yaml file."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Read configuration.yaml")
 
         async with MCPAssertions(mcp_client_with_filesystem) as mcp:
@@ -323,11 +353,15 @@ class TestReadFile:
                 f"Content doesn't look like configuration.yaml: {content[:200]}"
             )
 
-            logger.info(f"Successfully read configuration.yaml ({data.get('size', 0)} bytes)")
+            logger.info(
+                f"Successfully read configuration.yaml ({data.get('size', 0)} bytes)"
+            )
 
     async def test_read_secrets_yaml_masked(self, mcp_client_with_filesystem):
         """Test reading secrets.yaml - values should be masked."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Read secrets.yaml")
 
         async with MCPAssertions(mcp_client_with_filesystem) as mcp:
@@ -345,13 +379,17 @@ class TestReadFile:
             # Original secrets.yaml has: some_password: welcome
             # Should be masked to: some_password: [MASKED]
             assert "[MASKED]" in content, f"Secret values should be masked: {content}"
-            assert "welcome" not in content, f"Actual secret value should not appear: {content}"
+            assert "welcome" not in content, (
+                f"Actual secret value should not appear: {content}"
+            )
 
             logger.info("Successfully read secrets.yaml with masked values")
 
     async def test_read_file_in_www_directory(self, mcp_client_with_filesystem):
         """Test reading a file from the www directory."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Read file in www")
 
         async with MCPAssertions(mcp_client_with_filesystem) as mcp:
@@ -365,7 +403,11 @@ class TestReadFile:
             files = list_data.get("files", [])
 
             # Skip binary files - look for text files
-            text_files = [f for f in files if not f["name"].endswith((".jpg", ".png", ".gif", ".ico"))]
+            text_files = [
+                f
+                for f in files
+                if not f["name"].endswith((".jpg", ".png", ".gif", ".ico"))
+            ]
 
             if not text_files:
                 logger.info("No text files in www/ to test reading")
@@ -384,11 +426,15 @@ class TestReadFile:
 
     async def test_read_nonexistent_file(self, mcp_client_with_filesystem):
         """Test reading a file that doesn't exist."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Read nonexistent file")
 
         data = await safe_call_tool(
-            mcp_client_with_filesystem, "ha_read_file", {"path": "nonexistent_file_xyz123.yaml"}
+            mcp_client_with_filesystem,
+            "ha_read_file",
+            {"path": "nonexistent_file_xyz123.yaml"},
         )
 
         assert data.get("success") is False, f"Should have failed: {data}"
@@ -400,7 +446,9 @@ class TestReadFile:
 
     async def test_read_disallowed_file(self, mcp_client_with_filesystem):
         """Test reading a file outside allowed paths."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Read disallowed file")
 
         # Try to read /etc/passwd (path traversal attempt)
@@ -416,9 +464,13 @@ class TestReadFile:
 class TestWriteFile:
     """Test ha_write_file tool functionality."""
 
-    async def test_write_file_in_www_directory(self, mcp_client_with_filesystem, cleanup_tracker):
+    async def test_write_file_in_www_directory(
+        self, mcp_client_with_filesystem, cleanup_tracker
+    ):
         """Test writing a new file to the www directory."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Write file in www")
 
         test_filename = f"test_e2e_{uuid.uuid4().hex[:8]}.txt"
@@ -464,7 +516,9 @@ class TestWriteFile:
 
     async def test_write_file_overwrite_protection(self, mcp_client_with_filesystem):
         """Test that overwrite protection works."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Write overwrite protection")
 
         test_filename = f"test_overwrite_{uuid.uuid4().hex[:8]}.txt"
@@ -480,10 +534,16 @@ class TestWriteFile:
         data = await safe_call_tool(
             mcp_client_with_filesystem,
             "ha_write_file",
-            {"path": f"www/{test_filename}", "content": "New content", "overwrite": False},
+            {
+                "path": f"www/{test_filename}",
+                "content": "New content",
+                "overwrite": False,
+            },
         )
 
-        assert data.get("success") is False, f"Should have failed without overwrite: {data}"
+        assert data.get("success") is False, (
+            f"Should have failed without overwrite: {data}"
+        )
         assert "exists" in extract_error_message(data).lower(), (
             f"Wrong error: {data.get('error')}"
         )
@@ -494,11 +554,17 @@ class TestWriteFile:
             # Now overwrite with flag (should succeed)
             result_data = await mcp.call_tool_success(
                 "ha_write_file",
-                {"path": f"www/{test_filename}", "content": "New content", "overwrite": True},
+                {
+                    "path": f"www/{test_filename}",
+                    "content": "New content",
+                    "overwrite": True,
+                },
             )
 
             data = result_data
-            assert data.get("success") is True, f"Overwrite with flag should work: {data}"
+            assert data.get("success") is True, (
+                f"Overwrite with flag should work: {data}"
+            )
 
             logger.info("Successfully overwrote file with flag")
 
@@ -510,7 +576,9 @@ class TestWriteFile:
 
     async def test_write_file_create_directories(self, mcp_client_with_filesystem):
         """Test creating directories when writing files."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Write with create_dirs")
 
         test_subdir = f"test_subdir_{uuid.uuid4().hex[:8]}"
@@ -520,7 +588,11 @@ class TestWriteFile:
             # Write file with nested directories
             result_data = await mcp.call_tool_success(
                 "ha_write_file",
-                {"path": test_path, "content": "Nested file content", "create_dirs": True},
+                {
+                    "path": test_path,
+                    "content": "Nested file content",
+                    "create_dirs": True,
+                },
             )
 
             data = result_data
@@ -535,7 +607,9 @@ class TestWriteFile:
             )
 
             read_data = read_result
-            assert read_data.get("success") is True, f"Read nested file failed: {read_data}"
+            assert read_data.get("success") is True, (
+                f"Read nested file failed: {read_data}"
+            )
 
             # Clean up - delete the file first
             await mcp.call_tool_success(
@@ -551,7 +625,9 @@ class TestDeleteFile:
 
     async def test_delete_file_requires_confirmation(self, mcp_client_with_filesystem):
         """Test that deletion requires explicit confirmation."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Delete requires confirmation")
 
         test_filename = f"test_delete_{uuid.uuid4().hex[:8]}.txt"
@@ -573,9 +649,7 @@ class TestDeleteFile:
         assert data.get("success") is False, f"Should require confirmation: {data}"
         error = data.get("error", {})
         error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
-        assert "not confirmed" in error_msg.lower(), (
-            f"Wrong error message: {data}"
-        )
+        assert "not confirmed" in error_msg.lower(), f"Wrong error message: {data}"
 
         logger.info("Correctly required confirmation for delete")
 
@@ -587,13 +661,17 @@ class TestDeleteFile:
             )
 
             data = result_data
-            assert data.get("success") is True, f"Delete with confirmation should work: {data}"
+            assert data.get("success") is True, (
+                f"Delete with confirmation should work: {data}"
+            )
 
             logger.info("Successfully deleted file with confirmation")
 
     async def test_delete_nonexistent_file(self, mcp_client_with_filesystem):
         """Test deleting a file that doesn't exist."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Delete nonexistent file")
 
         data = await safe_call_tool(
@@ -616,13 +694,19 @@ class TestSecurityBoundaries:
 
     async def test_cannot_write_to_configuration_yaml(self, mcp_client_with_filesystem):
         """Test that writing to configuration.yaml is blocked."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Cannot write to config")
 
         data = await safe_call_tool(
             mcp_client_with_filesystem,
             "ha_write_file",
-            {"path": "configuration.yaml", "content": "# Malicious content", "overwrite": True},
+            {
+                "path": "configuration.yaml",
+                "content": "# Malicious content",
+                "overwrite": True,
+            },
         )
 
         assert data.get("success") is False, f"Should block writing to config: {data}"
@@ -635,13 +719,19 @@ class TestSecurityBoundaries:
 
     async def test_cannot_write_to_secrets_yaml(self, mcp_client_with_filesystem):
         """Test that writing to secrets.yaml is blocked."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Cannot write to secrets")
 
         data = await safe_call_tool(
             mcp_client_with_filesystem,
             "ha_write_file",
-            {"path": "secrets.yaml", "content": "malicious_secret: hacked", "overwrite": True},
+            {
+                "path": "secrets.yaml",
+                "content": "malicious_secret: hacked",
+                "overwrite": True,
+            },
         )
 
         assert data.get("success") is False, f"Should block writing to secrets: {data}"
@@ -650,7 +740,9 @@ class TestSecurityBoundaries:
 
     async def test_cannot_delete_configuration_files(self, mcp_client_with_filesystem):
         """Test that deleting configuration files is blocked."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Cannot delete config")
 
         # Try to delete configuration.yaml
@@ -666,7 +758,9 @@ class TestSecurityBoundaries:
 
     async def test_cannot_access_files_outside_config(self, mcp_client_with_filesystem):
         """Test that files outside config directory cannot be accessed."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Cannot access outside config")
 
         # Try various path traversal attacks
@@ -684,7 +778,9 @@ class TestSecurityBoundaries:
                 {"path": path},
             )
 
-            assert data.get("success") is False, f"Should block path traversal {path}: {data}"
+            assert data.get("success") is False, (
+                f"Should block path traversal {path}: {data}"
+            )
 
         logger.info("Correctly blocked all path traversal attempts")
 
@@ -695,7 +791,9 @@ class TestFullCRUDWorkflow:
 
     async def test_complete_file_lifecycle(self, mcp_client_with_filesystem):
         """Test Create, Read, Update, Delete workflow."""
-        service_check = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_check = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
         _skip_if_component_not_installed(service_check, "Complete CRUD workflow")
 
         test_filename = f"crud_test_{uuid.uuid4().hex[:8]}.css"
@@ -736,14 +834,20 @@ class TestFullCRUDWorkflow:
             list_data = list_result
             assert list_data.get("success") is True
             files = list_data.get("files", [])
-            assert any(f["name"] == test_filename for f in files), f"File not in listing: {files}"
+            assert any(f["name"] == test_filename for f in files), (
+                f"File not in listing: {files}"
+            )
             logger.info("   File found in directory listing")
 
             # UPDATE
             logger.info("4. UPDATE: Modifying file content")
             update_result = await mcp.call_tool_success(
                 "ha_write_file",
-                {"path": test_path, "content": ".test { color: blue; background: white; }", "overwrite": True},
+                {
+                    "path": test_path,
+                    "content": ".test { color: blue; background: white; }",
+                    "overwrite": True,
+                },
             )
 
             update_data = update_result
@@ -791,7 +895,9 @@ class TestFullCRUDWorkflow:
 class TestMcpToolsComponentNotInstalled:
     """Test behavior when ha_mcp_tools component is not installed."""
 
-    async def test_graceful_error_when_component_missing(self, mcp_client_with_filesystem):
+    async def test_graceful_error_when_component_missing(
+        self, mcp_client_with_filesystem
+    ):
         """Test that tools return helpful error when component is missing.
 
         This test verifies the error handling in the MCP tools layer
@@ -799,12 +905,16 @@ class TestMcpToolsComponentNotInstalled:
         PASS regardless of whether the component is installed - it validates
         the error message format when the component is missing.
         """
-        available, _ = await _check_filesystem_tools_available(mcp_client_with_filesystem)
+        available, _ = await _check_filesystem_tools_available(
+            mcp_client_with_filesystem
+        )
         if not available:
             pytest.skip("Filesystem tools not registered")
 
         # Check if the ha_mcp_tools service is actually available
-        service_available, _ = await _check_mcp_tools_service_available(mcp_client_with_filesystem)
+        service_available, _ = await _check_mcp_tools_service_available(
+            mcp_client_with_filesystem
+        )
 
         if not service_available:
             # This is the expected case when component is not installed
@@ -819,19 +929,29 @@ class TestMcpToolsComponentNotInstalled:
                 # Should fail with helpful message about installing component
                 if data.get("success") is False:
                     error = data.get("error", {})
-                    error_msg = error.get("message", "") if isinstance(error, dict) else str(error)
-                    error_code = error.get("code", "") if isinstance(error, dict) else ""
+                    error_msg = (
+                        error.get("message", "")
+                        if isinstance(error, dict)
+                        else str(error)
+                    )
+                    error_code = (
+                        error.get("code", "") if isinstance(error, dict) else ""
+                    )
 
                     # Check for helpful installation guidance
                     assert (
-                        "not installed" in error_msg.lower() or
-                        "ha_mcp_tools" in error_msg.lower() or
-                        error_code == "COMPONENT_NOT_INSTALLED"
+                        "not installed" in error_msg.lower()
+                        or "ha_mcp_tools" in error_msg.lower()
+                        or error_code == "COMPONENT_NOT_INSTALLED"
                     ), f"Should provide helpful error: {data}"
 
-                    logger.info("Correctly returned helpful error when component not installed")
+                    logger.info(
+                        "Correctly returned helpful error when component not installed"
+                    )
                 else:
                     # This means the component IS installed - test passes
                     logger.info("Component appears to be installed (unexpected in CI)")
         else:
-            logger.info("ha_mcp_tools service is available, component is installed - test passes")
+            logger.info(
+                "ha_mcp_tools service is available, component is installed - test passes"
+            )

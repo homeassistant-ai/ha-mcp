@@ -43,14 +43,16 @@ def mock_client():
             # Existing helper for the update path.
             return {
                 "success": True,
-                "result": [{
-                    "id": "abc123",
-                    "name": "Existing",
-                    "min": 0,
-                    "max": 100,
-                    "step": 1,
-                    "mode": "slider",
-                }],
+                "result": [
+                    {
+                        "id": "abc123",
+                        "name": "Existing",
+                        "min": 0,
+                        "max": 100,
+                        "step": 1,
+                        "mode": "slider",
+                    }
+                ],
             }
         if msg_type.endswith("/create") or msg_type.endswith("/update"):
             return {
@@ -122,12 +124,14 @@ class TestShorthandAliasesAccepted:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            await helper_tool.run({
-                "helper_type": "input_number",
-                "name": "Min Alias",
-                "min": 5,
-                "max_value": 50,  # mix canonical + alias to prove both paths
-            })
+            await helper_tool.run(
+                {
+                    "helper_type": "input_number",
+                    "name": "Min Alias",
+                    "min": 5,
+                    "max_value": 50,  # mix canonical + alias to prove both paths
+                }
+            )
 
         create_msg = _find_msg(mock_client, "input_number/create")
         assert create_msg is not None, "create message should be sent"
@@ -143,12 +147,14 @@ class TestShorthandAliasesAccepted:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            await helper_tool.run({
-                "helper_type": "input_number",
-                "name": "Max Alias",
-                "min_value": 0,
-                "max": 99,
-            })
+            await helper_tool.run(
+                {
+                    "helper_type": "input_number",
+                    "name": "Max Alias",
+                    "min_value": 0,
+                    "max": 99,
+                }
+            )
 
         create_msg = _find_msg(mock_client, "input_number/create")
         assert create_msg is not None
@@ -163,13 +169,15 @@ class TestShorthandAliasesAccepted:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            await helper_tool.run({
-                "helper_type": "input_number",
-                "name": "Unit Alias",
-                "min_value": 0,
-                "max_value": 100,
-                "unit": "C",
-            })
+            await helper_tool.run(
+                {
+                    "helper_type": "input_number",
+                    "name": "Unit Alias",
+                    "min_value": 0,
+                    "max_value": 100,
+                    "unit": "C",
+                }
+            )
 
         create_msg = _find_msg(mock_client, "input_number/create")
         assert create_msg is not None
@@ -185,13 +193,15 @@ class TestShorthandAliasesAccepted:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            result = await helper_tool.run({
-                "helper_type": "input_number",
-                "name": "Thermostat",
-                "min": 60,
-                "max": 85,
-                "unit": "F",
-            })
+            result = await helper_tool.run(
+                {
+                    "helper_type": "input_number",
+                    "name": "Thermostat",
+                    "min": 60,
+                    "max": 85,
+                    "unit": "F",
+                }
+            )
 
         # No exception means Bug 2 is fixed at the validation layer.
         assert result is not None
@@ -208,13 +218,15 @@ class TestShorthandAliasesAccepted:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            await helper_tool.run({
-                "helper_type": "input_number",
-                "helper_id": "abc123",
-                "min": 10,
-                "max": 90,
-                "unit": "%",
-            })
+            await helper_tool.run(
+                {
+                    "helper_type": "input_number",
+                    "helper_id": "abc123",
+                    "min": 10,
+                    "max": 90,
+                    "unit": "%",
+                }
+            )
 
         update_msg = _find_msg(mock_client, "input_number/update")
         assert update_msg is not None, "update message should be sent"
@@ -232,13 +244,15 @@ class TestCanonicalStillWorks:
             new_callable=AsyncMock,
             return_value=True,
         ):
-            await helper_tool.run({
-                "helper_type": "input_number",
-                "name": "Canonical",
-                "min_value": 1,
-                "max_value": 10,
-                "unit_of_measurement": "kW",
-            })
+            await helper_tool.run(
+                {
+                    "helper_type": "input_number",
+                    "name": "Canonical",
+                    "min_value": 1,
+                    "max_value": 10,
+                    "unit_of_measurement": "kW",
+                }
+            )
 
         create_msg = _find_msg(mock_client, "input_number/create")
         assert create_msg is not None

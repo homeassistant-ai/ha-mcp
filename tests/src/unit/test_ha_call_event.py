@@ -36,14 +36,18 @@ class TestHaCallEvent:
         result = await tools.ha_call_event("custom_event", {"key": "value"})
         assert result["success"] is True
         assert result["event_type"] == "custom_event"
-        tools._client.fire_event.assert_called_once_with("custom_event", {"key": "value"})
+        tools._client.fire_event.assert_called_once_with(
+            "custom_event", {"key": "value"}
+        )
 
     async def test_fires_event_with_json_string_data(self):
         tools = _make_tools({"message": "Event my_event fired."})
         result = await tools.ha_call_event("my_event", '{"temperature": 22}')
         assert result["success"] is True
         assert result["event_type"] == "my_event"
-        tools._client.fire_event.assert_called_once_with("my_event", {"temperature": 22})
+        tools._client.fire_event.assert_called_once_with(
+            "my_event", {"temperature": 22}
+        )
 
     async def test_raises_tool_error_on_list_data(self):
         tools = _make_tools({"message": "ok"})

@@ -22,7 +22,9 @@ import extract_tools  # noqa: E402
 #   - tags[0]  → category heading
 #   - name     → tool entry line
 #   - description → first-line description in DOCS section
-_DUMMY_TOOLS = [{"name": "ha_test_tool", "tags": ["Test"], "description": "Test description"}]
+_DUMMY_TOOLS = [
+    {"name": "ha_test_tool", "tags": ["Test"], "description": "Test description"}
+]
 
 
 class TestUpdateReadmeContentParam:
@@ -60,6 +62,7 @@ class TestUpdateDocsContentParam:
         """Optimisation: DOCS_PATH.read_text must not be called when content= given."""
         if not extract_tools.DOCS_PATH.exists():
             import pytest
+
             pytest.skip("DOCS_PATH not found — skipping")
 
         tools = _DUMMY_TOOLS
@@ -78,6 +81,7 @@ class TestUpdateDocsContentParam:
         """Correctness: result via content= matches result via internal file read."""
         if not extract_tools.DOCS_PATH.exists():
             import pytest
+
             pytest.skip("DOCS_PATH not found — skipping")
 
         tools = _DUMMY_TOOLS

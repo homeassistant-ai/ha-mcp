@@ -47,10 +47,7 @@ def perf_metrics():
 
 def pytest_configure(config):
     """Register custom markers for performance tests."""
-    config.addinivalue_line(
-        "markers",
-        "performance: mark test as a performance test"
-    )
+    config.addinivalue_line("markers", "performance: mark test as a performance test")
 
 
 def pytest_collection_modifyitems(config, items):

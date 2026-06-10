@@ -118,7 +118,8 @@ class ToolsRegistry:
 
         # Add explicit modules (only if enabled or no filter)
         discovered.extend(
-            module_name for module_name in EXPLICIT_MODULES
+            module_name
+            for module_name in EXPLICIT_MODULES
             if enabled_set is None or module_name in enabled_set
         )
 
@@ -128,7 +129,9 @@ class ToolsRegistry:
                 f"(filter: {self._enabled_modules})"
             )
         else:
-            logger.debug(f"Discovered {len(discovered)} tool modules (not yet imported)")
+            logger.debug(
+                f"Discovered {len(discovered)} tool modules (not yet imported)"
+            )
 
         return discovered
 
@@ -152,7 +155,9 @@ class ToolsRegistry:
             else:
                 register_func = None
                 for attr_name in dir(module):
-                    if attr_name.startswith("register_") and attr_name.endswith("_tools"):
+                    if attr_name.startswith("register_") and attr_name.endswith(
+                        "_tools"
+                    ):
                         register_func = getattr(module, attr_name)
                         break
 

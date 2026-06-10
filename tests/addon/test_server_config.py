@@ -19,7 +19,9 @@ class TestServerIcons:
         from ha_mcp.server import SERVER_ICONS
 
         for i, icon in enumerate(SERVER_ICONS):
-            assert isinstance(icon, Icon), f"Icon at index {i} must be an mcp.types.Icon"
+            assert isinstance(icon, Icon), (
+                f"Icon at index {i} must be an mcp.types.Icon"
+            )
 
     def test_icons_have_required_fields(self):
         """Check that all icons have required 'src' field."""
@@ -46,14 +48,18 @@ class TestServerIcons:
         from ha_mcp.server import SERVER_ICONS
 
         svg_icons = [icon for icon in SERVER_ICONS if icon.mimeType == "image/svg+xml"]
-        assert len(svg_icons) > 0, "Should include at least one SVG icon for scalability"
+        assert len(svg_icons) > 0, (
+            "Should include at least one SVG icon for scalability"
+        )
 
     def test_icons_include_raster_format(self):
         """Check that at least one raster icon (PNG) is included for compatibility."""
         from ha_mcp.server import SERVER_ICONS
 
         raster_icons = [icon for icon in SERVER_ICONS if icon.mimeType == "image/png"]
-        assert len(raster_icons) > 0, "Should include at least one PNG icon for compatibility"
+        assert len(raster_icons) > 0, (
+            "Should include at least one PNG icon for compatibility"
+        )
 
     def test_icon_urls_point_to_correct_repository(self):
         """Check that icon URLs point to the ha-mcp repository."""

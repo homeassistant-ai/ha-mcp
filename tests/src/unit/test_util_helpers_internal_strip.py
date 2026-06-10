@@ -10,6 +10,7 @@ A regression that, e.g., stops recursing into nested lists or mishandles
 non-string keys would silently surface internal fields through every
 public tool that touches them — these tests pin the contract.
 """
+
 from ha_mcp.tools.util_helpers import public_fields, strip_internal_fields
 
 

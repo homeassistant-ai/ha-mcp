@@ -56,12 +56,14 @@ async def measure_local() -> dict:
         schema_len = len(schema)
         total_desc += desc_len
         total_schema += schema_len
-        tool_data.append({
-            "name": t.name,
-            "desc_chars": desc_len,
-            "schema_chars": schema_len,
-            "total_chars": desc_len + schema_len,
-        })
+        tool_data.append(
+            {
+                "name": t.name,
+                "desc_chars": desc_len,
+                "schema_chars": schema_len,
+                "total_chars": desc_len + schema_len,
+            }
+        )
 
     tool_data.sort(key=lambda x: x["total_chars"], reverse=True)
     return {
@@ -75,7 +77,7 @@ async def measure_local() -> dict:
 
 def measure_branch(branch: str) -> dict:
     """Measure tools from a remote branch by installing and running."""
-    script = '''
+    script = """
 import asyncio, json, sys, tempfile, shutil
 from pathlib import Path
 
@@ -117,7 +119,7 @@ async def run():
     print(json.dumps(result))
 
 asyncio.run(run())
-'''
+"""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(script)
         script_path = f.name
@@ -125,10 +127,13 @@ asyncio.run(run())
     try:
         result = subprocess.run(
             [
-                "uvx", "--from",
+                "uvx",
+                "--from",
                 f"git+https://github.com/homeassistant-ai/ha-mcp.git@{branch}",
-                "--with", "fastmcp",
-                "python", script_path,
+                "--with",
+                "fastmcp",
+                "python",
+                script_path,
             ],
             capture_output=True,
             text=True,
@@ -147,9 +152,9 @@ asyncio.run(run())
 
 def print_report(data: dict, label: str) -> None:
     """Print a human-readable report."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Tool Description Sizes: {label}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Total tools: {data['total_tools']}")
     print(f"Total description chars: {data['total_desc_chars']:,}")
     print(f"Total schema chars: {data['total_schema_chars']:,}")
@@ -158,7 +163,9 @@ def print_report(data: dict, label: str) -> None:
     print(f"{'Tool':<45} {'Desc':>6} {'Schema':>7} {'Total':>7}")
     print("-" * 70)
     for t in data["tools"][:20]:
-        print(f"{t['name']:<45} {t['desc_chars']:>6} {t['schema_chars']:>7} {t['total_chars']:>7}")
+        print(
+            f"{t['name']:<45} {t['desc_chars']:>6} {t['schema_chars']:>7} {t['total_chars']:>7}"
+        )
 
 
 def print_comparison(v1: dict, v2: dict, label1: str, label2: str) -> None:
@@ -167,13 +174,19 @@ def print_comparison(v1: dict, v2: dict, label1: str, label2: str) -> None:
     v2_tools = {t["name"]: t for t in v2.get("tools", [])}
     all_names = sorted(set(list(v1_tools.keys()) + list(v2_tools.keys())))
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Comparison: {label1} vs {label2}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Tools: {v1.get('total_tools', 0)} -> {v2.get('total_tools', 0)}")
-    print(f"Desc chars: {v1.get('total_desc_chars', 0):,} -> {v2.get('total_desc_chars', 0):,} ({v2.get('total_desc_chars', 0) - v1.get('total_desc_chars', 0):+,})")
-    print(f"Schema chars: {v1.get('total_schema_chars', 0):,} -> {v2.get('total_schema_chars', 0):,}")
-    print(f"Total chars: {v1.get('total_chars', 0):,} -> {v2.get('total_chars', 0):,} ({v2.get('total_chars', 0) - v1.get('total_chars', 0):+,})")
+    print(
+        f"Desc chars: {v1.get('total_desc_chars', 0):,} -> {v2.get('total_desc_chars', 0):,} ({v2.get('total_desc_chars', 0) - v1.get('total_desc_chars', 0):+,})"
+    )
+    print(
+        f"Schema chars: {v1.get('total_schema_chars', 0):,} -> {v2.get('total_schema_chars', 0):,}"
+    )
+    print(
+        f"Total chars: {v1.get('total_chars', 0):,} -> {v2.get('total_chars', 0):,} ({v2.get('total_chars', 0) - v1.get('total_chars', 0):+,})"
+    )
 
     # Show tools with changed descriptions
     changed = []
@@ -228,7 +241,9 @@ def main() -> None:
             print_comparison(branch_data, data, args.branch, "local")
 
             if args.output:
-                branch_out = args.output.replace(".json", f"-{args.branch.replace('/', '-')}.json")
+                branch_out = args.output.replace(
+                    ".json", f"-{args.branch.replace('/', '-')}.json"
+                )
                 Path(branch_out).write_text(json.dumps(branch_data, indent=2))
                 print(f"\nSaved branch data to {branch_out}")
 

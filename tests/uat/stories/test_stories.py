@@ -53,9 +53,9 @@ class TestStory:
         prompt = story["prompt"]
         setup_steps = story.get("setup") or []
 
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
         logger.info(f"Story {story_id}: {title}")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
 
         # --- Setup via FastMCP ---
         if setup_steps:
@@ -93,17 +93,19 @@ def _detect_agent() -> str | None:
     return None
 
 
-def _run_bat_scenario(
-    scenario: dict, agent: str, ha_url: str, ha_token: str
-) -> dict:
+def _run_bat_scenario(scenario: dict, agent: str, ha_url: str, ha_token: str) -> dict:
     """Run a BAT scenario via run_uat.py and return parsed results."""
     cmd = [
         sys.executable,
         str(RUN_UAT),
-        "--agents", agent,
-        "--ha-url", ha_url,
-        "--ha-token", ha_token,
-        "--timeout", "180",
+        "--agents",
+        agent,
+        "--ha-url",
+        ha_url,
+        "--ha-token",
+        ha_token,
+        "--timeout",
+        "180",
     ]
 
     result = subprocess.run(

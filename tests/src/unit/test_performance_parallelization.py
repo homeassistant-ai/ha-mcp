@@ -147,6 +147,7 @@ def _make_tools(client):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def automation_entities():
     return [
@@ -199,6 +200,7 @@ def sample_services():
 # get_system_overview
 # ---------------------------------------------------------------------------
 
+
 class TestGetSystemOverview:
     """Test get_system_overview returns correct data."""
 
@@ -232,6 +234,7 @@ class TestGetSystemOverview:
             tools = SmartSearchTools(client=client)
 
             import time
+
             start = time.time()
             result = await tools.get_system_overview(detail_level="minimal")
             elapsed = time.time() - start
@@ -282,7 +285,9 @@ class TestGetSystemOverview:
     ):
         """When get_services() fails, the overview still succeeds with total_services=0."""
         client = MockClient(entities=sample_entities, services=sample_services)
-        client.get_services = AsyncMock(side_effect=ConnectionError("Connection refused"))
+        client.get_services = AsyncMock(
+            side_effect=ConnectionError("Connection refused")
+        )
 
         with patch("ha_mcp.tools.smart_search.get_global_settings") as mock_settings:
             mock_settings.return_value.fuzzy_threshold = 60
@@ -557,34 +562,36 @@ class TestGetSystemOverview:
     @pytest.mark.asyncio
     async def test_pagination_across_multiple_domains(self):
         """Pagination distributes budget fairly across domains on page 1."""
-        entities = [
-            {
-                "entity_id": f"sensor.s{i}",
-                "attributes": {"friendly_name": f"Sensor {i}"},
-                "state": "on",
-            }
-            for i in range(150)
-        ] + [
-            {
-                "entity_id": f"light.l{i}",
-                "attributes": {"friendly_name": f"Light {i}"},
-                "state": "on",
-            }
-            for i in range(50)
-        ] + [
-            {
-                "entity_id": f"switch.s{i}",
-                "attributes": {"friendly_name": f"Switch {i}"},
-                "state": "off",
-            }
-            for i in range(50)
-        ]
+        entities = (
+            [
+                {
+                    "entity_id": f"sensor.s{i}",
+                    "attributes": {"friendly_name": f"Sensor {i}"},
+                    "state": "on",
+                }
+                for i in range(150)
+            ]
+            + [
+                {
+                    "entity_id": f"light.l{i}",
+                    "attributes": {"friendly_name": f"Light {i}"},
+                    "state": "on",
+                }
+                for i in range(50)
+            ]
+            + [
+                {
+                    "entity_id": f"switch.s{i}",
+                    "attributes": {"friendly_name": f"Switch {i}"},
+                    "state": "off",
+                }
+                for i in range(50)
+            ]
+        )
         client = MockClient(entities=entities)
         tools = _make_tools(client)
 
-        result = await tools.get_system_overview(
-            detail_level="standard", limit=100
-        )
+        result = await tools.get_system_overview(detail_level="standard", limit=100)
 
         # All domains present with full counts
         assert result["domain_stats"]["sensor"]["count"] == 150
@@ -615,9 +622,7 @@ class TestGetSystemOverview:
         client = MockClient(entities=entities)
         tools = _make_tools(client)
 
-        result = await tools.get_system_overview(
-            detail_level="standard", limit=50
-        )
+        result = await tools.get_system_overview(detail_level="standard", limit=50)
 
         assert len(result["domain_stats"]["sensor"]["entities"]) == 50
         assert result["pagination"]["limit"] == 50
@@ -649,6 +654,7 @@ class TestGetSystemOverview:
 # deep_search – outcome-based tests
 # ---------------------------------------------------------------------------
 
+
 class TestDeepSearchResults:
     """Test that deep_search returns correct, complete results."""
 
@@ -658,7 +664,9 @@ class TestDeepSearchResults:
         tools = _make_tools(client)
 
         result = await tools.deep_search(
-            query="test", search_types=["automation"], limit=20,
+            query="test",
+            search_types=["automation"],
+            limit=20,
         )
 
         assert result["success"] is True
@@ -670,7 +678,9 @@ class TestDeepSearchResults:
         tools = _make_tools(client)
 
         result = await tools.deep_search(
-            query="test", search_types=["script"], limit=20,
+            query="test",
+            search_types=["script"],
+            limit=20,
         )
 
         assert result["success"] is True
@@ -682,7 +692,9 @@ class TestDeepSearchResults:
         tools = _make_tools(client)
 
         result = await tools.deep_search(
-            query="test", search_types=["helper"], limit=20,
+            query="test",
+            search_types=["helper"],
+            limit=20,
         )
 
         assert result["success"] is True
@@ -732,9 +744,11 @@ class TestDeepSearchEfficiency:
         tools = _make_tools(client)
 
         import time
+
         start = time.time()
         result = await tools.deep_search(
-            query="test", search_types=["helper"],
+            query="test",
+            search_types=["helper"],
         )
         elapsed = time.time() - start
 
@@ -763,7 +777,8 @@ class TestDeepSearchResilience:
         tools = _make_tools(client)
 
         result = await tools.deep_search(
-            query="test", search_types=["automation"],
+            query="test",
+            search_types=["automation"],
         )
 
         # Should succeed via fallback path (WS or individual fetch)
@@ -785,7 +800,8 @@ class TestDeepSearchResilience:
         tools = _make_tools(client)
 
         result = await tools.deep_search(
-            query="test", search_types=["automation"],
+            query="test",
+            search_types=["automation"],
         )
 
         # Should succeed — name-matching still works without configs

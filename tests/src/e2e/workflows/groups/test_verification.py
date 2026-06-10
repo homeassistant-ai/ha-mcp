@@ -56,13 +56,9 @@ class TestGroupVerification:
         logger.info(f"Group {entity_id} confirmed queryable after create")
 
         # Cleanup
-        await mcp_client.call_tool(
-            "ha_config_remove_group", {"object_id": object_id}
-        )
+        await mcp_client.call_tool("ha_config_remove_group", {"object_id": object_id})
 
-    async def test_removed_group_is_immediately_gone(
-        self, mcp_client, cleanup_tracker
-    ):
+    async def test_removed_group_is_immediately_gone(self, mcp_client, cleanup_tracker):
         """After ha_config_remove_group succeeds, the entity must be gone.
 
         Regression test: before verification was added, the tool returned

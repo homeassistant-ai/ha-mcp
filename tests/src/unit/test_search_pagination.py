@@ -56,25 +56,40 @@ def _make_entities(count: int) -> list[dict]:
     ]
 
 
-PAGINATION_FIELDS = {"total_matches", "offset", "limit", "count", "has_more", "next_offset"}
+PAGINATION_FIELDS = {
+    "total_matches",
+    "offset",
+    "limit",
+    "count",
+    "has_more",
+    "next_offset",
+}
 
 
 class TestFuzzySearchPagination:
     """Test FuzzyEntitySearcher.search_entities offset pagination."""
 
     def setup_method(self):
-        self.searcher = FuzzyEntitySearcher(threshold=0)  # threshold=0 to match everything
+        self.searcher = FuzzyEntitySearcher(
+            threshold=0
+        )  # threshold=0 to match everything
 
     def test_offset_zero_returns_first_page(self):
         entities = _make_entities(10)
-        results, total = self.searcher.search_entities(entities, "light", limit=3, offset=0)
+        results, total = self.searcher.search_entities(
+            entities, "light", limit=3, offset=0
+        )
         assert len(results) == 3
         assert total == 10
 
     def test_offset_skips_results(self):
         entities = _make_entities(10)
-        page1, total1 = self.searcher.search_entities(entities, "light", limit=3, offset=0)
-        page2, total2 = self.searcher.search_entities(entities, "light", limit=3, offset=3)
+        page1, total1 = self.searcher.search_entities(
+            entities, "light", limit=3, offset=0
+        )
+        page2, total2 = self.searcher.search_entities(
+            entities, "light", limit=3, offset=3
+        )
 
         assert total1 == total2 == 10
         assert len(page1) == 3
@@ -86,21 +101,31 @@ class TestFuzzySearchPagination:
 
     def test_offset_beyond_results_returns_empty(self):
         entities = _make_entities(5)
-        results, total = self.searcher.search_entities(entities, "light", limit=3, offset=100)
+        results, total = self.searcher.search_entities(
+            entities, "light", limit=3, offset=100
+        )
         assert len(results) == 0
         assert total == 5
 
     def test_offset_near_end_returns_partial_page(self):
         entities = _make_entities(10)
-        results, total = self.searcher.search_entities(entities, "light", limit=5, offset=8)
+        results, total = self.searcher.search_entities(
+            entities, "light", limit=5, offset=8
+        )
         assert len(results) == 2
         assert total == 10
 
     def test_default_offset_is_zero(self):
         entities = _make_entities(5)
-        results_default, total_default = self.searcher.search_entities(entities, "light", limit=3)
-        results_explicit, total_explicit = self.searcher.search_entities(entities, "light", limit=3, offset=0)
-        assert [r["entity_id"] for r in results_default] == [r["entity_id"] for r in results_explicit]
+        results_default, total_default = self.searcher.search_entities(
+            entities, "light", limit=3
+        )
+        results_explicit, total_explicit = self.searcher.search_entities(
+            entities, "light", limit=3, offset=0
+        )
+        assert [r["entity_id"] for r in results_default] == [
+            r["entity_id"] for r in results_explicit
+        ]
         assert total_default == total_explicit
 
     def test_full_pagination_covers_all_results(self):
@@ -110,7 +135,9 @@ class TestFuzzySearchPagination:
         offset = 0
         limit = 3
         while True:
-            results, total = self.searcher.search_entities(entities, "light", limit=limit, offset=offset)
+            results, total = self.searcher.search_entities(
+                entities, "light", limit=limit, offset=offset
+            )
             if not results:
                 break
             all_ids.extend(r["entity_id"] for r in results)
@@ -188,7 +215,9 @@ class TestFuzzyScoreAccumulation:
         domain = "light"
         query = "test"
 
-        score = searcher._calculate_entity_score(entity_id, friendly_name, domain, query)
+        score = searcher._calculate_entity_score(
+            entity_id, friendly_name, domain, query
+        )
 
         # Recompute expected score with single-floor accumulation
         base = 0
@@ -205,11 +234,7 @@ class TestFuzzyScoreAccumulation:
         et = calculate_token_sort_ratio(query, entity_id.lower())
         ft = calculate_token_sort_ratio(query, friendly_name.lower())
 
-        weighted = (
-            max(er, ep, et) * 0.7
-            + max(fr, fp, ft) * 0.8
-            + dr * 0.6
-        )
+        weighted = max(er, ep, et) * 0.7 + max(fr, fp, ft) * 0.8 + dr * 0.6
         expected = base + int(weighted)
 
         assert score == expected, (
@@ -232,7 +257,8 @@ class TestSmartEntitySearchSuggestions:
 
         assert result["success"] is True
         assert result["total_matches"] == 0
-        assert "suggestions" in result, "suggestions should be present when no matches found"
+        assert "suggestions" in result, (
+            "suggestions should be present when no matches found"
+        )
         assert isinstance(result["suggestions"], list)
         assert len(result["suggestions"]) > 0
-

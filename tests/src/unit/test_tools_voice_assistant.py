@@ -38,7 +38,7 @@ class TestHaListExposedEntities:
                         "light.living_room": {"conversation": True},
                         "light.bedroom": {"cloud.alexa": True},
                     }
-                }
+                },
             }
         )
         tools = VoiceAssistantTools(mock_client)
@@ -60,7 +60,7 @@ class TestHaListExposedEntities:
                         "light.living_room": {"conversation": True},
                         "light.bedroom": {"cloud.alexa": True},
                     }
-                }
+                },
             }
         )
         tools = VoiceAssistantTools(mock_client)
@@ -94,7 +94,7 @@ class TestHaListExposedEntities:
                         "light.living_room": {"conversation": True},
                         "light.bedroom": {"cloud.alexa": True},
                     }
-                }
+                },
             }
         )
         tools = VoiceAssistantTools(mock_client)
@@ -116,7 +116,7 @@ class TestHaListExposedEntities:
                     "exposed_entities": {
                         "light.living_room": {"conversation": True},
                     }
-                }
+                },
             }
         )
         tools = VoiceAssistantTools(mock_client)
@@ -136,11 +136,14 @@ class TestHaListExposedEntities:
                 "success": True,
                 "result": {
                     "exposed_entities": {
-                        "light.living_room": {"conversation": True, "cloud.alexa": True},
+                        "light.living_room": {
+                            "conversation": True,
+                            "cloud.alexa": True,
+                        },
                         "light.bedroom": {"conversation": True},
                         "light.kitchen": {"cloud.google_assistant": True},
                     }
-                }
+                },
             }
         )
         tools = VoiceAssistantTools(mock_client)
@@ -155,10 +158,7 @@ class TestHaListExposedEntities:
     async def test_websocket_error_response(self, mock_client):
         """WebSocket error response should be handled."""
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": {"message": "Service unavailable"}
-            }
+            return_value={"success": False, "error": {"message": "Service unavailable"}}
         )
         tools = VoiceAssistantTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
@@ -206,7 +206,7 @@ class TestHaGetEntityExposure:
                             "cloud.alexa": False,
                         },
                     }
-                }
+                },
             }
         )
         tools = VoiceAssistantTools(mock_client)
@@ -224,12 +224,7 @@ class TestHaGetEntityExposure:
     async def test_get_exposure_without_custom_settings(self, mock_client):
         """Entity without custom settings should show defaults."""
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {
-                    "exposed_entities": {}
-                }
-            }
+            return_value={"success": True, "result": {"exposed_entities": {}}}
         )
         tools = VoiceAssistantTools(mock_client)
         result = await tools.ha_get_entity_exposure(entity_id="light.living_room")
@@ -254,7 +249,7 @@ class TestHaGetEntityExposure:
                             "cloud.google_assistant": True,
                         },
                     }
-                }
+                },
             }
         )
         tools = VoiceAssistantTools(mock_client)
@@ -280,7 +275,7 @@ class TestHaGetEntityExposure:
                             "cloud.google_assistant": False,
                         },
                     }
-                }
+                },
             }
         )
         tools = VoiceAssistantTools(mock_client)
@@ -293,10 +288,7 @@ class TestHaGetEntityExposure:
     async def test_websocket_error_response(self, mock_client):
         """WebSocket error should be handled."""
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": False,
-                "error": {"message": "Access denied"}
-            }
+            return_value={"success": False, "error": {"message": "Access denied"}}
         )
         tools = VoiceAssistantTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
@@ -310,9 +302,7 @@ class TestHaGetEntityExposure:
     @pytest.mark.asyncio
     async def test_websocket_exception(self, mock_client):
         """WebSocket exception should be caught."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=Exception("Timeout")
-        )
+        mock_client.send_websocket_message = AsyncMock(side_effect=Exception("Timeout"))
         tools = VoiceAssistantTools(mock_client)
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_get_entity_exposure(entity_id="light.living_room")
@@ -353,10 +343,7 @@ class TestWebSocketMessageFormat:
     async def test_list_entities_message_format(self, mock_client):
         """List entities should send correct WebSocket message."""
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"exposed_entities": {}}
-            }
+            return_value={"success": True, "result": {"exposed_entities": {}}}
         )
         tools = VoiceAssistantTools(mock_client)
         await tools.ha_get_entity_exposure()
@@ -369,10 +356,7 @@ class TestWebSocketMessageFormat:
     async def test_get_exposure_message_format(self, mock_client):
         """Get exposure should send correct WebSocket message."""
         mock_client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": {"exposed_entities": {}}
-            }
+            return_value={"success": True, "result": {"exposed_entities": {}}}
         )
         tools = VoiceAssistantTools(mock_client)
         await tools.ha_get_entity_exposure(entity_id="light.living_room")

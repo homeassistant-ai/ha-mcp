@@ -128,9 +128,7 @@ class TestDeleteScriptConfig:
     @pytest.mark.asyncio
     async def test_delete_script_generic_exception_propagates(self, mock_client):
         """Non-API exceptions should propagate."""
-        mock_client._request = AsyncMock(
-            side_effect=RuntimeError("Unexpected error")
-        )
+        mock_client._request = AsyncMock(side_effect=RuntimeError("Unexpected error"))
 
         with pytest.raises(RuntimeError) as exc_info:
             await mock_client.delete_script_config("test_script")
@@ -229,7 +227,9 @@ class TestUpsertScriptConfig:
         with pytest.raises(ValueError) as exc_info:
             await mock_client.upsert_script_config(config, "test_script")
 
-        assert "sequence" in str(exc_info.value) and "use_blueprint" in str(exc_info.value)
+        assert "sequence" in str(exc_info.value) and "use_blueprint" in str(
+            exc_info.value
+        )
 
     @pytest.mark.asyncio
     async def test_upsert_script_adds_alias_if_missing(self, mock_client):
@@ -327,9 +327,7 @@ class TestResolveScriptId:
     @pytest.mark.asyncio
     async def test_resolve_fallback_on_missing_unique_id(self, mock_client):
         """Registry response without unique_id should fall back to bare id."""
-        mock_client.send_websocket_message = AsyncMock(
-            return_value={"result": {}}
-        )
+        mock_client.send_websocket_message = AsyncMock(return_value={"result": {}})
 
         result = await mock_client._resolve_script_id("my_script")
 

@@ -32,7 +32,7 @@ class TestToolDocsSync:
             )
 
         assert not legacy, (
-            f"Found legacy \"tags\" inside annotations dict in {len(legacy)} location(s):\n"
+            f'Found legacy "tags" inside annotations dict in {len(legacy)} location(s):\n'
             + "\n".join(f"  - {loc}" for loc in legacy)
             + "\n\nUse tags={'Category'} as a direct @mcp.tool() parameter instead."
         )
@@ -70,7 +70,9 @@ class TestToolDocsSync:
 
         # Pattern targets "- `ha_xxx`" at line start (re.MULTILINE).
         # Assumes tool entries are never indented; update regex if format changes.
-        section_tools = set(re.findall(r"^- `(ha_[a-z0-9_]+)`", section.group(0), re.MULTILINE))
+        section_tools = set(
+            re.findall(r"^- `(ha_[a-z0-9_]+)`", section.group(0), re.MULTILINE)
+        )
         missing = real_names - section_tools
         assert not missing, (
             f"Tools missing from DOCS.md auto-generated section ({len(missing)}): "
@@ -84,10 +86,17 @@ class TestToolDocsSync:
             + ", ".join(sorted(extra))
             + "\nRun 'python scripts/extract_tools.py' to regenerate."
         )
+
     def test_about_section_tool_count_synced(self) -> None:
         """Tool count in About section must match the actual tool registry."""
-        tools = json.loads((REPO_ROOT / "site" / "src" / "data" / "tools.json").read_text(encoding="utf-8"))
-        docs = (REPO_ROOT / "homeassistant-addon" / "DOCS.md").read_text(encoding="utf-8")
+        tools = json.loads(
+            (REPO_ROOT / "site" / "src" / "data" / "tools.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        docs = (REPO_ROOT / "homeassistant-addon" / "DOCS.md").read_text(
+            encoding="utf-8"
+        )
         for expected in [
             f"provides {len(tools)}+ tools",
             f"catalog (~{len(tools)} tools",

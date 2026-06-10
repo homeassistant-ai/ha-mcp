@@ -24,42 +24,54 @@ class TestGetLocalBackupAgentId:
     @pytest.mark.asyncio
     async def test_core_only_returns_backup_local(self):
         """HA Core install (only `backup.local` registered) returns `backup.local`."""
-        ws = _ws_client({
-            "success": True,
-            "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]},
-        })
+        ws = _ws_client(
+            {
+                "success": True,
+                "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]},
+            }
+        )
         assert await _get_local_backup_agent_id(ws) == "backup.local"
 
     @pytest.mark.asyncio
     async def test_supervised_only_returns_hassio_local(self):
         """HA Supervised install (only `hassio.local` registered) returns `hassio.local`."""
-        ws = _ws_client({
-            "success": True,
-            "result": {"agents": [{"agent_id": "hassio.local", "name": "local"}]},
-        })
+        ws = _ws_client(
+            {
+                "success": True,
+                "result": {"agents": [{"agent_id": "hassio.local", "name": "local"}]},
+            }
+        )
         assert await _get_local_backup_agent_id(ws) == "hassio.local"
 
     @pytest.mark.asyncio
     async def test_both_present_prefers_hassio_local(self):
         """When both agents are registered, prefer `hassio.local` (Supervisor)."""
-        ws = _ws_client({
-            "success": True,
-            "result": {
-                "agents": [
-                    {"agent_id": "backup.local", "name": "local"},
-                    {"agent_id": "hassio.local", "name": "local"},
-                ],
-            },
-        })
+        ws = _ws_client(
+            {
+                "success": True,
+                "result": {
+                    "agents": [
+                        {"agent_id": "backup.local", "name": "local"},
+                        {"agent_id": "hassio.local", "name": "local"},
+                    ],
+                },
+            }
+        )
         assert await _get_local_backup_agent_id(ws) == "hassio.local"
 
     @pytest.mark.asyncio
     async def test_only_remote_agents_raises(self):
         """No agent named `local` raises `ToolError` listing the available agents."""
-        ws = _ws_client({
-            "success": True,
-            "result": {"agents": [{"agent_id": "google_drive.cloud", "name": "Google Drive"}]},
-        })
+        ws = _ws_client(
+            {
+                "success": True,
+                "result": {
+                    "agents": [
+                        {"agent_id": "google_drive.cloud", "name": "Google Drive"}
+                    ]
+                },
+            }
+        )
         with pytest.raises(ToolError) as exc_info:
             await _get_local_backup_agent_id(ws)
         error = json.loads(str(exc_info.value))
@@ -87,24 +99,28 @@ class TestGetLocalBackupAgentId:
     @pytest.mark.asyncio
     async def test_malformed_local_entry_filtered_out(self):
         """An agent with `name=local` but missing `agent_id` is filtered, not returned as None."""
-        ws = _ws_client({
-            "success": True,
-            "result": {
-                "agents": [
-                    {"name": "local"},  # malformed — no agent_id
-                    {"agent_id": "backup.local", "name": "local"},
-                ],
-            },
-        })
+        ws = _ws_client(
+            {
+                "success": True,
+                "result": {
+                    "agents": [
+                        {"name": "local"},  # malformed — no agent_id
+                        {"agent_id": "backup.local", "name": "local"},
+                    ],
+                },
+            }
+        )
         assert await _get_local_backup_agent_id(ws) == "backup.local"
 
     @pytest.mark.asyncio
     async def test_only_malformed_local_entry_raises(self):
         """If the only `name=local` entry is malformed, raise rather than return None."""
-        ws = _ws_client({
-            "success": True,
-            "result": {"agents": [{"name": "local"}]},
-        })
+        ws = _ws_client(
+            {
+                "success": True,
+                "result": {"agents": [{"name": "local"}]},
+            }
+        )
         with pytest.raises(ToolError) as exc_info:
             await _get_local_backup_agent_id(ws)
         error = json.loads(str(exc_info.value))
@@ -125,13 +141,26 @@ class TestRestoreBackupWarnings:
             # backup/info — verify backup exists
             {"success": True, "result": {"backups": [{"backup_id": "abc123"}]}},
             # _get_local_backup_agent_id → backup/agents/info
-            {"success": True, "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]}},
+            {
+                "success": True,
+                "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]},
+            },
             # _get_backup_password → backup/config/info
-            {"success": True, "result": {"config": {"create_backup": {"password": "pw"}}}},
+            {
+                "success": True,
+                "result": {"config": {"create_backup": {"password": "pw"}}},
+            },
             # _create_safety_backup → backup/generate
             {"success": True, "result": {"backup_job_id": "safety_job_1"}},
             # _create_safety_backup polling → backup/info loop
-            {"success": True, "result": {"backups": [{"name": "Pre_Restore_Safety", "backup_id": "safety_xyz"}]}},
+            {
+                "success": True,
+                "result": {
+                    "backups": [
+                        {"name": "Pre_Restore_Safety", "backup_id": "safety_xyz"}
+                    ]
+                },
+            },
             # backup/restore — the actual restore call
             {"success": True},
         ]

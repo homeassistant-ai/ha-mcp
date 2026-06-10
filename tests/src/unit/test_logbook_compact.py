@@ -18,7 +18,11 @@ class TestCompactLogbookEntries:
                 "domain": "light",
                 "context_id": "abc123",
                 # These bulky fields should be stripped:
-                "attributes": {"brightness": 255, "color_temp": 400, "supported_features": 63},
+                "attributes": {
+                    "brightness": 255,
+                    "color_temp": 400,
+                    "supported_features": 63,
+                },
                 "icon": "mdi:lightbulb",
                 "source": "automation.motion",
             },
@@ -86,7 +90,10 @@ class TestCompactLogbookEntries:
                 "entity_id": "binary_sensor.motion",
                 "state": "on" if i % 2 == 0 else "off",
                 "name": "Motion Sensor",
-                "attributes": {"device_class": "motion", "friendly_name": "Motion Sensor"},
+                "attributes": {
+                    "device_class": "motion",
+                    "friendly_name": "Motion Sensor",
+                },
                 "old_state": {"state": "off"},
                 "new_state": {"state": "on"},
             }
@@ -105,7 +112,16 @@ class TestCompactLogbookEntries:
 
     def test_compact_fields_constant_contains_expected_fields(self):
         """Verify the constant has the expected essential fields."""
-        expected = {"when", "entity_id", "state", "name", "message", "domain", "context_id", "source"}
+        expected = {
+            "when",
+            "entity_id",
+            "state",
+            "name",
+            "message",
+            "domain",
+            "context_id",
+            "source",
+        }
         assert expected == COMPACT_LOGBOOK_FIELDS
 
     def test_missing_essential_fields_not_fabricated(self):

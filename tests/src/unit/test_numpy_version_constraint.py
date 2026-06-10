@@ -47,9 +47,7 @@ def test_numpy_version_constraint_for_cpu_compatibility():
     major_minor = f"{major}.{minor}"
 
     # Assert we're on 2.3.x
-    assert (
-        major_minor == "2.3"
-    ), f"""
+    assert major_minor == "2.3", f"""
 NumPy version {numpy_version} detected, but must be 2.3.x for CPU compatibility.
 
 NumPy 2.4.0+ requires x86-64-v2 baseline (SSE4.1/SSE4.2) which causes SIGILL

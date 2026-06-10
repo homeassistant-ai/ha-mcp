@@ -8,6 +8,7 @@ That helper output crosses the public-API boundary here — if a future
 refactor drops the strip call, internal fields leak directly to MCP
 clients with no signal in CI. This test pins the contract.
 """
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 

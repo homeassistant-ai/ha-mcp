@@ -10,7 +10,9 @@ class TestRepository:
 
     def test_repository_yaml_exists(self) -> None:
         """Check repository.yaml exists at project root."""
-        assert os.path.exists("repository.yaml"), "repository.yaml is required for HA add-on repository"
+        assert os.path.exists("repository.yaml"), (
+            "repository.yaml is required for HA add-on repository"
+        )
 
     def test_repository_yaml_valid(self) -> None:
         """Verify repository.yaml is valid YAML with required fields."""
@@ -34,5 +36,6 @@ class TestRepository:
             addon_config = yaml.safe_load(f)
 
         # URL should match
-        assert repo_config["url"] == addon_config["url"], \
+        assert repo_config["url"] == addon_config["url"], (
             "repository.yaml and config.yaml URLs should match"
+        )

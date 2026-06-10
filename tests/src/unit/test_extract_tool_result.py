@@ -123,9 +123,7 @@ class TestToolResultExtraction:
 
     def test_tool_result_json_payload(self):
         result = _extract_tool_result(
-            _FakeToolResult(
-                content=[_FakeContentBlock(text=json.dumps({"ok": True}))]
-            )
+            _FakeToolResult(content=[_FakeContentBlock(text=json.dumps({"ok": True}))])
         )
         assert result == {"ok": True}
 

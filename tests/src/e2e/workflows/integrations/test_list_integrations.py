@@ -364,9 +364,7 @@ class TestIntegrationFiltering:
         # At least one entry with supports_options=True should have non-empty
         # options. The conftest seeds a HACS entry with real options. If every
         # supports_options=True entry returns {}, the regression has resurfaced.
-        entries_with_support = [
-            e for e in data["entries"] if e.get("supports_options")
-        ]
+        entries_with_support = [e for e in data["entries"] if e.get("supports_options")]
         if entries_with_support:
             non_empty = [e for e in entries_with_support if e["options"]]
             assert non_empty, (
@@ -502,10 +500,9 @@ class TestIntegrationLogLevel:
             )
             assert isinstance(entry["log_level"], str), "log_level must be a string"
             # Accept canonical names, "DEFAULT", or "LEVEL_<n>" for non-standard ints
-            assert (
-                entry["log_level"] in self._ACCEPTED
-                or entry["log_level"].startswith("LEVEL_")
-            ), f"Unexpected log_level value: {entry['log_level']}"
+            assert entry["log_level"] in self._ACCEPTED or entry[
+                "log_level"
+            ].startswith("LEVEL_"), f"Unexpected log_level value: {entry['log_level']}"
 
             assert "log_level_raw" in entry, (
                 f"Entry {entry.get('domain')} missing log_level_raw field"
@@ -541,9 +538,9 @@ class TestIntegrationLogLevel:
         assert "log_level" in single_data, "Single entry should include log_level"
         level = single_data["log_level"]
         assert isinstance(level, str), "log_level must be a string"
-        assert (
-            level in self._ACCEPTED or level.startswith("LEVEL_")
-        ), f"Unexpected log_level value: {level}"
+        assert level in self._ACCEPTED or level.startswith("LEVEL_"), (
+            f"Unexpected log_level value: {level}"
+        )
 
         assert "log_level_raw" in single_data, (
             "Single entry should include log_level_raw"
@@ -606,9 +603,7 @@ class TestGetIntegrationDiagnostics:
     """E2E coverage for include_diagnostics=True on ha_get_integration."""
 
     @pytest.mark.asyncio
-    async def test_include_diagnostics_returns_subdict_with_entry_id(
-        self, mcp_client
-    ):
+    async def test_include_diagnostics_returns_subdict_with_entry_id(self, mcp_client):
         """include_diagnostics=True attaches a `diagnostics` sub-dict that always
         carries `config_entry_id`. Whether it also carries `data` (helper happy
         path) or `error` (404 from integrations without a diagnostics platform —
@@ -658,9 +653,7 @@ class TestGetIntegrationDiagnostics:
                 diag["error"],
             )
         else:
-            logger.info(
-                "Diagnostics happy path exercised for domain=%s", entry_domain
-            )
+            logger.info("Diagnostics happy path exercised for domain=%s", entry_domain)
 
     @pytest.mark.asyncio
     async def test_device_id_without_include_surfaces_warning(self, mcp_client):
@@ -683,6 +676,6 @@ class TestGetIntegrationDiagnostics:
         data = parse_mcp_result(result)
         assert "diagnostics" not in data
         warnings = data.get("warnings") or []
-        assert any(
-            "device_id" in w and "ignored" in w for w in warnings
-        ), f"Expected ignored-device_id warning. Got warnings: {warnings}"
+        assert any("device_id" in w and "ignored" in w for w in warnings), (
+            f"Expected ignored-device_id warning. Got warnings: {warnings}"
+        )

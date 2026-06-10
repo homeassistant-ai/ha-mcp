@@ -65,6 +65,7 @@ SYSTEM_SERVICES: tuple[str, ...] = (
     "supervisor",
 )
 
+
 @pytest.mark.system
 class TestGetLogsSystemServiceReal:
     """ha_get_logs source='system_service' against real Supervisor."""
@@ -208,7 +209,9 @@ class TestSettingsUiRestartReal:
     out from under ``mcp_client``.
     """
 
-    async def test_restart_via_slug_succeeds(self, ha_container_with_fresh_config) -> None:
+    async def test_restart_via_slug_succeeds(
+        self, ha_container_with_fresh_config
+    ) -> None:
         """POST /api/settings/restart with slug=<ssh-addon> → 200, addon restarts.
 
         Exercises the same Supervisor ``/addons/<slug>/restart`` wire
@@ -316,4 +319,3 @@ class TestMockResilienceReal:
     #
     # The 401/403 wire-contract test surface stays covered by the
     # external_only mock-tier tests in test_supervisor_mock.py.
-

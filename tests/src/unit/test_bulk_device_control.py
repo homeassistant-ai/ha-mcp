@@ -93,7 +93,10 @@ class TestBulkDeviceControlValidation:
         Valid operations would require a real HA connection to execute.
         """
         operations = [
-            {"entity_id": "light.test", "action": "on"},  # Valid (but will fail without HA)
+            {
+                "entity_id": "light.test",
+                "action": "on",
+            },  # Valid (but will fail without HA)
             {"action": "off"},  # Invalid - missing entity_id
             {"entity_id": "switch.test"},  # Invalid - missing action
         ]
@@ -123,7 +126,9 @@ class TestBulkDeviceControlValidation:
         assert any("action" in s for s in result["suggestions"])
 
     @pytest.mark.asyncio
-    async def test_skipped_details_includes_original_operation(self, device_control_tools):
+    async def test_skipped_details_includes_original_operation(
+        self, device_control_tools
+    ):
         """Skipped details include the original operation for debugging."""
         original_op = {"action": "on", "parameters": {"brightness": 100}}
         operations = [original_op]
@@ -132,7 +137,9 @@ class TestBulkDeviceControlValidation:
         assert result["skipped_details"][0]["operation"] == original_op
 
     @pytest.mark.asyncio
-    async def test_sequential_execution_validates_operations(self, device_control_tools):
+    async def test_sequential_execution_validates_operations(
+        self, device_control_tools
+    ):
         """Sequential execution mode also validates operations."""
         operations = [
             {"action": "on"},  # Missing entity_id
@@ -161,10 +168,19 @@ class TestBulkExecutionErrorHandling:
         tools_with_mock_control.control_device_smart = AsyncMock(  # type: ignore[method-assign]
             side_effect=[
                 {"entity_id": "light.ok", "command_sent": True, "operation_id": "op1"},
-                ToolError(json.dumps(create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND, "Entity not found: light.missing",
-                ))),
-                {"entity_id": "light.also_ok", "command_sent": True, "operation_id": "op3"},
+                ToolError(
+                    json.dumps(
+                        create_error_response(
+                            ErrorCode.ENTITY_NOT_FOUND,
+                            "Entity not found: light.missing",
+                        )
+                    )
+                ),
+                {
+                    "entity_id": "light.also_ok",
+                    "command_sent": True,
+                    "operation_id": "op3",
+                },
             ]
         )
 
@@ -173,7 +189,9 @@ class TestBulkExecutionErrorHandling:
             {"entity_id": "light.missing", "action": "on"},
             {"entity_id": "light.also_ok", "action": "on"},
         ]
-        result = await tools_with_mock_control.bulk_device_control(operations, parallel=False)
+        result = await tools_with_mock_control.bulk_device_control(
+            operations, parallel=False
+        )
 
         assert result["total_operations"] == 3
         assert result["successful_commands"] == 2
@@ -187,9 +205,14 @@ class TestBulkExecutionErrorHandling:
         tools_with_mock_control.control_device_smart = AsyncMock(  # type: ignore[method-assign]
             side_effect=[
                 {"entity_id": "light.ok", "command_sent": True, "operation_id": "op1"},
-                ToolError(json.dumps(create_error_response(
-                    ErrorCode.VALIDATION_INVALID_JSON, "Invalid JSON in parameters",
-                ))),
+                ToolError(
+                    json.dumps(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_JSON,
+                            "Invalid JSON in parameters",
+                        )
+                    )
+                ),
             ]
         )
 
@@ -197,9 +220,13 @@ class TestBulkExecutionErrorHandling:
             {"entity_id": "light.ok", "action": "on"},
             {"entity_id": "light.bad", "action": "on", "parameters": "{not-json"},
         ]
-        result = await tools_with_mock_control.bulk_device_control(operations, parallel=True)
+        result = await tools_with_mock_control.bulk_device_control(
+            operations, parallel=True
+        )
 
         assert result["total_operations"] == 2
         assert result["successful_commands"] == 1
         # Structured code preserved, not flattened to SERVICE_CALL_FAILED
-        assert result["results"][1]["error"]["code"] == ErrorCode.VALIDATION_INVALID_JSON
+        assert (
+            result["results"][1]["error"]["code"] == ErrorCode.VALIDATION_INVALID_JSON
+        )

@@ -75,18 +75,14 @@ def _entity_id_from_create(data: dict, helper_type: str) -> str | None:
 
 async def _get_attributes(mcp_client, entity_id: str) -> dict:
     """Fetch entity state and return its ``attributes`` dict (or ``{}``)."""
-    state_result = await mcp_client.call_tool(
-        "ha_get_state", {"entity_id": entity_id}
-    )
+    state_result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
     state_data = parse_mcp_result(state_result)
     return state_data.get("data", {}).get("attributes", {}) or {}
 
 
 async def _get_state_value(mcp_client, entity_id: str):
     """Fetch entity state and return the top-level ``state`` value."""
-    state_result = await mcp_client.call_tool(
-        "ha_get_state", {"entity_id": entity_id}
-    )
+    state_result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
     state_data = parse_mcp_result(state_result)
     return state_data.get("data", {}).get("state")
 

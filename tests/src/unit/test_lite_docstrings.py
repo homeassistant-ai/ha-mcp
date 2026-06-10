@@ -45,10 +45,7 @@ _FULL_AUTOMATION = (
     "Returns the complete configuration including triggers, conditions, "
     "actions, and mode settings. (... many more paragraphs ...)"
 )
-_LITE_AUTOMATION = (
-    "Get a Home Assistant automation. See "
-    "ha_get_skill_guide for schema."
-)
+_LITE_AUTOMATION = "Get a Home Assistant automation. See ha_get_skill_guide for schema."
 
 
 @pytest.fixture
@@ -71,9 +68,7 @@ def tools() -> Sequence[Tool]:
 
 class TestListTools:
     @pytest.mark.asyncio
-    async def test_empty_mapping_passes_through(
-        self, tools: Sequence[Tool]
-    ) -> None:
+    async def test_empty_mapping_passes_through(self, tools: Sequence[Tool]) -> None:
         transform = LiteDocstringsTransform(replacements={})
 
         result = list(await transform.list_tools(tools))
@@ -84,9 +79,7 @@ class TestListTools:
         ]
 
     @pytest.mark.asyncio
-    async def test_none_mapping_passes_through(
-        self, tools: Sequence[Tool]
-    ) -> None:
+    async def test_none_mapping_passes_through(self, tools: Sequence[Tool]) -> None:
         """``None`` replacements coerces to ``{}`` — same as the empty case."""
         transform = LiteDocstringsTransform(replacements=None)
 
@@ -123,9 +116,7 @@ class TestGetTool:
         assert result.description == _FULL_AUTOMATION
 
     @pytest.mark.asyncio
-    async def test_get_tool_replaces_mapped(
-        self, replacements: dict[str, str]
-    ) -> None:
+    async def test_get_tool_replaces_mapped(self, replacements: dict[str, str]) -> None:
         transform = LiteDocstringsTransform(replacements=replacements)
         original = _make_tool("ha_config_get_automation", description=_FULL_AUTOMATION)
         call_next = AsyncMock(return_value=original)
@@ -174,9 +165,7 @@ class TestApplyLiteDocstrings:
 
         stub = MagicMock()
         stub._LITE_DOCSTRINGS = HomeAssistantSmartMCPServer._LITE_DOCSTRINGS
-        stub.settings = MagicMock(
-            enable_lite_docstrings=enable_lite_docstrings
-        )
+        stub.settings = MagicMock(enable_lite_docstrings=enable_lite_docstrings)
         stub.mcp = MagicMock()
         return stub
 
@@ -291,6 +280,5 @@ class TestLiteDocstringsMappingInvariants:
                 offenders.append((name, first_word))
 
         assert not offenders, (
-            "Lite descriptions not starting with an action verb: "
-            f"{offenders}"
+            f"Lite descriptions not starting with an action verb: {offenders}"
         )

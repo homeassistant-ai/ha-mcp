@@ -117,23 +117,25 @@ class TestGroupToolsValidation:
     async def test_list_groups_success(self, mock_client):
         """Test successful group listing."""
         # Mock states with groups
-        mock_client.get_states = AsyncMock(return_value=[
-            {
-                "entity_id": "group.living_room",
-                "state": "on",
-                "attributes": {
-                    "friendly_name": "Living Room",
-                    "entity_id": ["light.lamp1", "light.lamp2"],
-                    "icon": "mdi:sofa",
-                    "all": False,
+        mock_client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "group.living_room",
+                    "state": "on",
+                    "attributes": {
+                        "friendly_name": "Living Room",
+                        "entity_id": ["light.lamp1", "light.lamp2"],
+                        "icon": "mdi:sofa",
+                        "all": False,
+                    },
                 },
-            },
-            {
-                "entity_id": "light.bed_light",  # Not a group
-                "state": "off",
-                "attributes": {"friendly_name": "Bed Light"},
-            },
-        ])
+                {
+                    "entity_id": "light.bed_light",  # Not a group
+                    "state": "off",
+                    "attributes": {"friendly_name": "Bed Light"},
+                },
+            ]
+        )
 
         tools = GroupTools(mock_client)
         result = await tools.ha_config_list_groups()
@@ -164,13 +166,14 @@ class TestGroupToolsValidation:
 
         # Verify service was called
         mock_client.call_service.assert_called_once_with(
-            "group", "set",
+            "group",
+            "set",
             {
                 "object_id": "test_group",
                 "name": "Test Group",
                 "icon": "mdi:lightbulb-group",
                 "entities": ["light.lamp1", "light.lamp2"],
-            }
+            },
         )
 
     async def test_remove_group_success(self, mock_client):
@@ -193,8 +196,7 @@ class TestGroupToolsValidation:
 
         # Verify service was called
         mock_client.call_service.assert_called_once_with(
-            "group", "remove",
-            {"object_id": "test_group"}
+            "group", "remove", {"object_id": "test_group"}
         )
 
     async def test_set_group_all_on_parameter(self, tools, mock_client):
