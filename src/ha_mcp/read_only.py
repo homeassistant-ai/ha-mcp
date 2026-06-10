@@ -94,8 +94,13 @@ def _energy_write(args: dict[str, Any]) -> str | None:
     mode = args.get("mode")
     if mode == "get":
         return None
-    # dry_run=True variants mutate nothing, but a get-only rule is
-    # simpler to audit and to explain in the error message.
+    # dry_run=True previews validate/simulate without saving (every
+    # write mode short-circuits before energy/save_prefs). Strict
+    # ``is True``: the middleware sees RAW pre-validation arguments, so
+    # a non-bool truthy value (e.g. the string "false") that schema
+    # coercion could turn into False must fail closed here.
+    if args.get("dry_run") is True:
+        return None
     return f"mode={mode!r}"
 
 
@@ -136,7 +141,8 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
     ),
     "ha_manage_energy_prefs": ReadOnlyExemption(
         _energy_write,
-        "reading the energy configuration (mode='get')",
+        "reading the energy configuration (mode='get') and dry-run "
+        "previews (dry_run=true)",
     ),
     "ha_manage_pipeline": ReadOnlyExemption(
         _pipeline_write,

@@ -337,7 +337,7 @@ Mixed read/write tools whose read functionality exists nowhere else stay availab
 
 - `ha_manage_backup` — only listing and viewing per-edit backups
 - `ha_manage_addon` — only HTTP GET proxy reads of add-on APIs
-- `ha_manage_energy_prefs` — only `mode='get'`
+- `ha_manage_energy_prefs` — only `mode='get'` and `dry_run=true` previews
 - `ha_manage_pipeline` — only `action='list'` / `'get'`
 - `ha_manage_custom_tool` — only `list_saved=true`
 

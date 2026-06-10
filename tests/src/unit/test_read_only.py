@@ -140,10 +140,19 @@ class TestExemptionRules:
         [
             ({"mode": "get"}, True),
             ({"mode": "set", "config": {}}, False),
-            # dry_run previews mutate nothing but are conservatively
-            # blocked — the get-only rule is the documented contract.
-            ({"mode": "set", "config": {}, "dry_run": True}, False),
-            ({"mode": "add_device", "dry_run": True}, False),
+            # dry_run=True previews validate/simulate without saving —
+            # allowed so a read-only agent can still sanity-check a
+            # proposed energy config.
+            ({"mode": "set", "config": {}, "dry_run": True}, True),
+            ({"mode": "add_device", "dry_run": True}, True),
+            ({"mode": "remove_device", "dry_run": True}, True),
+            ({"mode": "add_source", "dry_run": True}, True),
+            # Strict ``is True``: the middleware sees raw pre-validation
+            # arguments, so truthy non-bools (which schema coercion may
+            # turn into False before the tool runs) must fail closed.
+            ({"mode": "set", "config": {}, "dry_run": "true"}, False),
+            ({"mode": "set", "config": {}, "dry_run": 1}, False),
+            ({"mode": "set", "config": {}, "dry_run": False}, False),
             ({"mode": "remove_device"}, False),
             ({"mode": "add_source"}, False),
             ({}, False),
