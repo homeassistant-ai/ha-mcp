@@ -28,6 +28,7 @@ whether the call is a read (allowed) or a write (blocked).
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
@@ -70,11 +71,18 @@ def _backup_write(args: dict[str, Any]) -> str | None:
     return f"scope={scope!r}, action={action!r}"
 
 
+# Add-on parameters that, when present, mean the call mutates add-on
+# configuration (so the read-only middleware must block it). Module-level
+# so the schema-drift guard test (test_read_only.py) can pin an
+# independent manifest against it — see item 10b / ha_manage_addon.
+_ADDON_CONFIG_WRITE_PARAMS = ("options", "network", "boot", "auto_update", "watchdog")
+
+
 def _addon_write(args: dict[str, Any]) -> str | None:
     action = args.get("action")
     if action:
         return f"action={action!r}"
-    for param in ("options", "network", "boot", "auto_update", "watchdog"):
+    for param in _ADDON_CONFIG_WRITE_PARAMS:
         if args.get(param) is not None:
             return f"add-on configuration change ({param}=...)"
     if args.get("array_patch") is not None:
@@ -128,8 +136,11 @@ def _custom_tool_write(args: dict[str, Any]) -> str | None:
 #
 # ``MANDATORY_TOOLS`` (settings_ui.py) intentionally needs no special
 # case here: every mandatory tool is either ``readOnlyHint=True`` or
-# present in this table (``ha_manage_backup``) — a unit test guards
-# that invariant so the two sets cannot drift apart silently.
+# present in this table (``ha_manage_backup``). The e2e test
+# ``test_real_catalog_mandatory_tools_stay_available``
+# (tests/src/e2e/policy/test_readonly_mode.py) guards that invariant
+# against the real registered catalog at PR time, so the two sets
+# cannot drift apart silently.
 READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
     "ha_manage_backup": ReadOnlyExemption(
         _backup_write,
@@ -230,8 +241,8 @@ class ReadOnlyMiddleware(Middleware):
     middleware is the actual enforcement: it covers calls routed through
     the search proxies, the write actions of the exempt mixed tools, and
     direct calls to hidden tools. Annotation lookups go through an
-    unfiltered catalog provider (injected by server.py) and are cached —
-    the tool surface is static after startup.
+    unfiltered catalog provider (injected by server.py) and are cached
+    (rebuilt on a cache miss — see _classify).
     """
 
     def __init__(self, *, list_tools: Callable[[], Awaitable[Sequence[Tool]]]) -> None:
@@ -247,10 +258,37 @@ class ReadOnlyMiddleware(Middleware):
         caller gets the normal unknown-tool error (nothing executable,
         no write risk). An EMPTY catalog is abnormal (broken lookup) and
         classifies everything 'write' — fail closed rather than letting
-        calls through unclassified.
+        calls through unclassified. If the catalog lookup itself RAISES
+        we cannot classify anything, so we block the call with the
+        structured READ_ONLY_MODE error rather than let the exception
+        propagate opaquely (or, worse, let a future try/except return
+        'unknown' and silently fail open).
         """
         if self._read_safe_cache is None or name not in self._read_safe_cache:
-            tools = await self._list_tools()
+            try:
+                tools = await self._list_tools()
+            except Exception:
+                logger.exception(
+                    "read-only mode: tool catalog lookup failed while "
+                    "classifying %s — blocking the call conservatively",
+                    name,
+                )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.READ_ONLY_MODE,
+                        f"Read Only Mode is enabled on this Home Assistant MCP "
+                        f"server, and the tool catalog lookup needed to classify "
+                        f"'{name}' as read or write failed. The call to '{name}' "
+                        f"was blocked conservatively — no changes were made.",
+                        suggestions=[
+                            "Retry the call — the catalog lookup may succeed "
+                            + "on the next attempt.",
+                            "If this persists, the MCP server may be "
+                            + "misconfigured; check the server logs.",
+                        ],
+                        context={"tool_name": name, "read_only_mode": True},
+                    )
+                )
             self._read_safe_cache = {t.name: is_read_safe(t) for t in tools}
         if name in self._read_safe_cache:
             return "read" if self._read_safe_cache[name] else "write"
@@ -259,7 +297,34 @@ class ReadOnlyMiddleware(Middleware):
         return "unknown"
 
     @staticmethod
+    def _coerce_arguments(arguments: Any) -> dict[str, Any] | None:
+        """Normalise a proxy envelope's ``arguments`` to a dict or None.
+
+        The categorized proxies tolerate ``arguments`` arriving as a JSON
+        string (small models sometimes serialize it) and json.loads it
+        AFTER this middleware runs (categorized_search.py ~313-352). So:
+        a dict is used as-is; an absent value (``None``) becomes ``{}``
+        (a legitimate no-argument call, not malformed); a string is
+        parsed and only a JSON *object* yields a dict. Anything else — an
+        unparseable string, a non-dict JSON value (list/scalar/null), or
+        a non-str/non-dict type — returns None, meaning "malformed
+        envelope".
+        """
+        if isinstance(arguments, dict):
+            return arguments
+        if arguments is None:
+            return {}
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except (json.JSONDecodeError, ValueError):
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
+    @classmethod
     def _unwrap_proxy_call(
+        cls,
         args: dict[str, Any],
     ) -> tuple[str, dict[str, Any]] | None:
         """Extract the inner (tool, arguments) from a call-proxy envelope.
@@ -270,12 +335,19 @@ class ReadOnlyMiddleware(Middleware):
         proxied write would surface as a generic "tool not found" error
         instead of the explanatory READ_ONLY_MODE one. Unwrapping here
         lets the middleware decide on the inner call first. Mirrors the
-        proxy's own double-wrap unwrapping. Returns None when there is
-        no usable envelope (the proxy then raises its own validation
-        error; nothing can be written without a tool name).
+        proxy's own double-wrap unwrapping.
+
+        ``arguments`` is coerced at every level (see _coerce_arguments)
+        because the proxy accepts it as a JSON string. Returns None when
+        there is no usable envelope — including when ``arguments`` is a
+        MALFORMED string (json.loads fails, or the JSON is not an object).
+        Passing through on a malformed envelope is safe: the proxy
+        rejects such ``arguments`` with its own VALIDATION error BEFORE
+        the category check and before any dispatch
+        (categorized_search.py ~313-352), so no write can occur.
         """
         name = args.get("name")
-        arguments = args.get("arguments")
+        arguments = cls._coerce_arguments(args.get("arguments"))
         while (
             isinstance(name, str)
             and name in PROXY_META_TOOLS
@@ -283,10 +355,17 @@ class ReadOnlyMiddleware(Middleware):
             and isinstance(arguments.get("name"), str)
         ):
             name = arguments.get("name")
-            arguments = arguments.get("arguments")
+            arguments = cls._coerce_arguments(arguments.get("arguments"))
         if not isinstance(name, str):
             return None
-        return name, arguments if isinstance(arguments, dict) else {}
+        if arguments is None:
+            # Malformed inner ``arguments`` (a string that fails
+            # json.loads, or a non-object JSON value / non-dict type).
+            # Pass through: the proxy raises its own VALIDATION error
+            # before any dispatch, so nothing can be written. (An absent
+            # ``arguments`` key is NOT malformed — it coerces to ``{}``.)
+            return None
+        return name, arguments
 
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext

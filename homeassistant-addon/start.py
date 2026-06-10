@@ -24,6 +24,11 @@ def log_info(message: str) -> None:
     _log_with_timestamp("INFO", message)
 
 
+def log_warning(message: str) -> None:
+    """Log warning message."""
+    _log_with_timestamp("WARNING", message, sys.stderr)
+
+
 def log_error(message: str) -> None:
     """Log error message."""
     _log_with_timestamp("ERROR", message, sys.stderr)
@@ -182,7 +187,19 @@ def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool
     addon container.
     """
     raw = config.get(key, default)
-    return raw if isinstance(raw, bool) else default
+    if isinstance(raw, bool):
+        return raw
+    if key in config:
+        # Present-but-wrong-type is the diagnostic case: HA Supervisor
+        # coerces YAML scalars to the schema type, so a non-bool here
+        # usually means a hand-edited options.json with a bad value. Warn
+        # so the operator sees why the secure default won (an absent key
+        # is the normal path and stays silent).
+        log_warning(
+            f"addon option {key!r} has type {type(raw).__name__} "
+            f"(expected bool); applying default {default!r}."
+        )
+    return default
 
 
 _DEV_ADDON_BETA_KEYS = (

@@ -707,8 +707,9 @@ _SETTINGS_HTML = (
       <div class="feature-help">
         Toggles all write tools off, and removes ability for tools to
         make any write or destructive calls. Mixed read/write tools
-        (backups, add-ons, energy preferences, voice pipelines) stay
-        available with their write operations blocked.
+        (backups, add-ons, energy preferences, voice pipelines, and code
+        mode when enabled) stay available with their write operations
+        blocked.
       </div>
     </div>
     <div class="feature-control">
@@ -717,6 +718,10 @@ _SETTINGS_HTML = (
         <span class="slider"></span>
       </label>
     </div>
+  </div>
+  <div class="pin-notice" id="roUnknownNotice">
+    Could not read server settings — Read Only Mode status unknown; this
+    view may not reflect what the server enforces.
   </div>
   <input type="text" class="search" id="search" placeholder="Search tools...">
   <div id="groups"></div>

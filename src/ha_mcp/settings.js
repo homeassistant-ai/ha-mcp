@@ -476,7 +476,20 @@ function isReadOnlyForcedOff(t) {
 
 function syncReadOnlyToggle() {
   const cb = document.getElementById('read-only-mode-toggle');
-  if (cb) cb.checked = !!readOnlyState.enabled;
+  if (cb) {
+    cb.checked = !!readOnlyState.enabled;
+  } else {
+    // The toggle is part of the Tools-tab template; a missing element
+    // means template drift (or this surface lacks the row). Warn once so
+    // the desync is debuggable instead of silently no-op.
+    console.warn('syncReadOnlyToggle: #read-only-mode-toggle not found');
+  }
+  // When the features fetch failed, readOnlyState.enabledKnown is false
+  // and render() paints write tools as enabled even though the server may
+  // still block them. Surface that uncertainty. Function-scope lookup
+  // (guarded) so this id need not be a top-level handler binding.
+  const notice = document.getElementById('roUnknownNotice');
+  if (notice) notice.classList.toggle('show', !readOnlyState.enabledKnown);
 }
 
 // Escape HTML special characters before interpolating into innerHTML.
@@ -1251,7 +1264,7 @@ const FEATURE_META = {
   },
   read_only_mode: {
     label: "Read Only Mode",
-    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools (backups, add-ons, energy preferences, voice pipelines, code mode) stay listed with their write operations blocked server-side — the AI gets a clear READ_ONLY_MODE error if it tries. Mirrors the toggle at the top of the Tools tab. Off by default. Requires restart to take effect (applies live in standalone HTTP mode).",
+    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools (backups, add-ons, energy preferences, voice pipelines, and code mode when enabled) stay listed with their write operations blocked server-side — the AI gets a clear READ_ONLY_MODE error if it tries. Mirrors the toggle at the top of the Tools tab. Off by default. Requires restart to take effect (applies live in standalone HTTP mode).",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
@@ -1728,6 +1741,10 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
   });
 }
 
+// Returns true only when the server confirmed the save (HTTP ok), false
+// on any network/HTTP failure. Callers that need to revert UI state on a
+// failed save (the toggle handlers) branch on this; the additive return
+// doesn't affect callers that ignore it.
 async function saveFeatureFlag(fieldName, value) {
   updateStatus('Saving server setting...');
   let resp;
@@ -1739,7 +1756,7 @@ async function saveFeatureFlag(fieldName, value) {
     });
   } catch (e) {
     updateStatus('Save failed: ' + e.message);
-    return;
+    return false;
   }
   let data = null;
   try { data = await resp.json(); } catch (_e) {
@@ -1754,7 +1771,7 @@ async function saveFeatureFlag(fieldName, value) {
     let msg = `Save failed (HTTP ${resp.status})`;
     if (data?.error?.message) msg = 'Save failed: ' + data.error.message;
     updateStatus(msg);
-    return;
+    return false;
   }
   // Unified restart flow — save persists the change but does NOT fire
   // the addon restart. The user picks when to restart by clicking the
@@ -1767,6 +1784,7 @@ async function saveFeatureFlag(fieldName, value) {
     document.getElementById('restartNotice').classList.add('show');
     if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
   }
+  return true;
 }
 
 // ===== Tool Security Policies tab =====
@@ -2550,17 +2568,22 @@ document.getElementById('policy-save-global-btn').addEventListener('click', save
 // shows up in Server Settings (and the addon's config.yaml) on reload.
 document.getElementById('policy-master-toggle').addEventListener('change', async (e) => {
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
-  await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
+  const ok = await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
+  if (!ok) {
+    // Save definitely failed — the server still has the old value.
+    // Revert the checkbox and surface the failure (set the status AFTER
+    // the revert so it isn't clobbered).
+    e.target.checked = previous;
+    updateStatus('Tool Security Policies change did not save — the server still has the previous value');
+    return;
+  }
   // Re-read the truth from the server and sync the checkbox back to
-  // it. If saveFeatureFlag silently failed (network drop / 5xx) the
-  // server still has the old value and we need to revert the
-  // checkbox so the UI doesn't lie about persisted state.
+  // it. If the follow-up read can't confirm what the server has, revert
+  // to the pre-flip value so the UI doesn't lie about persisted state.
   await loadPolicyState();
   if (policyState.enabledKnown) {
     e.target.checked = !!policyState.enabled;
   } else {
-    // Can't confirm what the server has — revert to the pre-flip
-    // value and let the status message tell the user save failed.
     e.target.checked = previous;
   }
 });
@@ -2570,13 +2593,25 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
 // /api/settings/features, re-read server truth, revert on failure.
 document.getElementById('read-only-mode-toggle').addEventListener('change', async (e) => {
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
-  await saveFeatureFlag('read_only_mode', e.target.checked);
+  const ok = await saveFeatureFlag('read_only_mode', e.target.checked);
+  if (!ok) {
+    // Save definitely failed — the server still has the previous value.
+    // Revert the checkbox and leave readOnlyState.enabled untouched (do
+    // NOT write an unconfirmed value). Set the status AFTER the revert
+    // so the revert's render/sync can't clobber the message.
+    e.target.checked = previous;
+    render();
+    updateStatus('Read Only Mode change did not save — the server still has the previous value');
+    return;
+  }
+  // Re-read the truth from the server and sync the checkbox back to it.
   await loadPolicyState();
   if (readOnlyState.enabledKnown) {
     e.target.checked = !!readOnlyState.enabled;
   } else {
+    // Save reported OK but the follow-up read couldn't confirm — revert
+    // to the pre-flip value rather than assert an unconfirmed state.
     e.target.checked = previous;
-    readOnlyState.enabled = previous;
   }
   // Re-render so write-tool rows reflect the forced-off state instantly.
   render();
