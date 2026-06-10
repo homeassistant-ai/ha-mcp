@@ -102,13 +102,18 @@ assert set(get_args(HelperTypeLiteral)) == (
 def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     """Extract ``{field_name: current_value}`` from a form-type OptionsFlow.
 
-    Reads each ``data_schema`` entry's ``default`` key, falling back to
-    ``value`` (constant-type fields ship ``value`` instead of ``default``)
-    and then ``description.suggested_value`` (UI-created template, group,
-    utility_meter, and other flow-based helpers stash the current value
-    there — voluptuous renders ``suggested_value=...`` into the
-    ``description`` sub-object, not as a top-level field key). Fields with
-    a missing or ``None`` value are skipped.
+    Reads each ``data_schema`` entry's ``description.suggested_value``
+    first: HA's ``add_suggested_values_to_schema`` injects the entry's
+    *persisted* option there (voluptuous renders ``suggested_value=...``
+    into the ``description`` sub-object, not as a top-level field key),
+    and it is what the HA UI renders as the current value. Falls back to
+    ``default`` (the static schema default a brand-new form would show)
+    and then ``value`` (constant-type fields ship ``value`` instead of
+    ``default``). A field can carry both ``suggested_value`` and
+    ``default`` at once — e.g. a group helper's ``hide_members`` stored as
+    ``True`` over a schema default of ``False`` — and the stored value
+    must win (issue #1575). Fields with a missing or ``None`` value are
+    skipped.
     """
     out: dict[str, Any] = {}
     # Defensive: HA should always return a list of dict fields, but guard
@@ -123,11 +128,12 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
         name = field.get("name")
         if name is None:
             continue
-        value = field.get("default", field.get("value"))
+        value = None
+        description = field.get("description")
+        if isinstance(description, dict):
+            value = description.get("suggested_value")
         if value is None:
-            description = field.get("description")
-            if isinstance(description, dict):
-                value = description.get("suggested_value")
+            value = field.get("default", field.get("value"))
         if value is not None:
             out[name] = value
     return out
@@ -138,7 +144,10 @@ async def fetch_entry_options_with_status(
 ) -> tuple[dict[str, Any], bool]:
     """Read a config entry's ``options`` and report whether the probe succeeded.
 
-    Identical mechanics to :func:`fetch_entry_options` but returns
+    Starts the entry's OptionsFlow, harvests ``{name: current_value}`` from
+    its first-step form via :func:`options_from_form_flow` (the persisted
+    option from ``description.suggested_value``, falling back to the schema
+    ``default``), and aborts the flow so it doesn't sit half-open. Returns
     ``(options, ok)`` so callers can tell a probe *failure* apart from a
     genuinely-empty options form — both yield ``{}`` for ``options``, but
     ``ok`` is:
@@ -147,20 +156,23 @@ async def fetch_entry_options_with_status(
       fields: a genuinely-empty options form is a successful read).
     - ``False`` when the OptionsFlow could not be read into options: the flow
       raised, or its first step was not a form (a menu / abort / create_entry),
-      so no defaults could be harvested.
+      so no options could be harvested.
 
-    The flag lets bulk fan-out callers (``smart_search``) surface ``partial``
-    when an options-flow probe fails mid-search instead of silently scoring the
-    helper on title/domain only — the per-entry analog of the per-type/per-
-    dashboard backend-failure signals. The abort in ``finally`` is cleanup; a
-    failed abort does not flip ``ok`` (the options were already harvested).
+    The flag lets callers surface degraded reads instead of passing ``{}``
+    off as real options: ``smart_search`` flips ``partial`` when a probe
+    fails mid-search, and ``ha_get_integration`` attaches a ``warnings``
+    entry on its single-entry and list responses. The abort in ``finally``
+    is cleanup; a failed abort does not flip ``ok`` (the options were
+    already harvested).
 
     Home Assistant does not expose ``ConfigEntry.options`` through any
     read-only REST or WebSocket endpoint — ``/api/config/config_entries/entry``
     deliberately omits the field. The closest approximation that the HA UI
-    itself uses is the ``default`` values populated into the OptionsFlow's
-    first-step ``data_schema``: integrations build that schema from the
-    existing options dict, so the defaults match the persisted state.
+    itself uses is the OptionsFlow's first-step ``data_schema``: HA injects
+    the persisted options into each field's ``description.suggested_value``
+    (via ``add_suggested_values_to_schema``), which
+    :func:`options_from_form_flow` prefers over the static schema
+    ``default`` (issue #1575).
 
     Probe failures log at ``warning`` (so breakage of a deliberate
     single-entry probe is discoverable) unless ``quiet=True``, which demotes
@@ -181,7 +193,7 @@ async def fetch_entry_options_with_status(
         if flow_type != "form":
             log_probe_failure(
                 f"OptionsFlow for {entry_id} returned type={flow_type!r}, "
-                f"not a form — cannot extract option defaults"
+                f"not a form — cannot extract options"
             )
             return {}, False
         return options_from_form_flow(flow), True
@@ -199,25 +211,6 @@ async def fetch_entry_options_with_status(
                     f"Failed to abort options flow {flow_id}: "
                     f"{type(abort_err).__name__}: {abort_err}"
                 )
-
-
-async def fetch_entry_options(
-    client: Any, entry_id: str, *, quiet: bool = False
-) -> dict[str, Any]:
-    """Read the current ``options`` for a config entry via its OptionsFlow.
-
-    Starts the flow, harvests ``{name: default}`` from the first step, and
-    aborts the flow so it doesn't sit half-open. Returns ``{}`` on any failure
-    (unsupported entry, non-form first step such as a menu, init/abort errors)
-    so callers can treat the return as the canonical "options" field without
-    further checks.
-
-    Thin wrapper over :func:`fetch_entry_options_with_status` for callers that
-    only need the options dict and not the success flag (e.g. the
-    ``ha_remove_helpers_integrations`` / ``ha_get_integration`` config readout).
-    """
-    options, _ok = await fetch_entry_options_with_status(client, entry_id, quiet=quiet)
-    return options
 
 
 async def _get_entry_id_for_flow_helper(
@@ -714,19 +707,33 @@ class IntegrationTools:
 
             # Surface `options` on every per-entry response (HA's REST endpoint
             # omits the field). For entries with supports_options=True we probe
-            # via OptionsFlow — see `fetch_entry_options`. When include_schema
-            # is also requested, `_fetch_options_schema` below populates options
-            # from the same flow init so we don't pay for two round-trips.
+            # via OptionsFlow — see `fetch_entry_options_with_status`. When
+            # include_schema is also requested, `_fetch_options_schema` below
+            # populates options from the same flow init so we don't pay for
+            # two round-trips.
+            probe_warnings: list[str] = []
             if isinstance(result, dict):
                 result.setdefault("options", {})
                 if result.get("supports_options") and not include_schema:
-                    result["options"] = await self._fetch_entry_options(entry_id)
+                    options, probe_ok = await fetch_entry_options_with_status(
+                        self._client, entry_id
+                    )
+                    result["options"] = options
+                    if not probe_ok:
+                        probe_warnings.append(
+                            f"options probe failed for {entry_id}: the "
+                            "OptionsFlow could not be read, so 'options' may "
+                            "be incomplete — empty options does not mean the "
+                            "entry has none"
+                        )
 
             resp: dict[str, Any] = {
                 "success": True,
                 "entry_id": entry_id,
                 "entry": result,
             }
+            if probe_warnings:
+                resp["warnings"] = probe_warnings
 
             # Surface the effective Python logger level for this integration
             # so users can confirm logger.set_level changes took effect.
@@ -862,15 +869,6 @@ class IntegrationTools:
         """Class-method alias for :func:`options_from_form_flow`."""
         return options_from_form_flow(flow)
 
-    async def _fetch_entry_options(self, entry_id: str) -> dict[str, Any]:
-        """Instance wrapper around :func:`fetch_entry_options`.
-
-        Kept so existing call sites (and the ``include_schema`` path) read
-        naturally as ``self._fetch_entry_options(...)``; the probe logic and
-        full rationale live on the module-level function.
-        """
-        return await fetch_entry_options(self._client, entry_id)
-
     async def _fetch_options_schema(self, entry_id: str, resp: dict[str, Any]) -> None:
         """Start an options flow to read the schema, then abort it.
 
@@ -902,6 +900,12 @@ class IntegrationTools:
             logger.warning(
                 f"Failed to fetch options schema for {entry_id}: "
                 f"{type(schema_err).__name__}: {schema_err}"
+            )
+            schema_warnings: list[str] = resp.setdefault("warnings", [])
+            schema_warnings.append(
+                f"options schema probe failed for {entry_id}: "
+                f"{type(schema_err).__name__} — 'options_schema' is missing "
+                "and 'options' may be incomplete"
             )
         finally:
             if flow_id:
@@ -949,11 +953,14 @@ class IntegrationTools:
 
         # `_format_entry` is sync and cannot probe the OptionsFlow; options
         # are filled in by a second async pass below for entries that
-        # advertise supports_options=True. See `fetch_entry_options`.
+        # advertise supports_options=True. See `fetch_entry_options_with_status`.
         formatted_entries = [
             self._format_entry(entry, include_opts, logger_levels) for entry in entries
         ]
 
+        # quiet=True: per-entry probe failures are aggregated into a response
+        # warning below instead of one log line each (bulk fan-out).
+        probe_failures: list[str] = []
         if include_opts:
             options_targets = [
                 e for e in formatted_entries if e.get("supports_options")
@@ -961,13 +968,19 @@ class IntegrationTools:
             if options_targets:
                 fetched = await asyncio.gather(
                     *(
-                        self._fetch_entry_options(e["entry_id"])
+                        fetch_entry_options_with_status(
+                            self._client, e["entry_id"], quiet=True
+                        )
                         for e in options_targets
                     ),
                     return_exceptions=False,
                 )
-                for entry, opts in zip(options_targets, fetched, strict=True):
+                for entry, (opts, probe_ok) in zip(
+                    options_targets, fetched, strict=True
+                ):
                     entry["options"] = opts
+                    if not probe_ok:
+                        probe_failures.append(entry["entry_id"])
 
         # Apply search filter if query provided
         if query and query.strip():
@@ -996,6 +1009,13 @@ class IntegrationTools:
         }
         if domain:
             result_data["domain_filter"] = domain.strip().lower()
+        if probe_failures:
+            result_data["warnings"] = [
+                f"options probe failed for {len(probe_failures)} "
+                f"entr{'y' if len(probe_failures) == 1 else 'ies'} "
+                f"({', '.join(probe_failures)}) — their 'options' may be "
+                "incomplete; empty options does not mean an entry has none"
+            ]
         return result_data
 
     @staticmethod

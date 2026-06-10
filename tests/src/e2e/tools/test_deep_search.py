@@ -276,7 +276,7 @@ async def test_deep_search_finds_ui_template_helper(mcp_client):
     them entirely. They are now listed via the config-entries endpoint and the
     options flow is probed so the template body is searchable. This exercises
     the full chain end-to-end (deep_search → flow-helper probe →
-    fetch_entry_options → description.suggested_value extraction):
+    fetch_entry_options_with_status → description.suggested_value extraction):
 
     1. found by helper name,
     2. found by a token inside the template body (the headline fix), and
