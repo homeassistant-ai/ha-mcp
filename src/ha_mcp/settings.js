@@ -3013,3 +3013,31 @@ loadFsCustomPaths();
     }
   } catch (_) { /* best-effort */ }
 })();
+
+// #1572 theme toggle — sync the <select> to the saved choice, then on
+// change persist + reapply. Auto mode also subscribes to the matchMedia
+// change event so flipping the OS scheme reflects live without reload.
+// The anti-FOUC head script in settings_ui.py already set data-theme;
+// this handler keeps it in sync for the rest of the session.
+(function bindThemeToggle() {
+  const toggle = document.getElementById('themeToggle');
+  if (!toggle) return;
+  const KEY = 'ha-mcp-theme';
+  const mql = window.matchMedia('(prefers-color-scheme: light)');
+  const resolve = (pref) => pref === 'auto' ? (mql.matches ? 'light' : 'dark') : pref;
+  const apply = (pref) => {
+    document.documentElement.setAttribute('data-theme', resolve(pref));
+  };
+  let saved = 'auto';
+  try { saved = localStorage.getItem(KEY) || 'auto'; } catch (_) { /* private mode */ }
+  toggle.value = saved;
+  toggle.addEventListener('change', () => {
+    const pref = toggle.value;
+    try { localStorage.setItem(KEY, pref); } catch (_) { /* private mode */ }
+    apply(pref);
+  });
+  // Re-apply when the OS preference changes while we're in Auto mode.
+  mql.addEventListener('change', () => {
+    if (toggle.value === 'auto') apply('auto');
+  });
+})();

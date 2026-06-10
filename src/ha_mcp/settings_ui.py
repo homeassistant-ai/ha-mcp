@@ -664,6 +664,24 @@ _SETTINGS_HTML = (
      /favicon.ico (which would 404 and log a console error, since the
      settings server serves no such asset in any deployment mode). -->
 <link rel="icon" href="data:,">
+<script>
+  // #1572 theme resolver — runs before CSS evaluates so the data-theme
+  // attribute is set on <html> ahead of paint (no FOUC). Reads the user's
+  // saved choice from localStorage; falls back to prefers-color-scheme.
+  // "auto" means follow the OS; an explicit "light" / "dark" overrides it.
+  (function () {
+    try {
+      var pref = localStorage.getItem("ha-mcp-theme") || "auto";
+      var theme = pref === "auto"
+        ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+        : pref;
+      document.documentElement.setAttribute("data-theme", theme);
+    } catch (e) {
+      // localStorage may throw in private mode; fall back to dark default.
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
 <style>"""
     + _SETTINGS_CSS
     + """</style>
@@ -671,7 +689,14 @@ _SETTINGS_HTML = (
 <body>
 <div class="header">
   <h1>HA-MCP Settings</h1>
-  <span id="status" class="status">Loading...</span>
+  <div style="display:flex;align-items:center;gap:8px">
+    <select id="themeToggle" class="theme-toggle" aria-label="Color scheme">
+      <option value="auto">Auto</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+    <span id="status" class="status">Loading...</span>
+  </div>
 </div>
 <div class="tabs">
   <button class="tab active" data-panel="tools">Tools</button>

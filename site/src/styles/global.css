@@ -120,55 +120,82 @@ pre {
   box-shadow: 0 0 24px rgb(var(--brand) / 0.15), 0 0 48px rgb(var(--brand) / 0.05);
 }
 
-/* Light color-scheme override (#1572). Inverts surfaces, flips border
-   opacity from white-on-dark to black-on-light, and darkens the brand
-   triplet so `text-brand` link / heading uses stay readable on white
-   (the dark-base brand is too light for AA contrast on a white page).
-   The darker shade preserves the brand hue, just lower-luminance. */
-@media (prefers-color-scheme: light) {
-  :root {
-    --brand: 14 91 106;
-    --brand-light: 25 124 137;
-    --brand-dark: 8 67 78;
-    --surface-0: 248 250 252;
-    --surface-1: 255 255 255;
-    --surface-2: 241 245 249;
-    --surface-3: 226 232 240;
-    --border: rgba(15, 23, 42, 0.10);
-    --border-hover: rgba(15, 23, 42, 0.20);
-    --text-primary: #0F172A;
-    --text-secondary: #475569;
-    --text-muted: #64748B;
-  }
-
-  /* Glass-card's white-tinted gradient becomes invisible on a near-white
-     page; flip the tint to slate-900-low-alpha so cards stay visible. */
-  .glass-card {
-    background: linear-gradient(135deg, rgba(15,23,42,0.04) 0%, rgba(15,23,42,0.02) 100%);
-  }
-
-  /* `.code-block` and inline `<code class="bg-slate-900 ... text-brand">`
-     containers in faq.astro / guide-*.astro keep the dark Tailwind
-     background even in light mode. Combined with the darkened --brand text
-     that yields contrast below WCAG AA. Flip the surface to --surface-2
-     (light slate) so text-brand hits AA in light mode. */
-  .code-block,
-  code.bg-slate-900 { background-color: rgb(var(--surface-2)); }
-
+/* Light color-scheme override (#1572). Selector is :root[data-theme="light"]
+   — the inline head script in Layout.astro sets data-theme to "light",
+   "dark", or auto-resolved from prefers-color-scheme before this CSS
+   evaluates, so the user can override the OS preference via the Nav
+   toggle. Darkens the brand triplet so `text-brand` link / heading uses
+   stay readable on white (the dark-base brand is too light for AA on a
+   white page). The darker shade preserves the brand hue, just
+   lower-luminance. */
+:root[data-theme="light"] {
+  --brand: 14 91 106;
+  --brand-light: 25 124 137;
+  --brand-dark: 8 67 78;
+  --surface-0: 248 250 252;
+  --surface-1: 255 255 255;
+  --surface-2: 241 245 249;
+  --surface-3: 226 232 240;
+  --border: rgba(15, 23, 42, 0.10);
+  --border-hover: rgba(15, 23, 42, 0.20);
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #64748B;
 }
 
-/* Tailwind utility `text-white` is widely used on headings sitting on the
-   page background — which is now light in the new scheme. Flip the
-   heading-tag uses to --text-primary so they stay readable. Scope is
-   intentionally just the heading tags: `text-white` on `bg-brand`,
-   `bg-blue-600`, and other dark Tailwind backgrounds (buttons, list
-   bubbles, dark callouts) keeps the white text — a flat `.text-white`
-   override would break those. Wrapped in @layer utilities so Tailwind's
-   build pipeline preserves the compound selectors (raw rules at file end
-   get purged when their classes look like utility candidates). */
+/* Glass-card's white-tinted gradient becomes invisible on a near-white
+   page; flip the tint to slate-900-low-alpha so cards stay visible. */
+:root[data-theme="light"] .glass-card {
+  background: linear-gradient(135deg, rgba(15,23,42,0.04) 0%, rgba(15,23,42,0.02) 100%);
+}
+
+/* `.code-block` and inline `<code class="bg-slate-900 ... text-brand">`
+   containers in faq.astro / guide-*.astro keep the dark Tailwind
+   background even in light mode. Combined with the darkened --brand text
+   that yields contrast below WCAG AA. Flip the surface to --surface-2
+   (light slate) so text-brand hits AA in light mode. */
+:root[data-theme="light"] .code-block,
+:root[data-theme="light"] code.bg-slate-900 { background-color: rgb(var(--surface-2)); }
+
+/* Tailwind utility classes that hard-code light slate / white text are
+   used heavily across the pages. They read fine on the dark page bg but
+   become invisible (or near-invisible) in light mode. Wrapped in @layer
+   utilities so Tailwind's build pipeline preserves the compound selectors.
+
+   - `text-white` is flipped only on heading tags so it doesn't break
+     `text-white` on `bg-brand` / `bg-blue-600` button + list-bubble uses.
+   - `text-slate-{100..400}` is body / muted text from the dark palette
+     and turns light slate → invisible on a near-white page. Flip to
+     slate-700 (~7.7:1 on white, AAA) so it stays readable. Known gap:
+     these classes inside still-dark structural cards (`bg-slate-900/*`
+     uses in tools.astro / setup.astro / faq.astro) become dark-on-dark
+     under this rule. Those cards are a separate light-mode design
+     surface (a follow-up). */
 @layer utilities {
-  @media (prefers-color-scheme: light) {
-    h1.text-white, h2.text-white, h3.text-white,
-    h4.text-white, h5.text-white, h6.text-white { color: var(--text-primary); }
-  }
+  :root[data-theme="light"] h1.text-white,
+  :root[data-theme="light"] h2.text-white,
+  :root[data-theme="light"] h3.text-white,
+  :root[data-theme="light"] h4.text-white,
+  :root[data-theme="light"] h5.text-white,
+  :root[data-theme="light"] h6.text-white { color: var(--text-primary); }
+  :root[data-theme="light"] .text-slate-100,
+  :root[data-theme="light"] .text-slate-200,
+  :root[data-theme="light"] .text-slate-300,
+  :root[data-theme="light"] .text-slate-400 { color: rgb(51 65 85); }
 }
+
+/* Theme toggle in Nav — small <select> styled to match the existing nav
+   pill controls. Pulls from the surface palette so it auto-fits each
+   scheme. */
+.theme-toggle {
+  background: rgb(var(--surface-1));
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+}
+.theme-toggle:focus { border-color: rgb(var(--brand)); }

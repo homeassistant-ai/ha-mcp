@@ -329,48 +329,55 @@
     color: var(--text); font-size: 0.85rem; margin: 0 6px; }
   .policy-save-status { margin-left: 10px; font-size: 0.8rem;
     color: var(--text-secondary); }
-  /* Light color-scheme override (#1572). Triggered when the user's OS /
-     browser reports prefers-color-scheme: light. Inverts the surface +
-     text variables and provides explicit light pairs for every
-     hand-picked dark hex in the dark base palette (notices, status
-     badges, danger button, diff colors, inline code, slider track).
-     Each foreground/background pair is targeted at WCAG AA or better,
-     with AAA on body and primary surfaces — the contrast bar for
-     low-vision readers, not the typical-user default. */
-  @media (prefers-color-scheme: light) {
-    :root {
-      --bg: #f5f5f7; --surface: #ffffff; --surface-hover: #ebebed;
-      --text: #1d1d1f; --text-secondary: #525252; --accent: #0066cc;
-      --accent-hover: #0051a3; --danger: #cc0000; --success: #1a7f3e;
-      --warning: #a25c00; --border: #d2d2d7; --disabled-bg: #ebebed;
-    }
-    .status.saved { background: #d4edda; color: #155724; }
-    .readonly-notice { background: #d4e7fc; border-color: #a3c4f0; color: #0049a8; }
-    .badge.readonly { background: #d4e7fc; color: #0049a8; }
-    .badge.destructive { background: #fbe5e5; color: #a30000; }
-    .badge.mandatory { background: #d4edda; color: #155724; }
-    .slider { background: #909090; }
-    /* Switch knob inherits var(--text) as background; in light mode that's
-       near-black, which disappears on the blue active track and clashes on
-       the gray idle track. Use --surface (white) so the knob stays light,
-       plus a subtle drop shadow for definition (WCAG 1.4.11 wants ≥3:1 for
-       adjacent UI components; the idle track sits just above that line
-       against a white knob, so the shadow is reinforcement, not the gate). */
-    .slider::before { background: var(--surface);
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
-    .pin-notice { background: #fff4d6; border-color: #c08a1a; color: #6b4500; }
-    .restart-notice { background: #fbe5e5; border-color: #c95151; color: #a30000; }
-    .danger-btn { border-color: #c95151; color: #a30000; }
-    .danger-btn:hover { background: #fbe5e5; }
-    .backup-filters button.danger { background: #fbe5e5; color: #a30000; }
-    .backup-field-locked { background: #fff4d6; color: #6b4500; }
-    .diff-add { color: #155724; }
-    .diff-rem { color: #a30000; }
-    .diff-hdr { color: #0049a8; }
-    .feature-help code,
-    .adv-help code { background: #f0f0f0; }
-    /* Save-note's warning-tinted background is barely visible on a
-       light surface; bump opacity + replace the dark-tuned strong
-       color so the callout still reads as a warning callout. */
-    .adv-save-note { background: rgba(255, 152, 0, 0.18); }
+  /* Light color-scheme override (#1572). Selector is :root[data-theme="light"]
+     — the inline head script in settings_ui.py sets data-theme to "light",
+     "dark", or auto-resolved from prefers-color-scheme before this CSS
+     evaluates, so the user can override the OS preference via the header
+     toggle. Inverts surface + text variables and provides explicit light
+     pairs for every hand-picked dark hex in the dark base palette (notices,
+     status badges, danger button, diff colors, inline code, slider track).
+     Each foreground/background pair is targeted at WCAG AA or better, with
+     AAA on body and primary surfaces — the contrast bar for low-vision
+     readers, not the typical-user default. */
+  :root[data-theme="light"] {
+    --bg: #f5f5f7; --surface: #ffffff; --surface-hover: #ebebed;
+    --text: #1d1d1f; --text-secondary: #525252; --accent: #0066cc;
+    --accent-hover: #0051a3; --danger: #cc0000; --success: #1a7f3e;
+    --warning: #a25c00; --border: #d2d2d7; --disabled-bg: #ebebed;
   }
+  :root[data-theme="light"] .status.saved { background: #d4edda; color: #155724; }
+  :root[data-theme="light"] .readonly-notice { background: #d4e7fc; border-color: #a3c4f0; color: #0049a8; }
+  :root[data-theme="light"] .badge.readonly { background: #d4e7fc; color: #0049a8; }
+  :root[data-theme="light"] .badge.destructive { background: #fbe5e5; color: #a30000; }
+  :root[data-theme="light"] .badge.mandatory { background: #d4edda; color: #155724; }
+  :root[data-theme="light"] .slider { background: #909090; }
+  /* Switch knob inherits var(--text) as background; in light mode that's
+     near-black, which disappears on the blue active track and clashes on
+     the gray idle track. Use --surface (white) so the knob stays light,
+     plus a subtle drop shadow for definition (WCAG 1.4.11 wants ≥3:1 for
+     adjacent UI components; the idle track sits just above that line
+     against a white knob, so the shadow is reinforcement, not the gate). */
+  :root[data-theme="light"] .slider::before { background: var(--surface);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
+  :root[data-theme="light"] .pin-notice { background: #fff4d6; border-color: #c08a1a; color: #6b4500; }
+  :root[data-theme="light"] .restart-notice { background: #fbe5e5; border-color: #c95151; color: #a30000; }
+  :root[data-theme="light"] .danger-btn { border-color: #c95151; color: #a30000; }
+  :root[data-theme="light"] .danger-btn:hover { background: #fbe5e5; }
+  :root[data-theme="light"] .backup-filters button.danger { background: #fbe5e5; color: #a30000; }
+  :root[data-theme="light"] .backup-field-locked { background: #fff4d6; color: #6b4500; }
+  :root[data-theme="light"] .diff-add { color: #155724; }
+  :root[data-theme="light"] .diff-rem { color: #a30000; }
+  :root[data-theme="light"] .diff-hdr { color: #0049a8; }
+  :root[data-theme="light"] .feature-help code,
+  :root[data-theme="light"] .adv-help code { background: #f0f0f0; }
+  /* Save-note's warning-tinted background is barely visible on a light
+     surface; bump opacity + replace the dark-tuned strong color so the
+     callout still reads as a warning callout. */
+  :root[data-theme="light"] .adv-save-note { background: rgba(255, 152, 0, 0.18); }
+
+  /* Theme-toggle styling — small <select> in the header. Picks up the
+     surface palette so it fits each scheme automatically. */
+  .theme-toggle { background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px 8px; font-size: 0.8rem; cursor: pointer;
+    font-family: inherit; outline: none; }
+  .theme-toggle:focus { border-color: var(--accent); }

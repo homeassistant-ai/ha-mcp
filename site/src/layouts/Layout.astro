@@ -18,11 +18,56 @@ const { title } = Astro.props;
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
+    <script is:inline>
+      // #1572 theme resolver — runs before CSS evaluates so the data-theme
+      // attribute is set on <html> ahead of paint (no FOUC). Reads the
+      // user's saved choice from localStorage; falls back to
+      // prefers-color-scheme. "auto" follows the OS; explicit "light" /
+      // "dark" overrides it.
+      (function () {
+        try {
+          var pref = localStorage.getItem('ha-mcp-theme') || 'auto';
+          var theme = pref === 'auto'
+            ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+            : pref;
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
+    </script>
     <!-- Cloudflare Web Analytics -->
     <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "65196c0f415f4f3690e13ad77fa44cb0"}'></script>
   </head>
   <body class="min-h-screen text-[var(--text-primary)] antialiased body-background">
     <slot />
+    <script>
+      // #1572 theme-toggle binding — keep the <select> in sync with the
+      // saved choice, persist on change, re-apply on OS scheme flip when
+      // in Auto. The Layout head script already set the initial
+      // data-theme, this just wires up the runtime handler.
+      (function bindThemeToggle() {
+        const KEY = 'ha-mcp-theme';
+        const mql = window.matchMedia('(prefers-color-scheme: light)');
+        const resolve = (pref) => pref === 'auto' ? (mql.matches ? 'light' : 'dark') : pref;
+        const apply = (pref) => document.documentElement.setAttribute('data-theme', resolve(pref));
+        document.addEventListener('DOMContentLoaded', () => {
+          const toggle = document.getElementById('themeToggle');
+          if (!toggle) return;
+          let saved = 'auto';
+          try { saved = localStorage.getItem(KEY) || 'auto'; } catch (_) { /* private mode */ }
+          toggle.value = saved;
+          toggle.addEventListener('change', () => {
+            const pref = toggle.value;
+            try { localStorage.setItem(KEY, pref); } catch (_) { /* private mode */ }
+            apply(pref);
+          });
+          mql.addEventListener('change', () => {
+            if (toggle.value === 'auto') apply('auto');
+          });
+        });
+      })();
+    </script>
     <script>
       (function() {
         const svgAttrs = 'width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
