@@ -673,6 +673,7 @@ _SETTINGS_HTML = (
   // Duplicate of the same logic in site/src/layouts/Layout.astro head — both
   // surfaces share the localStorage keys, so any change here must be mirrored
   // there (and vice versa) or one surface paints with the wrong attributes.
+  // Enforced by tests/src/unit/test_anti_fouc_parity.py.
   (function () {
     var root = document.documentElement;
     function readPref(key, fallback) {

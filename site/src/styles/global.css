@@ -154,7 +154,7 @@ pre {
    inline code chips and structural cards. In light mode they kept the
    dark fill while the text overrides below darkened the foreground —
    yielding dark-on-dark (axe measured 1.41:1 on the bg-slate-800 code
-   chips, 103 nodes on the FAQ page alone). Remap the whole family to
+   chips). Remap the whole family to
    light surfaces, preserving the original depth hierarchy:
      - solid fills (inline code chips, .code-block) → surface-2 slate chip
      - translucent fills (structural cards / insets) → surface-1 white card
@@ -208,7 +208,7 @@ pre {
 }
 
 /* Semi-transparent colored pills (#1572) — the transport/status badges
-   (.transport-badge, used ~32× across the client cards) carry
+   (.transport-badge, used across the client cards) carry
    bg-<color>-900/50 + text-<color>-400. The text is darkened to -700 by
    the colored-text overrides above, but the translucent dark bg now
    composites over the WHITE cards (above) into a mid-tone that drops the

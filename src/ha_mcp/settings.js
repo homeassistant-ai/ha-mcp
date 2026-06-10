@@ -3044,7 +3044,7 @@ loadFsCustomPaths();
   };
   const applyFontSize = (pct) => {
     const n = parseInt(pct, 10);
-    if (isNaN(n) || n === 100) root.style.fontSize = '';
+    if (isNaN(n) || n <= 100 || n > 150) root.style.fontSize = '';
     else root.style.fontSize = (16 * n / 100) + 'px';
   };
   const applyContrast = (tier) => {

@@ -27,7 +27,7 @@ const { title } = Astro.props;
       // Duplicate of the same logic in src/ha_mcp/settings_ui.py head — both
       // surfaces share the localStorage keys, so any change here must be
       // mirrored there (and vice versa) or one surface paints with the wrong
-      // attributes.
+      // attributes. Enforced by tests/src/unit/test_anti_fouc_parity.py.
       (function () {
         var root = document.documentElement;
         function readPref(key, fallback) {
@@ -91,7 +91,7 @@ const { title } = Astro.props;
         };
         const applyFontSize = (pct) => {
           const n = parseInt(pct, 10);
-          if (isNaN(n) || n === 100) root.style.fontSize = '';
+          if (isNaN(n) || n <= 100 || n > 150) root.style.fontSize = '';
           else root.style.fontSize = (16 * n / 100) + 'px';
         };
         const applyContrast = (tier) => {
