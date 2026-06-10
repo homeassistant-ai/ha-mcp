@@ -1227,7 +1227,7 @@ class TestGetIntegrationDiagnostics:
 
 
 class TestOptionsFromFormFlow:
-    """``options_from_form_flow`` field extraction (issue #1457)."""
+    """``options_from_form_flow`` field extraction (issues #1457, #1575)."""
 
     def test_reads_default_when_present(self) -> None:
         flow = {
@@ -1268,17 +1268,50 @@ class TestOptionsFromFormFlow:
             "device_class": "temperature",
         }
 
-    def test_default_wins_over_description_suggested_value(self) -> None:
+    def test_suggested_value_wins_over_default(self) -> None:
+        # Issue #1575: a field can carry the static schema default AND the
+        # entry's current value at the same time. HA injects the persisted
+        # option as description.suggested_value (the value the UI renders);
+        # the top-level default is just what a brand-new form would show.
+        # Real shape from a group helper created with hide_members=True.
+        flow = {
+            "data_schema": [
+                {
+                    "name": "hide_members",
+                    "selector": {"boolean": {}},
+                    "required": True,
+                    "default": False,
+                    "description": {"suggested_value": True},
+                }
+            ]
+        }
+        assert options_from_form_flow(flow) == {"hide_members": True}
+
+    def test_falsy_suggested_value_wins_over_default(self) -> None:
+        # A stored False must beat a True schema default — guards against
+        # truthiness checks sneaking in where only None means "absent".
         flow = {
             "data_schema": [
                 {
                     "name": "field",
-                    "default": "wins",
-                    "description": {"suggested_value": "loses"},
+                    "default": True,
+                    "description": {"suggested_value": False},
                 }
             ]
         }
-        assert options_from_form_flow(flow) == {"field": "wins"}
+        assert options_from_form_flow(flow) == {"field": False}
+
+    def test_none_suggested_value_falls_back_to_default(self) -> None:
+        flow = {
+            "data_schema": [
+                {
+                    "name": "field",
+                    "default": "fallback",
+                    "description": {"suggested_value": None},
+                }
+            ]
+        }
+        assert options_from_form_flow(flow) == {"field": "fallback"}
 
     def test_skips_fields_with_no_value_anywhere(self) -> None:
         flow = {

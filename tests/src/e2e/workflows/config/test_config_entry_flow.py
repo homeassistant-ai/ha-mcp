@@ -191,6 +191,43 @@ class TestConfigEntryFlow:
                 {"target": entry_id, "confirm": True},
             )
 
+    async def test_include_options_reports_stored_hide_members(self, mcp_client):
+        """Regression for issue #1575: report stored options, not schema defaults.
+
+        A group helper created with ``hide_members=True`` exposes BOTH
+        ``default: False`` and ``description.suggested_value: True`` on the
+        same options-flow field; ``include_options`` must report the stored
+        ``True``, not the static default the buggy precedence used to pick.
+        """
+        config = {
+            "group_type": "light",
+            "name": "test_hide_members_1575_e2e",
+            "entities": [],  # empty keeps the test self-contained; the
+            # hide_members OPTION is stored regardless of membership
+            "hide_members": True,
+        }
+        entry_id = await _create_config_entry_helper(
+            mcp_client, "group", config, "light group helper (hide_members=True)"
+        )
+        try:
+            gi = await mcp_client.call_tool(
+                "ha_get_integration",
+                {"entry_id": entry_id, "include_options": True},
+            )
+            gi_data = assert_mcp_success(gi, "get integration include_options")
+            options = (gi_data.get("entry") or {}).get("options") or {}
+            assert options.get("hide_members") is True, (
+                "include_options must report the stored hide_members=True, "
+                f"not the schema default False (issue #1575); got {options!r}"
+            )
+            logger.info("✅ stored hide_members=True surfaced via include_options")
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
+
     async def test_update_min_max_helper(self, mcp_client):
         """Update an existing min_max helper via options flow (upsert with entry_id)."""
         config = {

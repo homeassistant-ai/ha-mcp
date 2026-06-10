@@ -102,13 +102,18 @@ assert set(get_args(HelperTypeLiteral)) == (
 def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
     """Extract ``{field_name: current_value}`` from a form-type OptionsFlow.
 
-    Reads each ``data_schema`` entry's ``default`` key, falling back to
-    ``value`` (constant-type fields ship ``value`` instead of ``default``)
-    and then ``description.suggested_value`` (UI-created template, group,
-    utility_meter, and other flow-based helpers stash the current value
-    there — voluptuous renders ``suggested_value=...`` into the
-    ``description`` sub-object, not as a top-level field key). Fields with
-    a missing or ``None`` value are skipped.
+    Reads each ``data_schema`` entry's ``description.suggested_value``
+    first: HA's ``add_suggested_values_to_schema`` injects the entry's
+    *persisted* option there (voluptuous renders ``suggested_value=...``
+    into the ``description`` sub-object, not as a top-level field key),
+    and it is what the HA UI renders as the current value. Falls back to
+    ``default`` (the static schema default a brand-new form would show)
+    and then ``value`` (constant-type fields ship ``value`` instead of
+    ``default``). A field can carry both ``suggested_value`` and
+    ``default`` at once — e.g. a group helper's ``hide_members`` stored as
+    ``True`` over a schema default of ``False`` — and the stored value
+    must win (issue #1575). Fields with a missing or ``None`` value are
+    skipped.
     """
     out: dict[str, Any] = {}
     # Defensive: HA should always return a list of dict fields, but guard
@@ -123,11 +128,12 @@ def options_from_form_flow(flow: dict[str, Any]) -> dict[str, Any]:
         name = field.get("name")
         if name is None:
             continue
-        value = field.get("default", field.get("value"))
+        value = None
+        description = field.get("description")
+        if isinstance(description, dict):
+            value = description.get("suggested_value")
         if value is None:
-            description = field.get("description")
-            if isinstance(description, dict):
-                value = description.get("suggested_value")
+            value = field.get("default", field.get("value"))
         if value is not None:
             out[name] = value
     return out
@@ -158,9 +164,11 @@ async def fetch_entry_options_with_status(
     Home Assistant does not expose ``ConfigEntry.options`` through any
     read-only REST or WebSocket endpoint — ``/api/config/config_entries/entry``
     deliberately omits the field. The closest approximation that the HA UI
-    itself uses is the ``default`` values populated into the OptionsFlow's
-    first-step ``data_schema``: integrations build that schema from the
-    existing options dict, so the defaults match the persisted state.
+    itself uses is the OptionsFlow's first-step ``data_schema``: HA injects
+    the persisted options into each field's ``description.suggested_value``
+    (via ``add_suggested_values_to_schema``), which
+    :func:`options_from_form_flow` prefers over the static schema
+    ``default`` (issue #1575).
 
     Probe failures log at ``warning`` (so breakage of a deliberate
     single-entry probe is discoverable) unless ``quiet=True``, which demotes
