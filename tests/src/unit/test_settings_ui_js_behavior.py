@@ -789,8 +789,6 @@ class TestPolicyTabFlow:
         # rather than substring-matching, so a body like
         # ``{"flags":{"x":"enable_tool_security_policies"}}`` (which
         # would pass the loose match) doesn't false-positive.
-        import json
-
         matched = False
         for f in flag_posts:
             raw = f.get("body", "")

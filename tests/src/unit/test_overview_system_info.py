@@ -516,7 +516,9 @@ class TestHaGetOverviewReadOnlyMode:
 
         monkeypatch.setattr(
             "ha_mcp.tools.tools_search.get_global_settings",
-            lambda: SimpleNamespace(read_only_mode=on),
+            # ha_get_overview reads enable_tool_search from the same
+            # singleton before the read-only re-read — stub both.
+            lambda: SimpleNamespace(read_only_mode=on, enable_tool_search=False),
         )
 
     @pytest.mark.asyncio

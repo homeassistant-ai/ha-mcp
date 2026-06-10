@@ -336,18 +336,22 @@ async def test_search_results_exclude_non_exempt_write_tools(readonly_toolsearch
     result = await client.call_tool("ha_search_tools", {"query": "automation create"})
     body = parse_mcp_result(result)
 
-    # Pull the result tool names from whatever list shape the proxy returns.
-    found = body if isinstance(body, dict) else {}
+    # Pull the result tool names from whatever shape the search returns —
+    # currently a top-level list of tool dicts; tolerate a dict envelope
+    # with a list under a conventional key too.
+    entries: list = body if isinstance(body, list) else []
+    if isinstance(body, dict):
+        for key in ("tools", "results", "matches"):
+            entries.extend(body.get(key) or [])
     result_names: set[str] = set()
-    for key in ("tools", "results", "matches"):
-        for entry in found.get(key, []) or []:
-            if isinstance(entry, dict):
-                name = entry.get("name") or entry.get("tool_name")
-                if isinstance(name, str):
-                    result_names.add(name)
+    for entry in entries:
+        if isinstance(entry, dict):
+            name = entry.get("name") or entry.get("tool_name")
+            if isinstance(name, str):
+                result_names.add(name)
     # Guard against a vacuous pass: this query matches the read-side
     # automation tools, so an empty extraction means the response shape
-    # drifted past the keys above, not that nothing matched.
+    # drifted past the handling above, not that nothing matched.
     assert result_names, f"could not extract any tool names from search: {body}"
 
     # Known pure-write tools must be absent from the search surface.
