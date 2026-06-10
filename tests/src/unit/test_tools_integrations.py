@@ -18,7 +18,6 @@ from ha_mcp.client.rest_client import (
 from ha_mcp.tools.tools_integrations import (
     IntegrationTools,
     _get_entry_id_for_flow_helper,
-    fetch_entry_options,
     fetch_entry_options_with_status,
     options_from_form_flow,
 )
@@ -1313,6 +1312,21 @@ class TestOptionsFromFormFlow:
         }
         assert options_from_form_flow(flow) == {"field": "fallback"}
 
+    def test_suggested_value_wins_over_constant_value(self) -> None:
+        # Pin the remaining precedence pair: a constant-type field's `value`
+        # loses to a non-None suggested_value (and is only reached when the
+        # suggested value is absent/None and no default exists).
+        flow = {
+            "data_schema": [
+                {
+                    "name": "field",
+                    "value": "constant",
+                    "description": {"suggested_value": "stored"},
+                }
+            ]
+        }
+        assert options_from_form_flow(flow) == {"field": "stored"}
+
     def test_skips_fields_with_no_value_anywhere(self) -> None:
         flow = {
             "data_schema": [
@@ -1349,74 +1363,6 @@ class TestOptionsFromFormFlow:
         # A non-dict entry inside data_schema is skipped, not crashed on.
         flow = {"data_schema": ["garbage", {"name": "state", "default": "kept"}]}
         assert options_from_form_flow(flow) == {"state": "kept"}
-
-
-class TestFetchEntryOptions:
-    """``fetch_entry_options`` module-level probe (issue #1457)."""
-
-    async def test_returns_options_from_form_flow(self) -> None:
-        client = MagicMock()
-        client.start_options_flow = AsyncMock(
-            return_value={
-                "flow_id": "f1",
-                "type": "form",
-                "data_schema": [
-                    {
-                        "name": "state",
-                        "description": {"suggested_value": "{{ true }}"},
-                    }
-                ],
-            }
-        )
-        client.abort_options_flow = AsyncMock()
-
-        assert await fetch_entry_options(client, "entry_x") == {"state": "{{ true }}"}
-        client.abort_options_flow.assert_awaited_once_with("f1")
-
-    async def test_returns_empty_when_flow_is_a_menu(self) -> None:
-        client = MagicMock()
-        client.start_options_flow = AsyncMock(
-            return_value={"flow_id": "f2", "type": "menu", "menu_options": []}
-        )
-        client.abort_options_flow = AsyncMock()
-
-        assert await fetch_entry_options(client, "entry_y") == {}
-        client.abort_options_flow.assert_awaited_once_with("f2")
-
-    async def test_skips_abort_when_start_raises_before_flow_id(self) -> None:
-        client = MagicMock()
-        client.start_options_flow = AsyncMock(side_effect=RuntimeError("init blew up"))
-        client.abort_options_flow = AsyncMock()
-
-        assert await fetch_entry_options(client, "entry_z") == {}
-        # start raised before a flow_id existed → abort skipped (no leak)
-        client.abort_options_flow.assert_not_awaited()
-
-    async def test_aborts_flow_when_extraction_raises_after_start(self) -> None:
-        # The flow starts (flow_id exists) but parsing the form blows up — the
-        # finally block must still abort so the flow doesn't sit half-open.
-        client = MagicMock()
-        client.start_options_flow = AsyncMock(
-            return_value={"flow_id": "f3", "type": "form", "data_schema": []}
-        )
-        client.abort_options_flow = AsyncMock()
-
-        with patch(
-            "ha_mcp.tools.tools_integrations.options_from_form_flow",
-            side_effect=RuntimeError("parse blew up"),
-        ):
-            assert await fetch_entry_options(client, "entry_w") == {}
-        client.abort_options_flow.assert_awaited_once_with("f3")
-
-    async def test_returns_empty_when_form_has_no_flow_id(self) -> None:
-        # A form response missing flow_id yields {} and skips the abort —
-        # there's no flow_id to abort — without raising.
-        client = MagicMock()
-        client.start_options_flow = AsyncMock(return_value={"type": "form"})
-        client.abort_options_flow = AsyncMock()
-
-        assert await fetch_entry_options(client, "entry_nf") == {}
-        client.abort_options_flow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1500,13 +1446,145 @@ class TestFetchEntryOptionsWithStatus:
         assert ok is False
         client.abort_options_flow.assert_awaited_once_with("f4")
 
-    async def test_wrapper_drops_status_flag(self) -> None:
-        # The thin fetch_entry_options wrapper returns only the options dict,
-        # preserving the legacy contract for callers that don't need the flag.
+    async def test_form_without_flow_id_reads_ok_and_skips_abort(self) -> None:
+        # A form response missing flow_id is still a readable (empty) form —
+        # ok is True — and with no flow_id the abort cleanup is skipped
+        # without raising.
         client = MagicMock()
-        client.start_options_flow = AsyncMock(
-            return_value={"flow_id": "f5", "type": "menu"}
-        )
+        client.start_options_flow = AsyncMock(return_value={"type": "form"})
         client.abort_options_flow = AsyncMock()
 
-        assert await fetch_entry_options(client, "entry_w") == {}
+        options, ok = await fetch_entry_options_with_status(client, "entry_nf")
+        assert options == {}
+        assert ok is True
+        client.abort_options_flow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+class TestOptionsProbeFailureWarnings:
+    """``ha_get_integration`` surfaces options-probe failures as ``warnings``
+    instead of passing ``{}`` off as the entry's real options (issue #1575
+    follow-through: the second reported symptom was an indistinguishable
+    ``options: {}`` on a probe hiccup)."""
+
+    @staticmethod
+    def _entry(entry_id: str) -> dict[str, Any]:
+        return {
+            "entry_id": entry_id,
+            "domain": "group",
+            "title": entry_id,
+            "state": "loaded",
+            "source": "user",
+            "supports_options": True,
+        }
+
+    @staticmethod
+    def _form_flow(flow_id: str) -> dict[str, Any]:
+        return {
+            "flow_id": flow_id,
+            "type": "form",
+            "data_schema": [
+                {"name": "hide_members", "description": {"suggested_value": True}}
+            ],
+        }
+
+    async def test_single_entry_probe_failure_attaches_warning(self) -> None:
+        client = MagicMock()
+        client.get_config_entry = AsyncMock(return_value=self._entry("entry_bad"))
+        client.start_options_flow = AsyncMock(side_effect=RuntimeError("probe down"))
+        client.abort_options_flow = AsyncMock()
+        tools = IntegrationTools(client)
+
+        with patch(
+            "ha_mcp.tools.tools_integrations.get_logger_levels",
+            new=AsyncMock(return_value={}),
+        ):
+            resp = await tools._get_single_entry(
+                "entry_bad",
+                None,
+                include_subentries=False,
+                include_subentry_schema=False,
+                subentry_type=None,
+                subentry_id=None,
+                show_advanced_options=False,
+            )
+        assert resp["entry"]["options"] == {}
+        assert resp.get("warnings"), f"expected a probe-failure warning: {resp}"
+        assert "entry_bad" in resp["warnings"][0]
+
+    async def test_single_entry_probe_success_has_no_warnings(self) -> None:
+        client = MagicMock()
+        client.get_config_entry = AsyncMock(return_value=self._entry("entry_good"))
+        client.start_options_flow = AsyncMock(return_value=self._form_flow("f1"))
+        client.abort_options_flow = AsyncMock()
+        tools = IntegrationTools(client)
+
+        with patch(
+            "ha_mcp.tools.tools_integrations.get_logger_levels",
+            new=AsyncMock(return_value={}),
+        ):
+            resp = await tools._get_single_entry(
+                "entry_good",
+                None,
+                include_subentries=False,
+                include_subentry_schema=False,
+                subentry_type=None,
+                subentry_id=None,
+                show_advanced_options=False,
+            )
+        assert resp["entry"]["options"] == {"hide_members": True}
+        assert "warnings" not in resp
+
+    async def test_list_aggregates_probe_failures_into_one_warning(self) -> None:
+        client = MagicMock()
+        client._request = AsyncMock(
+            return_value=[self._entry("entry_good"), self._entry("entry_bad")]
+        )
+
+        async def start_flow(entry_id: str) -> dict[str, Any]:
+            if entry_id == "entry_bad":
+                raise RuntimeError("probe down")
+            return self._form_flow("f1")
+
+        client.start_options_flow = AsyncMock(side_effect=start_flow)
+        client.abort_options_flow = AsyncMock()
+        tools = IntegrationTools(client)
+
+        with patch(
+            "ha_mcp.tools.tools_integrations.get_logger_levels",
+            new=AsyncMock(return_value={}),
+        ):
+            resp = await tools._list_entries(None, None, True, None, 50, 0)
+
+        by_id = {e["entry_id"]: e for e in resp["entries"]}
+        assert by_id["entry_good"]["options"] == {"hide_members": True}
+        assert by_id["entry_bad"]["options"] == {}
+        assert resp.get("warnings"), f"expected an aggregated warning: {resp}"
+        assert "entry_bad" in resp["warnings"][0]
+        assert "entry_good" not in resp["warnings"][0]
+
+    async def test_list_with_no_failures_has_no_warnings(self) -> None:
+        client = MagicMock()
+        client._request = AsyncMock(return_value=[self._entry("entry_good")])
+        client.start_options_flow = AsyncMock(return_value=self._form_flow("f1"))
+        client.abort_options_flow = AsyncMock()
+        tools = IntegrationTools(client)
+
+        with patch(
+            "ha_mcp.tools.tools_integrations.get_logger_levels",
+            new=AsyncMock(return_value={}),
+        ):
+            resp = await tools._list_entries(None, None, True, None, 50, 0)
+        assert "warnings" not in resp
+
+    async def test_schema_probe_failure_attaches_warning(self) -> None:
+        client = MagicMock()
+        client.start_options_flow = AsyncMock(side_effect=RuntimeError("probe down"))
+        client.abort_options_flow = AsyncMock()
+        tools = IntegrationTools(client)
+
+        resp: dict[str, Any] = {"entry": {"options": {}}}
+        await tools._fetch_options_schema("entry_s", resp)
+        assert "options_schema" not in resp
+        assert resp.get("warnings"), f"expected a schema-probe warning: {resp}"
+        assert "entry_s" in resp["warnings"][0]
