@@ -18,7 +18,7 @@ const { title } = Astro.props;
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
-    <script is:inline>
+    <script is:inline data-purpose="anti-fouc">
       // #1572 theme resolver — runs before CSS evaluates so the data-theme
       // attribute is set on <html> ahead of paint (no FOUC). Reads the
       // user's saved choice from localStorage; falls back to
@@ -41,7 +41,7 @@ const { title } = Astro.props;
   </head>
   <body class="min-h-screen text-[var(--text-primary)] antialiased body-background">
     <slot />
-    <script>
+    <script data-purpose="theme-toggle">
       // #1572 theme-toggle binding — keep the <select> in sync with the
       // saved choice, persist on change, re-apply on OS scheme flip when
       // in Auto. The Layout head script already set the initial

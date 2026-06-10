@@ -257,9 +257,13 @@ def extract_script_body(source: str, *, source_label: str = "<source>") -> str:
     and attributed forms like Astro's ``<script define:vars={...}>``.
     The body is everything between the opening tag's ``>`` and the next
     ``</script>``. External scripts (``<script src=...></script>``) are
-    skipped — they have no inline body to extract. Astro frontmatter is
-    skipped before searching so ``<script>`` mentions in frontmatter
-    comments don't match.
+    skipped — they have no inline body to extract. Scripts carrying a
+    ``data-purpose="…"`` attribute are also skipped: that marker tags
+    auxiliary inline snippets (anti-FOUC theme resolver, toggle-binding
+    handlers) that are intentionally separate from the page's main
+    inline script, so callers asking for "the inline script body" mean
+    the main one. Astro frontmatter is skipped before searching so
+    ``<script>`` mentions in frontmatter comments don't match.
 
     ``source_label`` (e.g. a file path) is included in the raised
     ``ValueError`` so callers know which surface was malformed.
@@ -268,6 +272,8 @@ def extract_script_body(source: str, *, source_label: str = "<source>") -> str:
     for match in re.finditer(r"<script\b([^>]*)>", search_source):
         attrs = match.group(1)
         if re.search(r"\bsrc\s*=", attrs):
+            continue
+        if re.search(r"\bdata-purpose\s*=", attrs):
             continue
         start = match.end()
         end = search_source.find("</script>", start)

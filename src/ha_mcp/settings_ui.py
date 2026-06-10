@@ -664,7 +664,7 @@ _SETTINGS_HTML = (
      /favicon.ico (which would 404 and log a console error, since the
      settings server serves no such asset in any deployment mode). -->
 <link rel="icon" href="data:,">
-<script>
+<script data-purpose="anti-fouc">
   // #1572 theme resolver — runs before CSS evaluates so the data-theme
   // attribute is set on <html> ahead of paint (no FOUC). Reads the user's
   // saved choice from localStorage; falls back to prefers-color-scheme.
