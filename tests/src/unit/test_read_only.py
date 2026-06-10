@@ -577,8 +577,8 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "make_preferred",
     },
     "ha_manage_custom_tool": {
-        # FastMCP-injected Context — not a caller-supplied argument.
-        "ctx",
+        # (The FastMCP-injected ``ctx`` Context is excluded by
+        # _decorated_tool_param_names itself — not a caller argument.)
         # Modifiers of the code-execution path, which is blocked outright.
         "justification",
         "save_as",
