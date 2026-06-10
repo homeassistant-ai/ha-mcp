@@ -3,6 +3,9 @@
 @tailwind utilities;
 
 :root {
+  /* Tells the UA which scheme native UI (form controls, scrollbars) should
+     follow; the light theme flips it (MDN: color-scheme). */
+  color-scheme: dark;
   --brand: 47 193 207;
   --brand-light: 93 211 222;
   --brand-dark: 26 157 170;
@@ -14,7 +17,10 @@
   --border-hover: rgba(255, 255, 255, 0.12);
   --text-primary: #F1F5F9;
   --text-secondary: #94A3B8;
-  --text-muted: #64748B;
+  /* #64748B measured 3.96:1 on the page bg and 3.73:1 on surface-1 cards —
+     under WCAG AA for the body-size labels it decorates. #78879C holds
+     5.15:1 / 4.85:1 while staying visibly quieter than --text-secondary. */
+  --text-muted: #78879C;
 }
 
 html {
@@ -120,15 +126,29 @@ pre {
   box-shadow: 0 0 24px rgb(var(--brand) / 0.15), 0 0 48px rgb(var(--brand) / 0.05);
 }
 
-/* Light color-scheme override (#1572). Selector is :root[data-theme="light"]
-   — the inline head script in Layout.astro sets data-theme to "light",
-   "dark", or auto-resolved from prefers-color-scheme before this CSS
-   evaluates, so the user can override the OS preference via the Nav
-   toggle. Darkens the brand triplet so `text-brand` link / heading uses
-   stay readable on white (the dark-base brand is too light for AA on a
-   white page). The darker shade preserves the brand hue, just
-   lower-luminance. */
+/* ---------------------------------------------------------------------------
+ * Light color scheme (#1572)
+ *
+ * Mechanism: an inline head script (Layout.astro) resolves the saved theme
+ * preference (localStorage; "auto" falls back to prefers-color-scheme) and
+ * sets data-theme on <html> before CSS evaluates — the web.dev theme-switch
+ * pattern. Everything below keys off :root[data-theme="light"].
+ *
+ * The Tailwind palette itself is theme-routed in tailwind.config.mjs:
+ * themed shades compile to rgb(var(--tw-<family>-<shade>, <dark channels>)),
+ * so in dark mode (vars undefined) stock Tailwind values render, and the
+ * --tw-* definitions below remap them for light. This reaches every
+ * utility variant (hover:, /alpha, gradients) and every @apply-baked
+ * class; only utilities that hard-code non-palette colors (text-white,
+ * white-alpha chrome) need the explicit overrides further down.
+ * Coverage: tests/src/unit/test_light_scheme_token_coverage.py.
+ * ------------------------------------------------------------------------ */
+
 :root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Site design tokens (consumed by html/body, cards, copy buttons, Nav).
+     Brand is darkened so text-brand holds AA on white; the hue is kept. */
   --brand: 14 91 106;
   --brand-light: 25 124 137;
   --brand-dark: 8 67 78;
@@ -140,138 +160,104 @@ pre {
   --border-hover: rgba(15, 23, 42, 0.20);
   --text-primary: #0F172A;
   --text-secondary: #475569;
-  --text-muted: #64748B;
+  /* #64748B measured 4.34:1 on surface-2 card fills; #58687E holds 5.19:1
+     there (5.68:1 on white) and keeps the muted/secondary distinction. */
+  --text-muted: #58687E;
+
+  /* Tailwind palette remaps (companion of tailwind.config.mjs). Foreground
+     shades (x-200..400, authored light-on-dark) drop to the family's
+     700/800 value — 5–7.7:1 against white. Container shades (x-900/950,
+     authored as dark fills) lift to the family's 100 tint so colored
+     callouts stay tinted callouts. slate maps onto the surface scale. */
+  --tw-slate-100: 51 65 85;
+  --tw-slate-200: 51 65 85;
+  --tw-slate-300: 51 65 85;
+  --tw-slate-400: 51 65 85;
+  --tw-slate-500: 71 85 105; /* measured 4.34:1 as slate-500 on surface-2 cards; slate-600 holds 6.6:1 */
+  --tw-slate-700: 226 232 240;
+  --tw-slate-800: 241 245 249;
+  --tw-slate-900: 255 255 255;
+  --tw-slate-950: 241 245 249;
+  --tw-blue-200: 29 78 216;
+  --tw-blue-300: 29 78 216;
+  --tw-blue-400: 29 78 216;
+  --tw-blue-900: 219 234 254;
+  --tw-green-300: 22 101 52; /* green-700 measured 4.47:1 on the green-100 selected-badge tint; green-800 clears AA */
+  --tw-green-400: 22 101 52;
+  --tw-green-900: 220 252 231;
+  --tw-amber-200: 146 64 14;
+  --tw-amber-300: 146 64 14;
+  --tw-amber-400: 146 64 14;
+  --tw-amber-900: 254 243 199;
+  --tw-red-200: 185 28 28;
+  --tw-red-300: 185 28 28;
+  --tw-red-400: 185 28 28;
+  --tw-red-900: 254 226 226;
+  --tw-purple-200: 126 34 206;
+  --tw-purple-300: 126 34 206;
+  --tw-purple-400: 126 34 206;
+  --tw-purple-900: 243 232 255;
+  --tw-violet-300: 109 40 217;
+  --tw-violet-400: 109 40 217;
+  --tw-cyan-300: 14 116 144;
+  --tw-cyan-500: 14 116 144;
+  --tw-cyan-900: 207 250 254;
+  --tw-emerald-500: 4 120 87;
+  --tw-yellow-300: 133 77 14; /* yellow-700 measured 4.49:1 on surface-2 badges; yellow-800 clears AA */
+  --tw-yellow-400: 133 77 14;
+  --tw-yellow-900: 254 249 195;
+  --tw-orange-300: 194 65 12;
+  --tw-orange-900: 255 237 213;
 }
+
+/* Non-palette utilities — these hard-code white, so the token remap can't
+   reach them. In light mode "white text" means "primary text"; the :is()
+   compound re-whitens it on saturated fills that stay saturated. The
+   @apply-baked white texts (.optional-badge, .step-number) are immune to
+   these class overrides and keep their dark chips — correct in both schemes.
+   Only blue fills appear in the re-whitening compound because blue-500/600
+   are the only saturated bgs sharing an element with a DOM-level text-white
+   (grep-verified; the coverage test pins the other keep-white cases). */
+:root[data-theme="light"] .text-white,
+:root[data-theme="light"] .text-white\/70,
+:root[data-theme="light"] .hover\:text-white:hover { color: var(--text-primary); }
+:root[data-theme="light"] :is(.bg-blue-500, .bg-blue-600).text-white { color: #ffffff; }
+
+/* @apply-BAKED white text is immune to the .text-white class override
+   above (the compiled class carries the color declaration itself, no
+   .text-white class in the DOM). These three sit on containers that turn
+   light, so their text must darken; the other baked-white classes
+   (.step-number, .section-number, .quick-start-badge) keep saturated
+   chip fills and correctly stay white. The coverage test forces every
+   @apply'd text-white into one of the two lists. */
+:root[data-theme="light"] :is(.section-header, .instruction-title, .arch-label) { color: var(--text-primary); }
+
+/* White-alpha chrome (arbitrary values: nav hairline, ghost buttons, icon
+   bubbles, search field) — flip the tint base from white to slate-950 so
+   the chrome stays visible on a light page. Complete set per grep of
+   site/src; the coverage test fails on any new white-alpha value. */
+:root[data-theme="light"] :is(.border-white\/\[0\.04\], .border-white\/\[0\.06\]) { border-color: rgba(15, 23, 42, 0.10); }
+:root[data-theme="light"] .border-white\/\[0\.08\] { border-color: rgba(15, 23, 42, 0.12); }
+:root[data-theme="light"] :is(.bg-white\/\[0\.03\], .bg-white\/\[0\.05\]) { background-color: rgba(15, 23, 42, 0.04); }
+:root[data-theme="light"] .hover\:bg-white\/\[0\.04\]:hover { background-color: rgba(15, 23, 42, 0.06); }
+:root[data-theme="light"] .hover\:bg-white\/\[0\.08\]:hover { background-color: rgba(15, 23, 42, 0.08); }
+
+/* Pinned exception — text-slate-700 (tools.astro design-mode separator) is
+   the one slate-700 use that is a foreground, not a container; the token
+   remap would turn it light-on-light. */
+:root[data-theme="light"] .text-slate-700 { color: rgb(51 65 85); }
 
 /* Glass-card's white-tinted gradient becomes invisible on a near-white
    page; flip the tint to slate-900-low-alpha so cards stay visible. */
 :root[data-theme="light"] .glass-card {
-  background: linear-gradient(135deg, rgba(15,23,42,0.04) 0%, rgba(15,23,42,0.02) 100%);
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.04) 0%, rgba(15, 23, 42, 0.02) 100%);
 }
 
-/* Dark Tailwind slate backgrounds (#1572). The docs were authored
-   dark-only with hard-coded bg-slate-{700,800,900} utilities for both
-   inline code chips and structural cards. In light mode they kept the
-   dark fill while the text overrides below darkened the foreground —
-   yielding dark-on-dark (axe measured 1.41:1 on the bg-slate-800 code
-   chips). Remap the whole family to
-   light surfaces, preserving the original depth hierarchy:
-     - solid fills (inline code chips, .code-block) → surface-2 slate chip
-     - translucent fills (structural cards / insets) → surface-1 white card
-     - slate borders → the light --border token so card edges stay visible
-   The already-darkened text-slate-* / text-<color>-* overrides below then
-   read at AA-strong–AAA against these light fills. */
-:root[data-theme="light"] .code-block,
-:root[data-theme="light"] .bg-slate-700,
-:root[data-theme="light"] .bg-slate-800,
-:root[data-theme="light"] .bg-slate-900 { background-color: rgb(var(--surface-2)); }
-:root[data-theme="light"] .bg-slate-700\/50,
-:root[data-theme="light"] .bg-slate-800\/30,
-:root[data-theme="light"] .bg-slate-800\/50,
-:root[data-theme="light"] .bg-slate-800\/60,
-:root[data-theme="light"] .bg-slate-900\/50,
-:root[data-theme="light"] .bg-slate-900\/80 { background-color: rgb(var(--surface-1)); }
-:root[data-theme="light"] .border-slate-600\/50,
-:root[data-theme="light"] .border-slate-700,
-:root[data-theme="light"] .border-slate-700\/30,
-:root[data-theme="light"] .border-slate-700\/50 { border-color: var(--border); }
-
-/* Dark-slate structural cards built with @apply (#1572). Tailwind bakes
-   the slate color INTO these custom classes, so the utility-class
-   overrides above can't reach them — in light mode they'd render as
-   dark-grey slabs (axe-readable but visually half-migrated). Flip the
-   large content cards to a white surface + light border, the small solid
-   boxes to the slate-chip surface. Categorised, not blanket: classes that
-   set their OWN light text (.optional-badge → text-white,
-   .arch-boundary-label → text-green-400) are deliberately left dark so
-   their text stays legible. */
-:root[data-theme="light"] .faq-item,
-:root[data-theme="light"] .guide-step,
-:root[data-theme="light"] .wizard-section,
-:root[data-theme="light"] .instruction-block,
-:root[data-theme="light"] .architecture-diagram,
-:root[data-theme="light"] .arch-preview,
-:root[data-theme="light"] .option-card,
-:root[data-theme="light"] .option-card-large,
-:root[data-theme="light"] .path-card {
-  background-color: rgb(var(--surface-1));
-  border-color: var(--border);
-}
-:root[data-theme="light"] .option-card:hover,
-:root[data-theme="light"] .option-card-large:hover,
-:root[data-theme="light"] .path-card:hover { background-color: rgb(var(--surface-2)); }
-:root[data-theme="light"] .arch-box,
-:root[data-theme="light"] .arch-boundary span,
-:root[data-theme="light"] .complexity-badge {
-  background-color: rgb(var(--surface-2));
-  border-color: var(--border);
-}
-
-/* Semi-transparent colored pills (#1572) — the transport/status badges
-   (.transport-badge, used across the client cards) carry
-   bg-<color>-900/50 + text-<color>-400. The text is darkened to -700 by
-   the colored-text overrides above, but the translucent dark bg now
-   composites over the WHITE cards (above) into a mid-tone that drops the
-   pair to ~1.95:1. Flip the bg to the -50 tint so the darkened text lands
-   at AA (~4.8:1). bg-<color>-900/50 is badge-only here, so this is safe. */
-:root[data-theme="light"] .bg-green-900\/50 { background-color: rgb(240 253 244); }
-:root[data-theme="light"] .bg-blue-900\/50  { background-color: rgb(239 246 255); }
-:root[data-theme="light"] .bg-amber-900\/50 { background-color: rgb(255 251 235); }
-
-/* Tailwind utility classes that hard-code light slate / white text are
-   used heavily across the pages. They read fine on the dark page bg but
-   become invisible (or near-invisible) in light mode. Wrapped in @layer
-   utilities so Tailwind's build pipeline preserves the compound selectors.
-
-   - `text-white` is flipped only on heading tags so it doesn't break
-     `text-white` on `bg-brand` / `bg-blue-600` button + list-bubble uses.
-   - `text-slate-{100..400}` is body / muted text from the dark palette
-     and turns light slate → invisible on a near-white page. Flip to
-     slate-700 (~7.7:1 on white, AAA) so it stays readable. The structural
-     `bg-slate-{700,800,900}` cards these sit inside are remapped to light
-     surfaces by the rule above, so the darkened text lands on a light
-     fill (not dark-on-dark). */
-@layer utilities {
-  :root[data-theme="light"] h1.text-white,
-  :root[data-theme="light"] h2.text-white,
-  :root[data-theme="light"] h3.text-white,
-  :root[data-theme="light"] h4.text-white,
-  :root[data-theme="light"] h5.text-white,
-  :root[data-theme="light"] h6.text-white { color: var(--text-primary); }
-  :root[data-theme="light"] .text-slate-100,
-  :root[data-theme="light"] .text-slate-200,
-  :root[data-theme="light"] .text-slate-300,
-  :root[data-theme="light"] .text-slate-400 { color: rgb(51 65 85); }
-
-  /* Colored-text utility classes — same problem as text-slate-*: the
-     light shades (300/400 and below) are tuned for dark backgrounds and
-     drop to ~1.5–3:1 on a near-white page. Remap each color family to
-     its corresponding 700–800 shade, which lands at 5–7.1:1 (AA-strong
-     to AAA). Opacity-modifier variants (e.g. text-amber-200/80) are
-     included via escaped-slash selectors. */
-  :root[data-theme="light"] .text-blue-200\/80,
-  :root[data-theme="light"] .text-blue-300,
-  :root[data-theme="light"] .text-blue-400 { color: rgb(29 78 216); }
-  :root[data-theme="light"] .text-amber-200\/80,
-  :root[data-theme="light"] .text-amber-200\/90,
-  :root[data-theme="light"] .text-amber-300,
-  :root[data-theme="light"] .text-amber-400,
-  :root[data-theme="light"] .text-amber-400\/70 { color: rgb(146 64 14); }
-  :root[data-theme="light"] .text-green-300,
-  :root[data-theme="light"] .text-green-400 { color: rgb(21 128 61); }
-  :root[data-theme="light"] .text-red-200\/80,
-  :root[data-theme="light"] .text-red-300,
-  :root[data-theme="light"] .text-red-400 { color: rgb(185 28 28); }
-  :root[data-theme="light"] .text-violet-300,
-  :root[data-theme="light"] .text-violet-300\/80,
-  :root[data-theme="light"] .text-violet-400 { color: rgb(109 40 217); }
-  :root[data-theme="light"] .text-yellow-300,
-  :root[data-theme="light"] .text-yellow-400 { color: rgb(161 98 7); }
-}
-
-/* Theme toggle in Nav — small <select> styled to match the existing nav
-   pill controls. Pulls from the surface palette so it auto-fits each
-   scheme. */
+/* Theme control in Nav — visible "Theme" label + small <select>, styled to
+   match the existing nav pill controls. Pulls from the surface palette so
+   it auto-fits each scheme. */
+.theme-control { display: inline-flex; align-items: center; gap: 6px; }
+.theme-control-label { font-size: 0.8rem; color: var(--text-secondary); }
 .theme-toggle {
   background: rgb(var(--surface-1));
   color: var(--text-primary);
@@ -285,9 +271,9 @@ pre {
 }
 .theme-toggle:focus { border-color: rgb(var(--brand)); }
 
-/* Accessibility popover (#1572). Anchored to the A11y button in Nav.
-   Mirrors the four-knob layout of the settings UI's Accessibility tab so
-   users get the same controls on both surfaces (same localStorage keys,
+/* Accessibility popover (#1572). Anchored to the Accessibility button in
+   Nav. Mirrors the four-knob layout of the settings UI's Accessibility tab
+   so users get the same controls on both surfaces (same localStorage keys,
    same applied attributes). */
 .a11y-panel {
   position: absolute;
@@ -334,12 +320,34 @@ pre {
 :root[data-theme="light"][data-shade="pure"]  body.body-background { background-color: #ffffff; }
 
 /* High-contrast tier (#1572). Mirrors `prefers-contrast: more`. Strengthens
-   the primary text variables; brand and surfaces stay so accent semantics
-   carry across both tiers. Body weight bumps to 500 for stroke contrast. */
+   primary text and the remapped slate body-text tokens toward the scheme's
+   extreme; brand and surfaces stay so accent semantics carry across tiers.
+   Body weight bumps to 500 for stroke contrast. */
 :root[data-contrast="high"] body { font-weight: 500; }
 :root[data-contrast="high"][data-theme="dark"] {
-  --text-primary: #ffffff; --text-secondary: #e0e0e0; --border: rgba(255, 255, 255, 0.18);
+  --text-primary: #ffffff; --text-secondary: #e0e0e0; --text-muted: #94A3B8;
+  --border: rgba(255, 255, 255, 0.18);
+  --tw-slate-100: 255 255 255;
+  --tw-slate-200: 255 255 255;
+  --tw-slate-300: 241 245 249;
+  --tw-slate-400: 241 245 249;
+  /* The stock dark palette carries a few sub-AA pairs by design choice
+     (e.g. text-slate-500 labels at 3.96:1, transport-badge blue-400 on
+     blue-900/50 at 4.07:1). The default scheme keeps the approved look;
+     this tier is where those pairs get lifted clear of AA. */
+  --tw-slate-500: 148 163 184;
+  --tw-blue-400: 147 197 253;
+  --tw-amber-400: 252 211 77;
+  --tw-green-400: 134 239 172;
+  --tw-red-400: 252 165 165;
+  --tw-violet-400: 196 181 253;
+  --tw-yellow-400: 253 224 71;
+  --tw-purple-400: 216 180 254;
 }
 :root[data-contrast="high"][data-theme="light"] {
   --text-primary: #000000; --text-secondary: #1a1a1a;
+  --tw-slate-100: 15 23 42;
+  --tw-slate-200: 15 23 42;
+  --tw-slate-300: 15 23 42;
+  --tw-slate-400: 15 23 42;
 }

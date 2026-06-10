@@ -714,11 +714,14 @@ _SETTINGS_HTML = (
 <div class="header">
   <h1>HA-MCP Settings</h1>
   <div style="display:flex;align-items:center;gap:8px">
-    <select id="themeToggle" class="theme-toggle" aria-label="Color scheme">
-      <option value="auto">Auto</option>
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
-    </select>
+    <label class="theme-control">
+      <span class="theme-control-label">Theme</span>
+      <select id="themeToggle" class="theme-toggle" aria-label="Theme: light or dark mode">
+        <option value="auto">Auto (OS)</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
     <span id="status" class="status">Loading...</span>
   </div>
 </div>

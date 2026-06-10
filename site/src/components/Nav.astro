@@ -41,21 +41,24 @@ const links = [
             {link.label}
           </a>
         ))}
-        <select id="themeToggle" class="theme-toggle ml-2" aria-label="Color scheme">
-          <option value="auto">Auto</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
+        <label class="theme-control ml-2">
+          <span class="theme-control-label">Theme</span>
+          <select id="themeToggle" class="theme-toggle" aria-label="Theme: light or dark mode">
+            <option value="auto">Auto (OS)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
         <div class="relative">
           <button
             id="a11yToggle"
             type="button"
             class="theme-toggle ml-1"
-            aria-label="A11y — accessibility settings"
+            aria-label="Accessibility settings"
             aria-haspopup="dialog"
             aria-expanded="false"
-            title="A11y — accessibility settings"
-          >A11y</button>
+            title="Accessibility settings"
+          >Accessibility</button>
           <div
             id="a11yPanel"
             class="a11y-panel"

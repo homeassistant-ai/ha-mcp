@@ -1,5 +1,11 @@
 
   :root {
+    /* Native form controls / scrollbars follow the scheme (MDN: color-scheme);
+       the light block below flips it. */
+    color-scheme: dark;
+    /* Accent used AS TEXT on tinted chips (a11y options): #0a84ff measures
+       3.82:1 on the dark chip fill, so text gets its own readable shade. */
+    --accent-text: #66b3ff;
     --bg: #1c1c1e; --surface: #2c2c2e; --surface-hover: #3a3a3c;
     --text: #f5f5f7; --text-secondary: #98989d; --accent: #0a84ff;
     --accent-hover: #409cff; --danger: #ff453a; --success: #30d158;
@@ -340,6 +346,8 @@
      AAA on body and primary surfaces — the contrast bar for low-vision
      readers, not the typical-user default. */
   :root[data-theme="light"] {
+    color-scheme: light;
+    --accent-text: #0051a3;
     --bg: #f5f5f7; --surface: #ffffff; --surface-hover: #ebebed;
     --text: #1d1d1f; --text-secondary: #525252; --accent: #0066cc;
     --accent-hover: #0051a3; --danger: #cc0000; --success: #1a7f3e;
@@ -375,8 +383,10 @@
      callout still reads as a warning callout. */
   :root[data-theme="light"] .adv-save-note { background: rgba(255, 152, 0, 0.18); }
 
-  /* Theme-toggle styling — small <select> in the header. Picks up the
-     surface palette so it fits each scheme automatically. */
+  /* Theme control — visible "Theme" label + small <select> in the header.
+     Picks up the surface palette so it fits each scheme automatically. */
+  .theme-control { display: inline-flex; align-items: center; gap: 6px; }
+  .theme-control-label { font-size: 0.8rem; color: var(--text-secondary); }
   .theme-toggle { background: var(--surface); color: var(--text); border: 1px solid var(--border);
     border-radius: 8px; padding: 4px 8px; font-size: 0.8rem; cursor: pointer;
     font-family: inherit; outline: none; }
@@ -394,7 +404,7 @@
     border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 0.85rem;
     background: var(--bg); user-select: none; }
   .a11y-option:hover { background: var(--surface-hover); }
-  .a11y-option:has(input:checked) { border-color: var(--accent); color: var(--accent);
+  .a11y-option:has(input:checked) { border-color: var(--accent); color: var(--accent-text);
     background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
   .a11y-option input { accent-color: var(--accent); }
 
