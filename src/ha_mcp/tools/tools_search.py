@@ -1889,10 +1889,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "device_types, service_availability, system_info, "
                     "notification_count, notifications, repair_count, "
                     "dismissed_repair_count, repairs, repairs_error, "
-                    "tool_discovery, settings_url, settings_url_hint. Note: "
-                    "``settings_url`` (stdio mode) and ``settings_url_hint`` "
-                    "(HTTP/Docker/OAuth mode) are emitted regardless of "
-                    "``fields=`` projection so the settings page stays "
+                    "tool_discovery, settings_url, settings_url_hint, "
+                    "read_only_mode, read_only_mode_hint. Note: "
+                    "``settings_url`` (stdio mode), ``settings_url_hint`` "
+                    "(HTTP/Docker/OAuth mode), and the ``read_only_mode`` / "
+                    "``read_only_mode_hint`` pair (only while Read Only Mode "
+                    "is on) are emitted regardless of ``fields=`` projection "
+                    "so the settings page and the active mode stay "
                     "discoverable; see the tool description."
                 ),
             ),

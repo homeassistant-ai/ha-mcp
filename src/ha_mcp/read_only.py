@@ -191,10 +191,10 @@ def _raise_read_only_error(
             message,
             suggestions=[
                 "Continue with read-only tools — searching, getting, and "
-                "listing data all remain available.",
+                + "listing data all remain available.",
                 "If the user wants to allow changes, they must turn off "
-                "Read Only Mode in the ha-mcp settings UI (Tools tab) or "
-                "the add-on configuration.",
+                + "Read Only Mode in the ha-mcp settings UI (Tools tab) or "
+                + "the add-on configuration.",
             ],
             context=context,
         )
