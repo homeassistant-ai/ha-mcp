@@ -133,20 +133,27 @@ const { title } = Astro.props;
             reflectRadio(name, read(pref));
           }
 
-          document.addEventListener('change', (e) => {
-            const t = e.target;
-            if (!(t instanceof HTMLInputElement) || t.type !== 'radio') return;
-            const pref = RADIO_TO_PREF[t.name];
-            if (!pref) return;
-            setPref(pref, t.value);
-            if (pref === 'theme' && headerToggle) headerToggle.value = t.value;
-          });
+          const a11yToggle = document.getElementById('a11yToggle');
+          const a11yPanel = document.getElementById('a11yPanel');
+
+          // Scope the change listener to the Accessibility popover rather
+          // than the document — only the a11y radios live inside it, so a
+          // document-level listener would just fire and bail on every other
+          // input on the page.
+          if (a11yPanel) {
+            a11yPanel.addEventListener('change', (e) => {
+              const t = e.target;
+              if (!(t instanceof HTMLInputElement) || t.type !== 'radio') return;
+              const pref = RADIO_TO_PREF[t.name];
+              if (!pref) return;
+              setPref(pref, t.value);
+              if (pref === 'theme' && headerToggle) headerToggle.value = t.value;
+            });
+          }
 
           // Popover open/close behavior. ESC and outside-click dismiss; the
           // toggle button flips aria-expanded so screen readers announce the
           // dialog open/close state.
-          const a11yToggle = document.getElementById('a11yToggle');
-          const a11yPanel = document.getElementById('a11yPanel');
           if (a11yToggle && a11yPanel) {
             const openPanel = () => {
               a11yPanel.hidden = false;
@@ -177,7 +184,6 @@ const { title } = Astro.props;
                   setPref(pref, PREFS[pref].default);
                   reflectRadio(name, PREFS[pref].default);
                 }
-                const headerToggle = document.getElementById('themeToggle');
                 if (headerToggle) headerToggle.value = PREFS.theme.default;
               });
             }

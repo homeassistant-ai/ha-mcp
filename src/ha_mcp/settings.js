@@ -3100,15 +3100,22 @@ loadFsCustomPaths();
   };
   initRadios();
 
-  document.addEventListener('change', (e) => {
-    const t = e.target;
-    if (!(t instanceof HTMLInputElement) || t.type !== 'radio') return;
-    const pref = RADIO_TO_PREF[t.name];
-    if (!pref) return;
-    setPref(pref, t.value);
-    // Keep the header toggle in sync if theme changed from the tab.
-    if (pref === 'theme' && headerToggle) headerToggle.value = t.value;
-  });
+  // Scope the change listener to the Accessibility panel rather than the
+  // document: the settings page carries dozens of unrelated inputs (tool
+  // toggles, server fields, backup forms) and a document-level listener
+  // would fire on every one of them just to bail the filter.
+  const a11yPanel = document.getElementById('panel-accessibility');
+  if (a11yPanel) {
+    a11yPanel.addEventListener('change', (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLInputElement) || t.type !== 'radio') return;
+      const pref = RADIO_TO_PREF[t.name];
+      if (!pref) return;
+      setPref(pref, t.value);
+      // Keep the header toggle in sync if theme changed from the tab.
+      if (pref === 'theme' && headerToggle) headerToggle.value = t.value;
+    });
+  }
 
   const resetBtn = document.getElementById('a11y-reset');
   if (resetBtn) {
