@@ -119,3 +119,31 @@ pre {
 .brand-glow {
   box-shadow: 0 0 24px rgb(var(--brand) / 0.15), 0 0 48px rgb(var(--brand) / 0.05);
 }
+
+/* Light color-scheme override (#1572). Inverts surfaces, flips border
+   opacity from white-on-dark to black-on-light, and darkens the brand
+   triplet so `text-brand` link / heading uses stay readable on white
+   (the dark-base cyan #2FC1CF is ~2.18:1 on #fff). The darker shade
+   preserves the brand hue, just lower-luminance. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --brand: 14 91 106;
+    --brand-light: 25 124 137;
+    --brand-dark: 8 67 78;
+    --surface-0: 248 250 252;
+    --surface-1: 255 255 255;
+    --surface-2: 241 245 249;
+    --surface-3: 226 232 240;
+    --border: rgba(15, 23, 42, 0.10);
+    --border-hover: rgba(15, 23, 42, 0.20);
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-muted: #64748B;
+  }
+
+  /* Glass-card's white-tinted gradient becomes invisible on a near-white
+     page; flip the tint to slate-900-low-alpha so cards stay visible. */
+  .glass-card {
+    background: linear-gradient(135deg, rgba(15,23,42,0.04) 0%, rgba(15,23,42,0.02) 100%);
+  }
+}

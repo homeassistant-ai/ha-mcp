@@ -329,3 +329,40 @@
     color: var(--text); font-size: 0.85rem; margin: 0 6px; }
   .policy-save-status { margin-left: 10px; font-size: 0.8rem;
     color: var(--text-secondary); }
+  /* Light color-scheme override (#1572). Triggered when the user's OS /
+     browser reports prefers-color-scheme: light. Inverts the surface +
+     text variables and provides explicit light pairs for every
+     hand-picked dark hex in the dark base palette (notices, status
+     badges, danger button, diff colors, inline code, slider track).
+     Each foreground/background pair is targeted at WCAG AA or better,
+     with AAA on body and primary surfaces — the contrast bar for
+     low-vision readers, not the typical-user default. */
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f5f7; --surface: #ffffff; --surface-hover: #ebebed;
+      --text: #1d1d1f; --text-secondary: #525252; --accent: #0066cc;
+      --accent-hover: #0051a3; --danger: #cc0000; --success: #1a7f3e;
+      --warning: #a25c00; --border: #d2d2d7; --disabled-bg: #ebebed;
+    }
+    .status.saved { background: #d4edda; color: #155724; }
+    .readonly-notice { background: #d4e7fc; border-color: #a3c4f0; color: #0049a8; }
+    .badge.readonly { background: #d4e7fc; color: #0049a8; }
+    .badge.destructive { background: #fbe5e5; color: #a30000; }
+    .badge.mandatory { background: #d4edda; color: #155724; }
+    .slider { background: #c7c7c7; }
+    .pin-notice { background: #fff4d6; border-color: #c08a1a; color: #6b4500; }
+    .restart-notice { background: #fbe5e5; border-color: #c95151; color: #a30000; }
+    .danger-btn { border-color: #c95151; color: #a30000; }
+    .danger-btn:hover { background: #fbe5e5; }
+    .backup-filters button.danger { background: #fbe5e5; color: #a30000; }
+    .backup-field-locked { background: #fff4d6; color: #6b4500; }
+    .diff-add { color: #155724; }
+    .diff-rem { color: #a30000; }
+    .diff-hdr { color: #0049a8; }
+    .feature-help code,
+    .adv-help code { background: #f0f0f0; }
+    /* Save-note's warning-tinted background is barely visible on a
+       light surface; bump opacity + replace the dark-tuned strong
+       color so the callout still reads as a warning callout. */
+    .adv-save-note { background: rgba(255, 152, 0, 0.18); }
+  }
