@@ -224,3 +224,62 @@ pre {
   outline: none;
 }
 .theme-toggle:focus { border-color: rgb(var(--brand)); }
+
+/* Accessibility popover (#1572). Anchored to the A11y button in Nav.
+   Mirrors the four-knob layout of the settings UI's Accessibility tab so
+   users get the same controls on both surfaces (same localStorage keys,
+   same applied attributes). */
+.a11y-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 60;
+  width: 18rem;
+  max-width: calc(100vw - 2rem);
+  background: rgb(var(--surface-1));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.a11y-panel[hidden] { display: none; }
+.a11y-section { margin-bottom: 10px; }
+.a11y-section:last-of-type { margin-bottom: 12px; }
+.a11y-section-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 6px; color: var(--text-primary); }
+.a11y-options { display: flex; flex-wrap: wrap; gap: 4px; }
+.a11y-option {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
+  cursor: pointer; font-size: 0.75rem; background: rgb(var(--surface-0));
+  color: var(--text-secondary); user-select: none;
+}
+.a11y-option:hover { background: rgb(var(--surface-2)); color: var(--text-primary); }
+.a11y-option:has(input:checked) {
+  border-color: rgb(var(--brand)); color: rgb(var(--brand));
+  background: rgb(var(--brand) / 0.08);
+}
+.a11y-option input { accent-color: rgb(var(--brand)); }
+.a11y-reset {
+  width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: rgb(var(--surface-0)); color: var(--text-secondary); cursor: pointer;
+  font-size: 0.75rem; font-family: inherit;
+}
+.a11y-reset:hover { background: rgb(var(--surface-2)); color: var(--text-primary); }
+
+/* Light-mode background shade picker (#1572). Mirrors the same selectors
+   used in src/ha_mcp/settings.css so the docs site and the settings UI
+   honor the same localStorage shade key. Only the page background flips —
+   surfaces (cards, glass-card) keep their tuned palette. */
+:root[data-theme="light"][data-shade="paper"] body.body-background { background-color: #f4ede0; }
+:root[data-theme="light"][data-shade="pure"]  body.body-background { background-color: #ffffff; }
+
+/* High-contrast tier (#1572). Mirrors `prefers-contrast: more`. Strengthens
+   the primary text variables; brand and surfaces stay so accent semantics
+   carry across both tiers. Body weight bumps to 500 for stroke contrast. */
+:root[data-contrast="high"] body { font-weight: 500; }
+:root[data-contrast="high"][data-theme="dark"] {
+  --text-primary: #ffffff; --text-secondary: #e0e0e0; --border: rgba(255, 255, 255, 0.18);
+}
+:root[data-contrast="high"][data-theme="light"] {
+  --text-primary: #000000; --text-secondary: #1a1a1a;
+}

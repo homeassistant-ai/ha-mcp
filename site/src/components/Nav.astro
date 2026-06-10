@@ -46,6 +46,58 @@ const links = [
           <option value="light">Light</option>
           <option value="dark">Dark</option>
         </select>
+        <div class="relative">
+          <button
+            id="a11yToggle"
+            type="button"
+            class="theme-toggle ml-1"
+            aria-label="Accessibility settings"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            title="Accessibility settings"
+          >A11y</button>
+          <div
+            id="a11yPanel"
+            class="a11y-panel"
+            role="dialog"
+            aria-label="Accessibility settings"
+            hidden
+          >
+            <section class="a11y-section">
+              <h3 class="a11y-section-title">Color scheme</h3>
+              <div class="a11y-options" role="radiogroup" aria-label="Color scheme">
+                <label class="a11y-option"><input type="radio" name="a11y-theme" value="auto" /> Auto</label>
+                <label class="a11y-option"><input type="radio" name="a11y-theme" value="light" /> Light</label>
+                <label class="a11y-option"><input type="radio" name="a11y-theme" value="dark" /> Dark</label>
+              </div>
+            </section>
+            <section class="a11y-section">
+              <h3 class="a11y-section-title">Text size</h3>
+              <div class="a11y-options" role="radiogroup" aria-label="Text size">
+                <label class="a11y-option"><input type="radio" name="a11y-font-size" value="100" /> 100%</label>
+                <label class="a11y-option"><input type="radio" name="a11y-font-size" value="115" /> 115%</label>
+                <label class="a11y-option"><input type="radio" name="a11y-font-size" value="130" /> 130%</label>
+                <label class="a11y-option"><input type="radio" name="a11y-font-size" value="150" /> 150%</label>
+              </div>
+            </section>
+            <section class="a11y-section">
+              <h3 class="a11y-section-title">Contrast</h3>
+              <div class="a11y-options" role="radiogroup" aria-label="Contrast">
+                <label class="a11y-option"><input type="radio" name="a11y-contrast" value="normal" /> Normal</label>
+                <label class="a11y-option"><input type="radio" name="a11y-contrast" value="high" /> High</label>
+              </div>
+            </section>
+            <section class="a11y-section">
+              <h3 class="a11y-section-title">Light background shade</h3>
+              <div class="a11y-options" role="radiogroup" aria-label="Light background shade">
+                <label class="a11y-option"><input type="radio" name="a11y-shade" value="off-white" /> Off-white</label>
+                <label class="a11y-option"><input type="radio" name="a11y-shade" value="paper" /> Paper</label>
+                <label class="a11y-option"><input type="radio" name="a11y-shade" value="pure" /> Pure white</label>
+              </div>
+            </section>
+            <button id="a11yReset" type="button" class="a11y-reset">Reset to defaults</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

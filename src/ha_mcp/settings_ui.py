@@ -665,20 +665,43 @@ _SETTINGS_HTML = (
      settings server serves no such asset in any deployment mode). -->
 <link rel="icon" href="data:,">
 <script data-purpose="anti-fouc">
-  // #1572 theme resolver — runs before CSS evaluates so the data-theme
-  // attribute is set on <html> ahead of paint (no FOUC). Reads the user's
-  // saved choice from localStorage; falls back to prefers-color-scheme.
-  // "auto" means follow the OS; an explicit "light" / "dark" overrides it.
+  // #1572 accessibility-pref resolver — runs before CSS evaluates so
+  // data-theme / data-contrast / data-shade and the root font-size are set
+  // on <html> ahead of paint (no FOUC, no jump). Reads saved choices from
+  // localStorage with safe defaults; falls back to prefers-color-scheme /
+  // prefers-contrast for "auto" modes.
+  // Duplicate of the same logic in site/src/layouts/Layout.astro head — both
+  // surfaces share the localStorage keys, so any change here must be mirrored
+  // there (and vice versa) or one surface paints with the wrong attributes.
   (function () {
+    var root = document.documentElement;
+    function readPref(key, fallback) {
+      try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
+    }
     try {
-      var pref = localStorage.getItem("ha-mcp-theme") || "auto";
-      var theme = pref === "auto"
+      var themePref = readPref("ha-mcp-theme", "auto");
+      var theme = themePref === "auto"
         ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
-        : pref;
-      document.documentElement.setAttribute("data-theme", theme);
+        : themePref;
+      root.setAttribute("data-theme", theme);
+
+      var contrastPref = readPref("ha-mcp-contrast", "normal");
+      if (contrastPref === "high") root.setAttribute("data-contrast", "high");
+
+      var shadePref = readPref("ha-mcp-shade", "off-white");
+      if (shadePref !== "off-white") root.setAttribute("data-shade", shadePref);
+
+      var sizePref = parseInt(readPref("ha-mcp-font-size", "100"), 10);
+      // Range = the UI's offered values; clamps a hand-edited localStorage
+      // value rather than silently honoring arbitrary input.
+      if (!isNaN(sizePref) && sizePref >= 100 && sizePref <= 150 && sizePref !== 100) {
+        // The browser default is 16px; scale the root so every rem-based
+        // size (the bulk of this stylesheet) cascades proportionally.
+        root.style.fontSize = (16 * sizePref / 100) + "px";
+      }
     } catch (e) {
       // localStorage may throw in private mode; fall back to dark default.
-      document.documentElement.setAttribute("data-theme", "dark");
+      root.setAttribute("data-theme", "dark");
     }
   })();
 </script>
@@ -703,6 +726,7 @@ _SETTINGS_HTML = (
   <button class="tab" data-panel="server">Server Settings</button>
   <button class="tab" data-panel="backups">Backups</button>
   <button class="tab" data-panel="tool-security-policies">Tool Security Policies</button>
+  <button class="tab" data-panel="accessibility">Accessibility</button>
 </div>
 <div class="restart-notice" id="restartNotice">
   <span class="restart-notice-text" id="restartNoticeText">
@@ -898,6 +922,56 @@ _SETTINGS_HTML = (
       <a href="#" data-panel-link="tools">Tools</a> tab.
     </div>
     <div id="policy-rules-list"></div>
+  </section>
+</div>
+<div class="panel" id="panel-accessibility">
+  <p class="tool-desc" style="margin-bottom:16px">
+    These settings live in your browser only (localStorage). They apply to the
+    settings page and the docs site at <a href="https://homeassistant-ai.github.io/ha-mcp/"
+      target="_blank" rel="noopener">homeassistant-ai.github.io/ha-mcp</a>;
+    nothing is sent to the server.
+  </p>
+  <section class="a11y-section">
+    <h3 class="a11y-section-title">Color scheme</h3>
+    <p class="a11y-section-help">Auto follows your OS preference and flips live when it changes.</p>
+    <div class="a11y-options" role="radiogroup" aria-label="Color scheme">
+      <label class="a11y-option"><input type="radio" name="a11y-theme" value="auto"> Auto</label>
+      <label class="a11y-option"><input type="radio" name="a11y-theme" value="light"> Light</label>
+      <label class="a11y-option"><input type="radio" name="a11y-theme" value="dark"> Dark</label>
+    </div>
+  </section>
+  <section class="a11y-section">
+    <h3 class="a11y-section-title">Text size</h3>
+    <p class="a11y-section-help">Scales the root font size. Browser zoom (Ctrl/Cmd +) still works on top of this.</p>
+    <div class="a11y-options" role="radiogroup" aria-label="Text size">
+      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="100"> 100%</label>
+      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="115"> 115%</label>
+      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="130"> 130%</label>
+      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="150"> 150%</label>
+    </div>
+  </section>
+  <section class="a11y-section">
+    <h3 class="a11y-section-title">Contrast</h3>
+    <p class="a11y-section-help">High contrast strengthens body text vs background and thickens
+      it. Status notices and badges keep their hand-tuned colors so they still read as the same
+      callout in both tiers.</p>
+    <div class="a11y-options" role="radiogroup" aria-label="Contrast">
+      <label class="a11y-option"><input type="radio" name="a11y-contrast" value="normal"> Normal</label>
+      <label class="a11y-option"><input type="radio" name="a11y-contrast" value="high"> High</label>
+    </div>
+  </section>
+  <section class="a11y-section">
+    <h3 class="a11y-section-title">Light background shade</h3>
+    <p class="a11y-section-help">Only active when the color scheme is Light (or Auto resolves to Light).
+      Some users find a pure-white background too harsh; pick the shade that's comfortable.</p>
+    <div class="a11y-options" role="radiogroup" aria-label="Light background shade">
+      <label class="a11y-option"><input type="radio" name="a11y-shade" value="off-white"> Off-white (default)</label>
+      <label class="a11y-option"><input type="radio" name="a11y-shade" value="paper"> Paper (warm)</label>
+      <label class="a11y-option"><input type="radio" name="a11y-shade" value="pure"> Pure white</label>
+    </div>
+  </section>
+  <section class="a11y-section">
+    <button id="a11y-reset" class="restart-btn" type="button">Reset to defaults</button>
   </section>
 </div>
 <div class="modal-backdrop" id="modalBackdrop">

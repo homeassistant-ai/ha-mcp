@@ -381,3 +381,44 @@
     border-radius: 8px; padding: 4px 8px; font-size: 0.8rem; cursor: pointer;
     font-family: inherit; outline: none; }
   .theme-toggle:focus { border-color: var(--accent); }
+
+  /* Accessibility tab (#1572). Each section is one knob the user can flip;
+     options render as radio chips with a clear active state. Layout uses
+     rem-based gaps so font-size scaling pulls them along with the labels. */
+  .a11y-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 12px; }
+  .a11y-section-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 4px; }
+  .a11y-section-help { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 12px; }
+  .a11y-options { display: flex; flex-wrap: wrap; gap: 8px; }
+  .a11y-option { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+    border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 0.85rem;
+    background: var(--bg); user-select: none; }
+  .a11y-option:hover { background: var(--surface-hover); }
+  .a11y-option:has(input:checked) { border-color: var(--accent); color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+  .a11y-option input { accent-color: var(--accent); }
+
+  /* Light-mode background shade picker (#1572). "off-white" is the baseline
+     light palette already defined above (--bg: #f5f5f7). "paper" warms the
+     background toward a low-blue-light cream; "pure" maximises brightness
+     for users who prefer it. Only the page background flips — surfaces
+     (cards, notices, badges) keep their own palette so contrast pairs the
+     light/dark CSS above hand-tuned stay intact. */
+  :root[data-theme="light"][data-shade="paper"] { --bg: #f4ede0; }
+  :root[data-theme="light"][data-shade="pure"]  { --bg: #ffffff; }
+
+  /* High-contrast tier (#1572). Mirrors `prefers-contrast: more` and the
+     WCAG 2.2 1.4.6 AAA threshold (7:1 for body text). The dark scheme pushes
+     foregrounds toward pure white and tightens borders; the light scheme
+     pushes toward pure black. Body weight bumps to 500 so the strokes carry
+     the extra contrast (a known APCA lever for low-vision readers).
+     Scope: lifts the four primary text/UI variables — notices and badges
+     (.pin-notice, .readonly-notice, .danger-btn, diff hues) keep their own
+     hand-tuned palette so they read as the same callout in both tiers. */
+  :root[data-contrast="high"] body { font-weight: 500; }
+  :root[data-contrast="high"][data-theme="dark"] {
+    --text: #ffffff; --text-secondary: #e0e0e0; --border: #6c6c70; --accent: #4ca8ff;
+  }
+  :root[data-contrast="high"][data-theme="light"] {
+    --text: #000000; --text-secondary: #1a1a1a; --border: #6c6c70; --accent: #003d99;
+  }

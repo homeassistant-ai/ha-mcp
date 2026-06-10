@@ -3014,30 +3014,110 @@ loadFsCustomPaths();
   } catch (_) { /* best-effort */ }
 })();
 
-// #1572 theme toggle — sync the <select> to the saved choice, then on
-// change persist + reapply. Auto mode also subscribes to the matchMedia
-// change event so flipping the OS scheme reflects live without reload.
-// The anti-FOUC head script in settings_ui.py already set data-theme;
-// this handler keeps it in sync for the rest of the session.
-(function bindThemeToggle() {
-  const toggle = document.getElementById('themeToggle');
-  if (!toggle) return;
-  const KEY = 'ha-mcp-theme';
+// #1572 accessibility prefs — bidirectional binding between the header
+// theme toggle, the Accessibility tab radios, and the underlying
+// localStorage / <html> attributes. The anti-FOUC head script in
+// settings_ui.py already set the initial attributes; this module keeps
+// them in sync for the rest of the session and persists user changes.
+(function bindAccessibilityPrefs() {
+  const root = document.documentElement;
   const mql = window.matchMedia('(prefers-color-scheme: light)');
-  const resolve = (pref) => pref === 'auto' ? (mql.matches ? 'light' : 'dark') : pref;
-  const apply = (pref) => {
-    document.documentElement.setAttribute('data-theme', resolve(pref));
+  const PREFS = {
+    theme:    { key: 'ha-mcp-theme',     default: 'auto'      },
+    fontSize: { key: 'ha-mcp-font-size', default: '100'       },
+    contrast: { key: 'ha-mcp-contrast',  default: 'normal'    },
+    shade:    { key: 'ha-mcp-shade',     default: 'off-white' },
   };
-  let saved = 'auto';
-  try { saved = localStorage.getItem(KEY) || 'auto'; } catch (_) { /* private mode */ }
-  toggle.value = saved;
-  toggle.addEventListener('change', () => {
-    const pref = toggle.value;
-    try { localStorage.setItem(KEY, pref); } catch (_) { /* private mode */ }
-    apply(pref);
-  });
-  // Re-apply when the OS preference changes while we're in Auto mode.
+  const read = (p) => {
+    try { return localStorage.getItem(PREFS[p].key) || PREFS[p].default; }
+    catch (_) { return PREFS[p].default; }
+  };
+  const write = (p, v) => {
+    try { localStorage.setItem(PREFS[p].key, v); } catch (_) { /* private mode */ }
+  };
+
+  // Apply functions mirror what the anti-FOUC head script does, so the
+  // runtime path and the pre-paint path stay observably identical.
+  const applyTheme = (pref) => {
+    const resolved = pref === 'auto' ? (mql.matches ? 'light' : 'dark') : pref;
+    root.setAttribute('data-theme', resolved);
+  };
+  const applyFontSize = (pct) => {
+    const n = parseInt(pct, 10);
+    if (isNaN(n) || n === 100) root.style.fontSize = '';
+    else root.style.fontSize = (16 * n / 100) + 'px';
+  };
+  const applyContrast = (tier) => {
+    if (tier === 'high') root.setAttribute('data-contrast', 'high');
+    else root.removeAttribute('data-contrast');
+  };
+  const applyShade = (shade) => {
+    if (shade && shade !== 'off-white') root.setAttribute('data-shade', shade);
+    else root.removeAttribute('data-shade');
+  };
+  const APPLY = { theme: applyTheme, fontSize: applyFontSize, contrast: applyContrast, shade: applyShade };
+
+  // Update the matching radio in the Accessibility tab without firing
+  // its change handler (we'd loop otherwise).
+  const reflectRadio = (name, value) => {
+    document.querySelectorAll('input[type="radio"][name="' + name + '"]').forEach((r) => {
+      r.checked = (r.value === value);
+    });
+  };
+
+  const setPref = (pref, value) => {
+    write(pref, value);
+    APPLY[pref](value);
+  };
+
+  // Header <select> for theme — keep it as the existing surface.
+  const headerToggle = document.getElementById('themeToggle');
+  if (headerToggle) {
+    headerToggle.value = read('theme');
+    headerToggle.addEventListener('change', () => {
+      setPref('theme', headerToggle.value);
+      reflectRadio('a11y-theme', headerToggle.value);
+    });
+  }
+
+  // Re-apply when the OS preference flips while in Auto.
   mql.addEventListener('change', () => {
-    if (toggle.value === 'auto') apply('auto');
+    if (read('theme') === 'auto') applyTheme('auto');
   });
+
+  // Accessibility tab — wire each radio group to its pref.
+  const RADIO_TO_PREF = {
+    'a11y-theme':     'theme',
+    'a11y-font-size': 'fontSize',
+    'a11y-contrast':  'contrast',
+    'a11y-shade':     'shade',
+  };
+
+  const initRadios = () => {
+    for (const [name, pref] of Object.entries(RADIO_TO_PREF)) {
+      reflectRadio(name, read(pref));
+    }
+  };
+  initRadios();
+
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLInputElement) || t.type !== 'radio') return;
+    const pref = RADIO_TO_PREF[t.name];
+    if (!pref) return;
+    setPref(pref, t.value);
+    // Keep the header toggle in sync if theme changed from the tab.
+    if (pref === 'theme' && headerToggle) headerToggle.value = t.value;
+  });
+
+  const resetBtn = document.getElementById('a11y-reset');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      for (const [name, pref] of Object.entries(RADIO_TO_PREF)) {
+        setPref(pref, PREFS[pref].default);
+        reflectRadio(name, PREFS[pref].default);
+      }
+      if (headerToggle) headerToggle.value = PREFS.theme.default;
+    });
+  }
 })();

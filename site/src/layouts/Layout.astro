@@ -19,20 +19,39 @@ const { title } = Astro.props;
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
     <script is:inline data-purpose="anti-fouc">
-      // #1572 theme resolver — runs before CSS evaluates so the data-theme
-      // attribute is set on <html> ahead of paint (no FOUC). Reads the
-      // user's saved choice from localStorage; falls back to
-      // prefers-color-scheme. "auto" follows the OS; explicit "light" /
-      // "dark" overrides it.
+      // #1572 accessibility-pref resolver — runs before CSS evaluates so
+      // data-theme / data-contrast / data-shade and the root font-size are
+      // set on <html> ahead of paint (no FOUC, no jump). Reads saved choices
+      // from localStorage with safe defaults; falls back to
+      // prefers-color-scheme for "auto" theme.
+      // Duplicate of the same logic in src/ha_mcp/settings_ui.py head — both
+      // surfaces share the localStorage keys, so any change here must be
+      // mirrored there (and vice versa) or one surface paints with the wrong
+      // attributes.
       (function () {
+        var root = document.documentElement;
+        function readPref(key, fallback) {
+          try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
+        }
         try {
-          var pref = localStorage.getItem('ha-mcp-theme') || 'auto';
-          var theme = pref === 'auto'
+          var themePref = readPref('ha-mcp-theme', 'auto');
+          var theme = themePref === 'auto'
             ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-            : pref;
-          document.documentElement.setAttribute('data-theme', theme);
+            : themePref;
+          root.setAttribute('data-theme', theme);
+
+          var contrastPref = readPref('ha-mcp-contrast', 'normal');
+          if (contrastPref === 'high') root.setAttribute('data-contrast', 'high');
+
+          var shadePref = readPref('ha-mcp-shade', 'off-white');
+          if (shadePref !== 'off-white') root.setAttribute('data-shade', shadePref);
+
+          var sizePref = parseInt(readPref('ha-mcp-font-size', '100'), 10);
+          if (!isNaN(sizePref) && sizePref >= 100 && sizePref <= 150 && sizePref !== 100) {
+            root.style.fontSize = (16 * sizePref / 100) + 'px';
+          }
         } catch (e) {
-          document.documentElement.setAttribute('data-theme', 'dark');
+          root.setAttribute('data-theme', 'dark');
         }
       })();
     </script>
@@ -42,29 +61,131 @@ const { title } = Astro.props;
   <body class="min-h-screen text-[var(--text-primary)] antialiased body-background">
     <slot />
     <script data-purpose="theme-toggle">
-      // #1572 theme-toggle binding — keep the <select> in sync with the
-      // saved choice, persist on change, re-apply on OS scheme flip when
-      // in Auto. The Layout head script already set the initial
-      // data-theme, this just wires up the runtime handler.
-      (function bindThemeToggle() {
-        const KEY = 'ha-mcp-theme';
+      // #1572 accessibility-prefs binding for docs site — bidirectional sync
+      // between the Nav header theme <select>, the Nav A11y popover radios,
+      // and the underlying localStorage / <html> attributes. The Layout head
+      // anti-FOUC script already set the initial attributes; this module
+      // keeps them in sync for the rest of the session and persists user
+      // changes. Mirrors src/ha_mcp/settings.js bindAccessibilityPrefs so
+      // both surfaces behave identically.
+      (function bindAccessibilityPrefs() {
+        const root = document.documentElement;
         const mql = window.matchMedia('(prefers-color-scheme: light)');
-        const resolve = (pref) => pref === 'auto' ? (mql.matches ? 'light' : 'dark') : pref;
-        const apply = (pref) => document.documentElement.setAttribute('data-theme', resolve(pref));
+        const PREFS = {
+          theme:    { key: 'ha-mcp-theme',     default: 'auto'      },
+          fontSize: { key: 'ha-mcp-font-size', default: '100'       },
+          contrast: { key: 'ha-mcp-contrast',  default: 'normal'    },
+          shade:    { key: 'ha-mcp-shade',     default: 'off-white' },
+        };
+        const read = (p) => {
+          try { return localStorage.getItem(PREFS[p].key) || PREFS[p].default; }
+          catch (_) { return PREFS[p].default; }
+        };
+        const write = (p, v) => {
+          try { localStorage.setItem(PREFS[p].key, v); } catch (_) { /* private mode */ }
+        };
+
+        const applyTheme = (pref) => {
+          const resolved = pref === 'auto' ? (mql.matches ? 'light' : 'dark') : pref;
+          root.setAttribute('data-theme', resolved);
+        };
+        const applyFontSize = (pct) => {
+          const n = parseInt(pct, 10);
+          if (isNaN(n) || n === 100) root.style.fontSize = '';
+          else root.style.fontSize = (16 * n / 100) + 'px';
+        };
+        const applyContrast = (tier) => {
+          if (tier === 'high') root.setAttribute('data-contrast', 'high');
+          else root.removeAttribute('data-contrast');
+        };
+        const applyShade = (shade) => {
+          if (shade && shade !== 'off-white') root.setAttribute('data-shade', shade);
+          else root.removeAttribute('data-shade');
+        };
+        const APPLY = { theme: applyTheme, fontSize: applyFontSize, contrast: applyContrast, shade: applyShade };
+
+        const reflectRadio = (name, value) => {
+          document.querySelectorAll('input[type="radio"][name="' + name + '"]').forEach((r) => {
+            r.checked = (r.value === value);
+          });
+        };
+        const setPref = (pref, value) => { write(pref, value); APPLY[pref](value); };
+
+        const RADIO_TO_PREF = {
+          'a11y-theme':     'theme',
+          'a11y-font-size': 'fontSize',
+          'a11y-contrast':  'contrast',
+          'a11y-shade':     'shade',
+        };
+
         document.addEventListener('DOMContentLoaded', () => {
-          const toggle = document.getElementById('themeToggle');
-          if (!toggle) return;
-          let saved = 'auto';
-          try { saved = localStorage.getItem(KEY) || 'auto'; } catch (_) { /* private mode */ }
-          toggle.value = saved;
-          toggle.addEventListener('change', () => {
-            const pref = toggle.value;
-            try { localStorage.setItem(KEY, pref); } catch (_) { /* private mode */ }
-            apply(pref);
+          const headerToggle = document.getElementById('themeToggle');
+          if (headerToggle) {
+            headerToggle.value = read('theme');
+            headerToggle.addEventListener('change', () => {
+              setPref('theme', headerToggle.value);
+              reflectRadio('a11y-theme', headerToggle.value);
+            });
+          }
+
+          // Initialize Accessibility popover radios from localStorage.
+          for (const [name, pref] of Object.entries(RADIO_TO_PREF)) {
+            reflectRadio(name, read(pref));
+          }
+
+          document.addEventListener('change', (e) => {
+            const t = e.target;
+            if (!(t instanceof HTMLInputElement) || t.type !== 'radio') return;
+            const pref = RADIO_TO_PREF[t.name];
+            if (!pref) return;
+            setPref(pref, t.value);
+            if (pref === 'theme' && headerToggle) headerToggle.value = t.value;
           });
-          mql.addEventListener('change', () => {
-            if (toggle.value === 'auto') apply('auto');
-          });
+
+          // Popover open/close behavior. ESC and outside-click dismiss; the
+          // toggle button flips aria-expanded so screen readers announce the
+          // dialog open/close state.
+          const a11yToggle = document.getElementById('a11yToggle');
+          const a11yPanel = document.getElementById('a11yPanel');
+          if (a11yToggle && a11yPanel) {
+            const openPanel = () => {
+              a11yPanel.hidden = false;
+              a11yToggle.setAttribute('aria-expanded', 'true');
+            };
+            const closePanel = () => {
+              a11yPanel.hidden = true;
+              a11yToggle.setAttribute('aria-expanded', 'false');
+            };
+            a11yToggle.addEventListener('click', () => {
+              a11yPanel.hidden ? openPanel() : closePanel();
+            });
+            document.addEventListener('click', (e) => {
+              if (a11yPanel.hidden) return;
+              if (a11yPanel.contains(e.target) || a11yToggle.contains(e.target)) return;
+              closePanel();
+            });
+            document.addEventListener('keydown', (e) => {
+              if (e.key === 'Escape' && !a11yPanel.hidden) {
+                closePanel();
+                a11yToggle.focus();
+              }
+            });
+            const resetBtn = document.getElementById('a11yReset');
+            if (resetBtn) {
+              resetBtn.addEventListener('click', () => {
+                for (const [name, pref] of Object.entries(RADIO_TO_PREF)) {
+                  setPref(pref, PREFS[pref].default);
+                  reflectRadio(name, PREFS[pref].default);
+                }
+                const headerToggle = document.getElementById('themeToggle');
+                if (headerToggle) headerToggle.value = PREFS.theme.default;
+              });
+            }
+          }
+        });
+
+        mql.addEventListener('change', () => {
+          if (read('theme') === 'auto') applyTheme('auto');
         });
       })();
     </script>
