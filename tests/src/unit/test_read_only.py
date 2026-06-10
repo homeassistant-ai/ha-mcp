@@ -6,7 +6,9 @@ Mirrors ``tests/src/unit/policy/test_middleware.py``: drive
 The live-settings read is patched at the ``ha_mcp.read_only`` import site.
 """
 
+import ast
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,6 +16,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.read_only import (
+    _ADDON_CONFIG_WRITE_PARAMS,
     READ_ONLY_EXEMPT_TOOLS,
     ReadOnlyMiddleware,
     ReadOnlyToolsTransform,
@@ -439,3 +442,290 @@ class TestExemptTableContract:
     def test_every_exemption_describes_whats_allowed(self):
         for name, exemption in READ_ONLY_EXEMPT_TOOLS.items():
             assert exemption.allowed, name
+
+
+# ---------------------------------------------------------------------------
+# Schema-drift guard for the exempt tools' write predicates.
+# ---------------------------------------------------------------------------
+
+_SRC_TOOLS_DIR = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools"
+
+# Module that defines each exempt tool's ``@tool`` / ``@mcp.tool`` method.
+_EXEMPT_TOOL_MODULES = {
+    "ha_manage_backup": "backup.py",
+    "ha_manage_addon": "tools_addons.py",
+    "ha_manage_energy_prefs": "tools_energy.py",
+    "ha_manage_pipeline": "tools_voice_assistant.py",
+    "ha_manage_custom_tool": "tools_code.py",
+}
+
+# INDEPENDENT, hardcoded manifests of the argument names each exempt
+# tool's write predicate inspects. These are duplicated here ON PURPOSE
+# (not derived from the predicates): if a future edit drops a name from a
+# predicate — silently reclassifying that write as a read — this manifest
+# still lists it and the equality / signature assertions below fail until
+# the change is consciously acknowledged here. A parameter rename in the
+# tool likewise fails this test, telling the maintainer to re-review the
+# read-only predicate.
+_EXEMPT_INSPECTED_ARGS = {
+    "ha_manage_backup": {"scope", "action"},
+    "ha_manage_addon": {
+        "action",
+        "options",
+        "network",
+        "boot",
+        "auto_update",
+        "watchdog",
+        "array_patch",
+        "websocket",
+        "method",
+    },
+    "ha_manage_energy_prefs": {"mode", "dry_run"},
+    "ha_manage_pipeline": {"action"},
+    "ha_manage_custom_tool": {"list_saved", "code", "run_saved"},
+}
+
+# The subset of the addon manifest that ``_addon_write`` iterates as
+# "config-change" parameters. Pinned independently so dropping one from
+# the production constant fails here rather than silently passing.
+_ADDON_CONFIG_WRITE_PARAMS_MANIFEST = (
+    "options",
+    "network",
+    "boot",
+    "auto_update",
+    "watchdog",
+)
+
+
+def _decorated_tool_param_names(module_path: Path, tool_name: str) -> set[str]:
+    """Return the parameter names of the ``@tool``-decorated function that
+    backs ``tool_name`` (both the ``@tool(name=...)`` class-method pattern
+    and the ``@mcp.tool(...)`` closure pattern, where the function name IS
+    the tool name)."""
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+
+    def _is_tool_decorated(node: ast.AST) -> bool:
+        for dec in node.decorator_list:
+            target = dec.func if isinstance(dec, ast.Call) else dec
+            if isinstance(target, ast.Attribute) and target.attr == "tool":
+                return True
+            if isinstance(target, ast.Name) and target.id == "tool":
+                return True
+        return False
+
+    def _names_match(node: ast.AST) -> bool:
+        # @tool(name="ha_...") explicit name kwarg.
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Call):
+                for kw in dec.keywords:
+                    if (
+                        kw.arg == "name"
+                        and isinstance(kw.value, ast.Constant)
+                        and kw.value.value == tool_name
+                    ):
+                        return True
+        # @mcp.tool(...) closure: function name is the tool name.
+        return node.name == tool_name and _is_tool_decorated(node)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and _names_match(
+            node
+        ):
+            args = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
+            return {a.arg for a in args if a.arg not in ("self", "ctx")}
+    raise AssertionError(
+        f"could not locate the @tool-decorated function for {tool_name} "
+        f"in {module_path.name}"
+    )
+
+
+class TestExemptPredicateSchemaDrift:
+    """Each exempt tool's write predicate inspects argument names that must
+    exist on the real tool. A parameter rename (or a silent predicate edit)
+    fails here so the maintainer re-reviews the read-only classification."""
+
+    @pytest.mark.parametrize("tool_name", sorted(_EXEMPT_INSPECTED_ARGS))
+    def test_inspected_args_exist_in_tool_signature(self, tool_name):
+        module_path = _SRC_TOOLS_DIR / _EXEMPT_TOOL_MODULES[tool_name]
+        real_params = _decorated_tool_param_names(module_path, tool_name)
+        for arg in sorted(_EXEMPT_INSPECTED_ARGS[tool_name]):
+            assert arg in real_params, (
+                f"read-only predicate for {tool_name} inspects {arg!r}, but "
+                f"that parameter no longer exists on the tool "
+                f"({module_path.name}). Re-review the read-only write "
+                f"predicate in read_only.py — a rename may have reclassified "
+                f"a write as a read."
+            )
+
+    def test_addon_config_write_params_manifest_matches_constant(self):
+        """The production ``_ADDON_CONFIG_WRITE_PARAMS`` must equal the
+        independent manifest above. Deleting a param from the constant
+        (which would let that add-on config write slip through as a read)
+        fails this test until the manifest is updated to match."""
+        assert (
+            tuple(_ADDON_CONFIG_WRITE_PARAMS) == _ADDON_CONFIG_WRITE_PARAMS_MANIFEST
+        ), (
+            "_ADDON_CONFIG_WRITE_PARAMS drifted from the independent manifest "
+            "in this test. If you intentionally changed which add-on params "
+            "count as a config write, update the manifest AND re-confirm the "
+            "read-only classification is still correct."
+        )
+
+    def test_addon_config_write_params_are_real_tool_args(self):
+        module_path = _SRC_TOOLS_DIR / _EXEMPT_TOOL_MODULES["ha_manage_addon"]
+        real_params = _decorated_tool_param_names(module_path, "ha_manage_addon")
+        for arg in _ADDON_CONFIG_WRITE_PARAMS:
+            assert arg in real_params, (
+                f"_ADDON_CONFIG_WRITE_PARAMS lists {arg!r}, absent from "
+                f"ha_manage_addon's signature ({module_path.name})"
+            )
+
+
+@pytest.mark.anyio
+class TestLiveFlip:
+    """One middleware + one transform, flipping the live flag through a
+    mutable holder — exercises the no-restart standalone-mode path."""
+
+    async def test_write_blocked_after_flag_flips_on_and_passes_again_off(
+        self, monkeypatch
+    ):
+        holder = SimpleNamespace(read_only_mode=False)
+        monkeypatch.setattr("ha_mcp.read_only.get_global_settings", lambda: holder)
+        mw = make_middleware()
+        transform = ReadOnlyToolsTransform()
+
+        def write_ctx():
+            return make_context("ha_config_set_automation", {"alias": "x"})
+
+        # Flag OFF: write passes, catalog unfiltered.
+        call_next = AsyncMock(return_value="ok")
+        assert await mw.on_call_tool(write_ctx(), call_next) == "ok"
+        assert {t.name for t in await transform.list_tools(CATALOG)} == {
+            t.name for t in CATALOG
+        }
+
+        # Flip ON: write blocked, catalog filtered.
+        holder.read_only_mode = True
+        call_next = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(write_ctx(), call_next)
+        expect_read_only_error(excinfo)
+        call_next.assert_not_called()
+        filtered = {t.name for t in await transform.list_tools(CATALOG)}
+        assert "ha_config_set_automation" not in filtered
+        assert "ha_get_state" in filtered
+
+        # Flip OFF again: write passes once more.
+        holder.read_only_mode = False
+        call_next = AsyncMock(return_value="ok-again")
+        assert await mw.on_call_tool(write_ctx(), call_next) == "ok-again"
+
+
+@pytest.mark.anyio
+class TestRaisingCatalog:
+    async def test_catalog_lookup_raise_blocks_call_fail_closed(self, read_only_on):
+        """If the unfiltered-catalog lookup raises, the middleware must
+        block with READ_ONLY_MODE rather than let the exception propagate
+        opaquely or fail open."""
+        mw = ReadOnlyMiddleware(list_tools=AsyncMock(side_effect=RuntimeError("boom")))
+        call_next = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(make_context("ha_anything"), call_next)
+        body = expect_read_only_error(excinfo)
+        assert body["tool_name"] == "ha_anything"
+        call_next.assert_not_called()
+
+
+@pytest.mark.anyio
+class TestStringEnvelopeProxy:
+    """The proxy tolerates ``arguments`` as a JSON string and parses it
+    after this middleware runs, so the middleware must coerce it too."""
+
+    async def test_string_envelope_write_blocked_with_inner_name(self, read_only_on):
+        mw = make_middleware()
+        call_next = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(
+                make_context(
+                    "ha_call_write_tool",
+                    {
+                        "name": "ha_manage_addon",
+                        "arguments": '{"slug": "x", "action": "install"}',
+                    },
+                ),
+                call_next,
+            )
+        body = expect_read_only_error(excinfo)
+        assert body["tool_name"] == "ha_manage_addon"
+        call_next.assert_not_called()
+
+    async def test_string_envelope_exempt_read_passes(self, read_only_on):
+        mw = make_middleware()
+        call_next = AsyncMock(return_value="energy-config")
+        result = await mw.on_call_tool(
+            make_context(
+                "ha_call_read_tool",
+                {"name": "ha_manage_energy_prefs", "arguments": '{"mode": "get"}'},
+            ),
+            call_next,
+        )
+        assert result == "energy-config"
+
+    async def test_unparseable_string_envelope_passes_through(self, read_only_on):
+        """``arguments='not json'`` is a malformed envelope — pass through
+        so the proxy raises its own VALIDATION error (nothing dispatched,
+        nothing written)."""
+        mw = make_middleware()
+        call_next = AsyncMock(return_value="proxy-validation-error")
+        result = await mw.on_call_tool(
+            make_context(
+                "ha_call_write_tool",
+                {"name": "ha_manage_addon", "arguments": "not json"},
+            ),
+            call_next,
+        )
+        assert result == "proxy-validation-error"
+
+    async def test_non_object_json_string_envelope_passes_through(self, read_only_on):
+        """A JSON string that parses to a non-object (e.g. a list) is also
+        malformed — pass through to the proxy's own validation."""
+        mw = make_middleware()
+        call_next = AsyncMock(return_value="proxy-validation-error")
+        result = await mw.on_call_tool(
+            make_context(
+                "ha_call_write_tool",
+                {"name": "ha_manage_addon", "arguments": "[1, 2]"},
+            ),
+            call_next,
+        )
+        assert result == "proxy-validation-error"
+
+
+@pytest.mark.anyio
+class TestLateRegistration:
+    async def test_rebuild_on_miss_blocks_late_registered_write_tool(
+        self, read_only_on
+    ):
+        """A write tool registered after the first classification must be
+        caught on the cache-miss rebuild (still fail-closed)."""
+        new_write = make_tool("ha_late_write", False)
+        list_tools = AsyncMock(side_effect=[CATALOG, [*CATALOG, new_write]])
+        mw = ReadOnlyMiddleware(list_tools=list_tools)
+
+        # Prime the cache with the original catalog (a known read tool).
+        call_next = AsyncMock(return_value="state")
+        assert (
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "light.x"}), call_next
+            )
+            == "state"
+        )
+
+        # The late tool is a cache miss → rebuild picks up the second
+        # catalog → classified write → blocked.
+        call_next = AsyncMock()
+        with pytest.raises(ToolError) as excinfo:
+            await mw.on_call_tool(make_context("ha_late_write"), call_next)
+        body = expect_read_only_error(excinfo)
+        assert body["tool_name"] == "ha_late_write"
+        call_next.assert_not_called()

@@ -12,10 +12,10 @@ against the testcontainer HA (function-scoped — the session-scoped
 - with tool search enabled, proxy-dispatched writes are blocked too;
 - ``ha_get_overview`` reports the mode to the LLM;
 - the real catalog satisfies the invariant that every mandatory tool is
-  either read-safe or exempt (the unit suite can only check this
-  against fakes).
+  either read-safe or exempt (a unit test cannot see the real registered
+  catalog, so this real-catalog check lives in the e2e suite).
 
-Cannot run on Termux (no Docker for testcontainers); CI-only verification.
+Requires Docker (testcontainers); runs in CI.
 """
 
 from __future__ import annotations
@@ -112,6 +112,24 @@ async def readonly_toolsearch_mcp(
     get_data_dir.cache_clear()
 
 
+@pytest.fixture
+async def readonly_codemode_mcp(ha_container_with_fresh_config, monkeypatch, tmp_path):
+    """Read-only server with code mode enabled so ha_manage_custom_tool
+    (a mixed read/write exempt tool) is registered — its list_saved read
+    must work while code execution is blocked."""
+    server, ha_client = await _build_readonly_server(
+        ha_container_with_fresh_config,
+        monkeypatch,
+        tmp_path,
+        extra_env={"ENABLE_CODE_MODE": "true", "ENABLE_BETA_FEATURES": "true"},
+    )
+    client = Client(server.mcp)
+    async with client:
+        yield client, server
+    await ha_client.close()
+    get_data_dir.cache_clear()
+
+
 @pytest.mark.asyncio
 async def test_write_tools_hidden_exempt_and_read_tools_listed(readonly_mcp):
     client, _server = readonly_mcp
@@ -156,7 +174,11 @@ async def test_real_catalog_mandatory_tools_stay_available(readonly_mcp):
             "read-only mode would dead-end it"
         )
     # Exempt names must reference real tools (typo guard). Feature-gated
-    # tools are only registered when their flag is on.
+    # tools are only registered when their flag is on — this fixture has
+    # code mode off, so ha_manage_custom_tool is skipped here; its real
+    # registration + read/write classification is covered against a
+    # code-mode-enabled server by
+    # test_code_mode_tool_read_works_and_execution_blocked.
     feature_gated = {"ha_manage_custom_tool"}
     for name in READ_ONLY_EXEMPT_TOOLS:
         if name in feature_gated:
@@ -238,3 +260,138 @@ async def test_proxy_dispatched_write_blocked_with_tool_search(readonly_toolsear
     else:
         body = parse_mcp_result(result)
     assert body.get("error", {}).get("code") == "READ_ONLY_MODE", body
+
+
+@pytest.mark.asyncio
+async def test_energy_prefs_dry_run_works_and_get_is_unchanged(readonly_mcp):
+    """The exempt energy tool's dry-run preview (mode='set', dry_run=True)
+    is a non-writing path and must succeed in read-only mode; a follow-up
+    mode='get' must show prefs were not mutated. An empty config produces
+    no shape errors and never writes (dry_run skips the config_hash
+    requirement)."""
+    client, _server = readonly_mcp
+
+    before = parse_mcp_result(
+        await client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
+    )
+    assert before.get("success") is True, before
+
+    dry = parse_mcp_result(
+        await client.call_tool(
+            "ha_manage_energy_prefs",
+            {"mode": "set", "config": {}, "dry_run": True},
+        )
+    )
+    assert dry.get("success") is True, dry
+    assert dry.get("dry_run") is True, dry
+
+    after = parse_mcp_result(
+        await client.call_tool("ha_manage_energy_prefs", {"mode": "get"})
+    )
+    assert after.get("success") is True, after
+    # The dry-run must not have changed the persisted config hash.
+    assert after.get("config_hash") == before.get("config_hash"), (before, after)
+
+
+@pytest.mark.asyncio
+async def test_string_envelope_proxy_write_blocked(readonly_toolsearch_mcp):
+    """The categorized proxy tolerates ``arguments`` as a JSON STRING and
+    parses it AFTER the read-only middleware runs, so the middleware must
+    coerce it too. A string-envelope write action of an exempt tool must
+    still surface READ_ONLY_MODE (this also pins the proxy re-dispatch
+    middleware re-entry)."""
+    client, server = readonly_toolsearch_mcp
+    catalog = await server.mcp.local_provider._list_tools()
+    names = {t.name for t in catalog}
+
+    # ha_manage_addon registers unconditionally (not supervisor-gated), but
+    # fall back to the always-registered energy tool if a future change
+    # gates it, so this test stays meaningful on a non-HAOS container.
+    if "ha_manage_addon" in names:
+        inner_name = "ha_manage_addon"
+        inner_args = '{"slug": "x", "action": "install"}'
+    else:
+        inner_name = "ha_manage_energy_prefs"
+        inner_args = '{"mode": "set", "config": {}}'
+
+    try:
+        result = await client.call_tool(
+            "ha_call_write_tool",
+            {"name": inner_name, "arguments": inner_args},
+        )
+    except ToolError as exc:
+        body = tool_error_to_result(exc)
+    else:
+        body = parse_mcp_result(result)
+    assert body.get("error", {}).get("code") == "READ_ONLY_MODE", body
+    assert body.get("tool_name") == inner_name, body
+
+
+@pytest.mark.asyncio
+async def test_search_results_exclude_non_exempt_write_tools(readonly_toolsearch_mcp):
+    """ha_search_tools must never surface a hidden (non-exempt write) tool:
+    the read-only catalog filter runs before the BM25 index is built, so a
+    search can only return read-safe or exempt tools."""
+    client, server = readonly_toolsearch_mcp
+    result = await client.call_tool("ha_search_tools", {"query": "automation create"})
+    body = parse_mcp_result(result)
+
+    # Pull the result tool names from whatever list shape the proxy returns.
+    found = body if isinstance(body, dict) else {}
+    result_names: set[str] = set()
+    for key in ("tools", "results", "matches"):
+        for entry in found.get(key, []) or []:
+            if isinstance(entry, dict):
+                name = entry.get("name") or entry.get("tool_name")
+                if isinstance(name, str):
+                    result_names.add(name)
+    # Guard against a vacuous pass: this query matches the read-side
+    # automation tools, so an empty extraction means the response shape
+    # drifted past the keys above, not that nothing matched.
+    assert result_names, f"could not extract any tool names from search: {body}"
+
+    # Known pure-write tools must be absent from the search surface.
+    for write_tool in ("ha_config_set_automation", "ha_set_zone", "ha_call_service"):
+        assert write_tool not in result_names, (
+            f"{write_tool} is a non-exempt write tool but appeared in search: {body}"
+        )
+
+    # Stronger: every surfaced name must be read-safe or exempt, judged
+    # against the UNFILTERED catalog.
+    catalog = await server.mcp.local_provider._list_tools()
+    by_name = {t.name: t for t in catalog}
+    for name in result_names:
+        tool = by_name.get(name)
+        if tool is None:
+            continue  # proxy meta-tool or alias — not a real catalog write
+        assert is_read_safe(tool) or name in READ_ONLY_EXEMPT_TOOLS, (
+            f"search surfaced write-capable {name} that is not exempt: {body}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_code_mode_tool_read_works_and_execution_blocked(readonly_codemode_mcp):
+    """With code mode enabled, ha_manage_custom_tool (a mixed read/write
+    exempt tool) is listed; its list_saved read works, and a code-execution
+    call is blocked with READ_ONLY_MODE."""
+    client, _server = readonly_codemode_mcp
+
+    tools = await client.list_tools()
+    names = {t.name for t in tools}
+    if "ha_manage_custom_tool" not in names:
+        pytest.skip(
+            "ha_manage_custom_tool not registered (pydantic-monty missing or "
+            "code mode unavailable in this environment)"
+        )
+
+    listed = parse_mcp_result(
+        await client.call_tool("ha_manage_custom_tool", {"list_saved": True})
+    )
+    assert listed.get("success") is True, listed
+
+    body = await _expect_read_only_blocked(
+        client,
+        "ha_manage_custom_tool",
+        {"code": "1 + 1", "justification": "read-only mode test"},
+    )
+    assert body["tool_name"] == "ha_manage_custom_tool", body

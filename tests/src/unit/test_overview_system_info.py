@@ -470,6 +470,80 @@ class TestHaGetOverviewSettingsUrl:
         assert "/mcp/settings" in result.get("settings_url_hint", "")
 
 
+class TestHaGetOverviewReadOnlyMode:
+    """Read Only Mode (#1569) is surfaced in ha_get_overview only while
+    the flag is on, and like ``settings_url`` it survives ``fields=``
+    projection so a minimized overview still teaches the LLM the mode is
+    on. Mirrors the settings_url test scaffolding."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={})
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        return client
+
+    @pytest.fixture
+    def mock_smart_tools(self):
+        smart = MagicMock()
+        smart.get_system_overview = AsyncMock(return_value={"success": True})
+        return smart
+
+    @pytest.fixture
+    def overview_tool(self, mock_mcp, mock_client, mock_smart_tools):
+        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
+        return self.registered_tools["ha_get_overview"]
+
+    @staticmethod
+    def _patch_read_only(monkeypatch, *, on: bool) -> None:
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_search.get_global_settings",
+            lambda: SimpleNamespace(read_only_mode=on),
+        )
+
+    @pytest.mark.asyncio
+    async def test_read_only_keys_absent_when_flag_off(
+        self, overview_tool, monkeypatch
+    ):
+        """Mode off → neither ``read_only_mode`` nor ``read_only_mode_hint``
+        appears (strict ``not in`` so a regression emitting them to every
+        overview is caught)."""
+        self._patch_read_only(monkeypatch, on=False)
+        result = await overview_tool(detail_level="minimal")
+        assert "read_only_mode" not in result
+        assert "read_only_mode_hint" not in result
+
+    @pytest.mark.asyncio
+    async def test_read_only_keys_present_and_survive_fields_projection(
+        self, overview_tool, monkeypatch
+    ):
+        """Mode on → the pair is emitted AND survives a narrow
+        ``fields=["system_info"]`` projection, like ``settings_url``."""
+        self._patch_read_only(monkeypatch, on=True)
+        result = await overview_tool(fields=["system_info"])
+        assert "system_info" in result
+        assert result.get("read_only_mode") is True
+        assert "Read Only Mode is ON" in result.get("read_only_mode_hint", "")
+
+
 class TestHaGetOverviewAlwaysEmittedKeys:
     """Keys advertised in the ``fields=`` docstring must always be in
     the result so ``fields=[<key>]`` never trips the ``project_fields``

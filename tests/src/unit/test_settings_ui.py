@@ -2066,6 +2066,37 @@ class TestSaveFeatureFlagsStandaloneMode:
         # back in alongside the new shape.
         assert "restarting" not in body
 
+    @pytest.mark.asyncio
+    async def test_read_only_mode_save_round_trips_into_settings(
+        self, monkeypatch, tmp_path
+    ):
+        """POST {flags: {read_only_mode: true}} in standalone mode must
+        persist so a fresh get_global_settings() reports the flag on —
+        proves the Tools-tab toggle actually flips the live setting the
+        middleware reads (#1569)."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("READ_ONLY_MODE", raising=False)
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.config import _reset_global_settings, get_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+        assert get_global_settings().read_only_mode is False
+
+        handlers = build_settings_handlers(server=None)
+        request = MagicMock()
+        request.json = AsyncMock(return_value={"flags": {"read_only_mode": True}})
+        resp = await handlers["save_feature_flags"](request)
+        assert resp.status_code == 200, json.loads(resp.body)
+
+        _reset_global_settings()
+        assert get_global_settings().read_only_mode is True
+
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
 
 class TestSaveToolsResponseShape:
     """Pins the unified ``{success, applied, mode, restart_required}``
