@@ -496,6 +496,95 @@ _ADDON_CONFIG_WRITE_PARAMS_MANIFEST = (
     "watchdog",
 )
 
+# REVERSE-direction manifests: every signature parameter of an exempt tool
+# that the predicate does NOT inspect, each one deliberately classified as
+# safe because it is gated by an inspected dispatch field (scope/action/
+# mode/method/websocket) or has no mutation capability at all. Together
+# with ``_EXEMPT_INSPECTED_ARGS`` these must EXACTLY cover the real tool
+# signature — so adding a NEW parameter to an exempt tool fails the
+# partition test below until someone consciously classifies it. Without
+# this, a new write-capable parameter (one that mutates outside the
+# dispatch fields the predicate inspects) would silently classify as a
+# read in Read Only Mode.
+_EXEMPT_GATED_OR_READ_ARGS = {
+    "ha_manage_backup": {
+        # Consumed only under the (scope, action) dispatch the predicate
+        # inspects: snapshot create/restore payloads...
+        "name",
+        "backup_id",
+        "restore_database",
+        # ...edits create payload / list filters (list is an allowed read),
+        "domain",
+        "entity_id",
+        # ...edits view selector (read) / delete target (blocked),
+        "backup_name",
+        # ...edits delete filter (blocked) and list pagination (read).
+        "older_than_days",
+        "limit",
+    },
+    "ha_manage_addon": {
+        # Read-path selectors/modifiers of the allowed GET proxy.
+        "slug",
+        "path",
+        "debug",
+        "port",
+        "offset",
+        "limit",
+        "summarize",
+        "python_transform",
+        "request_headers",
+        # Sent only on POST/PUT/PATCH (method check) or as the WS initial
+        # message (websocket check) — both inspected and blocked.
+        "body",
+        # WebSocket-only modifiers, gated by the inspected websocket flag.
+        "wait_for_close",
+        "message_limit",
+        "message_offset",
+        # Only consumed by the repository actions, gated by action.
+        "repository",
+    },
+    "ha_manage_energy_prefs": {
+        # mode='set' payload — blocked unless dry_run=True (preview only).
+        "config",
+        "config_hash",
+        # Convenience-mode payloads (add_device/remove_device/add_source),
+        # all blocked unless dry_run=True.
+        "stat_consumption",
+        "name",
+        "included_in_stat",
+        "water",
+        "source",
+    },
+    "ha_manage_pipeline": {
+        # Selector for action='get' (read) and the blocked write actions.
+        "pipeline_id",
+        # create/update payloads — those actions are blocked.
+        "name",
+        "conversation_engine",
+        "base_pipeline_id",
+        "conversation_language",
+        "language",
+        "stt_engine",
+        "stt_language",
+        "tts_engine",
+        "tts_language",
+        "tts_voice",
+        "wake_word_entity",
+        "wake_word_id",
+        "prefer_local_intents",
+        # Extra set_preferred write, but it only fires on create/update,
+        # which the action check blocks.
+        "make_preferred",
+    },
+    "ha_manage_custom_tool": {
+        # FastMCP-injected Context — not a caller-supplied argument.
+        "ctx",
+        # Modifiers of the code-execution path, which is blocked outright.
+        "justification",
+        "save_as",
+    },
+}
+
 
 def _decorated_tool_param_names(module_path: Path, tool_name: str) -> set[str]:
     """Return the parameter names of the ``@tool``-decorated function that
@@ -579,6 +668,47 @@ class TestExemptPredicateSchemaDrift:
                 f"_ADDON_CONFIG_WRITE_PARAMS lists {arg!r}, absent from "
                 f"ha_manage_addon's signature ({module_path.name})"
             )
+
+    @pytest.mark.parametrize("tool_name", sorted(_EXEMPT_INSPECTED_ARGS))
+    def test_every_tool_param_is_deliberately_classified(self, tool_name):
+        """REVERSE drift guard: the inspected + gated-or-read manifests
+        must exactly cover the real tool signature, with no overlap.
+
+        The forward test above catches a predicate inspecting a renamed
+        parameter; this one catches the more dangerous direction — a NEW
+        parameter added to an exempt tool that the predicate never sees.
+        Without it, a new write-capable parameter (one that mutates
+        outside the dispatch fields the predicate inspects) would
+        silently classify as a read in Read Only Mode."""
+        module_path = _SRC_TOOLS_DIR / _EXEMPT_TOOL_MODULES[tool_name]
+        real_params = _decorated_tool_param_names(module_path, tool_name)
+        inspected = _EXEMPT_INSPECTED_ARGS[tool_name]
+        gated = _EXEMPT_GATED_OR_READ_ARGS[tool_name]
+
+        overlap = inspected & gated
+        assert not overlap, (
+            f"{tool_name}: {sorted(overlap)} appear in BOTH the inspected "
+            f"and gated-or-read manifests — each parameter must be "
+            f"classified exactly once."
+        )
+
+        unclassified = real_params - inspected - gated
+        assert not unclassified, (
+            f"{tool_name} gained parameter(s) {sorted(unclassified)} that "
+            f"the read-only review has not classified. Decide whether each "
+            f"can trigger a write in Read Only Mode: if yes, add it to the "
+            f"predicate in read_only.py AND to _EXEMPT_INSPECTED_ARGS; if "
+            f"it is gated by an inspected dispatch field or has no mutation "
+            f"capability, add it to _EXEMPT_GATED_OR_READ_ARGS with a "
+            f"comment saying why."
+        )
+
+        stale = (inspected | gated) - real_params
+        assert not stale, (
+            f"{tool_name}: manifest entries {sorted(stale)} no longer exist "
+            f"on the tool signature ({module_path.name}) — remove them and "
+            f"re-confirm the read-only classification still holds."
+        )
 
 
 @pytest.mark.anyio
