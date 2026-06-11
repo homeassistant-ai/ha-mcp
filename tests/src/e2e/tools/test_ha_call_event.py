@@ -45,6 +45,19 @@ async def test_call_event_with_dict_data(mcp_client):
 
 
 @pytest.mark.asyncio
+async def test_call_event_with_json_string_data(mcp_client):
+    """Regression #1581: a JSON-encoded object string for data is coerced."""
+    result = await mcp_client.call_tool(
+        "ha_call_event",
+        {"event_type": "test_mcp_event_json_str", "data": '{"source": "e2e_test"}'},
+    )
+    data = assert_mcp_success(result, "call event with JSON string data")
+    assert data["success"] is True
+    assert data["event_type"] == "test_mcp_event_json_str"
+    logger.info("Called event with JSON string data: %s", data)
+
+
+@pytest.mark.asyncio
 async def test_call_event_list_data_rejected(mcp_client):
     """Event data must be a dict — a native list is rejected with ToolError."""
     with pytest.raises(ToolError):

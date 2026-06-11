@@ -32,6 +32,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
@@ -1021,6 +1022,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         ],
         config: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Dashboard configuration with views and cards. "
                 "Omit or set to None to create dashboard without initial config. "

@@ -46,6 +46,7 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .util_helpers import (
+    JSON_STRING_COERCION,
     apply_entity_category,
     attach_skill_content,
     augment_error_dict_with_skill_content,
@@ -435,6 +436,7 @@ class AutomationConfigTools:
         self,
         config: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Complete automation configuration with required fields: 'alias', 'triggers', 'actions'. "
                 "Optional: 'description', 'conditions', 'mode', 'max', 'initial_state', 'variables'. "

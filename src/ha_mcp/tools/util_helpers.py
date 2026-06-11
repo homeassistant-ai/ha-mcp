@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastmcp.exceptions import ToolError
-from pydantic import ValidationError
+from pydantic import BeforeValidator, ValidationError
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -117,6 +117,33 @@ def parse_json_param(
     raise ValueError(
         f"{param_name} must be string, dict, list, or None, got {type(param).__name__}"
     )
+
+
+def _loads_if_json_container_str(value: Any) -> Any:
+    """Parse a JSON-encoded object/array string into its container value.
+
+    Anything that isn't a string encoding a JSON object or array passes
+    through unchanged, so Pydantic still raises dict_type/list_type for
+    genuinely-malformed input (which ValidationErrorMiddleware rewrites
+    into an actionable message).
+    """
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return value
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    return value
+
+
+# Annotated metadata for MCP-exposed dict/list params (issue #1581): coerces a
+# JSON-encoded string to its parsed container before validation, without
+# re-advertising string in the tool schema (the #1485/#1487/#1492 fix). Some
+# MCP client stacks (Claude Desktop stdio among them) pass model-emitted
+# stringified objects through unrepaired, so the strict schema boundary alone
+# rejects previously-valid traffic.
+JSON_STRING_COERCION = BeforeValidator(_loads_if_json_container_str)
 
 
 def _parse_json_to_str_list(s: str, param_name: str) -> list[str]:

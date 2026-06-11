@@ -24,6 +24,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     compact_service_result,
     parse_json_param,
     parse_string_list_param,
@@ -297,7 +298,7 @@ class ServiceTools:
         domain: str,
         service: str,
         entity_id: str | None = None,
-        data: dict[str, Any] | None = None,
+        data: Annotated[dict[str, Any] | None, JSON_STRING_COERCION] = None,
         return_response: bool = False,
         wait: bool = True,
         verbose: Annotated[
@@ -584,7 +585,7 @@ class ServiceTools:
     @log_tool_usage
     async def ha_bulk_control(
         self,
-        operations: list[dict[str, Any]],
+        operations: Annotated[list[dict[str, Any]], JSON_STRING_COERCION],
         parallel: bool = True,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
@@ -632,7 +633,7 @@ class ServiceTools:
     async def ha_call_event(
         self,
         event_type: str,
-        data: dict[str, Any] | None = None,
+        data: Annotated[dict[str, Any] | None, JSON_STRING_COERCION] = None,
     ) -> dict[str, Any]:
         """Execute a custom event on the Home Assistant event bus.
 

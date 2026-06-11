@@ -41,6 +41,7 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .util_helpers import (
+    JSON_STRING_COERCION,
     apply_entity_category,
     attach_skill_content,
     augment_error_dict_with_skill_content,
@@ -399,6 +400,7 @@ class ConfigScriptTools:
         ],
         config: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). "
                 "Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'. "
