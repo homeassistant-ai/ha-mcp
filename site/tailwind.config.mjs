@@ -51,10 +51,10 @@ export default {
           2: 'rgb(var(--surface-2) / <alpha-value>)',
           3: 'rgb(var(--surface-3) / <alpha-value>)',
         },
-        // Foreground shades (100–400 read light-on-dark) and container
+        // Foreground shades (100–500 read light-on-dark) and container
         // shades (700–950 are dark fills/borders) get light-mode remaps.
-        // slate-500/600 are intentionally NOT themed: they hold AA contrast
-        // on both schemes (see the coverage test's LIGHT_SAFE set).
+        // slate-600 is intentionally NOT themed: it holds AA contrast on
+        // both schemes (see the coverage test's LIGHT_SAFE set).
         slate: themed('slate', 100, 200, 300, 400, 500, 700, 800, 900, 950),
         blue: themed('blue', 200, 300, 400, 900),
         green: themed('green', 300, 400, 900),

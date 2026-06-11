@@ -117,7 +117,7 @@ def _themed_shades() -> set[tuple[str, int]]:
     """Parse the themed(...) declarations out of tailwind.config.mjs."""
     config = _CONFIG.read_text(encoding="utf-8")
     themed: set[tuple[str, int]] = set()
-    for match in re.finditer(r"themed\('(\w+)'((?:,\s*\d+)+)\)", config):
+    for match in re.finditer(r"themed\(\s*['\"](\w+)['\"]((?:,\s*\d+)+)\)", config):
         family = match.group(1)
         for shade in re.findall(r"\d+", match.group(2)):
             themed.add((family, int(shade)))
@@ -219,7 +219,14 @@ def test_apply_baked_white_text_is_classified() -> None:
         "global.css)."
     )
     css = _GLOBAL_CSS.read_text(encoding="utf-8")
-    not_overridden = [c for c in _BAKED_WHITE_OVERRIDE & found if f".{c}" not in css]
+    # Anchored match: a plain substring (or \b, which treats "-" as a
+    # boundary) would accept ".section-header-title" as covering
+    # ".section-header".
+    not_overridden = [
+        c
+        for c in _BAKED_WHITE_OVERRIDE & found
+        if not re.search(rf"\.{re.escape(c)}(?![\w-])", css)
+    ]
     assert not not_overridden, (
         f"baked-white classes registered as OVERRIDE but missing a light-mode "
         f"rule in global.css: {not_overridden}"
