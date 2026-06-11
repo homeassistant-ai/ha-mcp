@@ -967,24 +967,26 @@ _SETTINGS_HTML = (
     <h3 class="a11y-section-title">Theme</h3>
     <p class="a11y-section-help">One-click color schemes. Dark is the default; Auto follows
       your OS preference and flips live when it changes.</p>
-    <div class="a11y-options" role="radiogroup" aria-label="Theme preset">
+    <fieldset class="a11y-options">
+      <legend class="visually-hidden">Theme preset</legend>
       <label class="a11y-option"><input type="radio" name="a11y-preset" value="dark"> <span class="a11y-preset-chip" data-chip="dark" aria-hidden="true">Aa</span> Dark</label>
       <label class="a11y-option"><input type="radio" name="a11y-preset" value="light"> <span class="a11y-preset-chip" data-chip="light" aria-hidden="true">Aa</span> Light</label>
       <label class="a11y-option"><input type="radio" name="a11y-preset" value="auto"> <span class="a11y-preset-chip" data-chip="auto" aria-hidden="true"></span> Auto</label>
       <label class="a11y-option"><input type="radio" name="a11y-preset" value="paper"> <span class="a11y-preset-chip" data-chip="paper" aria-hidden="true">Aa</span> Paper</label>
       <label class="a11y-option"><input type="radio" name="a11y-preset" value="gray"> <span class="a11y-preset-chip" data-chip="gray" aria-hidden="true">Aa</span> Gray</label>
       <label class="a11y-option"><input type="radio" name="a11y-preset" value="contrast"> <span class="a11y-preset-chip" data-chip="contrast" aria-hidden="true">Aa</span> High Contrast</label>
-    </div>
+    </fieldset>
   </section>
   <section class="a11y-section">
     <h3 class="a11y-section-title">Text size</h3>
     <p class="a11y-section-help">Scales the root font size. Browser zoom (Ctrl/Cmd +) still works on top of this.</p>
-    <div class="a11y-options" role="radiogroup" aria-label="Text size">
+    <fieldset class="a11y-options">
+      <legend class="visually-hidden">Text size</legend>
       <label class="a11y-option"><input type="radio" name="a11y-font-size" value="100"> 100%</label>
       <label class="a11y-option"><input type="radio" name="a11y-font-size" value="115"> 115%</label>
       <label class="a11y-option"><input type="radio" name="a11y-font-size" value="130"> 130%</label>
       <label class="a11y-option"><input type="radio" name="a11y-font-size" value="150"> 150%</label>
-    </div>
+    </fieldset>
   </section>
   <section class="a11y-section">
     <h3 class="a11y-section-title">Custom colors</h3>

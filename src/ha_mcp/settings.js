@@ -3148,12 +3148,16 @@ loadFsCustomPaths();
     headerToggle.addEventListener('change', () => {
       setPref('theme', headerToggle.value);
       reflectPreset();
+      refreshSwatches();
     });
   }
 
   // Re-apply when the OS preference flips while in Auto.
   mql.addEventListener('change', () => {
-    if (read('theme') === 'auto') applyTheme('auto');
+    if (read('theme') === 'auto') {
+      applyTheme('auto');
+      refreshSwatches();
+    }
   });
 
   reflectRadio('a11y-font-size', read('fontSize'));
@@ -3178,16 +3182,23 @@ loadFsCustomPaths();
       cssColorToHex(rootStyle.getPropertyValue('--brand'));
   };
   const customInputs = document.querySelectorAll('input[type="color"][data-custom]');
-  {
-    const custom = applyCustom(read('custom'));
-    updateContrastWarning(custom);
+  // Sync the swatch wells with reality: a stored custom value wins,
+  // otherwise the active theme's computed color. Re-run after anything
+  // that changes the active palette (preset click, header toggle, OS
+  // auto-flip, clear, reset) so the wells never keep showing a previous
+  // theme's colors.
+  const refreshSwatches = () => {
+    let custom = {};
+    try { custom = JSON.parse(read('custom') || '{}') || {}; } catch (_) { /* ignore */ }
     customInputs.forEach((inp) => {
       const v = custom[inp.dataset.custom];
       const fallback = currentColorFor(inp.dataset.custom);
       if (HEX_RE.test(v || '')) inp.value = v;
       else if (fallback) inp.value = fallback;
     });
-  }
+  };
+  updateContrastWarning(applyCustom(read('custom')));
+  refreshSwatches();
   customInputs.forEach((inp) => {
     inp.addEventListener('input', () => {
       let custom = {};
@@ -3203,6 +3214,7 @@ loadFsCustomPaths();
     clearBtn.addEventListener('click', () => {
       write('custom', '');
       updateContrastWarning(applyCustom(''));
+      refreshSwatches();
     });
   }
 
@@ -3218,6 +3230,7 @@ loadFsCustomPaths();
       if (t.name === 'a11y-preset') {
         applyPreset(t.value);
         if (headerToggle) headerToggle.value = read('theme');
+        refreshSwatches();
       } else if (t.name === 'a11y-font-size') {
         setPref('fontSize', t.value);
       }
@@ -3236,6 +3249,7 @@ loadFsCustomPaths();
       reflectRadio('a11y-font-size', PREFS.fontSize.default);
       reflectPreset();
       if (headerToggle) headerToggle.value = PREFS.theme.default;
+      refreshSwatches();
     });
   }
 })();
