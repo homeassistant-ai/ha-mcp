@@ -20,6 +20,7 @@ from ..client.rest_client import (
 )
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
+from .config_entry_flow import FLOW_HELPER_TYPES
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -27,7 +28,6 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .tools_config_entry_flow import FLOW_HELPER_TYPES
 from .tools_config_helpers import (
     SIMPLE_HELPER_TYPES,
     _get_entities_for_config_entry,
