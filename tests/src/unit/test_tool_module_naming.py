@@ -37,7 +37,9 @@ def test_every_tools_module_has_a_register_function() -> None:
     for module_name in _discovered_tools_modules():
         module = importlib.import_module(f"ha_mcp.tools.{module_name}")
         has_register = any(
-            attr.startswith("register_") and attr.endswith("_tools")
+            attr.startswith("register_")
+            and attr.endswith("_tools")
+            and callable(getattr(module, attr))
             for attr in dir(module)
         )
         if not has_register:
