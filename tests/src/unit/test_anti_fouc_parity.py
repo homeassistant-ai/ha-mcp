@@ -74,3 +74,32 @@ def test_anti_fouc_resolvers_are_logically_identical() -> None:
         "keys, same <html> attributes) or one surface paints with the "
         "wrong prefs before CSS loads. Mirror your change into both."
     )
+
+
+# The runtime binding scripts (settings.js / Layout.astro theme-toggle
+# module) wire different DOMs, but their state semantics — pref keys,
+# defaults, preset triples, apply functions, custom-color layering — live
+# in a shared core from `const PREFS = {` through the `const APPLY = ...`
+# aggregate. That core must stay logically identical or the two surfaces
+# interpret the same stored prefs differently.
+_BINDING_CORE_RE = re.compile(r"const PREFS = \{.*?const APPLY = \{[^}]*\};", re.DOTALL)
+
+
+def test_binding_script_cores_are_logically_identical() -> None:
+    repo = Path(__file__).resolve().parents[3]
+    settings_js = (repo / "src" / "ha_mcp" / "settings.js").read_text(encoding="utf-8")
+    layout = (repo / "site" / "src" / "layouts" / "Layout.astro").read_text(
+        encoding="utf-8"
+    )
+
+    settings_core = _BINDING_CORE_RE.search(settings_js)
+    layout_core = _BINDING_CORE_RE.search(layout)
+    assert settings_core is not None, "no PREFS..APPLY core found in settings.js"
+    assert layout_core is not None, "no PREFS..APPLY core found in Layout.astro"
+
+    assert _normalize(settings_core.group(0)) == _normalize(layout_core.group(0)), (
+        "The accessibility binding cores (PREFS/PRESETS/apply functions/"
+        "custom-color layering) in src/ha_mcp/settings.js and "
+        "site/src/layouts/Layout.astro have diverged. Mirror your change "
+        "into both surfaces."
+    )

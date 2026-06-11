@@ -668,8 +668,9 @@ _SETTINGS_HTML = (
   // #1572 accessibility-pref resolver — runs before CSS evaluates so
   // data-theme / data-contrast / data-shade and the root font-size are set
   // on <html> ahead of paint (no FOUC, no jump). Reads saved choices from
-  // localStorage with safe defaults; falls back to prefers-color-scheme /
-  // prefers-contrast for "auto" modes.
+  // localStorage with safe defaults. Dark is the default (#1574 review:
+  // existing users rely on the current look); "auto" is opt-in and
+  // resolves via prefers-color-scheme.
   // Duplicate of the same logic in site/src/layouts/Layout.astro head — both
   // surfaces share the localStorage keys, so any change here must be mirrored
   // there (and vice versa) or one surface paints with the wrong attributes.
@@ -680,7 +681,7 @@ _SETTINGS_HTML = (
       try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
     }
     try {
-      var themePref = readPref("ha-mcp-theme", "auto");
+      var themePref = readPref("ha-mcp-theme", "dark");
       var theme = themePref === "auto"
         ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
         : themePref;
@@ -700,6 +701,34 @@ _SETTINGS_HTML = (
         // size (the bulk of this stylesheet) cascades proportionally.
         root.style.fontSize = (16 * sizePref / 100) + "px";
       }
+
+      // Custom colors layer on top of the preset as inline styles (inline
+      // beats stylesheet rules). Both surfaces' variable names are written;
+      // names a surface does not use are inert. Malformed JSON or non-hex
+      // values are ignored without disturbing the already-applied theme.
+      try {
+        var customRaw = readPref("ha-mcp-custom-colors", "");
+        if (customRaw) {
+          var custom = JSON.parse(customRaw);
+          var hexOk = function (v) { return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v); };
+          var channels = function (v) {
+            return parseInt(v.slice(1, 3), 16) + " " + parseInt(v.slice(3, 5), 16) + " " + parseInt(v.slice(5, 7), 16);
+          };
+          if (hexOk(custom.bg)) {
+            root.style.setProperty("--bg", custom.bg);
+            root.style.setProperty("--surface-0", channels(custom.bg));
+          }
+          if (hexOk(custom.text)) {
+            root.style.setProperty("--text", custom.text);
+            root.style.setProperty("--text-primary", custom.text);
+          }
+          if (hexOk(custom.accent)) {
+            root.style.setProperty("--accent", custom.accent);
+            root.style.setProperty("--accent-text", custom.accent);
+            root.style.setProperty("--brand", channels(custom.accent));
+          }
+        }
+      } catch (e2) { /* ignore malformed custom colors */ }
     } catch (e) {
       // localStorage may throw in private mode; fall back to dark default.
       root.setAttribute("data-theme", "dark");
@@ -930,18 +959,21 @@ _SETTINGS_HTML = (
 </div>
 <div class="panel" id="panel-accessibility">
   <p class="tool-desc" style="margin-bottom:16px">
-    These settings live in your browser only (localStorage). They apply to the
-    settings page and the docs site at <a href="https://homeassistant-ai.github.io/ha-mcp/"
-      target="_blank" rel="noopener">homeassistant-ai.github.io/ha-mcp</a>;
-    nothing is sent to the server.
+    These settings are stored in this browser only (localStorage); nothing is
+    sent to the server. They apply per site &mdash; the docs site offers the same
+    controls in its navigation bar, saved separately by your browser.
   </p>
   <section class="a11y-section">
-    <h3 class="a11y-section-title">Color scheme</h3>
-    <p class="a11y-section-help">Auto follows your OS preference and flips live when it changes.</p>
-    <div class="a11y-options" role="radiogroup" aria-label="Color scheme">
-      <label class="a11y-option"><input type="radio" name="a11y-theme" value="auto"> Auto</label>
-      <label class="a11y-option"><input type="radio" name="a11y-theme" value="light"> Light</label>
-      <label class="a11y-option"><input type="radio" name="a11y-theme" value="dark"> Dark</label>
+    <h3 class="a11y-section-title">Theme</h3>
+    <p class="a11y-section-help">One-click color schemes. Dark is the default; Auto follows
+      your OS preference and flips live when it changes.</p>
+    <div class="a11y-options" role="radiogroup" aria-label="Theme preset">
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="dark"> <span class="a11y-preset-chip" data-chip="dark" aria-hidden="true">Aa</span> Dark</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="light"> <span class="a11y-preset-chip" data-chip="light" aria-hidden="true">Aa</span> Light</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="auto"> <span class="a11y-preset-chip" data-chip="auto" aria-hidden="true"></span> Auto</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="paper"> <span class="a11y-preset-chip" data-chip="paper" aria-hidden="true">Aa</span> Paper</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="gray"> <span class="a11y-preset-chip" data-chip="gray" aria-hidden="true">Aa</span> Gray</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="contrast"> <span class="a11y-preset-chip" data-chip="contrast" aria-hidden="true">Aa</span> High Contrast</label>
     </div>
   </section>
   <section class="a11y-section">
@@ -955,24 +987,18 @@ _SETTINGS_HTML = (
     </div>
   </section>
   <section class="a11y-section">
-    <h3 class="a11y-section-title">Contrast</h3>
-    <p class="a11y-section-help">High contrast strengthens body text vs background and thickens
-      it. Status notices and badges keep their hand-tuned colors so they still read as the same
-      callout in both tiers.</p>
-    <div class="a11y-options" role="radiogroup" aria-label="Contrast">
-      <label class="a11y-option"><input type="radio" name="a11y-contrast" value="normal"> Normal</label>
-      <label class="a11y-option"><input type="radio" name="a11y-contrast" value="high"> High</label>
+    <h3 class="a11y-section-title">Custom colors</h3>
+    <p class="a11y-section-help">Pick your own colors on top of the selected theme. Each swatch
+      opens your system's visual color picker.</p>
+    <div class="a11y-swatches">
+      <label class="a11y-swatch">Background <input type="color" id="a11y-custom-bg" data-custom="bg"></label>
+      <label class="a11y-swatch">Text <input type="color" id="a11y-custom-text" data-custom="text"></label>
+      <label class="a11y-swatch">Accent <input type="color" id="a11y-custom-accent" data-custom="accent"></label>
     </div>
-  </section>
-  <section class="a11y-section">
-    <h3 class="a11y-section-title">Light background shade</h3>
-    <p class="a11y-section-help">Only active when the color scheme is Light (or Auto resolves to Light).
-      Some users find a pure-white background too harsh; pick the shade that's comfortable.</p>
-    <div class="a11y-options" role="radiogroup" aria-label="Light background shade">
-      <label class="a11y-option"><input type="radio" name="a11y-shade" value="off-white"> Off-white (default)</label>
-      <label class="a11y-option"><input type="radio" name="a11y-shade" value="paper"> Paper (warm)</label>
-      <label class="a11y-option"><input type="radio" name="a11y-shade" value="pure"> Pure white</label>
-    </div>
+    <p class="a11y-contrast-warning" id="a11y-contrast-warning" hidden>
+      Heads-up: the chosen background and text colors fall below a 4.5:1 contrast
+      ratio and may be hard to read together.</p>
+    <button id="a11y-custom-clear" class="a11y-reset" type="button" style="margin-top:12px">Clear custom colors</button>
   </section>
   <section class="a11y-section">
     <button id="a11y-reset" class="restart-btn" type="button">Reset to defaults</button>

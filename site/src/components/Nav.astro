@@ -67,11 +67,14 @@ const links = [
             hidden
           >
             <section class="a11y-section">
-              <h3 class="a11y-section-title">Color scheme</h3>
-              <div class="a11y-options" role="radiogroup" aria-label="Color scheme">
-                <label class="a11y-option"><input type="radio" name="a11y-theme" value="auto" /> Auto</label>
-                <label class="a11y-option"><input type="radio" name="a11y-theme" value="light" /> Light</label>
-                <label class="a11y-option"><input type="radio" name="a11y-theme" value="dark" /> Dark</label>
+              <h3 class="a11y-section-title">Theme</h3>
+              <div class="a11y-options" role="radiogroup" aria-label="Theme preset">
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="dark" /> <span class="a11y-preset-chip" data-chip="dark" aria-hidden="true">Aa</span> Dark</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="light" /> <span class="a11y-preset-chip" data-chip="light" aria-hidden="true">Aa</span> Light</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="auto" /> <span class="a11y-preset-chip" data-chip="auto" aria-hidden="true"></span> Auto</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="paper" /> <span class="a11y-preset-chip" data-chip="paper" aria-hidden="true">Aa</span> Paper</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="gray" /> <span class="a11y-preset-chip" data-chip="gray" aria-hidden="true">Aa</span> Gray</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="contrast" /> <span class="a11y-preset-chip" data-chip="contrast" aria-hidden="true">Aa</span> High Contrast</label>
               </div>
             </section>
             <section class="a11y-section">
@@ -84,19 +87,16 @@ const links = [
               </div>
             </section>
             <section class="a11y-section">
-              <h3 class="a11y-section-title">Contrast</h3>
-              <div class="a11y-options" role="radiogroup" aria-label="Contrast">
-                <label class="a11y-option"><input type="radio" name="a11y-contrast" value="normal" /> Normal</label>
-                <label class="a11y-option"><input type="radio" name="a11y-contrast" value="high" /> High</label>
+              <h3 class="a11y-section-title">Custom colors</h3>
+              <div class="a11y-swatches">
+                <label class="a11y-swatch">Background <input type="color" id="a11y-custom-bg" data-custom="bg" /></label>
+                <label class="a11y-swatch">Text <input type="color" id="a11y-custom-text" data-custom="text" /></label>
+                <label class="a11y-swatch">Accent <input type="color" id="a11y-custom-accent" data-custom="accent" /></label>
               </div>
-            </section>
-            <section class="a11y-section">
-              <h3 class="a11y-section-title">Light background shade</h3>
-              <div class="a11y-options" role="radiogroup" aria-label="Light background shade">
-                <label class="a11y-option"><input type="radio" name="a11y-shade" value="off-white" /> Off-white</label>
-                <label class="a11y-option"><input type="radio" name="a11y-shade" value="paper" /> Paper</label>
-                <label class="a11y-option"><input type="radio" name="a11y-shade" value="pure" /> Pure white</label>
-              </div>
+              <p class="a11y-contrast-warning" id="a11y-contrast-warning" hidden>
+                Heads-up: the chosen background and text colors fall below a 4.5:1
+                contrast ratio and may be hard to read together.</p>
+              <button id="a11y-custom-clear" type="button" class="a11y-reset">Clear custom colors</button>
             </section>
             <button id="a11yReset" type="button" class="a11y-reset">Reset to defaults</button>
           </div>

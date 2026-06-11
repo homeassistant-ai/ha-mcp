@@ -3015,18 +3015,32 @@ loadFsCustomPaths();
 })();
 
 // #1572 accessibility prefs — bidirectional binding between the header
-// theme toggle, the Accessibility tab radios, and the underlying
-// localStorage / <html> attributes. The anti-FOUC head script in
-// settings_ui.py already set the initial attributes; this module keeps
-// them in sync for the rest of the session and persists user changes.
+// theme toggle, the Accessibility tab controls, and the underlying
+// localStorage / <html> attributes. The anti-FOUC head script already set
+// the initial attributes; this module keeps them in sync for the rest of
+// the session and persists user changes. The block from `const PREFS` to
+// `const APPLY` is mirrored verbatim in site/src/layouts/Layout.astro and
+// guarded by tests/src/unit/test_anti_fouc_parity.py.
 (function bindAccessibilityPrefs() {
   const root = document.documentElement;
   const mql = window.matchMedia('(prefers-color-scheme: light)');
   const PREFS = {
-    theme:    { key: 'ha-mcp-theme',     default: 'auto'      },
-    fontSize: { key: 'ha-mcp-font-size', default: '100'       },
-    contrast: { key: 'ha-mcp-contrast',  default: 'normal'    },
-    shade:    { key: 'ha-mcp-shade',     default: 'off-white' },
+    theme:    { key: 'ha-mcp-theme',         default: 'dark'      },
+    fontSize: { key: 'ha-mcp-font-size',     default: '100'       },
+    contrast: { key: 'ha-mcp-contrast',      default: 'normal'    },
+    shade:    { key: 'ha-mcp-shade',         default: 'off-white' },
+    custom:   { key: 'ha-mcp-custom-colors', default: ''          },
+  };
+  // One-click presets (Firefox Reader View shape, #1574 review): each sets
+  // the full (theme, shade, contrast) triple; the checked chip is derived
+  // back from the stored triple, so hand-edited combos simply match none.
+  const PRESETS = {
+    dark:     { theme: 'dark',  shade: 'off-white', contrast: 'normal' },
+    light:    { theme: 'light', shade: 'off-white', contrast: 'normal' },
+    auto:     { theme: 'auto',  shade: 'off-white', contrast: 'normal' },
+    paper:    { theme: 'light', shade: 'paper',     contrast: 'normal' },
+    gray:     { theme: 'light', shade: 'gray',      contrast: 'normal' },
+    contrast: { theme: 'light', shade: 'pure',      contrast: 'high'   },
   };
   const read = (p) => {
     try { return localStorage.getItem(PREFS[p].key) || PREFS[p].default; }
@@ -3055,28 +3069,85 @@ loadFsCustomPaths();
     if (shade && shade !== 'off-white') root.setAttribute('data-shade', shade);
     else root.removeAttribute('data-shade');
   };
-  const APPLY = { theme: applyTheme, fontSize: applyFontSize, contrast: applyContrast, shade: applyShade };
-
-  // Update the matching radio in the Accessibility tab without firing
-  // its change handler (we'd loop otherwise).
-  const reflectRadio = (name, value) => {
-    document.querySelectorAll('input[type="radio"][name="' + name + '"]').forEach((r) => {
-      r.checked = (r.value === value);
-    });
+  const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+  const channels = (hex) =>
+    parseInt(hex.slice(1, 3), 16) + ' ' + parseInt(hex.slice(3, 5), 16) + ' ' + parseInt(hex.slice(5, 7), 16);
+  // Custom colors layer on top of any preset as inline styles (inline beats
+  // stylesheet rules, so the cascade is: preset CSS -> user custom). Both
+  // surfaces' variable names are written; names a surface does not use are
+  // inert. Returns the parsed object so callers can reuse it.
+  const CUSTOM_VARS = {
+    bg:     { hex: ['--bg'], chan: ['--surface-0'] },
+    text:   { hex: ['--text', '--text-primary'], chan: [] },
+    accent: { hex: ['--accent', '--accent-text'], chan: ['--brand'] },
   };
+  const applyCustom = (raw) => {
+    for (const part in CUSTOM_VARS) {
+      CUSTOM_VARS[part].hex.concat(CUSTOM_VARS[part].chan).forEach((name) => root.style.removeProperty(name));
+    }
+    let custom = {};
+    try { custom = JSON.parse(raw || '{}') || {}; } catch (_) { return {}; }
+    for (const part in CUSTOM_VARS) {
+      const v = custom[part];
+      if (typeof v !== 'string' || !HEX_RE.test(v)) continue;
+      CUSTOM_VARS[part].hex.forEach((name) => root.style.setProperty(name, v));
+      CUSTOM_VARS[part].chan.forEach((name) => root.style.setProperty(name, channels(v)));
+    }
+    return custom;
+  };
+  const APPLY = { theme: applyTheme, fontSize: applyFontSize, contrast: applyContrast, shade: applyShade, custom: applyCustom };
 
   const setPref = (pref, value) => {
     write(pref, value);
     APPLY[pref](value);
   };
+  const applyPreset = (name) => {
+    const p = PRESETS[name];
+    if (!p) return;
+    setPref('theme', p.theme);
+    setPref('shade', p.shade);
+    setPref('contrast', p.contrast);
+  };
+  const reflectPreset = () => {
+    const theme = read('theme'), shade = read('shade'), contrast = read('contrast');
+    let active = '';
+    for (const name in PRESETS) {
+      const p = PRESETS[name];
+      if (p.theme === theme && p.shade === shade && p.contrast === contrast) { active = name; break; }
+    }
+    document.querySelectorAll('input[type="radio"][name="a11y-preset"]').forEach((r) => {
+      r.checked = (r.value === active);
+    });
+  };
+  const reflectRadio = (name, value) => {
+    document.querySelectorAll('input[type="radio"][name="' + name + '"]').forEach((r) => {
+      r.checked = (r.value === value);
+    });
+  };
+  // WCAG 2.x relative-luminance contrast for the custom-color warning.
+  const luminance = (hex) => {
+    const f = (i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * f(1) + 0.7152 * f(3) + 0.0722 * f(5);
+  };
+  const updateContrastWarning = (custom) => {
+    const warn = document.getElementById('a11y-contrast-warning');
+    if (!warn) return;
+    const comparable = HEX_RE.test(custom.bg || '') && HEX_RE.test(custom.text || '');
+    if (!comparable) { warn.hidden = true; return; }
+    const l1 = luminance(custom.bg), l2 = luminance(custom.text);
+    warn.hidden = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05) >= 4.5;
+  };
 
-  // Header <select> for theme — keep it as the existing surface.
+  // Header <select> for theme — quick Dark/Light/Auto access.
   const headerToggle = document.getElementById('themeToggle');
   if (headerToggle) {
     headerToggle.value = read('theme');
     headerToggle.addEventListener('change', () => {
       setPref('theme', headerToggle.value);
-      reflectRadio('a11y-theme', headerToggle.value);
+      reflectPreset();
     });
   }
 
@@ -3085,20 +3156,55 @@ loadFsCustomPaths();
     if (read('theme') === 'auto') applyTheme('auto');
   });
 
-  // Accessibility tab — wire each radio group to its pref.
-  const RADIO_TO_PREF = {
-    'a11y-theme':     'theme',
-    'a11y-font-size': 'fontSize',
-    'a11y-contrast':  'contrast',
-    'a11y-shade':     'shade',
+  reflectRadio('a11y-font-size', read('fontSize'));
+  reflectPreset();
+  // Initialize each swatch from the saved custom value, falling back to
+  // the theme's current computed color so the wells show reality instead
+  // of an arbitrary black default.
+  const cssColorToHex = (value) => {
+    const v = (value || '').trim();
+    if (HEX_RE.test(v)) return v;
+    let m = v.match(/^rgba?\((\d+)[, ]+(\d+)[, ]+(\d+)/);
+    if (!m) m = v.match(/^(\d+) (\d+) (\d+)$/);
+    if (!m) return '';
+    return '#' + [m[1], m[2], m[3]].map((n) => (+n).toString(16).padStart(2, '0')).join('');
   };
-
-  const initRadios = () => {
-    for (const [name, pref] of Object.entries(RADIO_TO_PREF)) {
-      reflectRadio(name, read(pref));
-    }
+  const currentColorFor = (part) => {
+    const body = getComputedStyle(document.body);
+    const rootStyle = getComputedStyle(root);
+    if (part === 'bg') return cssColorToHex(body.backgroundColor);
+    if (part === 'text') return cssColorToHex(body.color);
+    return cssColorToHex(rootStyle.getPropertyValue('--accent')) ||
+      cssColorToHex(rootStyle.getPropertyValue('--brand'));
   };
-  initRadios();
+  const customInputs = document.querySelectorAll('input[type="color"][data-custom]');
+  {
+    const custom = applyCustom(read('custom'));
+    updateContrastWarning(custom);
+    customInputs.forEach((inp) => {
+      const v = custom[inp.dataset.custom];
+      const fallback = currentColorFor(inp.dataset.custom);
+      if (HEX_RE.test(v || '')) inp.value = v;
+      else if (fallback) inp.value = fallback;
+    });
+  }
+  customInputs.forEach((inp) => {
+    inp.addEventListener('input', () => {
+      let custom = {};
+      try { custom = JSON.parse(read('custom') || '{}') || {}; } catch (_) { /* start fresh */ }
+      custom[inp.dataset.custom] = inp.value;
+      write('custom', JSON.stringify(custom));
+      applyCustom(read('custom'));
+      updateContrastWarning(custom);
+    });
+  });
+  const clearBtn = document.getElementById('a11y-custom-clear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      write('custom', '');
+      updateContrastWarning(applyCustom(''));
+    });
+  }
 
   // Scope the change listener to the Accessibility panel rather than the
   // document: the settings page carries dozens of unrelated inputs (tool
@@ -3109,21 +3215,26 @@ loadFsCustomPaths();
     a11yPanel.addEventListener('change', (e) => {
       const t = e.target;
       if (!(t instanceof HTMLInputElement) || t.type !== 'radio') return;
-      const pref = RADIO_TO_PREF[t.name];
-      if (!pref) return;
-      setPref(pref, t.value);
-      // Keep the header toggle in sync if theme changed from the tab.
-      if (pref === 'theme' && headerToggle) headerToggle.value = t.value;
+      if (t.name === 'a11y-preset') {
+        applyPreset(t.value);
+        if (headerToggle) headerToggle.value = read('theme');
+      } else if (t.name === 'a11y-font-size') {
+        setPref('fontSize', t.value);
+      }
     });
   }
 
   const resetBtn = document.getElementById('a11y-reset');
   if (resetBtn) {
     resetBtn.addEventListener('click', () => {
-      for (const [name, pref] of Object.entries(RADIO_TO_PREF)) {
-        setPref(pref, PREFS[pref].default);
-        reflectRadio(name, PREFS[pref].default);
-      }
+      setPref('theme', PREFS.theme.default);
+      setPref('shade', PREFS.shade.default);
+      setPref('contrast', PREFS.contrast.default);
+      setPref('fontSize', PREFS.fontSize.default);
+      write('custom', '');
+      updateContrastWarning(applyCustom(''));
+      reflectRadio('a11y-font-size', PREFS.fontSize.default);
+      reflectPreset();
       if (headerToggle) headerToggle.value = PREFS.theme.default;
     });
   }
