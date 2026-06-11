@@ -34,7 +34,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_config_entry_flow import (
+from ha_mcp.tools.config_entry_flow import (
     FLOW_HELPER_TYPES,
     fetch_helper_flow_info,
 )

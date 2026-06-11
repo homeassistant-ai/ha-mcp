@@ -312,7 +312,7 @@ class TestConfigEntryFlow:
         ), f"Error should mention menu selection: {error_str}"
         # The error context must carry the legal sub-types inline so the
         # caller can pick a branch on the next try without a discovery
-        # round-trip — see _handle_menu_step in tools_config_entry_flow.
+        # round-trip — see _handle_menu_step in config_entry_flow.
         menu_options = data.get("menu_options")
         assert isinstance(menu_options, list) and menu_options, (
             f"Error should carry menu_options list: {data}"

@@ -19,20 +19,20 @@ from pydantic import AliasChoices, Field
 from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
-from .helpers import (
-    exception_to_structured_error,
-    log_tool_usage,
-    raise_tool_error,
-    register_tool_methods,
-    validate_identifier_not_empty,
-)
-from .tools_config_entry_flow import (
+from .config_entry_flow import (
     FLOW_HELPER_TYPES,
     create_flow_helper,
     fetch_helper_flow_info,
     get_user_step_field_names,
     set_config_subentry,
     update_flow_helper,
+)
+from .helpers import (
+    exception_to_structured_error,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+    validate_identifier_not_empty,
 )
 from .util_helpers import (
     apply_entity_category,
@@ -573,7 +573,7 @@ def get_simple_helper_schema(helper_type: str) -> list[_HelperFieldSpec] | None:
     Callers attach the result to validation-error context as ``data_schema``
     so the LLM sees field shape inline with a 4xx response, matching the
     auto-attach pattern already in use for flow helpers (see
-    ``fetch_helper_flow_info`` in ``tools_config_entry_flow``).
+    ``fetch_helper_flow_info`` in ``config_entry_flow``).
     Returns ``None`` for any helper_type not in ``SIMPLE_HELPER_SCHEMAS``,
     so callers can write a single uniform ``if schema is not None: …`` branch.
     """
@@ -611,7 +611,7 @@ def _simple_helper_error_context(
 _MENU_ROOTED_FLOW_HELPER_TYPES: frozenset[str] = frozenset({"template", "group"})
 
 # Keys callers may pass inside ``config`` to select a menu branch — mirrors
-# ``_MENU_SELECTION_KEYS`` in ``tools_config_entry_flow.py`` (kept in parallel
+# ``_MENU_SELECTION_KEYS`` in ``config_entry_flow.py`` (kept in parallel
 # rather than imported to avoid widening that module's surface).
 _MENU_CHOICE_CONFIG_KEYS: tuple[str, ...] = (
     "group_type",
@@ -627,7 +627,7 @@ def _extract_menu_choice_from_config(
 
     Returns the value of the first ``_MENU_CHOICE_CONFIG_KEYS`` key found in
     ``config_dict`` if it's a non-empty string, else ``None``. Mirrors
-    ``_handle_menu_step`` in ``tools_config_entry_flow`` — without this,
+    ``_handle_menu_step`` in ``config_entry_flow`` — without this,
     ``_flow_helper_error_context`` falls back to ``menu_choice=None`` and
     silently omits ``data_schema`` for menu-rooted types
     (``template``/``group`` — the most common ones).
@@ -669,7 +669,7 @@ async def _flow_helper_error_context(
         )
     except Exception as e:
         # Mirror the breadcrumb in ``abort_config_flow``'s own swallow
-        # (tools_config_entry_flow), so a fetch failure here doesn't
+        # (config_entry_flow), so a fetch failure here doesn't
         # disappear silently — this PR raises the call rate by 5 sites
         # and the swallow needs an audit-trail entry.
         logger.debug(
