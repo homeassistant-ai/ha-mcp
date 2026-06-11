@@ -59,8 +59,7 @@ class TestHaGetCameraImage:
         result = await tools.ha_get_camera_image(entity_id="camera.front_door")
 
         mock_client.httpx_client.get.assert_called_once_with(
-            "/camera_proxy/camera.front_door",
-            params=None
+            "/camera_proxy/camera.front_door", params=None
         )
         assert result.data == b"\xff\xd8\xff\xe0"
         assert result._format == "jpeg"
@@ -75,11 +74,12 @@ class TestHaGetCameraImage:
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        await tools.ha_get_camera_image(entity_id="camera.front_door", width=640, height=480)
+        await tools.ha_get_camera_image(
+            entity_id="camera.front_door", width=640, height=480
+        )
 
         mock_client.httpx_client.get.assert_called_once_with(
-            "/camera_proxy/camera.front_door",
-            params={"width": "640", "height": "480"}
+            "/camera_proxy/camera.front_door", params={"width": "640", "height": "480"}
         )
 
     @pytest.mark.asyncio
@@ -112,7 +112,9 @@ class TestHaGetCameraImage:
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        with pytest.raises(RuntimeError, match="Failed to retrieve camera image: HTTP 500"):
+        with pytest.raises(
+            RuntimeError, match="Failed to retrieve camera image: HTTP 500"
+        ):
             await tools.ha_get_camera_image(entity_id="camera.front_door")
 
     @pytest.mark.asyncio
@@ -180,8 +182,7 @@ class TestHaGetCameraImage:
         await tools.ha_get_camera_image(entity_id="camera.front_door", width=800)
 
         mock_client.httpx_client.get.assert_called_once_with(
-            "/camera_proxy/camera.front_door",
-            params={"width": "800"}
+            "/camera_proxy/camera.front_door", params={"width": "800"}
         )
 
     @pytest.mark.asyncio
@@ -197,6 +198,5 @@ class TestHaGetCameraImage:
         await tools.ha_get_camera_image(entity_id="camera.front_door", height=600)
 
         mock_client.httpx_client.get.assert_called_once_with(
-            "/camera_proxy/camera.front_door",
-            params={"height": "600"}
+            "/camera_proxy/camera.front_door", params={"height": "600"}
         )

@@ -313,9 +313,7 @@ class TestWebSocketClientUsesVerifySsl:
         monkeypatch.setenv("HOMEASSISTANT_TOKEN", "t")
         from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
-        client = HomeAssistantWebSocketClient(
-            url="https://ha.local:8123", token="t"
-        )
+        client = HomeAssistantWebSocketClient(url="https://ha.local:8123", token="t")
         assert client.verify_ssl is False
 
     def test_constructor_safe_default_when_settings_load_fails(
@@ -335,9 +333,7 @@ class TestWebSocketClientUsesVerifySsl:
                 url="https://ha.local:8123", token="t"
             )
         assert client.verify_ssl is True
-        assert any(
-            "Could not load settings" in r.getMessage() for r in caplog.records
-        )
+        assert any("Could not load settings" in r.getMessage() for r in caplog.records)
 
 
 class TestPoolFactoryHonorsEnv:
@@ -374,9 +370,7 @@ class TestHelperPropagatesVerifySsl:
             async def connect(self):
                 return True
 
-        with patch.object(
-            helpers_mod, "HomeAssistantWebSocketClient", FakeWsClient
-        ):
+        with patch.object(helpers_mod, "HomeAssistantWebSocketClient", FakeWsClient):
             ws, error = await helpers_mod.get_connected_ws_client(
                 "https://ha.local:8123", "t", verify_ssl=False
             )

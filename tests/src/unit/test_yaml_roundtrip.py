@@ -16,7 +16,9 @@ sys.modules["homeassistant.components"] = homeassistant.components
 sys.modules["homeassistant.config_entries"] = homeassistant.config_entries
 sys.modules["homeassistant.core"] = homeassistant.core
 sys.modules["homeassistant.helpers"] = homeassistant.helpers
-sys.modules["homeassistant.helpers.config_validation"] = homeassistant.helpers.config_validation
+sys.modules["homeassistant.helpers.config_validation"] = (
+    homeassistant.helpers.config_validation
+)
 
 from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
     _TaggedScalar,
@@ -28,6 +30,7 @@ from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _load(text: str):
     """Load YAML text via the round-trip helper and return (ry, data)."""
     ry = make_yaml()
@@ -38,6 +41,7 @@ def _load(text: str):
 # ---------------------------------------------------------------------------
 # Comment preservation
 # ---------------------------------------------------------------------------
+
 
 class TestCommentPreservation:
     """Comments (top-level, inline, block) survive a round-trip."""
@@ -69,6 +73,7 @@ homeassistant:
 # ---------------------------------------------------------------------------
 # HA custom tags
 # ---------------------------------------------------------------------------
+
 
 class TestSecretTag:
     def test_secret_preserved(self):
@@ -103,11 +108,14 @@ class TestIncludeTag:
 
 
 class TestIncludeDirTags:
-    @pytest.mark.parametrize("tag", [
-        "!include_dir_list",
-        "!include_dir_merge_list",
-        "!include_dir_named",
-    ])
+    @pytest.mark.parametrize(
+        "tag",
+        [
+            "!include_dir_list",
+            "!include_dir_merge_list",
+            "!include_dir_named",
+        ],
+    )
     def test_include_dir_tag_preserved(self, tag):
         src = f"items: {tag} ./stuff\n"
         ry, data = _load(src)
@@ -125,6 +133,7 @@ class TestEnvVarTag:
 # ---------------------------------------------------------------------------
 # Round-trip validity
 # ---------------------------------------------------------------------------
+
 
 class TestRoundTripValidity:
     """Output of a round-trip is itself valid YAML."""
@@ -150,6 +159,7 @@ homeassistant:
 # Mutation preserves comments
 # ---------------------------------------------------------------------------
 
+
 class TestMutationPreservesComments:
     SAMPLE = """\
 # Main config
@@ -169,6 +179,7 @@ homeassistant:
 # ---------------------------------------------------------------------------
 # Content snippets
 # ---------------------------------------------------------------------------
+
 
 class TestSnippetPreservation:
     """Realistic HA snippet with mixed tags and comments."""

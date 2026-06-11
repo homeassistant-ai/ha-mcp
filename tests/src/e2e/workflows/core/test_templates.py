@@ -161,7 +161,9 @@ class TestEvalTemplate:
         data = assert_mcp_success(result, "Eval filter template")
 
         assert "result" in data, f"Missing 'result': {data}"
-        assert data["result"] == "Hello World", f"Filter result mismatch: {data['result']}"
+        assert data["result"] == "Hello World", (
+            f"Filter result mismatch: {data['result']}"
+        )
 
         logger.info(f"Filter result: {data['result']}")
 
@@ -242,7 +244,9 @@ class TestEvalTemplate:
 
         data = assert_mcp_success(result, "Eval template with timeout")
 
-        logger.info(f"Template with timeout executed successfully: {data.get('result')}")
+        logger.info(
+            f"Template with timeout executed successfully: {data.get('result')}"
+        )
 
     async def test_eval_template_counting_entities(self, mcp_client):
         """Test evaluating template that counts entities."""
@@ -394,6 +398,8 @@ async def test_eval_template_brightness_calculation(mcp_client, test_light_entit
     assert "result" in data, f"Missing 'result': {data}"
     # Result should be a number 0-100 (percentage)
     result_value = float(data["result"]) if data["result"] else 0
-    assert 0 <= result_value <= 100, f"Brightness percentage out of range: {result_value}"
+    assert 0 <= result_value <= 100, (
+        f"Brightness percentage out of range: {result_value}"
+    )
 
     logger.info(f"Brightness percentage: {result_value}%")

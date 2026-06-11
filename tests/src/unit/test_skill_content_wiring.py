@@ -8,7 +8,8 @@ violated each tool's contract that ``MandatoryBPS=True`` (the
 default) would ship ``skill_content`` in the response.
 
 These tests address that bug class without trying to spin up the full
-fastmcp stack (which Termux can't do without uv):
+fastmcp stack (they need only the source tree, not an installed
+fastmcp/pydantic stack or a running server):
 
 * :class:`TestWriteToolAttachCoverage` — AST-scans each of the six write
   tools, finds every successful return path inside the public ``@tool``

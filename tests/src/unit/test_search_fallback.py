@@ -8,7 +8,6 @@ Its behavior was a useless score-0 entity dump that masked errors;
 exceptions now propagate to callers instead.
 """
 
-
 import pytest
 
 from ha_mcp.tools.tools_search import _exact_match_search
@@ -169,7 +168,8 @@ class TestExactMatchSearch:
         # the penalised hidden entry.
         visible_bedroom = next(
             (
-                r for eid, r in by_id.items()
+                r
+                for eid, r in by_id.items()
                 if eid != "light.bedroom" and "bedroom" in eid.lower()
             ),
             None,

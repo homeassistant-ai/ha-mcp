@@ -96,6 +96,10 @@ class ErrorCode(StrEnum):
     USER_DENIED = "USER_DENIED"
     POLICY_LOAD_FAILED = "POLICY_LOAD_FAILED"
 
+    # Read Only Mode (discussion #1569). A write operation was blocked
+    # because the server-wide Read Only Mode toggle is on.
+    READ_ONLY_MODE = "READ_ONLY_MODE"
+
 
 # Default suggestions for common error codes
 DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {

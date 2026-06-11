@@ -62,7 +62,9 @@ class TestConfigGetDashboardSearchErrorHandling:
 
         result = json.loads(str(exc_info.value))
         assert result["success"] is False
-        assert isinstance(result["error"], dict), "error must be structured dict, not raw string"
+        assert isinstance(result["error"], dict), (
+            "error must be structured dict, not raw string"
+        )
         assert "code" in result["error"]
         assert "message" in result["error"]
         assert "error_type" not in result

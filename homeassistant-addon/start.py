@@ -24,6 +24,11 @@ def log_info(message: str) -> None:
     _log_with_timestamp("INFO", message)
 
 
+def log_warning(message: str) -> None:
+    """Log warning message."""
+    _log_with_timestamp("WARNING", message, sys.stderr)
+
+
 def log_error(message: str) -> None:
     """Log error message."""
     _log_with_timestamp("ERROR", message, sys.stderr)
@@ -182,7 +187,19 @@ def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool
     addon container.
     """
     raw = config.get(key, default)
-    return raw if isinstance(raw, bool) else default
+    if isinstance(raw, bool):
+        return raw
+    if key in config:
+        # Present-but-wrong-type is the diagnostic case: HA Supervisor
+        # coerces YAML scalars to the schema type, so a non-bool here
+        # usually means a hand-edited options.json with a bad value. Warn
+        # so the operator sees why the secure default won (an absent key
+        # is the normal path and stays silent).
+        log_warning(
+            f"addon option {key!r} has type {type(raw).__name__} "
+            f"(expected bool); applying default {default!r}."
+        )
+    return default
 
 
 _DEV_ADDON_BETA_KEYS = (
@@ -280,6 +297,7 @@ def main() -> int:
     custom_secret_path = ""  # default
     enable_tool_search = False  # default
     enable_tool_security_policies = False  # default
+    read_only_mode = False  # default (discussion #1569 — non-beta, off by default)
     enable_yaml_config_editing = False  # default
     yaml_config_in_config = False  # presence flag
     # Per-key sub-gates of enable_yaml_config_editing (dev-addon schema
@@ -339,6 +357,7 @@ def main() -> int:
                 if isinstance(raw_tool_security_policies, bool)
                 else False
             )
+            read_only_mode = resolve_bool_option(config, "read_only_mode", False)
             # Beta sub-flag presence tracking. On stable-addon, the 5
             # beta keys are NOT in config.yaml
             # schema — options.json carries none of them. If we wrote
@@ -495,6 +514,9 @@ def main() -> int:
     os.environ["ENABLE_TOOL_SECURITY_POLICIES"] = str(
         enable_tool_security_policies
     ).lower()
+    # READ_ONLY_MODE is non-beta and in BOTH addon schemas, so it is
+    # written unconditionally (like ENABLE_MANDATORY_BPS below).
+    os.environ["READ_ONLY_MODE"] = str(read_only_mode).lower()
     # ENABLE_MANDATORY_BPS is non-beta and default-ON, so it is written
     # unconditionally (like the stable core settings above) — never
     # presence-gated or beta-master-gated like the beta sub-flags below.

@@ -103,7 +103,9 @@ async def test_set_preferred_assist_pipeline_sends_preferred_message(tools):
         "result": None,
     }
 
-    result = await tools.ha_manage_pipeline(action="set_preferred", pipeline_id="pipeline_1")
+    result = await tools.ha_manage_pipeline(
+        action="set_preferred", pipeline_id="pipeline_1"
+    )
 
     assert result == {
         "success": True,
@@ -257,12 +259,14 @@ async def test_set_assist_pipeline_normalizes_nullable_empty_strings(tools):
     )
 
     assert result["success"] is True
-    assert tools._client.send_websocket_message.await_args_list[1].args[0][
-        "stt_engine"
-    ] is None
-    assert tools._client.send_websocket_message.await_args_list[1].args[0][
-        "tts_voice"
-    ] is None
+    assert (
+        tools._client.send_websocket_message.await_args_list[1].args[0]["stt_engine"]
+        is None
+    )
+    assert (
+        tools._client.send_websocket_message.await_args_list[1].args[0]["tts_voice"]
+        is None
+    )
 
 
 async def test_set_assist_pipeline_rejects_required_empty_strings(tools):

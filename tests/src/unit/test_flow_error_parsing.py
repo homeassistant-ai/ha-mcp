@@ -74,7 +74,11 @@ class TestStructuredFieldErrors:
         # second call to start_config_flow; sequence both.
         intro_schema = [
             {"name": "entity_id", "required": True, "selector": {"entity": {}}},
-            {"name": "filter", "required": True, "selector": {"select": {"options": ["lowpass", "outlier"]}}},
+            {
+                "name": "filter",
+                "required": True,
+                "selector": {"select": {"options": ["lowpass", "outlier"]}},
+            },
         ]
         start_calls: list[str] = []
 
@@ -175,9 +179,7 @@ class TestUnstructuredErrorAttachesSchema:
         client.abort_config_flow = AsyncMock(return_value={})
 
         with pytest.raises(ToolError) as exc_info:
-            await create_flow_helper(
-                client, "statistics", {"entity_id": "sensor.foo"}
-            )
+            await create_flow_helper(client, "statistics", {"entity_id": "sensor.foo"})
 
         body = _parse_tool_error(exc_info.value)
         assert body["success"] is False
@@ -284,12 +286,14 @@ class TestHandleFlowStepsOptionsFlowError:
         # auto-generated coroutines that never await cleanly.
         client = AsyncMock()
         intro_schema = [{"name": "window_size", "selector": {"number": {}}}]
-        client.start_config_flow = AsyncMock(return_value={
-            "type": "form",
-            "flow_id": "intro-opt",
-            "step_id": "init",
-            "data_schema": intro_schema,
-        })
+        client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "form",
+                "flow_id": "intro-opt",
+                "step_id": "init",
+                "data_schema": intro_schema,
+            }
+        )
         client.abort_config_flow = AsyncMock(return_value={})
 
         with pytest.raises(ToolError) as exc_info:

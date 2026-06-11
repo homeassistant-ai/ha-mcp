@@ -701,6 +701,28 @@ _SETTINGS_HTML = (
     or add-on Configuration page).
   </div>
   <div class="summary" id="summary"></div>
+  <div class="feature-row" id="readOnlyModeRow">
+    <div class="feature-info">
+      <div class="feature-name">Read Only Mode</div>
+      <div class="feature-help">
+        Toggles all write tools off, and removes ability for tools to
+        make any write or destructive calls. Mixed read/write tools
+        (backups, add-ons, energy preferences, voice pipelines, and code
+        mode when enabled) stay available with their write operations
+        blocked.
+      </div>
+    </div>
+    <div class="feature-control">
+      <label class="switch">
+        <input type="checkbox" id="read-only-mode-toggle">
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+  <div class="pin-notice" id="roUnknownNotice">
+    Could not read server settings — Read Only Mode status unknown; this
+    view may not reflect what the server enforces.
+  </div>
   <input type="text" class="search" id="search" placeholder="Search tools...">
   <div id="groups"></div>
 </div>
@@ -1277,7 +1299,20 @@ def build_settings_handlers(
         for name in DEFAULT_PINNED_TOOLS:
             if name not in states:
                 states[name] = "pinned"
-        return JSONResponse({"tools": tools, "states": states, "env_pinned": pinned})
+        # Mixed read/write tools that stay enabled in Read Only Mode
+        # (their write actions are blocked at call time instead). The JS
+        # uses this to keep their toggles live while force-disabling the
+        # other write-capable tools' rows when the mode is on.
+        from .read_only import READ_ONLY_EXEMPT_TOOLS
+
+        return JSONResponse(
+            {
+                "tools": tools,
+                "states": states,
+                "env_pinned": pinned,
+                "read_only_exempt": sorted(READ_ONLY_EXEMPT_TOOLS),
+            }
+        )
 
     async def _save_tools(request: Request) -> JSONResponse:
         try:

@@ -47,7 +47,9 @@ def wait_for_ha_ready(url: str, token: str) -> None:
                     )
                     break
                 if component_count != last_component_count:
-                    logger.info(f"  {component_count} components loaded, waiting for {MIN_COMPONENTS}+...")
+                    logger.info(
+                        f"  {component_count} components loaded, waiting for {MIN_COMPONENTS}+..."
+                    )
                     last_component_count = component_count
         except (requests.RequestException, ValueError) as exc:
             logger.debug("Readiness check failed (retrying): %s", exc)
@@ -69,10 +71,14 @@ def wait_for_ha_ready(url: str, token: str) -> None:
             if r.status_code == 200:
                 entity_count = len(r.json())
                 if entity_count >= MIN_ENTITIES:
-                    logger.info(f"HA ready: {entity_count} entities registered ({attempt + 1}s)")
+                    logger.info(
+                        f"HA ready: {entity_count} entities registered ({attempt + 1}s)"
+                    )
                     break
                 if entity_count != last_entity_count:
-                    logger.info(f"  {entity_count} entities registered, waiting for {MIN_ENTITIES}+...")
+                    logger.info(
+                        f"  {entity_count} entities registered, waiting for {MIN_ENTITIES}+..."
+                    )
                     last_entity_count = entity_count
         except (requests.RequestException, ValueError) as exc:
             logger.debug("Readiness check failed (retrying): %s", exc)

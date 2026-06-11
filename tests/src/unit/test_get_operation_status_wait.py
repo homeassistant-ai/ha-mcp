@@ -18,7 +18,9 @@ from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.utils.operation_manager import DeviceOperation, OperationStatus
 
 
-def _make_operation(status: OperationStatus = OperationStatus.PENDING) -> DeviceOperation:
+def _make_operation(
+    status: OperationStatus = OperationStatus.PENDING,
+) -> DeviceOperation:
     return DeviceOperation(
         operation_id="op-1",
         entity_id="light.a",
@@ -99,7 +101,8 @@ async def test_polls_until_completion_within_timeout() -> None:
 
     with (
         patch(
-            "ha_mcp.tools.device_control.get_operation_from_memory", side_effect=fake_get
+            "ha_mcp.tools.device_control.get_operation_from_memory",
+            side_effect=fake_get,
         ),
         patch.object(asyncio, "sleep", new=fast_sleep),
     ):
@@ -192,7 +195,8 @@ async def test_cleanup_mid_poll_raises_resource_not_found() -> None:
 
     with (
         patch(
-            "ha_mcp.tools.device_control.get_operation_from_memory", side_effect=fake_get
+            "ha_mcp.tools.device_control.get_operation_from_memory",
+            side_effect=fake_get,
         ),
         patch.object(asyncio, "sleep", new=fast_sleep),
         pytest.raises(ToolError) as exc_info,
@@ -227,7 +231,8 @@ async def test_failed_mid_poll_raises_service_call_failed() -> None:
 
     with (
         patch(
-            "ha_mcp.tools.device_control.get_operation_from_memory", side_effect=fake_get
+            "ha_mcp.tools.device_control.get_operation_from_memory",
+            side_effect=fake_get,
         ),
         patch.object(asyncio, "sleep", new=fast_sleep),
         pytest.raises(ToolError) as exc_info,

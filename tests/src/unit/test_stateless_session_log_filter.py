@@ -50,17 +50,13 @@ class TestStatelessSessionLogFilter:
         assert record.levelno == logging.INFO
 
     def test_leaves_other_loggers_unchanged(self):
-        record = self._make_record(
-            "some.other.logger", "Terminating session: None"
-        )
+        record = self._make_record("some.other.logger", "Terminating session: None")
         result = self.log_filter.filter(record)
         assert result is True
         assert record.levelno == logging.INFO
 
     def test_leaves_unrelated_messages_unchanged(self):
-        record = self._make_record(
-            "mcp.server.streamable_http", "Processing request"
-        )
+        record = self._make_record("mcp.server.streamable_http", "Processing request")
         result = self.log_filter.filter(record)
         assert result is True
         assert record.levelno == logging.INFO

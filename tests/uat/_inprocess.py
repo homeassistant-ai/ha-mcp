@@ -17,9 +17,7 @@ if TYPE_CHECKING:
 
 
 @contextlib.asynccontextmanager
-async def inprocess_mcp_client(
-    ha_url: str, ha_token: str
-) -> AsyncIterator[Client]:
+async def inprocess_mcp_client(ha_url: str, ha_token: str) -> AsyncIterator[Client]:
     """Build one in-process FastMCP client for setup/verify/teardown.
 
     Clearing ``ha_mcp.config._settings`` forces the next ``get_global_settings()``

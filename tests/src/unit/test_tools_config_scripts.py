@@ -48,14 +48,14 @@ class TestScriptToolsValidation:
         """Create ConfigScriptTools instance."""
         return ConfigScriptTools(mock_client)
 
-    async def test_set_script_missing_both_sequence_and_blueprint(
-        self, tools
-    ):
+    async def test_set_script_missing_both_sequence_and_blueprint(self, tools):
         """Test that config without sequence or use_blueprint is rejected."""
         with pytest.raises(ToolError) as exc_info:
             await tools.ha_config_set_script(
                 script_id="test_script",
-                config={"alias": "Test Script"},  # Missing both sequence and use_blueprint
+                config={
+                    "alias": "Test Script"
+                },  # Missing both sequence and use_blueprint
             )
 
         error_data = json.loads(str(exc_info.value))
@@ -180,18 +180,14 @@ class TestGetScriptCanonicalId:
         client = MagicMock()
         # send_websocket_message is invoked by fetch_entity_category; return
         # a no-category response so the get path doesn't error.
-        client.send_websocket_message = AsyncMock(
-            return_value={"success": False}
-        )
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
         return client
 
     @pytest.fixture
     def tools(self, mock_client):
         return ConfigScriptTools(mock_client)
 
-    async def test_returns_canonical_script_id_from_envelope(
-        self, tools, mock_client
-    ):
+    async def test_returns_canonical_script_id_from_envelope(self, tools, mock_client):
         """When the rest_client resolves an alias to a storage key, the
         tool's returned ``script_id`` reflects the canonical key."""
         mock_client.get_script_config = AsyncMock(
@@ -237,10 +233,11 @@ class TestGetScriptCanonicalId:
         assert result["action"] == "get"
         assert result["script_id"] == "caller_input"
         assert any(
-            "rest_client contract violation" in r.message
-            and r.levelname == "WARNING"
+            "rest_client contract violation" in r.message and r.levelname == "WARNING"
             for r in caplog.records
-        ), f"Expected contract-violation warning, got: {[r.message for r in caplog.records]}"
+        ), (
+            f"Expected contract-violation warning, got: {[r.message for r in caplog.records]}"
+        )
 
 
 class TestStripEmptyScriptFields:

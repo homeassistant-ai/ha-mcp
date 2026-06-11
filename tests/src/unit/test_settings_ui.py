@@ -2066,6 +2066,37 @@ class TestSaveFeatureFlagsStandaloneMode:
         # back in alongside the new shape.
         assert "restarting" not in body
 
+    @pytest.mark.asyncio
+    async def test_read_only_mode_save_round_trips_into_settings(
+        self, monkeypatch, tmp_path
+    ):
+        """POST {flags: {read_only_mode: true}} in standalone mode must
+        persist so a fresh get_global_settings() reports the flag on —
+        proves the Tools-tab toggle actually flips the live setting the
+        middleware reads (#1569)."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.delenv("READ_ONLY_MODE", raising=False)
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.config import _reset_global_settings, get_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+        assert get_global_settings().read_only_mode is False
+
+        handlers = build_settings_handlers(server=None)
+        request = MagicMock()
+        request.json = AsyncMock(return_value={"flags": {"read_only_mode": True}})
+        resp = await handlers["save_feature_flags"](request)
+        assert resp.status_code == 200, json.loads(resp.body)
+
+        _reset_global_settings()
+        assert get_global_settings().read_only_mode is True
+
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
 
 class TestSaveToolsResponseShape:
     """Pins the unified ``{success, applied, mode, restart_required}``
@@ -2359,6 +2390,21 @@ class TestEnvPinnedTools:
         # Also confirm the overlay is reflected in states / tools.
         assert body["states"].get("ha_foo") == "disabled"
         _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_get_tools_includes_read_only_exempt_list(self, monkeypatch):
+        """GET /api/settings/tools advertises the Read Only Mode exempt
+        tools so the JS keeps their rows live while force-disabling the
+        other write-capable rows when the mode is on."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_tools"](MagicMock())
+        body = json.loads(resp.body)
+        assert body["read_only_exempt"] == sorted(READ_ONLY_EXEMPT_TOOLS)
+        assert "ha_manage_backup" in body["read_only_exempt"]
 
 
 class TestAdvancedSettingsEndpoints:

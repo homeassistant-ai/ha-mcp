@@ -115,14 +115,15 @@ class HomeAssistantTestEnvironment:
                 container = container.with_bind_ports(8123, port)
                 logger.info(f"🔌 Using fixed port {port} (from HA_TEST_PORT)")
             except ValueError:
-                logger.warning(f"⚠️ Invalid HA_TEST_PORT '{custom_port}', using random port")
+                logger.warning(
+                    f"⚠️ Invalid HA_TEST_PORT '{custom_port}', using random port"
+                )
                 container = container.with_bind_ports(8123, None)
         else:
             container = container.with_bind_ports(8123, None)  # Random host port
 
         self.container = (
-            container
-            .with_volume_mapping(str(config_dir), "/config", "rw")
+            container.with_volume_mapping(str(config_dir), "/config", "rw")
             .with_env("TZ", "UTC")
             .with_kwargs(privileged=True)
         )

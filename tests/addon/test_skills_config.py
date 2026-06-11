@@ -42,21 +42,13 @@ class TestBundledSkillFiles:
 
     def test_skill_md_exists(self):
         """Check that SKILL.md is present (required by SkillsDirectoryProvider)."""
-        skill_md = (
-            self._get_skills_dir()
-            / "home-assistant-best-practices"
-            / "SKILL.md"
-        )
+        skill_md = self._get_skills_dir() / "home-assistant-best-practices" / "SKILL.md"
         assert skill_md.exists(), "SKILL.md not found"
         assert skill_md.stat().st_size > 0, "SKILL.md is empty"
 
     def test_skill_md_has_frontmatter(self):
         """Check that SKILL.md contains YAML frontmatter with required fields."""
-        skill_md = (
-            self._get_skills_dir()
-            / "home-assistant-best-practices"
-            / "SKILL.md"
-        )
+        skill_md = self._get_skills_dir() / "home-assistant-best-practices" / "SKILL.md"
         content = skill_md.read_text()
         assert content.startswith("---"), "SKILL.md should start with YAML frontmatter"
         # Should have name and description in frontmatter
@@ -68,9 +60,7 @@ class TestBundledSkillFiles:
     def test_reference_files_exist(self):
         """Check that all expected reference files are bundled."""
         refs_dir = (
-            self._get_skills_dir()
-            / "home-assistant-best-practices"
-            / "references"
+            self._get_skills_dir() / "home-assistant-best-practices" / "references"
         )
         assert refs_dir.exists(), "references/ directory not found"
 
@@ -94,4 +84,6 @@ class TestBundledSkillFiles:
         total_size = sum(f.stat().st_size for f in skill_dir.rglob("*") if f.is_file())
         # Should be roughly 60-80KB
         assert total_size > 50_000, f"Skill content too small: {total_size} bytes"
-        assert total_size < 200_000, f"Skill content unexpectedly large: {total_size} bytes"
+        assert total_size < 200_000, (
+            f"Skill content unexpectedly large: {total_size} bytes"
+        )

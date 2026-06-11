@@ -344,7 +344,9 @@ class OperationManager:
         for op_id, operation in self.operations.items():
             age_seconds = (current_time * 1000 - operation.start_time) / 1000
 
-            if (operation.status == OperationStatus.COMPLETED and age_seconds > 300) or (
+            if (
+                operation.status == OperationStatus.COMPLETED and age_seconds > 300
+            ) or (
                 operation.status in [OperationStatus.FAILED, OperationStatus.CANCELLED]
                 and age_seconds > 60
             ):

@@ -1,8 +1,10 @@
 """Test Home Assistant add-on structure and configuration."""
 
 import os
+import re
 import stat
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -14,6 +16,7 @@ except ImportError:
 
 
 ADDON_DIR = "homeassistant-addon"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestAddonStructure:
@@ -128,6 +131,10 @@ class TestAddonStructure:
             "tool_search_max_results": ("int(2,10)?", 5),
             "disabled_tools": ("str?", ""),
             "pinned_tools": ("str?", ""),
+            # Read Only Mode (#1569) — non-beta safety toggle, default OFF
+            # (an on-by-default value would silently break every write
+            # tool on upgrade).
+            "read_only_mode": ("bool?", False),
         }
         for key, (schema_type, default) in expected.items():
             assert key in config["options"], f"{key!r} must be in stable options"
@@ -143,7 +150,12 @@ class TestAddonStructure:
         stable and dev add-ons — same defaults AND same schema types. Guards
         against future one-sided drift (the exact bug class this fix
         addresses: dev gains/changes an option, stable is forgotten)."""
-        keys = ("tool_search_max_results", "disabled_tools", "pinned_tools")
+        keys = (
+            "tool_search_max_results",
+            "disabled_tools",
+            "pinned_tools",
+            "read_only_mode",
+        )
         with open(f"{ADDON_DIR}/config.yaml") as f:
             stable = yaml.safe_load(f)
         with open("homeassistant-addon-dev/config.yaml") as f:
@@ -155,6 +167,40 @@ class TestAddonStructure:
             assert stable["schema"].get(key) == dev["schema"].get(key), (
                 f"{key!r} schema type differs between stable and dev add-ons"
             )
+
+    def test_start_py_wires_read_only_mode_env(self):
+        """start.py must read the ``read_only_mode`` addon option and export
+        it as the ``READ_ONLY_MODE`` env var, and that env name must match
+        the one ``config.FEATURE_FLAG_FIELDS`` registers for the
+        ``read_only_mode`` flag — otherwise the addon toggle would write to
+        a phantom env var the server never reads. Source-level contract so
+        the wiring can't silently drift (no ha_mcp import needed)."""
+        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
+        assert 'resolve_bool_option(config, "read_only_mode"' in start_src, (
+            "start.py must resolve the read_only_mode addon option via "
+            "resolve_bool_option"
+        )
+        assert 'os.environ["READ_ONLY_MODE"]' in start_src, (
+            "start.py must export the READ_ONLY_MODE env var the server reads"
+        )
+
+        # The env name start.py writes must equal the one config.py
+        # registers for read_only_mode. Regex the FeatureFlagField entry
+        # from config.py source rather than importing ha_mcp (tests/addon
+        # has no src on sys.path by default).
+        config_src = (_REPO_ROOT / "src" / "ha_mcp" / "config.py").read_text(
+            encoding="utf-8"
+        )
+        m = re.search(
+            r'FeatureFlagField\(\s*"read_only_mode"\s*,\s*"([^"]+)"', config_src
+        )
+        assert m is not None, (
+            "config.py FEATURE_FLAG_FIELDS must register a read_only_mode entry"
+        )
+        assert m.group(1) == "READ_ONLY_MODE", (
+            f"read_only_mode env name in config.py is {m.group(1)!r}, but "
+            'start.py exports os.environ["READ_ONLY_MODE"] — they must match'
+        )
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="Unix permissions not applicable on Windows"

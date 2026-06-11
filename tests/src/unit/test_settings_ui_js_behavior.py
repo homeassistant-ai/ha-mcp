@@ -14,6 +14,7 @@ breaks; this file catches behavioural regressions on top of it.
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -77,6 +78,9 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # the global-settings save button writes wait_seconds / TTL.
     "policy-master-toggle",
     "policy-save-global-btn",
+    # Read Only Mode toggle (#1569) — Tools tab, above the search box.
+    # Same save-then-verify flow as the policy master toggle.
+    "read-only-mode-toggle",
     # Advanced settings panel — Save button + status text +
     # the 5 section containers that loadAdvancedSettings() writes to
     # via innerHTML. Without container divs in MIN_DOM, renderSection
@@ -141,8 +145,8 @@ def _build_min_dom() -> str:
             continue  # rendered as a child of restartNotice above
         elif el_id == "search":
             rows.append('<input id="search" />')
-        elif el_id == "policy-master-toggle":
-            rows.append('<input id="policy-master-toggle" type="checkbox" />')
+        elif el_id in ("policy-master-toggle", "read-only-mode-toggle"):
+            rows.append(f'<input id="{el_id}" type="checkbox" />')
         elif el_id == "policy-save-global-btn":
             rows.append('<button id="policy-save-global-btn"></button>')
         else:
@@ -785,8 +789,6 @@ class TestPolicyTabFlow:
         # rather than substring-matching, so a body like
         # ``{"flags":{"x":"enable_tool_security_policies"}}`` (which
         # would pass the loose match) doesn't false-positive.
-        import json
-
         matched = False
         for f in flag_posts:
             raw = f.get("body", "")
@@ -3044,4 +3046,362 @@ class TestYamlPackagesSubFlagNesting:
         assert m is not None, f"probe div missing; tail: {result.dom[-1500:]}"
         assert m.group(1) == "false", (
             "sub-row <input> must be interactive when both gates are on"
+        )
+
+
+class TestReadOnlyModeToggle:
+    """Read Only Mode (#1569): the Tools-tab toggle posts to the
+    feature-flag endpoint, and render() forces write-capable tool rows
+    off (without rewriting saved states) while exempt mixed read/write
+    tools stay interactive."""
+
+    @staticmethod
+    def _tools_payload() -> dict:
+        return {
+            "status": 200,
+            "json": {
+                "tools": [
+                    {
+                        "name": "ha_get_history",
+                        "title": "Get History",
+                        "primary_tag": "Test",
+                        "annotations": {"readOnlyHint": True},
+                    },
+                    {
+                        "name": "ha_config_set_scene",
+                        "title": "Set Scene",
+                        "primary_tag": "Test",
+                        "annotations": {"destructiveHint": True},
+                    },
+                    {
+                        "name": "ha_manage_pipeline",
+                        "title": "Manage Pipeline",
+                        "primary_tag": "Test",
+                        "annotations": {"destructiveHint": True},
+                    },
+                ],
+                "states": {},
+                "env_pinned": {},
+                "read_only_exempt": ["ha_manage_pipeline"],
+            },
+        }
+
+    def _fetches(self, *, read_only: bool) -> dict:
+        return {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": self._tools_payload(),
+            "/api/settings/features": {
+                "status": 200,
+                "json": {"flags": {"read_only_mode": {"value": read_only}}},
+            },
+        }
+
+    @staticmethod
+    def _input_tag(dom: str, tool: str) -> str:
+        m = re.search(rf'<input[^>]*name="tool:{tool}:enabled"[^>]*>', dom)
+        assert m is not None, (
+            f"enabled input for {tool} missing; dom tail: {dom[-1500:]}"
+        )
+        return m.group(0)
+
+    @staticmethod
+    def _posted_read_only_true(result: HarnessResult) -> bool:
+        flag_posts = [
+            f
+            for f in result.fetches
+            if f["method"] == "POST" and "/api/settings/features" in f["url"]
+        ]
+        assert flag_posts, (
+            f"expected POST to /api/settings/features; got {result.fetches}"
+        )
+        for f in flag_posts:
+            raw = f.get("body", "")
+            if not raw:
+                continue
+            try:
+                body = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            flags = body.get("flags") if isinstance(body, dict) else None
+            if isinstance(flags, dict) and flags.get("read_only_mode") is True:
+                return True
+        return False
+
+    @staticmethod
+    def _probe_toggle_state() -> str:
+        return """
+          const cb = document.getElementById('read-only-mode-toggle');
+          cb.checked = true;
+          cb.dispatchEvent(new Event('change'));
+          await new Promise(r => setTimeout(r, 80));
+          const probe = document.createElement('div');
+          probe.id = '__ro_toggle_probe';
+          probe.dataset.checked = String(
+            document.getElementById('read-only-mode-toggle').checked);
+          document.body.appendChild(probe);
+        """
+
+    @staticmethod
+    def _probe_checked(dom: str) -> str:
+        m = re.search(r'<div[^>]*id="__ro_toggle_probe"[^>]*>', dom)
+        assert m is not None, f"toggle probe missing; dom tail: {dom[-1500:]}"
+        return m.group(0)
+
+    def test_toggle_change_posts_to_features_endpoint(
+        self, settings_script: str
+    ) -> None:
+        """Flipping the Tools-tab toggle must POST
+        ``{flags: {read_only_mode: true}}`` to /api/settings/features —
+        the same endpoint and shape as every other feature flag — and,
+        when the follow-up features GET confirms the new value, the
+        checkbox stays checked.
+
+        ``responses`` sequences the three same-URL hits: init GET (off),
+        save POST (ok), re-read GET (on).
+        """
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "responses": [
+                        {"status": 200, "json": {"flags": {}}},
+                        {"status": 200, "json": {"restart_required": True}},
+                        {
+                            "status": 200,
+                            "json": {"flags": {"read_only_mode": {"value": True}}},
+                        },
+                    ]
+                },
+            },
+            invoke=self._probe_toggle_state(),
+        )
+        _assert_clean_init(result)
+        assert self._posted_read_only_true(result), (
+            f"no POST carried flags.read_only_mode=true: {result.fetches}"
+        )
+        probe = self._probe_checked(result.dom)
+        assert 'data-checked="true"' in probe, (
+            f"toggle must stay checked when the server confirms on: {probe}"
+        )
+
+    def test_toggle_reverts_to_previous_when_save_fails(
+        self, settings_script: str
+    ) -> None:
+        """A non-200 features POST is a failed save — the checkbox must
+        revert to its pre-flip (off) value rather than lie about a
+        persisted change. ``responses``: init GET (off), save POST (500)."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "responses": [
+                        {"status": 200, "json": {"flags": {}}},
+                        {"status": 500, "json": {"error": {"message": "boom"}}},
+                    ]
+                },
+            },
+            invoke=self._probe_toggle_state(),
+        )
+        _assert_clean_init(result)
+        probe = self._probe_checked(result.dom)
+        assert 'data-checked="false"' in probe, (
+            f"toggle must revert to previous (off) on save failure: {probe}"
+        )
+
+    def test_render_forces_write_tools_off_when_on(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(read_only=True),
+            invoke="await new Promise(r => setTimeout(r, 250));",
+        )
+        _assert_clean_init(result)
+        write_tag = self._input_tag(result.dom, "ha_config_set_scene")
+        assert "disabled" in write_tag, f"write tool must be locked: {write_tag}"
+        assert "checked" not in write_tag, f"write tool must render off: {write_tag}"
+        read_tag = self._input_tag(result.dom, "ha_get_history")
+        assert "checked" in read_tag, f"read tool must stay on: {read_tag}"
+        assert "disabled" not in read_tag, f"read tool must stay live: {read_tag}"
+        exempt_tag = self._input_tag(result.dom, "ha_manage_pipeline")
+        assert "checked" in exempt_tag, f"exempt tool must stay on: {exempt_tag}"
+        assert "disabled" not in exempt_tag, (
+            f"exempt tool toggle must stay live: {exempt_tag}"
+        )
+        assert "Read Only Mode is on; write tools are disabled" in result.dom
+        assert "write operations of this tool are blocked" in result.dom
+
+    def test_render_leaves_tools_alone_when_off(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(read_only=False),
+            invoke="await new Promise(r => setTimeout(r, 250));",
+        )
+        _assert_clean_init(result)
+        write_tag = self._input_tag(result.dom, "ha_config_set_scene")
+        assert "checked" in write_tag, (
+            f"write tool defaults on when mode off: {write_tag}"
+        )
+        assert "disabled" not in write_tag, (
+            f"write tool stays interactive when mode off: {write_tag}"
+        )
+        assert "Read Only Mode is on; write tools are disabled" not in result.dom
+
+    def test_group_master_click_does_not_touch_write_tool_when_on(
+        self, settings_script: str
+    ) -> None:
+        """With Read Only Mode on, the group master switch must exclude
+        write-capable rows: clicking it never enables/disables the forced
+        -off write tool, and that tool's row input stays unchecked +
+        disabled. The save POST (if any) must not flip the write tool."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(read_only=True),
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const master = document.querySelector(
+                'input[name="tool-group:Test"]');
+              if (master) {
+                master.checked = !master.checked;
+                master.dispatchEvent(new Event('change'));
+              }
+              // saveConfig is debounced 800ms; advance past it.
+              await new Promise(r => setTimeout(r, 1000));
+            """,
+        )
+        _assert_clean_init(result)
+        # The write-tool row input stays off + locked under the mode.
+        write_tag = self._input_tag(result.dom, "ha_config_set_scene")
+        assert "checked" not in write_tag, (
+            f"write tool must stay off after group-master click: {write_tag}"
+        )
+        assert "disabled" in write_tag, (
+            f"write tool must stay locked after group-master click: {write_tag}"
+        )
+        # No tools-save POST may carry a state for the write tool.
+        tool_posts = [
+            f
+            for f in result.fetches
+            if f["method"] == "POST" and "/api/settings/tools" in f["url"]
+        ]
+        for f in tool_posts:
+            assert "ha_config_set_scene" not in f.get("body", ""), (
+                f"group-master save flipped the forced-off write tool: {f}"
+            )
+
+    def test_double_flip_restores_pinned_row_without_tools_save(
+        self, settings_script: str
+    ) -> None:
+        """A pinned write tool forced off while the mode is on must render
+        back as checked+pinned once the mode goes off again — and the
+        re-render must NOT issue a tools-save POST (saved state is never
+        rewritten, only visually overridden)."""
+        tools_payload = {
+            "status": 200,
+            "json": {
+                "tools": [
+                    {
+                        "name": "ha_config_set_scene",
+                        "title": "Set Scene",
+                        "primary_tag": "Test",
+                        "annotations": {"destructiveHint": True},
+                    },
+                ],
+                "states": {"ha_config_set_scene": "pinned"},
+                "env_pinned": {},
+                "read_only_exempt": [],
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/tools": tools_payload,
+                "/api/settings/features": {
+                    # init GET (on), then re-read GET (off) after the flip.
+                    "responses": [
+                        {
+                            "status": 200,
+                            "json": {"flags": {"read_only_mode": {"value": True}}},
+                        },
+                        {
+                            "status": 200,
+                            "json": {"restart_required": True},
+                        },
+                        {
+                            "status": 200,
+                            "json": {"flags": {"read_only_mode": {"value": False}}},
+                        },
+                    ]
+                },
+            },
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              // Mode starts on → the pinned write row is forced off.
+              const cb = document.getElementById('read-only-mode-toggle');
+              cb.checked = false;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 1000));
+            """,
+        )
+        _assert_clean_init(result)
+        scene_enabled = self._input_tag(result.dom, "ha_config_set_scene")
+        assert "checked" in scene_enabled, (
+            f"pinned row must render checked once mode is off again: {scene_enabled}"
+        )
+        pinned_tag = re.search(
+            r'<input[^>]*name="tool:ha_config_set_scene:pinned"[^>]*>', result.dom
+        )
+        assert pinned_tag is not None and "checked" in pinned_tag.group(0), (
+            f"row must render pinned again once mode is off: {result.dom[-1500:]}"
+        )
+        tool_posts = [
+            f
+            for f in result.fetches
+            if f["method"] == "POST" and "/api/settings/tools" in f["url"]
+        ]
+        assert not tool_posts, (
+            f"double-flip must not POST a tools-save (state is only visually "
+            f"overridden): {tool_posts}"
+        )
+
+    def test_unknown_state_notice_shown_when_features_fetch_fails(
+        self, settings_script: str
+    ) -> None:
+        """When /api/settings/features fails (503), readOnlyState is
+        unknown and the #roUnknownNotice element must gain the ``show``
+        class so the user knows the view may not match the server (#1569,
+        item 6)."""
+        dom = MIN_DOM.replace(
+            "</body>",
+            '<div class="pin-notice" id="roUnknownNotice"></div></body>',
+        )
+        result = run_script(
+            settings_script,
+            initial_html=dom,
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {"status": 503, "json": {}},
+            },
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              const notice = document.getElementById('roUnknownNotice');
+              const probe = document.createElement('div');
+              probe.id = '__ro_notice_probe';
+              probe.dataset.shown = String(
+                !!notice && notice.classList.contains('show'));
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'<div[^>]*id="__ro_notice_probe"[^>]*>', result.dom)
+        assert m is not None, f"notice probe missing; dom tail: {result.dom[-1500:]}"
+        assert 'data-shown="true"' in m.group(0), (
+            f"roUnknownNotice must show when features fetch fails: {m.group(0)}"
         )

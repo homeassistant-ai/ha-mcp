@@ -15,7 +15,7 @@ Starlette routing layer is short-circuited. The MCP transport / tool
 dispatch / middleware pipeline are exercised exactly as a real client
 would see them.
 
-Cannot run on Termux (no Docker for testcontainers); CI-only verification.
+Requires Docker (testcontainers); runs in CI.
 """
 
 from __future__ import annotations

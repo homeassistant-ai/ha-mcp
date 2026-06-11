@@ -20,6 +20,7 @@ def _register_and_capture(mock_client):
         def decorator(fn):
             captured[fn.__name__] = fn
             return fn
+
         return decorator
 
     mock_mcp.tool = fake_tool
@@ -90,20 +91,23 @@ class TestZWaveNodeIdParsing:
         device = _make_device(
             identifiers=[["zwave_js", "3232323232-5"]],
         )
-        mock_client = _mock_client_with_device(device, {
-            "zwave_js/node_status": {
-                "success": True,
-                "result": {
-                    "node_id": 5,
-                    "status": "alive",
-                    "is_routing": True,
-                    "is_secure": True,
-                    "highest_security_class": "S2_Authenticated",
-                    "zwave_plus_version": 2,
-                    "is_controller_node": False,
+        mock_client = _mock_client_with_device(
+            device,
+            {
+                "zwave_js/node_status": {
+                    "success": True,
+                    "result": {
+                        "node_id": 5,
+                        "status": "alive",
+                        "is_routing": True,
+                        "is_secure": True,
+                        "highest_security_class": "S2_Authenticated",
+                        "zwave_plus_version": 2,
+                        "is_controller_node": False,
+                    },
                 },
             },
-        })
+        )
         captured = _register_and_capture(mock_client)
         result = await captured["ha_get_device"](device_id="test_device_123")
 
@@ -136,17 +140,20 @@ class TestZWaveNodeIdParsing:
         device = _make_device(
             identifiers=[["zwave_js", "3232323232-5-extra"]],
         )
-        mock_client = _mock_client_with_device(device, {
-            "zwave_js/node_status": {
-                "success": True,
-                "result": {
-                    "node_id": 5,
-                    "status": "alive",
-                    "is_routing": False,
-                    "is_secure": False,
+        mock_client = _mock_client_with_device(
+            device,
+            {
+                "zwave_js/node_status": {
+                    "success": True,
+                    "result": {
+                        "node_id": 5,
+                        "status": "alive",
+                        "is_routing": False,
+                        "is_secure": False,
+                    },
                 },
             },
-        })
+        )
         captured = _register_and_capture(mock_client)
         result = await captured["ha_get_device"](device_id="test_device_123")
 
@@ -164,18 +171,21 @@ class TestZHAIeeeAddressParsing:
         device = _make_device(
             identifiers=[["zha", "00:11:22:33:44:55:66:77"]],
         )
-        mock_client = _mock_client_with_device(device, {
-            "zha/devices": {
-                "success": True,
-                "result": [
-                    {
-                        "ieee": "00:11:22:33:44:55:66:77",
-                        "lqi": 200,
-                        "rssi": -45,
-                    }
-                ],
+        mock_client = _mock_client_with_device(
+            device,
+            {
+                "zha/devices": {
+                    "success": True,
+                    "result": [
+                        {
+                            "ieee": "00:11:22:33:44:55:66:77",
+                            "lqi": 200,
+                            "rssi": -45,
+                        }
+                    ],
+                },
             },
-        })
+        )
         captured = _register_and_capture(mock_client)
         result = await captured["ha_get_device"](device_id="test_device_123")
 

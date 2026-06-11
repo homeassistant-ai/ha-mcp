@@ -46,6 +46,7 @@ def _test_server_import(errors: list[str]) -> type | None:
     print("\n[2/4] Testing server module import...")
     try:
         from ha_mcp.server import HomeAssistantSmartMCPServer
+
         print("  ✓ Server module imported successfully")
         return HomeAssistantSmartMCPServer
     except Exception as e:

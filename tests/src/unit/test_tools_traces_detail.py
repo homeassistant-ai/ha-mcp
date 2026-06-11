@@ -11,37 +11,47 @@ class TestFormatDetailedTrace:
 
         # Data structure as provided by user
         trace_data = {
-            "timestamp": {"start": "2026-01-29T23:05:00.345824+00:00", "finish": "2026-01-29T23:05:00.356669+00:00"},
+            "timestamp": {
+                "start": "2026-01-29T23:05:00.345824+00:00",
+                "finish": "2026-01-29T23:05:00.356669+00:00",
+            },
             "state": "stopped",
             "trigger": "time",
             "trace": {
-                "trigger/0": [{
-                    "path": "trigger/0",
-                    "timestamp": "2026-01-29T23:05:00.345915+00:00",
-                    "changed_variables": {
-                        "trigger": {
-                            "platform": "time",
-                            "description": "time",
-                            "entity_id": None
-                        }
+                "trigger/0": [
+                    {
+                        "path": "trigger/0",
+                        "timestamp": "2026-01-29T23:05:00.345915+00:00",
+                        "changed_variables": {
+                            "trigger": {
+                                "platform": "time",
+                                "description": "time",
+                                "entity_id": None,
+                            }
+                        },
                     }
-                }],
-                "action/0": [{
-                    "path": "action/0",
-                    "timestamp": "2026-01-29T23:05:00.346301+00:00",
-                    "result": {"params": {"domain": "light", "service": "turn_on"}}
-                }],
-                "action/0/0": [{
-                    "path": "action/0/0",
-                    "timestamp": "2026-01-29T23:05:00.347072+00:00",
-                    "child_id": {"domain": "script", "item_id": "set_brightness_chambre", "run_id": "04e0241d"},
-                    "result": {"params": {"domain": "script"}}
-                }]
+                ],
+                "action/0": [
+                    {
+                        "path": "action/0",
+                        "timestamp": "2026-01-29T23:05:00.346301+00:00",
+                        "result": {"params": {"domain": "light", "service": "turn_on"}},
+                    }
+                ],
+                "action/0/0": [
+                    {
+                        "path": "action/0/0",
+                        "timestamp": "2026-01-29T23:05:00.347072+00:00",
+                        "child_id": {
+                            "domain": "script",
+                            "item_id": "set_brightness_chambre",
+                            "run_id": "04e0241d",
+                        },
+                        "result": {"params": {"domain": "script"}},
+                    }
+                ],
             },
-            "config": {
-                "alias": "Lumières Chambre 18h05",
-                "mode": "single"
-            }
+            "config": {"alias": "Lumières Chambre 18h05", "mode": "single"},
         }
 
         result = _format_detailed_trace("automation.test", "run_123", trace_data)
@@ -75,20 +85,19 @@ class TestFormatDetailedTrace:
             "timestamp": "2026-01-29T23:05:00",
             "state": "stopped",
             "trace": {
-                "trigger": [{
-                    "path": "trigger/0",
-                    "variables": {
-                        "trigger": {
-                            "platform": "state",
-                            "description": "state change"
-                        }
+                "trigger": [
+                    {
+                        "path": "trigger/0",
+                        "variables": {
+                            "trigger": {
+                                "platform": "state",
+                                "description": "state change",
+                            }
+                        },
                     }
-                }],
-                "action": [{
-                    "path": "action/0",
-                    "result": {"executed": True}
-                }]
-            }
+                ],
+                "action": [{"path": "action/0", "result": {"executed": True}}],
+            },
         }
 
         result = _format_detailed_trace("automation.legacy", "run_456", trace_data)
@@ -107,27 +116,29 @@ class TestFormatDetailedTrace:
 
         trace_data = {
             "trace": {
-                "trigger/0": [{
-                    "variables": {
-                        "trigger": {"platform": "variables_key"}
+                "trigger/0": [
+                    {"variables": {"trigger": {"platform": "variables_key"}}}
+                ],
+                "trigger/1": [
+                    {
+                        "changed_variables": {
+                            "trigger": {"platform": "changed_variables_key"}
+                        }
                     }
-                }],
-                "trigger/1": [{
-                    "changed_variables": {
-                        "trigger": {"platform": "changed_variables_key"}
-                    }
-                }]
+                ],
             }
         }
 
         # Test finding in 'variables' (legacy/standard)
-        result1 = _format_detailed_trace("auto.1", "1",
-            {"trace": {"trigger/0": trace_data["trace"]["trigger/0"]}})
+        result1 = _format_detailed_trace(
+            "auto.1", "1", {"trace": {"trigger/0": trace_data["trace"]["trigger/0"]}}
+        )
         assert result1["trigger"]["platform"] == "variables_key"
 
         # Test finding in 'changed_variables' (new flat format)
-        result2 = _format_detailed_trace("auto.2", "2",
-            {"trace": {"trigger/0": trace_data["trace"]["trigger/1"]}})
+        result2 = _format_detailed_trace(
+            "auto.2", "2", {"trace": {"trigger/0": trace_data["trace"]["trigger/1"]}}
+        )
         assert result2["trigger"]["platform"] == "changed_variables_key"
 
     def test_variable_deduplication_identical_steps(self):
@@ -145,25 +156,31 @@ class TestFormatDetailedTrace:
         trace_data = {
             "state": "stopped",
             "trace": {
-                "trigger/0": [{
-                    "path": "trigger/0",
-                    "timestamp": "2026-01-01T00:00:00Z",
-                    "changed_variables": {"trigger": {"platform": "mqtt"}},
-                }],
+                "trigger/0": [
+                    {
+                        "path": "trigger/0",
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "changed_variables": {"trigger": {"platform": "mqtt"}},
+                    }
+                ],
                 # 5 action steps with identical variables
                 **{
-                    f"action/{i}": [{
-                        "path": f"action/{i}",
-                        "timestamp": f"2026-01-01T00:00:0{i + 1}Z",
-                        "result": {"executed": True},
-                        "variables": shared_vars.copy(),
-                    }]
+                    f"action/{i}": [
+                        {
+                            "path": f"action/{i}",
+                            "timestamp": f"2026-01-01T00:00:0{i + 1}Z",
+                            "result": {"executed": True},
+                            "variables": shared_vars.copy(),
+                        }
+                    ]
                     for i in range(5)
                 },
             },
         }
 
-        result = _format_detailed_trace("automation.test_dedup", "run_dedup", trace_data)
+        result = _format_detailed_trace(
+            "automation.test_dedup", "run_dedup", trace_data
+        )
 
         actions = result["action_trace"]
         assert len(actions) == 5
@@ -183,34 +200,49 @@ class TestFormatDetailedTrace:
         trace_data = {
             "state": "stopped",
             "trace": {
-                "trigger/0": [{
-                    "path": "trigger/0",
-                    "changed_variables": {"trigger": {"platform": "state"}},
-                }],
-                "action/0": [{
-                    "path": "action/0",
-                    "timestamp": "2026-01-01T00:00:01Z",
-                    "variables": {"counter": 1, "status": "running"},
-                }],
-                "action/1": [{
-                    "path": "action/1",
-                    "timestamp": "2026-01-01T00:00:02Z",
-                    "variables": {"counter": 1, "status": "running"},  # Same
-                }],
-                "action/2": [{
-                    "path": "action/2",
-                    "timestamp": "2026-01-01T00:00:03Z",
-                    "variables": {"counter": 2, "status": "running"},  # Changed!
-                }],
-                "action/3": [{
-                    "path": "action/3",
-                    "timestamp": "2026-01-01T00:00:04Z",
-                    "variables": {"counter": 2, "status": "running"},  # Same as action/2
-                }],
+                "trigger/0": [
+                    {
+                        "path": "trigger/0",
+                        "changed_variables": {"trigger": {"platform": "state"}},
+                    }
+                ],
+                "action/0": [
+                    {
+                        "path": "action/0",
+                        "timestamp": "2026-01-01T00:00:01Z",
+                        "variables": {"counter": 1, "status": "running"},
+                    }
+                ],
+                "action/1": [
+                    {
+                        "path": "action/1",
+                        "timestamp": "2026-01-01T00:00:02Z",
+                        "variables": {"counter": 1, "status": "running"},  # Same
+                    }
+                ],
+                "action/2": [
+                    {
+                        "path": "action/2",
+                        "timestamp": "2026-01-01T00:00:03Z",
+                        "variables": {"counter": 2, "status": "running"},  # Changed!
+                    }
+                ],
+                "action/3": [
+                    {
+                        "path": "action/3",
+                        "timestamp": "2026-01-01T00:00:04Z",
+                        "variables": {
+                            "counter": 2,
+                            "status": "running",
+                        },  # Same as action/2
+                    }
+                ],
             },
         }
 
-        result = _format_detailed_trace("automation.test_changed", "run_changed", trace_data)
+        result = _format_detailed_trace(
+            "automation.test_changed", "run_changed", trace_data
+        )
 
         actions = result["action_trace"]
         assert len(actions) == 4
@@ -234,22 +266,33 @@ class TestFormatDetailedTrace:
         trace_data = {
             "state": "stopped",
             "trace": {
-                "trigger/0": [{
-                    "path": "trigger/0",
-                    "changed_variables": {"trigger": {"platform": "state"}},
-                }],
-                "action/0": [{
-                    "path": "action/0",
-                    "variables": {"trigger": {"platform": "state"}, "other": "data"},
-                }],
-                "action/1": [{
-                    "path": "action/1",
-                    "variables": {"useful_var": "value"},
-                }],
+                "trigger/0": [
+                    {
+                        "path": "trigger/0",
+                        "changed_variables": {"trigger": {"platform": "state"}},
+                    }
+                ],
+                "action/0": [
+                    {
+                        "path": "action/0",
+                        "variables": {
+                            "trigger": {"platform": "state"},
+                            "other": "data",
+                        },
+                    }
+                ],
+                "action/1": [
+                    {
+                        "path": "action/1",
+                        "variables": {"useful_var": "value"},
+                    }
+                ],
             },
         }
 
-        result = _format_detailed_trace("automation.test_trigger_skip", "run_1", trace_data)
+        result = _format_detailed_trace(
+            "automation.test_trigger_skip", "run_1", trace_data
+        )
 
         actions = result["action_trace"]
 
@@ -270,18 +313,22 @@ class TestFormatDetailedTrace:
         trace_data = {
             "state": "stopped",
             "trace": {
-                "trigger/0": [{
-                    "path": "trigger/0",
-                    "timestamp": "2026-01-01T00:00:00Z",
-                    "changed_variables": {"trigger": {"platform": "mqtt"}},
-                }],
+                "trigger/0": [
+                    {
+                        "path": "trigger/0",
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "changed_variables": {"trigger": {"platform": "mqtt"}},
+                    }
+                ],
                 **{
-                    f"action/{i}": [{
-                        "path": f"action/{i}",
-                        "timestamp": f"2026-01-01T00:00:0{i + 1}Z",
-                        "result": {"executed": True},
-                        "variables": shared_vars.copy(),
-                    }]
+                    f"action/{i}": [
+                        {
+                            "path": f"action/{i}",
+                            "timestamp": f"2026-01-01T00:00:0{i + 1}Z",
+                            "result": {"executed": True},
+                            "variables": shared_vars.copy(),
+                        }
+                    ]
                     for i in range(5)
                 },
             },
@@ -306,18 +353,30 @@ class TestFormatDetailedTrace:
         trace_data = {
             "state": "stopped",
             "trace": {
-                "trigger/0": [{
-                    "path": "trigger/0",
-                    "changed_variables": {"trigger": {"platform": "state"}},
-                }],
-                "action/0": [{
-                    "path": "action/0",
-                    "result": {"executed": True},
-                }],
+                "trigger/0": [
+                    {
+                        "path": "trigger/0",
+                        "changed_variables": {"trigger": {"platform": "state"}},
+                    }
+                ],
+                "action/0": [
+                    {
+                        "path": "action/0",
+                        "result": {"executed": True},
+                    }
+                ],
             },
             "logbook_entries": [
-                {"when": "2026-01-01T00:00:01Z", "entity_id": "light.test", "state": "on"},
-                {"when": "2026-01-01T00:00:02Z", "entity_id": "light.test", "state": "off"},
+                {
+                    "when": "2026-01-01T00:00:01Z",
+                    "entity_id": "light.test",
+                    "state": "on",
+                },
+                {
+                    "when": "2026-01-01T00:00:02Z",
+                    "entity_id": "light.test",
+                    "state": "off",
+                },
             ],
             "context": {"id": "ctx_123", "parent_id": None, "user_id": None},
         }
@@ -341,30 +400,40 @@ class TestFormatDetailedTrace:
         trace_data = {
             "state": "stopped",
             "trace": {
-                "trigger/0": [{
-                    "path": "trigger/0",
-                    "changed_variables": {"trigger": {"platform": "event"}},
-                }],
-                "0": [{
-                    "path": "0",
-                    "timestamp": "2026-01-01T00:00:01Z",
-                    "result": {"executed": True},
-                }],
-                "1": [{
-                    "path": "1",
-                    "timestamp": "2026-01-01T00:00:02Z",
-                    "result": {"executed": True},
-                }],
-                "0/repeat/sequence/0": [{
-                    "path": "0/repeat/sequence/0",
-                    "timestamp": "2026-01-01T00:00:03Z",
-                    "result": {"executed": True},
-                }],
-                "sequence/0": [{
-                    "path": "sequence/0",
-                    "timestamp": "2026-01-01T00:00:04Z",
-                    "result": {"executed": True},
-                }],
+                "trigger/0": [
+                    {
+                        "path": "trigger/0",
+                        "changed_variables": {"trigger": {"platform": "event"}},
+                    }
+                ],
+                "0": [
+                    {
+                        "path": "0",
+                        "timestamp": "2026-01-01T00:00:01Z",
+                        "result": {"executed": True},
+                    }
+                ],
+                "1": [
+                    {
+                        "path": "1",
+                        "timestamp": "2026-01-01T00:00:02Z",
+                        "result": {"executed": True},
+                    }
+                ],
+                "0/repeat/sequence/0": [
+                    {
+                        "path": "0/repeat/sequence/0",
+                        "timestamp": "2026-01-01T00:00:03Z",
+                        "result": {"executed": True},
+                    }
+                ],
+                "sequence/0": [
+                    {
+                        "path": "sequence/0",
+                        "timestamp": "2026-01-01T00:00:04Z",
+                        "result": {"executed": True},
+                    }
+                ],
             },
         }
 

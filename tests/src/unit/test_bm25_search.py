@@ -148,9 +148,7 @@ class TestFuzzyEntitySearcherBM25:
     def test_production_threshold_passes_full_match(self, entities):
         """A match containing all query tokens must pass the production threshold (60)."""
         searcher = FuzzyEntitySearcher(threshold=60)
-        results, total = searcher.search_entities(
-            entities, "kitchen ceiling", limit=5
-        )
+        results, total = searcher.search_entities(entities, "kitchen ceiling", limit=5)
         assert total > 0, (
             "Full token match ('kitchen' + 'ceiling') must survive threshold=60 "
             "under absolute IDF-based normalization"
@@ -163,9 +161,7 @@ class TestFuzzyEntitySearcherBM25:
         # "light nonexistent" only matches on the very common 'light' token —
         # with absolute normalization, a half-match of a common term should
         # score well below 60.
-        results, _ = searcher.search_entities(
-            entities, "light nonexistent", limit=5
-        )
+        results, _ = searcher.search_entities(entities, "light nonexistent", limit=5)
         # Either zero results or only those where 'light' carries enough IDF
         # weight — no noise floor of 100 from empirical normalization.
         assert all(r["score"] < 100 for r in results), (
@@ -202,9 +198,7 @@ class TestFuzzyEntitySearcherBM25:
         results_p1, total = searcher.search_entities(
             entities, "light", limit=2, offset=0
         )
-        results_p2, _ = searcher.search_entities(
-            entities, "light", limit=2, offset=2
-        )
+        results_p2, _ = searcher.search_entities(entities, "light", limit=2, offset=2)
         # Pages should not overlap
         ids_p1 = {r["entity_id"] for r in results_p1}
         ids_p2 = {r["entity_id"] for r in results_p2}
@@ -300,9 +294,7 @@ class TestSearchInDictBM25:
                 {"service": "light.turn_on", "target": {"entity_id": "light.kitchen"}}
             ],
         }
-        score = smart_tools._search_in_dict(
-            config, "kitchen motion", exact_match=False
-        )
+        score = smart_tools._search_in_dict(config, "kitchen motion", exact_match=False)
         assert score > 0
 
 
@@ -436,8 +428,7 @@ class TestFuzzySearcherIssue1170:
         # 5-char typo of "light" — the 4-char gate should not block this.
         results, total = searcher.search_entities(entities, "ligth", limit=10)
         assert total >= 1, (
-            f"4+ char single-token typo should still fire typo_fallback: "
-            f"{results}"
+            f"4+ char single-token typo should still fire typo_fallback: {results}"
         )
 
     def test_finding_8_alias_search_with_match_type_label(self, lights_corpus):
@@ -454,9 +445,7 @@ class TestFuzzySearcherIssue1170:
             enriched.append(e2)
         searcher = FuzzyEntitySearcher()
         results, total = searcher.search_entities(enriched, "lullaby", limit=10)
-        assert total == 1, (
-            f"alias should be searchable as a query token: {results}"
-        )
+        assert total == 1, f"alias should be searchable as a query token: {results}"
         assert results[0]["entity_id"] == "light.bed_light"
         assert results[0]["match_type"] == "alias_match", (
             f"alias-driven match should be labeled alias_match: {results[0]}"
@@ -465,9 +454,7 @@ class TestFuzzySearcherIssue1170:
     def test_finding_8_no_alias_no_match(self, lights_corpus):
         """Without ``_aliases``, an alias-only query yields no result."""
         searcher = FuzzyEntitySearcher()
-        results, total = searcher.search_entities(
-            lights_corpus, "lullaby", limit=10
-        )
+        results, total = searcher.search_entities(lights_corpus, "lullaby", limit=10)
         assert total == 0, f"no alias data → no match: {results}"
 
     def test_finding_8_alias_does_not_overshadow_name_match(self, lights_corpus):
@@ -579,9 +566,7 @@ class TestHiddenScorePenalty:
             f"visible match should rank above penalised hidden: {results}"
         )
         # And the hidden one's score is lower.
-        hidden = next(
-            r for r in results if r["entity_id"] == "light.kitchen_diag"
-        )
+        hidden = next(r for r in results if r["entity_id"] == "light.kitchen_diag")
         visible = results[0]
         assert hidden["score"] < visible["score"], (
             f"hidden score should be < visible: hidden={hidden}, visible={visible}"
@@ -692,17 +677,14 @@ class TestHiddenScorePenalty:
         # threshold=100 means only an exact-IDF max BM25 hit clears.
         # The single-token single-doc case lands at exactly that.
         searcher = FuzzyEntitySearcher(threshold=100)
-        results, total = searcher.search_entities(
-            entities, "borderline", limit=10
-        )
+        results, total = searcher.search_entities(entities, "borderline", limit=10)
         assert total == 1, (
             f"raw-100 hidden match must clear threshold-100 gate "
             f"despite the post-gate penalty: {results}"
         )
         # And the emitted score reflects the penalty.
         assert results[0]["score"] == 80, (
-            f"penalty must still apply (100→80) to the surfaced hit: "
-            f"{results[0]}"
+            f"penalty must still apply (100→80) to the surfaced hit: {results[0]}"
         )
 
     def test_score_ties_break_on_entity_id_ascending(self):

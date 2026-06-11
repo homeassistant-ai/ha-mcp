@@ -118,6 +118,26 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # Build server instructions from bundled skills (if enabled)
         instructions = self._build_skills_instructions()
 
+        # Surface Read Only Mode in the startup instructions so clients
+        # that show server instructions warn the model up front. Startup
+        # state only — live flips are covered by the structured
+        # READ_ONLY_MODE call errors and the ha_get_overview field.
+        if self.settings.read_only_mode:
+            read_only_note = (
+                "## Read Only Mode\n"
+                "This server is running in Read Only Mode: write-capable "
+                "tools are disabled and every write or destructive "
+                "operation is blocked with a READ_ONLY_MODE error. You can "
+                "search, read, and analyze freely. To allow changes, the "
+                "user must turn off Read Only Mode in the ha-mcp settings "
+                "UI (Tools tab) or the add-on configuration."
+            )
+            instructions = (
+                f"{instructions}\n\n{read_only_note}"
+                if instructions
+                else read_only_note
+            )
+
         # Create FastMCP server with Home Assistant icons for client UI display
         self.mcp = FastMCP(
             name=server_name,
@@ -187,6 +207,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         # search indexing too).
         self._apply_settings_visibility()
 
+        # Read Only Mode catalog filter (discussion #1569) — always
+        # installed, consults the live flag per request. Must come
+        # before the search transforms so the BM25 index never indexes
+        # hidden write tools while the mode is on.
+        self._apply_read_only_catalog_filter()
+
         # Replace heavy tool descriptions with lite variants when
         # ENABLE_LITE_DOCSTRINGS=true. Must come BEFORE keyword
         # enrichment so BM25 keywords append to the lite text (instead
@@ -209,6 +235,12 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         from .tools.validation_middleware import ValidationErrorMiddleware
 
         self.mcp.add_middleware(ValidationErrorMiddleware())
+
+        # Read Only Mode write blocker (discussion #1569) — always
+        # installed, consults the live flag per call. Before
+        # PolicyMiddleware so a write blocked by Read Only Mode never
+        # queues a pointless approval request.
+        self._apply_read_only_middleware()
 
         # Wire tool security policies middleware (#966) — opt-in via
         # ENABLE_TOOL_SECURITY_POLICIES. Must come last so the middleware
@@ -938,6 +970,42 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
                 "all tool calls pass through ungated.",
                 data_dir,
             )
+
+    def _apply_read_only_catalog_filter(self) -> None:
+        """Install the Read Only Mode catalog filter (discussion #1569).
+
+        Always installed — :class:`ReadOnlyToolsTransform` consults the
+        live ``read_only_mode`` flag per list request, so it is a no-op
+        while the mode is off and standalone-mode toggles take effect
+        without a restart. Hides write-capable tools (``readOnlyHint``
+        not True) except the exempt mixed read/write tools, whose write
+        actions ``ReadOnlyMiddleware`` blocks at call time instead.
+        """
+        from .read_only import ReadOnlyToolsTransform
+
+        self.mcp.add_transform(ReadOnlyToolsTransform())
+        if self.settings.read_only_mode:
+            logger.info(
+                "Read Only Mode is ON — write-capable tools are hidden "
+                "and write operations are blocked"
+            )
+
+    def _apply_read_only_middleware(self) -> None:
+        """Install the Read Only Mode write blocker (discussion #1569).
+
+        Always installed — consults the live flag per call, so there is
+        no per-call work beyond the flag check while the mode is off.
+        The annotation lookup uses the UNFILTERED tool list (private
+        FastMCP API, same justified usage as the settings UI and policy
+        handlers) so hidden tools still resolve to a clear structured
+        error instead of an opaque unknown-tool failure.
+        """
+        from .read_only import ReadOnlyMiddleware
+
+        async def _list_all_tools() -> Any:
+            return await self.mcp.local_provider._list_tools()
+
+        self.mcp.add_middleware(ReadOnlyMiddleware(list_tools=_list_all_tools))
 
     # Shared action-phrased keyword block for retrieval. Some MCP clients
     # (Claude Code, others) rank candidate tools by token-overlap between

@@ -164,5 +164,3 @@ async def test_state_change_handler_ignores_event_missing_new_state(listener_ser
         await listener_service._handle_state_change(event)
 
     mock_update.assert_not_called()
-
-

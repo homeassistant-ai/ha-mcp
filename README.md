@@ -174,6 +174,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **🔧 Manage** | Automations, scripts, helpers, dashboards, areas, zones, groups, calendars, blueprints |
 | **📊 Monitor** | History, statistics, camera snapshots, automation traces, ZHA devices |
 | **💾 System** | Backup/restore, updates, add-ons, device registry |
+| **🔒 Safety** | Read Only Mode toggle, per-tool enable/disable, tool security policies (user approval), automatic edit backups |
 
 <details>
 <!-- TOOLS_TABLE_START -->

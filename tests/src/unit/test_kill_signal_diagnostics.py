@@ -131,14 +131,18 @@ class TestReadProcStatusSummary:
 class TestReadProcComm:
     def test_returns_stripped_comm(self) -> None:
         with patch("builtins.open", create=True) as mock_open:
-            mock_open.return_value.__enter__.return_value.read.return_value = b"supervisor\n"
+            mock_open.return_value.__enter__.return_value.read.return_value = (
+                b"supervisor\n"
+            )
             assert read_proc_comm(42) == "supervisor"
 
     def test_handles_non_utf8_process_name(self) -> None:
         # PR_SET_NAME accepts arbitrary bytes; strict-UTF-8 decode would
         # raise on those. Verify we fall back to replacement chars.
         with patch("builtins.open", create=True) as mock_open:
-            mock_open.return_value.__enter__.return_value.read.return_value = b"\xff\xfe\xfd\n"
+            mock_open.return_value.__enter__.return_value.read.return_value = (
+                b"\xff\xfe\xfd\n"
+            )
             result = read_proc_comm(42)
             # Don't assert the exact replacement char output; just that
             # we returned a string and didn't raise.
@@ -206,7 +210,10 @@ class TestFormatDiagnosticBlock:
             proc_status={},
         )
 
-        assert "Sender PID:     0 (cross-namespace; likely Supervisor or host process)" in block
+        assert (
+            "Sender PID:     0 (cross-namespace; likely Supervisor or host process)"
+            in block
+        )
         assert "Sender comm:    <cross-namespace>" in block
         assert "Sender cmdline: <cross-namespace>" in block
         assert "<unavailable — non-Linux or /proc not mounted>" in block
@@ -271,7 +278,10 @@ class TestInstallKillSignalDiagnostics:
     def test_returns_false_when_libc_lookup_fails(self) -> None:
         if sys.platform != "linux":
             pytest.skip("Linux-only branch")
-        with patch("ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library", return_value=None):
+        with patch(
+            "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library",
+            return_value=None,
+        ):
             assert install_kill_signal_diagnostics() is False
 
     def test_install_never_raises_on_libc_load_error(self) -> None:
@@ -291,9 +301,16 @@ class TestInstallKillSignalDiagnostics:
             pytest.skip("Linux-only branch")
         fake_libc = MagicMock()
         fake_libc.sigaction.return_value = 0  # success
-        with patch(
-            "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library", return_value="libc.so.6"
-        ), patch("ha_mcp.utils.kill_signal_diagnostics.ctypes.CDLL", return_value=fake_libc):
+        with (
+            patch(
+                "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library",
+                return_value="libc.so.6",
+            ),
+            patch(
+                "ha_mcp.utils.kill_signal_diagnostics.ctypes.CDLL",
+                return_value=fake_libc,
+            ),
+        ):
             assert install_kill_signal_diagnostics() is True
 
         # Three signals (SIGTERM, SIGINT, SIGHUP) → three sigaction calls.
@@ -307,10 +324,18 @@ class TestInstallKillSignalDiagnostics:
         fake_libc = MagicMock()
         # First two calls succeed, third fails.
         fake_libc.sigaction.side_effect = [0, 0, 1]
-        with patch(
-            "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library", return_value="libc.so.6"
-        ), patch("ha_mcp.utils.kill_signal_diagnostics.ctypes.CDLL", return_value=fake_libc), patch(
-            "ha_mcp.utils.kill_signal_diagnostics.ctypes.get_errno", return_value=22
+        with (
+            patch(
+                "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library",
+                return_value="libc.so.6",
+            ),
+            patch(
+                "ha_mcp.utils.kill_signal_diagnostics.ctypes.CDLL",
+                return_value=fake_libc,
+            ),
+            patch(
+                "ha_mcp.utils.kill_signal_diagnostics.ctypes.get_errno", return_value=22
+            ),
         ):
             assert install_kill_signal_diagnostics() is True
 
@@ -319,9 +344,16 @@ class TestInstallKillSignalDiagnostics:
             pytest.skip("Linux-only branch")
         fake_libc = MagicMock()
         fake_libc.sigaction.return_value = 0
-        with patch(
-            "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library", return_value="libc.so.6"
-        ), patch("ha_mcp.utils.kill_signal_diagnostics.ctypes.CDLL", return_value=fake_libc):
+        with (
+            patch(
+                "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library",
+                return_value="libc.so.6",
+            ),
+            patch(
+                "ha_mcp.utils.kill_signal_diagnostics.ctypes.CDLL",
+                return_value=fake_libc,
+            ),
+        ):
             assert install_kill_signal_diagnostics() is True
             first_call_count = fake_libc.sigaction.call_count
             # Second call short-circuits before touching libc.
@@ -356,16 +388,22 @@ class TestUvicornOverwriteScenario:
         try:
             fake_libc = MagicMock()
             fake_libc.sigaction.return_value = 0
-            with patch(
-                "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library",
-                return_value="libc.so.6",
-            ), patch(
-                "ha_mcp.utils.kill_signal_diagnostics.ctypes.CDLL",
-                return_value=fake_libc,
+            with (
+                patch(
+                    "ha_mcp.utils.kill_signal_diagnostics.ctypes.util.find_library",
+                    return_value="libc.so.6",
+                ),
+                patch(
+                    "ha_mcp.utils.kill_signal_diagnostics.ctypes.CDLL",
+                    return_value=fake_libc,
+                ),
             ):
                 assert install_kill_signal_diagnostics() is True
 
-            assert ksd._chained_handlers.get(int(signal.SIGTERM)) is fake_uvicorn_handle_exit
+            assert (
+                ksd._chained_handlers.get(int(signal.SIGTERM))
+                is fake_uvicorn_handle_exit
+            )
         finally:
             signal.signal(signal.SIGTERM, original)
 
