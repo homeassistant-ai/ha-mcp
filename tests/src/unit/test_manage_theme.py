@@ -130,6 +130,23 @@ class TestManageThemeSet:
         assert result["data"]["default_dark_theme"] == "nord"
 
     @pytest.mark.asyncio
+    async def test_set_light_mode_leaves_dark_default_untouched(self):
+        client = _client(
+            themes_dict={"nord": {}, "iceberg": {}},
+            default_theme="nord",
+            default_dark_theme="iceberg",
+        )
+        tools = ThemesTools(client)
+
+        result = await tools.ha_manage_theme(action="set", theme_name="nord")
+
+        client.call_service.assert_awaited_once_with(
+            "frontend", "set_theme", {"name": "nord"}
+        )
+        assert result["data"]["mode"] == "light"
+        assert result["data"]["default_dark_theme"] == "iceberg"
+
+    @pytest.mark.asyncio
     async def test_set_verification_failure_raises_tool_error(self):
         """A failed post-set verification read surfaces as a structured error."""
         client = _client()

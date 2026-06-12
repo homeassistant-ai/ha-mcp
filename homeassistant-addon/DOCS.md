@@ -587,7 +587,7 @@ The add-on provides 84+ MCP tools for controlling Home Assistant:
 - `ha_list_services` — List available Home Assistant services with optional pagination and detail control.
 
 ### System
-- `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT). MUST call ha_get_skill_guide first.
+- `ha_config_set_yaml` **(beta — dev channel only)** — Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT). MUST call ha_get_skill_guide first.
 - `ha_get_updates` — Get update information -- list all updates or get details for a specific one.
 - `ha_manage_backup` — Polymorphic backup tool. See the tool description for the routing matrix.
 - `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.

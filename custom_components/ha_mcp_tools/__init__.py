@@ -686,7 +686,7 @@ def _build_edit_yaml_config_handler(hass):
             if key in PACKAGES_ONLY_YAML_KEYS
         }
 
-        # Validate file path — only configuration.yaml and packages/*.yaml
+        # Validate file path — only configuration.yaml, packages/*.yaml, and themes/*.yaml
         normalized = os.path.normpath(rel_path)  # noqa: ASYNC240
         if normalized.startswith("..") or normalized.startswith("/"):
             return {
@@ -701,12 +701,13 @@ def _build_edit_yaml_config_handler(hass):
         # ``packages/**/*.yaml`` is mathematically a subset of this
         # one (``**`` reduces to ``*`` in fnmatch), so it's omitted.
         is_package = fnmatch.fnmatch(normalized, "packages/*.yaml")
-        if not is_config_yaml and not is_package:
+        is_theme = fnmatch.fnmatch(normalized, "themes/*.yaml")
+        if not is_config_yaml and not is_package and not is_theme:
             return {
                 "success": False,
                 "error": (
                     f"File '{rel_path}' is not allowed. "
-                    f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)} and packages/*.yaml are supported."
+                    f"Only {', '.join(ALLOWED_YAML_CONFIG_FILES)}, packages/*.yaml, and themes/*.yaml are supported."
                 ),
             }
 
@@ -729,7 +730,7 @@ def _build_edit_yaml_config_handler(hass):
 
         # Parse and validate yaml_path (replaces the old ALLOWED_YAML_KEYS check)
         kind, path_parts, path_err = _parse_and_validate_yaml_path(
-            yaml_path, is_package=is_package
+            yaml_path, is_package=is_package, is_theme=is_theme
         )
         if path_err is not None:
             return {"success": False, "error": path_err}
@@ -755,6 +756,12 @@ def _build_edit_yaml_config_handler(hass):
                 return {
                     "success": False,
                     "error": "Content parsed as null/empty. Provide non-empty YAML.",
+                }
+            # Theme content must be a YAML mapping (theme variables)
+            if kind == "theme" and not isinstance(parsed_content, dict):
+                return {
+                    "success": False,
+                    "error": "Theme content must be a YAML mapping (theme variables).",
                 }
 
         target_file = config_dir / normalized
@@ -870,8 +877,12 @@ def _build_edit_yaml_config_handler(hass):
                         del data["lovelace"]
 
             else:
-                # Single-key apply logic
+                # Single-key apply logic, shared by plain config keys and
+                # theme names (kind == "theme"): a theme file is a mapping of
+                # theme-name -> variables, and theme content is pre-validated
+                # as a mapping above, so the list-merge arm never fires for it.
                 yaml_key = path_parts[0]
+                label = "Theme" if kind == "theme" else "Key"
                 if action == "add":
                     if yaml_key in data:
                         existing = data[yaml_key]
@@ -888,7 +899,7 @@ def _build_edit_yaml_config_handler(hass):
                             return {
                                 "success": False,
                                 "error": (
-                                    f"Type mismatch for key '{yaml_key}': "
+                                    f"Type mismatch for {label.lower()} '{yaml_key}': "
                                     f"existing is {type(existing).__name__}, "
                                     f"new content is {type(parsed_content).__name__}. "
                                     "Use action='replace' to overwrite."
@@ -902,7 +913,7 @@ def _build_edit_yaml_config_handler(hass):
                     if yaml_key not in data:
                         return {
                             "success": False,
-                            "error": f"Key '{yaml_key}' not found in '{rel_path}'.",
+                            "error": f"{label} '{yaml_key}' not found in '{rel_path}'.",
                         }
                     del data[yaml_key]
 
@@ -966,6 +977,29 @@ def _build_edit_yaml_config_handler(hass):
             # Surface the post-edit action required to activate the change
             if kind == "lovelace_dashboard":
                 post_info = {"post_action": "restart_required"}
+            elif kind == "theme":
+                # Trigger frontend.reload_themes to load the theme change
+                try:
+                    await hass.services.async_call(
+                        "frontend",
+                        "reload_themes",
+                        {},
+                        blocking=True,
+                    )
+                    post_info = {
+                        "post_action": "reload_performed",
+                        "reload_service": "frontend.reload_themes",
+                    }
+                except Exception as reload_err:
+                    post_info = {
+                        "post_action": "reload_available",
+                        "reload_service": "frontend.reload_themes",
+                        "reload_error": str(reload_err),
+                    }
+                    _LOGGER.warning(
+                        "frontend.reload_themes failed after theme edit: %s",
+                        reload_err,
+                    )
             else:
                 post_info = YAML_KEY_POST_ACTIONS.get(
                     path_parts[0], YAML_KEY_DEFAULT_POST_ACTION
@@ -1020,14 +1054,16 @@ def _parse_and_validate_yaml_path(
     yaml_path: str,
     *,
     is_package: bool = False,
+    is_theme: bool = False,
 ) -> tuple[str, tuple[str, ...], str | None]:
     """Parse and validate a yaml_path argument.
 
-    Two accepted shapes:
+    Three accepted shapes:
     1. Single segment in ALLOWED_YAML_KEYS -> kind='single'
        When ``is_package=True``, single segments in PACKAGES_ONLY_YAML_KEYS
        (automation, script, scene) are also accepted.
     2. Exactly 'lovelace.dashboards.<url_path>' -> kind='lovelace_dashboard'
+    3. Single segment theme name (no dots) when ``is_theme=True`` -> kind='theme'
 
     Returns (kind, parts, error). On error, kind is '' and parts is ().
     """
@@ -1035,6 +1071,19 @@ def _parse_and_validate_yaml_path(
         return "", (), "yaml_path must be a non-empty string"
 
     parts = tuple(yaml_path.split("."))
+
+    # Shape 3: theme name (single segment, no dots)
+    if is_theme:
+        if len(parts) == 1:
+            return "theme", parts, None
+        return (
+            "",
+            (),
+            (
+                f"Theme name '{yaml_path}' cannot contain dots. "
+                "Provide a simple theme name (e.g., 'my-theme', not 'my.theme')."
+            ),
+        )
 
     # Shape 1: single key
     if len(parts) == 1:

@@ -152,7 +152,8 @@ class YamlConfigTools:
                     "For YAML-mode dashboards, "
                     "use the dotted form 'lovelace.dashboards.<url_path>' where "
                     "<url_path> is lowercase, hyphenated, and not a reserved HA "
-                    "route. No other multi-segment paths are supported. "
+                    "route. For themes in themes/*.yaml, use the theme name "
+                    "(simple name without dots). "
                     "'automation', 'script', and 'scene' are accepted only when "
                     "file is under packages/*.yaml; in configuration.yaml use "
                     "the dedicated storage-mode tools "
@@ -188,7 +189,9 @@ class YamlConfigTools:
                 default="configuration.yaml",
                 description=(
                     "Relative path to the YAML config file. Defaults to "
-                    "'configuration.yaml'. Also supports 'packages/*.yaml'."
+                    "'configuration.yaml'. Also supports 'packages/*.yaml' and "
+                    "'themes/*.yaml' (yaml_path is the theme name; "
+                    "frontend.reload_themes is triggered automatically)."
                 ),
             ),
         ] = "configuration.yaml",
@@ -207,7 +210,7 @@ class YamlConfigTools:
             Field(default=True),
         ] = True,
     ) -> dict[str, Any]:
-        """Update raw YAML configuration in configuration.yaml or packages/*.yaml (LAST RESORT). MUST call ha_get_skill_guide first.
+        """Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT). MUST call ha_get_skill_guide first.
 
         **WARNING:** Destructive, disabled by default. Dedicated tools exist for
         almost every use case and should be preferred:
@@ -224,8 +227,10 @@ class YamlConfigTools:
         Intended for YAML-only integrations with no config-flow or API
         equivalent (command_line, rest, shell_command, notify platforms),
         for integrations with significant YAML-only configuration (knx
-        entities in package files), and for registering YAML-mode dashboards via
-        ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys).
+        entities in package files), for registering YAML-mode dashboards via
+        ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys),
+        and for editing theme files in ``themes/*.yaml`` (keyed by theme name;
+        ``frontend.reload_themes`` is triggered automatically so no restart is needed).
         Also accepts ``automation``, ``script``, and ``scene`` keys when
         ``file`` is a ``packages/*.yaml`` — for git-managed YAML configs
         that track these alongside templates and other YAML items. Writes
@@ -233,8 +238,8 @@ class YamlConfigTools:
         storage-mode and YAML-mode collections don't collide; use the
         dedicated storage-mode tools instead.
         Check ``post_action`` in the response: most keys need a full HA
-        restart; template, mqtt, group, automation, script, and scene
-        support reload. Preserves YAML comments and HA tags (``!include``,
+        restart; template, mqtt, group, automation, script, scene, and theme
+        files support reload. Preserves YAML comments and HA tags (``!include``,
         ``!secret``) on round-trip; ``replace`` swaps the subtree as-is.
 
         ``template-guidelines.md`` ships in this response under ``skill_content``

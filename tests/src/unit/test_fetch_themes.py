@@ -34,6 +34,16 @@ class TestSummarizeThemeListing:
         assert result["default_theme"] == "default"
         assert result["default_dark_theme"] is None
 
+    def test_list_shaped_themes_value_degrades_to_empty(self):
+        """A malformed themes value (list instead of dict) degrades to empty."""
+        result = summarize_theme_listing(
+            {"themes": ["nord", "default"], "default_theme": "nord"}
+        )
+
+        assert result["themes"] == []
+        assert result["count"] == 0
+        assert result["default_theme"] == "nord"
+
 
 class TestFetchThemes:
     """Unit coverage for the _fetch_themes helper."""

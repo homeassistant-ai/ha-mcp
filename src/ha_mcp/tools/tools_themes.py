@@ -74,9 +74,9 @@ class ThemesTools:
             str | None,
             Field(
                 description=(
-                    "Theme to apply when action='set'. Must be an installed "
-                    "theme; 'default' restores the built-in theme, 'none' "
-                    "resets the chosen mode to the built-in default."
+                    "Theme name when action='set'. Must be an installed theme; "
+                    "'default' restores the built-in theme, 'none' resets the "
+                    "chosen mode to the built-in default."
                 ),
                 default=None,
             ),
@@ -96,9 +96,9 @@ class ThemesTools:
 
         When NOT to use: themes are YAML files - Home Assistant has no API to
         create or edit them. Installing community themes goes through HACS
-        (ha_manage_hacs); writing theme files directly requires the beta
-        filesystem tools (ha_write_file, needs the ha-mcp custom component).
-        After file changes, reload with ha_reload_core(target="themes").
+        (ha_manage_hacs); editing custom theme files goes through
+        ha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name
+        and reloads themes automatically).
 
         When to use: action='list' discovers installed theme names and the
         current defaults; action='set' selects the backend default theme
@@ -169,9 +169,6 @@ class ThemesTools:
                     "default_theme": listing.get("default_theme"),
                     "default_dark_theme": listing.get("default_dark_theme"),
                 },
-                "message": (
-                    f"Theme '{theme_name}' applied as {mode or 'light'} default"
-                ),
             }
         except ToolError:
             raise

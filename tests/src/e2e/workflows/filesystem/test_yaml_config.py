@@ -1062,6 +1062,102 @@ class TestDashboardsDirectoryAllowlist:
 
 
 @pytest.mark.filesystem
+@pytest.mark.themes
+class TestYamlConfigThemesIntegration:
+    """E2E: ha_config_set_yaml can create/delete themes, triggering reload."""
+
+    async def test_create_theme_and_reload_makes_it_appear(
+        self, mcp_client_with_yaml_config
+    ):
+        """Create a theme via ha_config_set_yaml → reload → verify it appears in list.
+
+        Exercises the themes/ allowlist, post-action reload (frontend.reload_themes),
+        and the full lifecycle: add → list shows it → remove → list no longer shows it.
+        Uses a zz_-prefixed name so it cannot collide with seeded Test Theme A/B.
+        """
+        theme_file = "themes/zz_e2e_created.yaml"
+        theme_name = "E2E Created Theme"
+        theme_content = (
+            f"{theme_name}:\n"
+            "  primary-color: '#ff6b6b'\n"
+            "  accent-color: '#4ecdc4'\n"
+            "  text-primary-color: '#1a1a1a'\n"
+        )
+
+        try:
+            # Create the theme file.
+            async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+                add_data = await mcp.call_tool_success(
+                    TOOL_NAME,
+                    {
+                        "yaml_path": theme_name,
+                        "action": "add",
+                        "content": theme_content,
+                        "file": theme_file,
+                        "backup": False,
+                    },
+                )
+                assert add_data.get("success") is True, (
+                    f"Theme add should succeed: {add_data}"
+                )
+                assert add_data.get("post_action") == "reload_performed", (
+                    f"Theme add should trigger reload_performed: {add_data}"
+                )
+                assert add_data.get("reload_service") == "frontend.reload_themes", (
+                    f"reload_service should be frontend.reload_themes: {add_data}"
+                )
+
+                logger.info(f"Created theme {theme_name} via ha_config_set_yaml")
+
+            # Verify the theme appears in ha_manage_theme list.
+            list_result = await safe_call_tool(
+                mcp_client_with_yaml_config, "ha_manage_theme", {"action": "list"}
+            )
+            assert list_result.get("success") is True, (
+                f"List themes after add failed: {list_result}"
+            )
+            theme_names = list_result["data"]["themes"]
+            assert theme_name in theme_names, (
+                f"{theme_name} should appear after add+reload: {theme_names}"
+            )
+            logger.info(f"Verified {theme_name} appears in theme list")
+
+        finally:
+            # Cleanup: remove the theme and verify it disappears from the list.
+            # This guarantees the themes-module count==2 assertion can never
+            # observe the extra theme (sequential within-worker execution).
+            async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+                remove_data = await mcp.call_tool_success(
+                    TOOL_NAME,
+                    {
+                        "yaml_path": theme_name,
+                        "action": "remove",
+                        "file": theme_file,
+                        "backup": False,
+                    },
+                )
+                assert remove_data.get("success") is True, (
+                    f"Theme remove should succeed: {remove_data}"
+                )
+                assert remove_data.get("post_action") == "reload_performed", (
+                    f"Theme remove should trigger reload_performed: {remove_data}"
+                )
+
+            # Verify the theme no longer appears.
+            list_after_remove = await safe_call_tool(
+                mcp_client_with_yaml_config, "ha_manage_theme", {"action": "list"}
+            )
+            assert list_after_remove.get("success") is True, (
+                f"List themes after remove failed: {list_after_remove}"
+            )
+            final_theme_names = list_after_remove["data"]["themes"]
+            assert theme_name not in final_theme_names, (
+                f"{theme_name} should disappear after remove+reload: {final_theme_names}"
+            )
+            logger.info(f"Verified {theme_name} removed and no longer in list")
+
+
+@pytest.mark.filesystem
 class TestYamlConfigSkillContentDelivery:
     """E2E: ha_config_set_yaml participates in the write-tool skill_content
     delivery feature (#1182) — the sixth write tool exposing MandatoryBPS.
