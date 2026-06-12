@@ -4,10 +4,10 @@ The #1572 accessibility feature ships the same pre-paint resolver on two
 independent surfaces — the Python-served settings UI
 (``ha_mcp.settings_ui._SETTINGS_HTML``) and the Astro docs layout
 (``site/src/layouts/Layout.astro``). Both read the same ``ha-mcp-*``
-``localStorage`` keys and set the same ``data-theme`` / ``data-contrast``
-/ ``data-shade`` / root-``font-size`` attributes on ``<html>`` before CSS
-evaluates, so a user who set prefs on one surface sees them honored on the
-other with no flash.
+``localStorage`` key names and interpret them identically — the storage
+itself is per-origin, so each surface keeps its own saved values — and set
+the same ``data-theme`` / ``data-contrast`` / ``data-shade`` /
+root-``font-size`` attributes on ``<html>`` before CSS evaluates.
 
 They CANNOT share a source file: the settings page is a self-contained
 HTML string (no external assets, may be served while the docs site is a

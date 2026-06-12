@@ -4,7 +4,7 @@ import colors from 'tailwindcss/colors';
 /*
  * Light-scheme token indirection (#1572).
  *
- * The site was authored dark-only, with ~1,400 hard-coded color utilities
+ * The site was authored dark-only, with hard-coded color utilities
  * (bg-slate-800, text-slate-300, ...) across pages — including @apply-baked
  * custom classes that class-level CSS overrides cannot reach. Instead of
  * re-authoring every call site with dark: variants, the shades listed below
@@ -53,8 +53,9 @@ export default {
         },
         // Foreground shades (100–500 read light-on-dark) and container
         // shades (700–950 are dark fills/borders) get light-mode remaps.
-        // slate-600 is intentionally NOT themed: it holds AA contrast on
-        // both schemes (see the coverage test's LIGHT_SAFE set).
+        // slate-600 is intentionally NOT themed: the stock value reads
+        // acceptably on both schemes (see LIGHT_SAFE in
+        // tests/src/unit/test_light_scheme_token_coverage.py).
         slate: themed('slate', 100, 200, 300, 400, 500, 700, 800, 900, 950),
         blue: themed('blue', 200, 300, 400, 900),
         green: themed('green', 300, 400, 900),

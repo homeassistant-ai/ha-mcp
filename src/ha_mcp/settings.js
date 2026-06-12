@@ -3019,13 +3019,14 @@ loadFsCustomPaths();
 // localStorage / <html> attributes. The anti-FOUC head script already set
 // the initial attributes; this module keeps them in sync for the rest of
 // the session and persists user changes. The block from `const PREFS` to
-// `const APPLY` is mirrored verbatim in site/src/layouts/Layout.astro and
-// guarded by tests/src/unit/test_anti_fouc_parity.py.
+// `const APPLY` must stay logically identical to the copy in
+// site/src/layouts/Layout.astro (comments and formatting may differ) —
+// enforced by tests/src/unit/test_anti_fouc_parity.py.
 (function bindAccessibilityPrefs() {
   const root = document.documentElement;
   const mql = window.matchMedia('(prefers-color-scheme: light)');
   const PREFS = {
-    theme:    { key: 'ha-mcp-theme',         default: 'dark'      },
+    theme:    { key: 'ha-mcp-theme',         default: 'auto'      },
     fontSize: { key: 'ha-mcp-font-size',     default: '100'       },
     contrast: { key: 'ha-mcp-contrast',      default: 'normal'    },
     shade:    { key: 'ha-mcp-shade',         default: 'off-white' },
@@ -3047,7 +3048,11 @@ loadFsCustomPaths();
     catch (_) { return PREFS[p].default; }
   };
   const write = (p, v) => {
-    try { localStorage.setItem(PREFS[p].key, v); } catch (_) { /* private mode */ }
+    let stored = true;
+    try { localStorage.setItem(PREFS[p].key, v); } catch (_) { stored = false; }
+    // Surface-specific follow-up (server sync on the settings UI,
+    // blocked-storage note on both) lives outside this mirrored core.
+    if (window.__haMcpPrefsHook) window.__haMcpPrefsHook(p, v, stored);
   };
 
   // Apply functions mirror what the anti-FOUC head script does, so the
@@ -3096,6 +3101,37 @@ loadFsCustomPaths();
     return custom;
   };
   const APPLY = { theme: applyTheme, fontSize: applyFontSize, contrast: applyContrast, shade: applyShade, custom: applyCustom };
+
+  // #1574 review: localStorage is the synchronous store the anti-FOUC
+  // script reads at paint time, but it is origin-scoped and the stdio
+  // sidecar binds a fresh random port (= fresh empty origin) per session.
+  // This hook therefore (a) mirrors every change to the server
+  // (./api/settings/theme -> theme_prefs.json), which seeds the next
+  // fresh origin via the server-prefs head script, and (b) surfaces a
+  // blocked localStorage (private mode) once instead of silently losing
+  // the choices on reload. Debounced so color-picker drags don't flood
+  // the endpoint; best-effort because the browser copy already applied.
+  const storageNote = document.getElementById('a11y-storage-note');
+  const pendingPrefs = {};
+  let prefsSyncTimer = null;
+  window.__haMcpPrefsHook = (pref, value, stored) => {
+    if (!stored && storageNote) storageNote.hidden = false;
+    pendingPrefs[pref] = value;
+    clearTimeout(prefsSyncTimer);
+    prefsSyncTimer = setTimeout(() => {
+      const body = JSON.stringify(pendingPrefs);
+      for (const k in pendingPrefs) delete pendingPrefs[k];
+      fetch('./api/settings/theme', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      }).then((resp) => {
+        // A non-2xx means client and server disagree about valid values —
+        // an implementation bug worth a console trail, not a user error.
+        if (!resp.ok) console.warn('ha-mcp: theme prefs not persisted:', resp.status);
+      }).catch(() => { /* offline / sidecar gone — localStorage still has it */ });
+    }, 400);
+  };
 
   const setPref = (pref, value) => {
     write(pref, value);

@@ -353,10 +353,11 @@ fieldset.a11y-options { border: 0; padding: 0; margin: 0; min-inline-size: auto;
 :root[data-theme="light"][data-shade="gray"]  body.body-background { background-color: #d4d6da; }
 :root[data-theme="light"][data-shade="pure"]  body.body-background { background-color: #ffffff; }
 
-/* High-contrast tier (#1572). Mirrors `prefers-contrast: more`. Strengthens
-   primary text and the remapped slate body-text tokens toward the scheme's
-   extreme; brand and surfaces stay so accent semantics carry across tiers.
-   Body weight bumps to 500 for stroke contrast. */
+/* High-contrast tier (#1572). Set via the Accessibility panel
+   (data-contrast="high"). Strengthens primary text and the remapped slate
+   body-text tokens toward the scheme's extreme; brand and surfaces stay so
+   accent semantics carry across tiers. Body weight bumps to 500 for stroke
+   contrast. */
 :root[data-contrast="high"] body { font-weight: 500; }
 :root[data-contrast="high"][data-theme="dark"] {
   --text-primary: #ffffff; --text-secondary: #e0e0e0; --text-muted: #94A3B8;

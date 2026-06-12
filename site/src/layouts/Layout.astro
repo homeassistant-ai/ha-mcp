@@ -22,20 +22,21 @@ const { title } = Astro.props;
       // #1572 accessibility-pref resolver — runs before CSS evaluates so
       // data-theme / data-contrast / data-shade and the root font-size are
       // set on <html> ahead of paint (no FOUC, no jump). Reads saved choices
-      // from localStorage with safe defaults. Dark is the default (#1574
-      // review: existing users rely on the current look); "auto" is opt-in
-      // and resolves via prefers-color-scheme.
-      // Duplicate of the same logic in src/ha_mcp/settings_ui.py head — both
-      // surfaces share the localStorage keys, so any change here must be
-      // mirrored there (and vice versa) or one surface paints with the wrong
-      // attributes. Enforced by tests/src/unit/test_anti_fouc_parity.py.
+      // from localStorage with safe defaults. Auto is the default (#1574
+      // review: follow the OS preference out of the box); Dark stays one
+      // click away as a preset.
+      // Same logic as in src/ha_mcp/settings_ui.py head — both surfaces use
+      // the same localStorage key names interpreted identically, but storage
+      // is per-origin, so each surface keeps its own saved values. Any change
+      // here must be mirrored there (and vice versa) or the surfaces drift
+      // apart. Enforced by tests/src/unit/test_anti_fouc_parity.py.
       (function () {
         var root = document.documentElement;
         function readPref(key, fallback) {
           try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
         }
         try {
-          var themePref = readPref('ha-mcp-theme', 'dark');
+          var themePref = readPref('ha-mcp-theme', 'auto');
           var theme = themePref === 'auto'
             ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
             : themePref;
@@ -82,8 +83,17 @@ const { title } = Astro.props;
                 root.style.setProperty('--brand', channels(custom.accent));
               }
             }
-          } catch (e2) { /* ignore malformed custom colors */ }
+          } catch (e2) {
+            // Corrupted custom-colors JSON would re-fail on every load; drop
+            // it so the next visit starts clean instead of wedged.
+            try { localStorage.removeItem('ha-mcp-custom-colors'); } catch (e3) { /* storage blocked */ }
+          }
         } catch (e) {
+          // localStorage is already guarded inside readPref — this catch
+          // guards everything else (matchMedia, attribute writes). Warn so a
+          // shipped bug here is visible in the console instead of hiding
+          // behind the silent dark fallback.
+          console.warn('ha-mcp accessibility prefs failed to apply:', e);
           root.setAttribute('data-theme', 'dark');
         }
       })();
@@ -100,13 +110,14 @@ const { title } = Astro.props;
       // attributes. The Layout head anti-FOUC script already set the initial
       // attributes; this module keeps them in sync for the rest of the
       // session and persists user changes. The block from `const PREFS` to
-      // `const APPLY` is mirrored verbatim in src/ha_mcp/settings.js and
-      // guarded by tests/src/unit/test_anti_fouc_parity.py.
+      // `const APPLY` must stay logically identical to src/ha_mcp/settings.js
+      // (comments and formatting may differ) — enforced by
+      // tests/src/unit/test_anti_fouc_parity.py.
       (function bindAccessibilityPrefs() {
         const root = document.documentElement;
         const mql = window.matchMedia('(prefers-color-scheme: light)');
         const PREFS = {
-          theme:    { key: 'ha-mcp-theme',         default: 'dark'      },
+          theme:    { key: 'ha-mcp-theme',         default: 'auto'      },
           fontSize: { key: 'ha-mcp-font-size',     default: '100'       },
           contrast: { key: 'ha-mcp-contrast',      default: 'normal'    },
           shade:    { key: 'ha-mcp-shade',         default: 'off-white' },
@@ -128,7 +139,11 @@ const { title } = Astro.props;
           catch (_) { return PREFS[p].default; }
         };
         const write = (p, v) => {
-          try { localStorage.setItem(PREFS[p].key, v); } catch (_) { /* private mode */ }
+          let stored = true;
+          try { localStorage.setItem(PREFS[p].key, v); } catch (_) { stored = false; }
+          // Surface-specific follow-up (server sync on the settings UI,
+          // blocked-storage note on both) lives outside this mirrored core.
+          if (window.__haMcpPrefsHook) window.__haMcpPrefsHook(p, v, stored);
         };
 
         // Apply functions mirror what the anti-FOUC head script does, so the
@@ -177,6 +192,16 @@ const { title } = Astro.props;
           return custom;
         };
         const APPLY = { theme: applyTheme, fontSize: applyFontSize, contrast: applyContrast, shade: applyShade, custom: applyCustom };
+
+        // #1574 review: surface a blocked localStorage (private mode /
+        // storage-blocking browsers) once instead of silently losing the
+        // choices on reload. The docs site is a static build, so unlike the
+        // settings UI there is no server to persist to — the note is the
+        // whole story here.
+        const storageNote = document.getElementById('a11y-storage-note');
+        window.__haMcpPrefsHook = (pref, value, stored) => {
+          if (!stored && storageNote) storageNote.hidden = false;
+        };
 
         const setPref = (pref, value) => {
           write(pref, value);

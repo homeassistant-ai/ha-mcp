@@ -3,8 +3,9 @@
     /* Native form controls / scrollbars follow the scheme (MDN: color-scheme);
        the light block below flips it. */
     color-scheme: dark;
-    /* Accent used AS TEXT on tinted chips (a11y options): #0a84ff measures
-       3.82:1 on the dark chip fill, so text gets its own readable shade. */
+    /* Accent used AS TEXT on tinted chips (a11y options): the base accent
+       (#0a84ff) doesn't meet contrast requirements, so text gets its own
+       readable shade. */
     --accent-text: #66b3ff;
     --bg: #1c1c1e; --surface: #2c2c2e; --surface-hover: #3a3a3c;
     /* Semantic tokens for surfaces that previously hard-coded per-scheme
@@ -454,14 +455,15 @@
   :root[data-theme="light"][data-shade="gray"]  { --bg: #d4d6da; }
   :root[data-theme="light"][data-shade="pure"]  { --bg: #ffffff; }
 
-  /* High-contrast tier (#1572). Mirrors `prefers-contrast: more` and the
-     WCAG 2.2 1.4.6 AAA threshold (7:1 for body text). The dark scheme pushes
-     foregrounds toward pure white and tightens borders; the light scheme
-     pushes toward pure black. Body weight bumps to 500 so the strokes carry
-     the extra contrast (a known APCA lever for low-vision readers).
-     Scope: lifts the four primary text/UI variables — notices and badges
-     (.pin-notice, .readonly-notice, .danger-btn, diff hues) keep their own
-     hand-tuned palette so they read as the same callout in both tiers. */
+  /* High-contrast tier (#1572). Set via the Accessibility panel
+     (data-contrast="high"), targeting the WCAG 2.2 1.4.6 AAA threshold (7:1
+     for body text). The dark scheme pushes foregrounds toward pure white and
+     tightens borders; the light scheme pushes toward pure black. Body weight
+     bumps to 500 so the strokes carry the extra contrast (a known APCA lever
+     for low-vision readers). Scope: lifts the four primary text/UI
+     variables — notices and badges (.pin-notice, .readonly-notice,
+     .danger-btn, diff hues) keep their own hand-tuned palette so they read as
+     the same callout in both tiers. */
   :root[data-contrast="high"] body { font-weight: 500; }
   :root[data-contrast="high"][data-theme="dark"] {
     --text: #ffffff; --text-secondary: #e0e0e0; --border: #6c6c70; --accent: #4ca8ff;
