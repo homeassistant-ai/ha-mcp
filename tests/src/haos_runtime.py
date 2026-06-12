@@ -602,30 +602,46 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
             text=True,
             timeout=60,
         )
-        subprocess.run(
-            [
-                "guestfish",
-                "--rw",
-                "-a",
-                str(image_path),
-                "run",
-                ":",
-                "mount",
-                "/dev/sda8",
-                "/",
-                ":",
-                "rm-rf",
-                "/supervisor/addons/local/ha_mcp_dev",
-                ":",
-                "tar-in",
-                str(seed_tar),
-                "/supervisor/addons/local",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
+        try:
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--rw",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    # Parity with the bake's staging call — tar-in fails if
+                    # the destination directory does not exist.
+                    "mkdir-p",
+                    "/supervisor/addons/local",
+                    ":",
+                    "rm-rf",
+                    "/supervisor/addons/local/ha_mcp_dev",
+                    ":",
+                    "tar-in",
+                    str(seed_tar),
+                    "/supervisor/addons/local",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except subprocess.CalledProcessError as err:
+            # Without this, capture_output swallows guestfish's actual error
+            # text and the test log only shows "exit status 1".
+            LOG.error(
+                "guestfish addon refresh failed (exit %s)\nstdout:\n%s\nstderr:\n%s",
+                err.returncode,
+                err.stdout,
+                err.stderr,
+            )
+            raise
         LOG.info("Refreshed ha-mcp dev addon source in %s", image_path)
     finally:
         _shutil.rmtree(workdir, ignore_errors=True)
