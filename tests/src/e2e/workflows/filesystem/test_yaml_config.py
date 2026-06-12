@@ -1077,11 +1077,12 @@ class TestYamlConfigThemesIntegration:
         """
         theme_file = "themes/zz_e2e_created.yaml"
         theme_name = "E2E Created Theme"
+        # Content is the theme-variable mapping only; the component nests it
+        # under yaml_path (the theme name) itself.
         theme_content = (
-            f"{theme_name}:\n"
-            "  primary-color: '#ff6b6b'\n"
-            "  accent-color: '#4ecdc4'\n"
-            "  text-primary-color: '#1a1a1a'\n"
+            "primary-color: '#ff6b6b'\n"
+            "accent-color: '#4ecdc4'\n"
+            "text-primary-color: '#1a1a1a'\n"
         )
 
         try:

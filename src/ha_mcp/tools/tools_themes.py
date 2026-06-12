@@ -1,8 +1,10 @@
 """Frontend theme management tools for Home Assistant.
 
-Themes are YAML/file-based: Home Assistant exposes no API to create or edit
-theme files. This module covers what CAN be managed at runtime - listing the
-installed themes and selecting the backend default theme.
+Themes are YAML/file-based: Home Assistant itself exposes no API to create or
+edit theme files. This module covers what CAN be managed at runtime - listing
+the installed themes and selecting the backend default theme. Creating or
+editing custom theme files goes through ha_config_set_yaml (beta, ha-mcp
+custom component); installing community themes goes through HACS.
 """
 
 import logging

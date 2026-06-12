@@ -579,7 +579,6 @@ class FilesystemTools:
 
         Creates or updates files in restricted directories only. This is useful for:
         - Creating custom CSS/JS for dashboards
-        - Adding theme files
         - Creating Jinja2 templates
 
         **Allowed Write Directories:**

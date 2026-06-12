@@ -234,6 +234,81 @@ class TestThemeEditHandler:
         assert "theme1" not in written
         assert "theme2" in written
 
+    async def test_theme_remove_last_theme_leaves_empty_mapping(
+        self, handler, hass, call_factory, tmp_path
+    ):
+        theme_file = tmp_path / "themes" / "single-theme.yaml"
+        theme_file.parent.mkdir(parents=True, exist_ok=True)
+        theme_file.write_text("only-theme:\n  primary-color: '#123456'")
+
+        call = call_factory(
+            {
+                "file": "themes/single-theme.yaml",
+                "action": "remove",
+                "yaml_path": "only-theme",
+                "backup": False,
+            }
+        )
+
+        result = await handler(call)
+
+        assert result["success"] is True
+        # ruamel serializes an empty root mapping as "{}"; both that and a
+        # truly empty file parse cleanly under !include_dir_merge_named.
+        assert theme_file.read_text().strip() in ("", "{}")
+
+    async def test_theme_add_second_theme_to_existing_file(
+        self, handler, hass, call_factory, tmp_path
+    ):
+        theme_file = tmp_path / "themes" / "pair.yaml"
+        theme_file.parent.mkdir(parents=True, exist_ok=True)
+        theme_file.write_text("theme-a:\n  primary-color: '#111111'")
+
+        call = call_factory(
+            {
+                "file": "themes/pair.yaml",
+                "action": "add",
+                "yaml_path": "theme-b",
+                "content": "primary-color: '#222222'",
+                "backup": False,
+            }
+        )
+
+        result = await handler(call)
+
+        assert result["success"] is True
+        written = theme_file.read_text()
+        assert "theme-a:" in written
+        assert "primary-color: '#111111'" in written
+        assert "theme-b:" in written
+        assert "primary-color: '#222222'" in written
+
+    async def test_theme_backup_true_creates_backup(
+        self, handler, hass, call_factory, tmp_path
+    ):
+        theme_file = tmp_path / "themes" / "backed-up.yaml"
+        theme_file.parent.mkdir(parents=True, exist_ok=True)
+        original = "backed-up:\n  primary-color: '#101010'\n"
+        theme_file.write_text(original)
+
+        call = call_factory(
+            {
+                "file": "themes/backed-up.yaml",
+                "action": "replace",
+                "yaml_path": "backed-up",
+                "content": "primary-color: '#202020'",
+                "backup": True,
+            }
+        )
+
+        result = await handler(call)
+
+        assert result["success"] is True
+        backup_path = result.get("backup_path")
+        assert backup_path, f"backup_path missing from response: {result}"
+        assert (tmp_path / backup_path).read_text() == original
+        assert "primary-color: '#202020'" in theme_file.read_text()
+
     async def test_theme_remove_not_found_error(
         self, handler, hass, call_factory, tmp_path
     ):
@@ -307,7 +382,7 @@ class TestThemeEditHandler:
         result = await handler(call)
 
         assert result["success"] is False
-        assert result["success"] is False
+        assert "not allowed" in result["error"]
 
     async def test_theme_reload_failure_degrades_gracefully(
         self, handler, tmp_path, call_factory
@@ -354,6 +429,9 @@ class TestThemeEditHandler:
         assert result["reload_service"] == "frontend.reload_themes"
         assert "reload_error" in result
         assert "unavailable" in result["reload_error"]
+
+        # The write itself must have landed despite the failed reload.
+        assert "primary-color: '#000000'" in theme_file.read_text()
 
     async def test_theme_nested_directory_supported(
         self, handler, hass, call_factory, tmp_path

@@ -503,3 +503,42 @@ async def test_theme_nested_directory(monkeypatch):
     )
     assert _dispatch_call_count(client) == 1
     assert _dispatch_payloads(client)[0]["file"] == "themes/custom/nested-theme.yaml"
+
+
+async def test_theme_reload_failure_surfaces_warning(monkeypatch):
+    """A component-side reload_error must surface as a top-level warning,
+    not vanish behind success: True."""
+    fn, client = await _make_tool()
+
+    async def degraded_call_service(domain, service, payload, **kwargs):
+        if service == "get_caller_token":
+            from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+
+            return {
+                "service_response": {
+                    "success": True,
+                    "token": "test-token",
+                    "version": MIN_COMPONENT_VERSION,
+                }
+            }
+        return {
+            "success": True,
+            "file": "themes/test-theme.yaml",
+            "post_action": "reload_available",
+            "reload_service": "frontend.reload_themes",
+            "reload_error": "Reload service unavailable",
+        }
+
+    client.call_service = AsyncMock(side_effect=degraded_call_service)
+
+    result = await fn(
+        file="themes/test-theme.yaml",
+        yaml_path="test-theme",
+        action="add",
+        content="primary-color: '#000000'",
+    )
+
+    warnings = result.get("warnings")
+    assert isinstance(warnings, list) and warnings, f"warnings missing: {result}"
+    assert "Reload service unavailable" in warnings[0]
+    assert "frontend.reload_themes" in warnings[0]
