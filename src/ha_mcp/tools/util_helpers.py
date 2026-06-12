@@ -36,6 +36,22 @@ def websocket_error_message(error: Any) -> str:
     return str(error)
 
 
+def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
+    """Summarize a ``frontend/get_themes`` result into names plus defaults.
+
+    Returns theme NAMES, not the full per-theme CSS variable dicts (installed
+    community themes can carry hundreds of variables; listings are a
+    discovery/verify surface, not a content dump).
+    """
+    theme_names = sorted(raw_themes.get("themes", {}).keys())
+    return {
+        "themes": theme_names,
+        "count": len(theme_names),
+        "default_theme": raw_themes.get("default_theme"),
+        "default_dark_theme": raw_themes.get("default_dark_theme"),
+    }
+
+
 def strip_internal_fields(obj: Any, _seen: set[int] | None = None) -> Any:
     """Remove leading-underscore keys from ``obj`` and any nested dicts
     or lists in place.

@@ -28,6 +28,7 @@ from .util_helpers import (
     fetch_integration_diagnostics,
     filter_active_repairs,
     parse_diagnostics_fields,
+    summarize_theme_listing,
 )
 
 logger = logging.getLogger(__name__)
@@ -889,15 +890,7 @@ class SystemTools:
         try:
             themes_result = await ws_client.send_command("frontend/get_themes")
             if themes_result.get("success"):
-                raw_themes = themes_result.get("result", {})
-                theme_dict = raw_themes.get("themes", {})
-                theme_names = sorted(theme_dict.keys())
-                themes_data = {
-                    "themes": theme_names,
-                    "count": len(theme_names),
-                    "default_theme": raw_themes.get("default_theme"),
-                    "default_dark_theme": raw_themes.get("default_dark_theme"),
-                }
+                themes_data = summarize_theme_listing(themes_result.get("result") or {})
             else:
                 err = themes_result.get("error") or {}
                 err_msg = (

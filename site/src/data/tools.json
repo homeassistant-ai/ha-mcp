@@ -2958,6 +2958,38 @@
     "source_file": "tools_code.py"
   },
   {
+    "name": "ha_manage_theme",
+    "title": "Manage Frontend Themes",
+    "description": "Manage Home Assistant frontend themes.\n\nWhen NOT to use: themes are YAML files - Home Assistant has no API to\ncreate or edit them. Installing community themes goes through HACS\n(ha_manage_hacs); writing theme files directly requires the beta\nfilesystem tools (ha_write_file, needs the ha-mcp custom component).\nAfter file changes, reload with ha_reload_core(target=\"themes\").\n\nWhen to use: action='list' discovers installed theme names and the\ncurrent defaults; action='set' selects the backend default theme\n(optionally per light/dark mode).\n\nCaveats: action='set' changes the backend-selected default only -\nusers who explicitly picked a theme in their profile keep their\nchoice. Theme names are validated by Home Assistant at call time.\n\nEXAMPLES:\n- List themes: ha_manage_theme(action=\"list\")\n- Set default theme: ha_manage_theme(action=\"set\", theme_name=\"nord\")\n- Set dark-mode theme: ha_manage_theme(\n      action=\"set\", theme_name=\"nord\", mode=\"dark\")\n- Restore built-in default: ha_manage_theme(\n      action=\"set\", theme_name=\"default\")",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "type": "Annotated[ThemeAction, Field(description='Theme operation: list installed themes or set the default theme.')]"
+        },
+        "theme_name": {
+          "type": "Annotated[str | None, Field(description=\"Theme to apply when action='set'. Must be an installed theme; 'default' restores the built-in theme, 'none' resets the chosen mode to the built-in default.\", default=None)]",
+          "default": null
+        },
+        "mode": {
+          "type": "Annotated[Literal['light', 'dark'] | None, Field(description=\"Which mode the theme applies to when action='set'. Defaults to light.\", default=None)]",
+          "default": null
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "readOnlyHint": false
+    },
+    "tags": [
+      "System"
+    ],
+    "source_file": "tools_themes.py"
+  },
+  {
     "name": "ha_reload_core",
     "title": "Reload Core Components",
     "description": "Reload Home Assistant configuration without full restart.\n\nThis tool reloads specific configuration components, allowing changes\nto take effect without restarting the entire Home Assistant instance.\nThis is much faster than a full restart.\n\n**Parameters:**\n- target: What to reload. Options:\n  - \"all\": Reload all reloadable components\n  - \"automations\": Reload automation configurations\n  - \"scripts\": Reload script configurations\n  - \"scenes\": Reload scene configurations\n  - \"groups\": Reload group configurations\n  - \"input_booleans\": Reload input_boolean helpers\n  - \"input_numbers\": Reload input_number helpers\n  - \"input_texts\": Reload input_text helpers\n  - \"input_selects\": Reload input_select helpers\n  - \"input_datetimes\": Reload input_datetime helpers\n  - \"input_buttons\": Reload input_button helpers\n  - \"timers\": Reload timer helpers\n  - \"templates\": Reload template sensors/entities\n  - \"persons\": Reload person configurations\n  - \"zones\": Reload zone configurations\n  - \"core\": Reload core configuration (customize, packages)\n  - \"themes\": Reload frontend themes\n\n**Example Usage:**\n```python\n# Reload just automations after editing\nha_reload_core(target=\"automations\")\n\n# Reload all configurations\nha_reload_core(target=\"all\")\n\n# Reload input helpers after adding new ones\nha_reload_core(target=\"input_booleans\")\n```\n\n**When to Use:**\n- After editing automation/script YAML files\n- After adding new input helpers via YAML\n- After modifying customize.yaml\n- After theme changes",
