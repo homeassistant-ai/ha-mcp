@@ -636,6 +636,9 @@ class TestSystemTools:
         assert "themes" in themes, "Themes should contain 'themes' list"
         assert "count" in themes, "Themes should contain 'count'"
         assert "default_theme" in themes, "Themes should contain 'default_theme'"
+        assert "default_dark_theme" in themes, (
+            "Themes should contain 'default_dark_theme' (None when unset)"
+        )
         assert isinstance(themes["themes"], list), "Themes list should be a list"
         assert isinstance(themes["count"], int), "Count should be an int"
         assert themes["count"] >= 0, "Count should be non-negative"

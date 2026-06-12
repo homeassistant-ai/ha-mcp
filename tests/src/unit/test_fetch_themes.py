@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp.tools.tools_system import SystemTools
+from ha_mcp.tools.util_helpers import summarize_theme_listing
 
 
 def _ws_client_with_themes(themes_dict, default_theme=None, default_dark_theme=None):
@@ -21,6 +22,19 @@ def _ws_client_with_themes(themes_dict, default_theme=None, default_dark_theme=N
         result["result"]["default_dark_theme"] = default_dark_theme
     ws.send_command.return_value = result
     return ws
+
+
+class TestSummarizeThemeListing:
+    """Unit coverage for the shared summarize_theme_listing helper."""
+
+    def test_null_themes_value_is_treated_as_empty(self):
+        """A degraded frontend may return themes: null - no AttributeError."""
+        result = summarize_theme_listing({"themes": None, "default_theme": "default"})
+
+        assert result["themes"] == []
+        assert result["count"] == 0
+        assert result["default_theme"] == "default"
+        assert result["default_dark_theme"] is None
 
 
 class TestFetchThemes:

@@ -129,6 +129,24 @@ class TestManageThemeSet:
         assert result["data"]["default_dark_theme"] == "nord"
 
     @pytest.mark.asyncio
+    async def test_set_verification_failure_raises_tool_error(self):
+        """A failed post-set verification read surfaces as a structured error."""
+        client = _client()
+        client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "ws timeout"},
+        }
+        tools = ThemesTools(client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_theme(action="set", theme_name="nord")
+
+        client.call_service.assert_awaited_once()
+        payload = _tool_error_payload(exc_info)
+        assert payload["success"] is False
+        assert "ws timeout" in payload["error"]["message"]
+
+    @pytest.mark.asyncio
     async def test_set_service_failure_raises_tool_error(self):
         client = _client()
         client.call_service.side_effect = RuntimeError("Theme nope not found")

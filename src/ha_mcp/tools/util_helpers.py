@@ -43,7 +43,7 @@ def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
     community themes can carry hundreds of variables; listings are a
     discovery/verify surface, not a content dump).
     """
-    theme_names = sorted(raw_themes.get("themes", {}).keys())
+    theme_names = sorted((raw_themes.get("themes") or {}).keys())
     return {
         "themes": theme_names,
         "count": len(theme_names),

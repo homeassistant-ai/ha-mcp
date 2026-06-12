@@ -143,6 +143,7 @@ class ThemesTools:
                 "success": True,
                 "data": {
                     "theme": theme_name,
+                    # HA applies the theme to light mode when mode is omitted.
                     "mode": mode or "light",
                     "default_theme": listing.get("default_theme"),
                     "default_dark_theme": listing.get("default_dark_theme"),
