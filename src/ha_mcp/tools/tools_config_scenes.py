@@ -38,6 +38,7 @@ from .helpers import (
 )
 from .reference_validator import validate_config_references
 from .util_helpers import (
+    JSON_STRING_COERCION,
     apply_entity_category,
     attach_skill_content,
     augment_error_dict_with_skill_content,
@@ -438,6 +439,7 @@ class ConfigSceneTools:
         ],
         config: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Scene configuration dictionary. Must include 'entities' "

@@ -313,6 +313,28 @@ class TestCallService:
         data = assert_mcp_success(result, "Scene turn_on service call")
         logger.info(f"Scene activation executed: {data.get('message')}")
 
+    async def test_call_service_data_as_json_string(self, mcp_client):
+        """Regression #1581: data passed as a JSON-encoded string is coerced.
+
+        Some MCP client stacks (Claude Desktop stdio among them) pass
+        model-emitted stringified objects through unrepaired; 7.7.0 rejected
+        them at the schema boundary with VALIDATION_FAILED/dict_type.
+        """
+        logger.info("Testing ha_call_service with JSON string data")
+
+        result = await mcp_client.call_tool(
+            "ha_call_service",
+            {
+                "domain": "persistent_notification",
+                "service": "create",
+                "data": '{"notification_id": "issue_1581", "title": "t", "message": "m"}',
+            },
+        )
+
+        data = assert_mcp_success(result, "Service call with JSON string data")
+        assert data["success"] is True
+        logger.info("Service call with JSON string data succeeded")
+
     async def test_call_service_without_entity_id(self, mcp_client):
         """Test calling domain-wide service without entity_id."""
         logger.info("Testing ha_call_service without entity_id")
