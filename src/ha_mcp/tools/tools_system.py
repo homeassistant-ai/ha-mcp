@@ -340,6 +340,7 @@ class SystemTools:
           - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
           - "zha_network_full": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer "zha_network" for summary)
           - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)
+          - "themes": Installed theme names and defaults (sorted list of theme names, count, default_theme, default_dark_theme)
           - "diagnostics": Per-integration diagnostics dump — integration-defined JSON
             (commonly includes redacted config, device list, state snapshots; exact
             top-level keys vary by integration). REQUIRES ``config_entry_id``. The
@@ -393,7 +394,13 @@ class SystemTools:
 
         # Sections that require the system_health WebSocket connection; the
         # REST-based sections (config_check, diagnostics) do not.
-        ws_backed = {"repairs", "zha_network", "zha_network_full", "zwave_network"}
+        ws_backed = {
+            "repairs",
+            "zha_network",
+            "zha_network_full",
+            "zwave_network",
+            "themes",
+        }
 
         ws_client = None
 
@@ -441,6 +448,7 @@ class SystemTools:
                 "zwave_network",
                 "diagnostics",
                 "config_check",
+                "themes",
             }
             unknown = includes - VALID_INCLUDES
             if unknown:
@@ -462,6 +470,7 @@ class SystemTools:
             want_repairs = "repairs" in includes
             want_zha = zha_full or zha_summary
             want_zwave = "zwave_network" in includes
+            want_themes = "themes" in includes
 
             if ws_client is None:
                 # Health WebSocket unavailable: WS-backed sections can't run.
@@ -476,13 +485,15 @@ class SystemTools:
                     result["zha_network"] = {"error": ws_error}
                 if want_zwave:
                     result["zwave_network"] = {"error": ws_error}
+                if want_themes:
+                    result["themes"] = {"error": ws_error}
                 unavailable = sorted(includes & ws_backed)
                 if unavailable:
                     result.setdefault("warnings", []).append(
                         "These sections require the system_health WebSocket, "
                         f"which is unavailable: {', '.join(unavailable)}"
                     )
-                want_repairs = want_zha = want_zwave = False
+                want_repairs = want_zha = want_zwave = want_themes = False
 
             sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
             if want_repairs:
@@ -501,6 +512,8 @@ class SystemTools:
                 )
             if want_zwave:
                 sections.append(("zwave_network", self._fetch_zwave_network(ws_client)))
+            if want_themes:
+                sections.append(("themes", self._fetch_themes(ws_client)))
 
             if sections:
                 gathered = await asyncio.gather(
@@ -858,6 +871,46 @@ class SystemTools:
                 f"Z-Wave JS integration not available or error: {e}"
             )
         return zwave_network
+
+    @staticmethod
+    async def _fetch_themes(ws_client: Any) -> dict[str, Any]:
+        """Fetch installed theme names and defaults from Home Assistant.
+
+        Returns theme NAMES plus defaults, not the full per-theme CSS variable
+        dicts (installed community themes can carry hundreds of variables; this
+        section is a listing/verify surface, not a content dump).
+        """
+        themes_data: dict[str, Any] = {
+            "themes": [],
+            "count": 0,
+            "default_theme": None,
+            "default_dark_theme": None,
+        }
+        try:
+            themes_result = await ws_client.send_command("frontend/get_themes")
+            if themes_result.get("success"):
+                raw_themes = themes_result.get("result", {})
+                theme_dict = raw_themes.get("themes", {})
+                theme_names = sorted(theme_dict.keys())
+                themes_data = {
+                    "themes": theme_names,
+                    "count": len(theme_names),
+                    "default_theme": raw_themes.get("default_theme"),
+                    "default_dark_theme": raw_themes.get("default_dark_theme"),
+                }
+            else:
+                err = themes_result.get("error") or {}
+                err_msg = (
+                    err.get("message") if isinstance(err, dict) else str(err)
+                ) or "unknown error"
+                logger.warning(
+                    "frontend/get_themes returned success=false: %s", err_msg
+                )
+                themes_data["error"] = f"Themes data not available: {err_msg}"
+        except Exception as e:
+            logger.warning("Failed to fetch themes: %s", e)
+            themes_data["error"] = f"Themes data not available: {e}"
+        return themes_data
 
     async def _fetch_config_check(self) -> dict[str, Any]:
         """Validate HA configuration via POST /config/core/check_config.

@@ -609,13 +609,20 @@ class FilesystemTools:
             overwrite=True
         )
 
-        # Create a theme file
+        # Create a theme file (workflow: write -> reload -> verify)
         result = ha_write_file(
             path="themes/dark_blue.yaml",
             content="Dark Blue:\\n  primary-color: '#1a237e'",
             overwrite=False
         )
+        ha_reload_core(target="themes")  # register the new theme
+        health = ha_get_system_health(include="themes")  # verify it was loaded
         ```
+
+        **Note:** If a theme does not appear in the themes listing after
+        write+reload, configuration.yaml is missing the `frontend: themes:`
+        include (e.g. `themes: !include_dir_merge_named themes`) - ha-mcp
+        cannot add that; the user must.
         """
         try:
             # Check if custom component is available
