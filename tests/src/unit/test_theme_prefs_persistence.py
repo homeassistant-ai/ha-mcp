@@ -135,6 +135,31 @@ class TestLoadThemePrefs:
         result = _load_theme_prefs()
         assert result == prefs
 
+    def test_dropped_key_warns_once_per_process(
+        self,
+        monkeypatch: MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A stale/invalid key warns on first load only — the page handler
+        calls ``_load_theme_prefs()`` on every view, and a permanently
+        invalid file entry must not spam the log per view (#1574 review).
+        """
+        import ha_mcp.settings_ui as sui
+
+        path = tmp_path / "theme_prefs.json"
+        path.write_text(json.dumps({"theme": "light", "legacy_key": "x"}))
+        monkeypatch.setattr("ha_mcp.settings_ui.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr(sui, "_WARNED_DROPPED_THEME_PREFS", set())
+        with caplog.at_level("WARNING", logger="ha_mcp.settings_ui"):
+            assert _load_theme_prefs() == {"theme": "light"}
+            assert _load_theme_prefs() == {"theme": "light"}
+        warnings = [
+            r for r in caplog.records if "Ignoring invalid theme pref" in r.getMessage()
+        ]
+        assert len(warnings) == 1, warnings
+        assert "legacy_key" in warnings[0].getMessage()
+
 
 class TestRenderSettingsHtml:
     """Test ``_render_settings_html`` substitution."""

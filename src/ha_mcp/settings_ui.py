@@ -1375,6 +1375,10 @@ _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 # lock because it serializes a different file (``theme_prefs.json``).
 _THEME_PREFS_LOCK: asyncio.Lock | None = None
 
+# Keys already warned about by ``_load_theme_prefs`` — it runs on every
+# page view, so each invalid entry logs once per process, not per view.
+_WARNED_DROPPED_THEME_PREFS: set[str] = set()
+
 
 def _get_theme_prefs_lock() -> asyncio.Lock:
     global _THEME_PREFS_LOCK
@@ -1437,11 +1441,18 @@ def _load_theme_prefs() -> dict[str, str]:
         logger.warning("Cannot read theme prefs at %s", path, exc_info=True)
         return {}
     sanitized = _sanitize_theme_prefs(raw) or {}
-    if isinstance(raw, dict) and (dropped := set(raw) - set(sanitized)):
+    if isinstance(raw, dict):
         # Hand-edited values outside the offered sets are dropped on load
         # AND overwritten by the next save's RMW merge — leave a trail so
-        # the edit's author can see why their value never sticks.
-        logger.warning("Ignoring invalid theme pref entries: %s", sorted(dropped))
+        # the edit's author can see why their value never sticks. Warn
+        # once per key per process: _render_settings_html() calls this on
+        # every page view, and a permanently stale key (e.g. left behind
+        # by a future version) must not spam the log forever (#1574
+        # review).
+        dropped = set(raw) - set(sanitized) - _WARNED_DROPPED_THEME_PREFS
+        if dropped:
+            _WARNED_DROPPED_THEME_PREFS.update(dropped)
+            logger.warning("Ignoring invalid theme pref entries: %s", sorted(dropped))
     return sanitized
 
 
