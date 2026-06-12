@@ -19,6 +19,7 @@ import pytest
 
 from ...utilities.assertions import (
     assert_mcp_success,
+    extract_error_message,
     parse_mcp_result,
     safe_call_tool,
 )
@@ -162,7 +163,7 @@ class TestCalendarEvents:
 
         # Should fail with validation error
         assert data.get("success") is False, "Should fail for invalid format"
-        assert "calendar." in str(data.get("error", "")), (
+        assert "calendar." in extract_error_message(data), (
             "Error should mention correct format"
         )
 
@@ -260,7 +261,7 @@ class TestCalendarEventLifecycle:
 
             else:
                 # Calendar might not support event creation
-                error_msg = data.get("error", "Unknown error")
+                error_msg = extract_error_message(data) or "Unknown error"
                 if "not supported" in error_msg.lower() or "read" in error_msg.lower():
                     pytest.skip(
                         f"Calendar {calendar_entity} does not support event creation"
@@ -301,7 +302,7 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in str(data.get("error", "")), (
+        assert "calendar." in extract_error_message(data), (
             "Error should mention correct format"
         )
 
@@ -351,7 +352,7 @@ class TestCalendarEventLifecycle:
         if not create_data.get("success"):
             pytest.skip(
                 f"Calendar {calendar_entity} does not support recurring "
-                f"event creation: {create_data.get('error', 'Unknown')}"
+                f"event creation: {extract_error_message(create_data) or 'Unknown'}"
             )
         assert create_data.get("event", {}).get("rrule") == rrule
 
@@ -642,7 +643,7 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in str(data.get("error", "")), (
+        assert "calendar." in extract_error_message(data), (
             "Error should mention correct format"
         )
 
