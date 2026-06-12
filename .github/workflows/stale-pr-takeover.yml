@@ -1,0 +1,213 @@
+name: '🤖 Stale PR Reminders'
+
+# Implements the "Abandoned PRs" policy from CONTRIBUTING.md: when a maintainer
+# requests changes or an update on a contributor PR and the author goes silent,
+# post reminders after 4 and 6 days, then mark the PR takeover-eligible at 7 days.
+
+on:
+  schedule:
+    - cron: '30 8 * * *'  # Daily at 08:30 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  group: stale-pr-takeover
+  cancel-in-progress: false
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  stale_pr_reminders:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remind inactive PR authors and flag takeover-eligible PRs
+        uses: actions/github-script@v9
+        with:
+          script: |
+            // HTML anchors — drift-resistant vs matching display text (same pattern as close-needs-info.yml)
+            const REMINDER_1_MARKER = '<!-- stale-pr-bot:reminder-1 -->';
+            const REMINDER_2_MARKER = '<!-- stale-pr-bot:reminder-2 -->';
+            const TAKEOVER_MARKER = '<!-- stale-pr-bot:takeover-eligible -->';
+            const BOT_LOGIN = 'github-actions[bot]';
+            const TAKEOVER_LABEL = 'takeover-eligible';
+            const DAYS_REMINDER_1 = 4;
+            const DAYS_REMINDER_2 = 6;
+            const DAYS_TAKEOVER = 7;
+            const MS_PER_DAY = 86400000;
+            const POLICY_URL = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/master/CONTRIBUTING.md#-abandoned-prs`;
+            // PR authors with push access are not subject to the takeover policy
+            const MAINTAINER_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+
+            core.info(`Found ${prs.length} open PRs`);
+
+            for (const pr of prs) {
+              const prNumber = pr.number;
+              const author = pr.user.login;
+
+              if (pr.draft) {
+                core.info(`#${prNumber}: draft — skipping`);
+                continue;
+              }
+              if (pr.user.type === 'Bot') {
+                core.info(`#${prNumber}: bot author (${author}) — skipping`);
+                continue;
+              }
+              if (MAINTAINER_ASSOCIATIONS.includes(pr.author_association)) {
+                core.info(`#${prNumber}: maintainer author (${author}) — skipping`);
+                continue;
+              }
+
+              const [comments, reviewComments, reviews, commits] = await Promise.all([
+                github.paginate(github.rest.issues.listComments, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  per_page: 100,
+                }),
+                github.paginate(github.rest.pulls.listReviewComments, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  per_page: 100,
+                }),
+                github.paginate(github.rest.pulls.listReviews, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  per_page: 100,
+                }),
+                github.paginate(github.rest.pulls.listCommits, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  per_page: 100,
+                }),
+              ]);
+
+              // Latest activity by the PR author: PR creation, commits, comments, reviews.
+              // Commits with no resolvable login count as author activity (fail-open: resets the clock).
+              let lastAuthorActivity = new Date(pr.created_at).getTime();
+              for (const c of commits) {
+                if (!c.author || c.author.login === author) {
+                  const t = new Date(c.commit.committer?.date || c.commit.author?.date || pr.created_at).getTime();
+                  if (t > lastAuthorActivity) lastAuthorActivity = t;
+                }
+              }
+              for (const c of [...comments, ...reviewComments]) {
+                if (c.user.login === author) {
+                  const t = new Date(c.created_at).getTime();
+                  if (t > lastAuthorActivity) lastAuthorActivity = t;
+                }
+              }
+              for (const r of reviews) {
+                if (r.user && r.user.login === author && r.submitted_at) {
+                  const t = new Date(r.submitted_at).getTime();
+                  if (t > lastAuthorActivity) lastAuthorActivity = t;
+                }
+              }
+
+              // Latest request from a human non-author (a maintainer asking for changes/an update).
+              // Bot reviews/comments (Gemini, this workflow, etc.) never start or extend the clock.
+              let lastMaintainerRequest = 0;
+              for (const c of [...comments, ...reviewComments]) {
+                if (c.user.login !== author && c.user.type !== 'Bot') {
+                  const t = new Date(c.created_at).getTime();
+                  if (t > lastMaintainerRequest) lastMaintainerRequest = t;
+                }
+              }
+              for (const r of reviews) {
+                if (r.user && r.user.login !== author && r.user.type !== 'Bot' && r.submitted_at) {
+                  const t = new Date(r.submitted_at).getTime();
+                  if (t > lastMaintainerRequest) lastMaintainerRequest = t;
+                }
+              }
+
+              const waitingOnAuthor = lastMaintainerRequest > lastAuthorActivity;
+              const hasTakeoverLabel = pr.labels.some(l => l.name === TAKEOVER_LABEL);
+
+              if (!waitingOnAuthor) {
+                core.info(`#${prNumber}: not waiting on author — skipping`);
+                // Author came back after the PR was flagged — clear the label
+                if (hasTakeoverLabel) {
+                  core.info(`#${prNumber}: author active again — removing ${TAKEOVER_LABEL}`);
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: prNumber,
+                      name: TAKEOVER_LABEL,
+                    });
+                  } catch (err) {
+                    if (err.status !== 404) core.warning(`#${prNumber}: failed to remove label: ${err.message}`);
+                  }
+                }
+                continue;
+              }
+
+              const daysWaiting = (Date.now() - lastMaintainerRequest) / MS_PER_DAY;
+              core.info(`#${prNumber}: waiting on @${author} for ${daysWaiting.toFixed(1)} days`);
+
+              // Only bot comments posted after the author's last activity belong to the
+              // current stale cycle — older markers from a previous cycle don't count.
+              const cycleBotComments = comments.filter(c =>
+                c.user.login === BOT_LOGIN &&
+                new Date(c.created_at).getTime() > lastAuthorActivity
+              );
+              const hasMarker = marker => cycleBotComments.some(c => c.body.includes(marker));
+
+              const postComment = body => github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+
+              if (daysWaiting >= DAYS_TAKEOVER) {
+                if (hasMarker(TAKEOVER_MARKER)) {
+                  core.info(`#${prNumber}: already flagged takeover-eligible`);
+                  continue;
+                }
+                core.info(`#${prNumber}: flagging takeover-eligible`);
+                await postComment(
+                  `${TAKEOVER_MARKER}\nHi @${author} — there has been no response for ${DAYS_TAKEOVER} days since a maintainer requested changes or an update on this PR.\n\nPer our [abandoned PR policy](${POLICY_URL}), a maintainer may now take over this PR or close it at their discretion. If you are still working on it, just reply here and the clock resets.\n\n*Automated by PR Bot*`
+                );
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: prNumber,
+                    labels: [TAKEOVER_LABEL],
+                  });
+                } catch (err) {
+                  core.warning(`#${prNumber}: failed to add label: ${err.message}`);
+                }
+              } else if (daysWaiting >= DAYS_REMINDER_2) {
+                if (hasMarker(REMINDER_2_MARKER)) {
+                  core.info(`#${prNumber}: second reminder already posted`);
+                  continue;
+                }
+                core.info(`#${prNumber}: posting second reminder`);
+                await postComment(
+                  `${REMINDER_2_MARKER}\nHi @${author} — a maintainer requested changes or an update on this PR ${DAYS_REMINDER_2} days ago and we haven't heard back.\n\nPer our [abandoned PR policy](${POLICY_URL}), after ${DAYS_TAKEOVER} days without a response a maintainer may take over or close this PR. A quick reply is enough to keep it yours.\n\n*Automated by PR Bot*`
+                );
+              } else if (daysWaiting >= DAYS_REMINDER_1) {
+                if (hasMarker(REMINDER_1_MARKER)) {
+                  core.info(`#${prNumber}: first reminder already posted`);
+                  continue;
+                }
+                core.info(`#${prNumber}: posting first reminder`);
+                await postComment(
+                  `${REMINDER_1_MARKER}\nHi @${author} — just a friendly reminder that a maintainer requested changes or an update on this PR ${DAYS_REMINDER_1} days ago.\n\nWhen you have a moment, please respond or push an update. See our [abandoned PR policy](${POLICY_URL}) for details.\n\n*Automated by PR Bot*`
+                );
+              } else {
+                core.info(`#${prNumber}: ${(DAYS_REMINDER_1 - daysWaiting).toFixed(1)} days until first reminder`);
+              }
+            }
