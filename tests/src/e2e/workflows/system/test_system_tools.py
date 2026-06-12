@@ -18,7 +18,11 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    extract_error_message,
+    parse_mcp_result,
+    safe_call_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -623,7 +627,7 @@ class TestSystemTools:
         data = parse_mcp_result(result)
 
         if not data.get("success"):
-            error_msg = str(data.get("error", ""))
+            error_msg = extract_error_message(data)
             if "not available" in error_msg.lower():
                 pytest.skip("system_health not available in test environment")
             else:

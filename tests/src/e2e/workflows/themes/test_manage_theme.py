@@ -11,7 +11,11 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    extract_error_message,
+    parse_mcp_result,
+    safe_call_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +94,8 @@ class TestManageTheme:
         assert data.get("success") is False, (
             f"Setting an unknown theme should fail: {data}"
         )
-        error = data.get("error") or {}
-        assert unknown in str(error.get("message", "")), (
+        error_msg = extract_error_message(data)
+        assert unknown in error_msg, (
             f"Error message should name the unknown theme: {data}"
         )
 
