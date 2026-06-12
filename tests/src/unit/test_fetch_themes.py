@@ -11,16 +11,14 @@ from ha_mcp.tools.util_helpers import summarize_theme_listing
 def _ws_client_with_themes(themes_dict, default_theme=None, default_dark_theme=None):
     """Mock ws_client whose send_command('frontend/get_themes') returns themes."""
     ws = AsyncMock()
-    result = {
+    ws.send_command.return_value = {
         "success": True,
         "result": {
             "themes": themes_dict,
             "default_theme": default_theme or "default",
+            "default_dark_theme": default_dark_theme,
         },
     }
-    if default_dark_theme is not None:
-        result["result"]["default_dark_theme"] = default_dark_theme
-    ws.send_command.return_value = result
     return ws
 
 
