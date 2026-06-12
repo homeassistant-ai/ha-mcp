@@ -50,6 +50,17 @@ uv run lefthook install --reset-hooks-path
 - **Docs**: Update README.md for user-facing changes
 - **PRs**: Use the template, ensure tests pass
 
+## 💤 Abandoned PRs
+
+If a maintainer requests changes or an update on a PR and there is no response or
+activity from the author for **7 days**, a maintainer may, at their discretion,
+take over the PR (push to it or supersede it) or close it.
+
+- An automated reminder is posted on the PR after 4 and 6 days without a response.
+- Any activity from the author (a comment is enough) resets the clock.
+- This is a guideline, not a hard rule — maintainers may leave a PR open longer
+  when the situation warrants it.
+
 ## 🏗️ Stuck?
 
 - Open an [Issue](../../issues).
