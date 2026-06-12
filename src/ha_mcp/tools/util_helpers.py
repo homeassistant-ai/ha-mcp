@@ -130,7 +130,9 @@ def _loads_if_json_container_str(value: Any) -> Any:
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
-        except ValueError:
+        except (ValueError, RecursionError):
+            # RecursionError (deeply-nested input) must not escape: Pydantic
+            # only converts ValueError/AssertionError into ValidationError.
             return value
         if isinstance(parsed, (dict, list)):
             return parsed

@@ -137,3 +137,52 @@ def test_dict_param_rejects_json_string_of_array(
     ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
     with pytest.raises(ValidationError):
         TypeAdapter(ann).validate_python("[1, 2, 3]")
+
+
+@pytest.mark.parametrize("scalar_string", ['"hello"', "123", "null"])
+def test_dict_param_passes_json_scalar_string_through_unchanged(scalar_string):
+    """A well-formed JSON scalar string is not coerced: it fails dict_type
+    with the original string as the offending input."""
+    module, register_fn, tool_name, param_name = _DICT_PARAMS[0]
+    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    with pytest.raises(ValidationError) as exc_info:
+        TypeAdapter(ann).validate_python(scalar_string)
+    assert exc_info.value.errors()[0]["input"] == scalar_string
+
+
+def test_deeply_nested_string_fails_validation_not_recursion():
+    """Regression: json.loads raises RecursionError on deeply-nested input.
+
+    Pydantic only converts ValueError/AssertionError raised in a validator
+    into a ValidationError, so an uncaught RecursionError would surface as an
+    opaque internal error instead of the actionable dict_type message.
+    """
+    module, register_fn, tool_name, param_name = _DICT_PARAMS[0]
+    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    with pytest.raises(ValidationError):
+        TypeAdapter(ann).validate_python("[" * 100_000)
+
+
+@pytest.mark.parametrize(
+    ("module", "register_fn", "tool_name", "param_name"),
+    _BULK_TOOLS,
+)
+def test_list_param_passes_native_list_through(
+    module, register_fn, tool_name, param_name
+):
+    """A native list continues to validate unchanged."""
+    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    assert TypeAdapter(ann).validate_python(_LIST_SAMPLE) == _LIST_SAMPLE
+
+
+@pytest.mark.parametrize(
+    ("module", "register_fn", "tool_name", "param_name"),
+    _BULK_TOOLS,
+)
+def test_list_param_rejects_json_string_of_object(
+    module, register_fn, tool_name, param_name
+):
+    """A JSON-encoded object for a list param still fails list validation."""
+    ann = _get_param_annotation(_resolve(module, register_fn), tool_name, param_name)
+    with pytest.raises(ValidationError):
+        TypeAdapter(ann).validate_python('{"entity_id": "light.kitchen"}')
