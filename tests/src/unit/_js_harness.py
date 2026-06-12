@@ -426,7 +426,9 @@ def discover_script_surfaces() -> list[ScriptSurface]:
             base_id = f"astro_{rel.as_posix().replace('/', '_')}"
             # Check if this is a data-purpose script and incorporate that
             # into the surface ID so we can tell them apart in test output.
-            purpose_match = re.search(r'\bdata-purpose\s*=\s*["\']([^"\']+)["\']', attrs)
+            purpose_match = re.search(
+                r'\bdata-purpose\s*=\s*["\']([^"\']+)["\']', attrs
+            )
             if purpose_match:
                 surface_id = f"{base_id}_data-purpose-{purpose_match.group(1)}"
             else:
