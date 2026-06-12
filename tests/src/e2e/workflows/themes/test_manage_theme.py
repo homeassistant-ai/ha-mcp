@@ -90,9 +90,9 @@ class TestManageTheme:
         assert data.get("success") is False, (
             f"Setting an unknown theme should fail: {data}"
         )
-        error_text = str(data.get("error", "")).lower()
-        assert unknown in error_text or "not found" in error_text, (
-            f"Error should name the unknown theme or say 'not found': {data}"
+        error = data.get("error") or {}
+        assert unknown in str(error.get("message", "")), (
+            f"Error message should name the unknown theme: {data}"
         )
 
     async def test_set_without_theme_name_fails(self, mcp_client):

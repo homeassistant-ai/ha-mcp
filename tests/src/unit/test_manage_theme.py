@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.tools_themes import ThemesTools
 
 
@@ -145,6 +146,22 @@ class TestManageThemeSet:
         payload = _tool_error_payload(exc_info)
         assert payload["success"] is False
         assert "ws timeout" in payload["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_set_api_rejection_names_theme(self):
+        """HA's bare 400 for unknown themes gets enriched with the theme name."""
+        client = _client()
+        client.call_service.side_effect = HomeAssistantAPIError(
+            "API error: 400 - 400: Bad Request"
+        )
+        tools = ThemesTools(client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_manage_theme(action="set", theme_name="nope")
+
+        payload = _tool_error_payload(exc_info)
+        assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "nope" in payload["error"]["message"]
 
     @pytest.mark.asyncio
     async def test_set_service_failure_raises_tool_error(self):
