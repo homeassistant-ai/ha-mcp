@@ -427,3 +427,118 @@ async def test_disabled_key_remove_action_rejected_before_dispatch(monkeypatch):
         )
     assert "scene" in str(excinfo.value)
     assert _dispatch_call_count(client) == 0
+
+
+# ---------------------------------------------------------------------------
+# Theme file editing (themes/*.yaml)
+# ---------------------------------------------------------------------------
+
+
+async def test_theme_file_dispatches_successfully(monkeypatch):
+    """themes/*.yaml edits are dispatched to the custom component."""
+    fn, client = await _make_tool()
+    await fn(
+        file="themes/dark-theme.yaml",
+        yaml_path="dark-theme",
+        action="add",
+        content="primary-color: '#1976D2'",
+    )
+    assert _dispatch_call_count(client) == 1
+    payloads = _dispatch_payloads(client)
+    assert payloads[0]["file"] == "themes/dark-theme.yaml"
+    assert payloads[0]["yaml_path"] == "dark-theme"
+
+
+async def test_theme_not_blocked_by_packages_only_gate(monkeypatch):
+    """Theme files must not be blocked by the packages-only key gate,
+    even when all package keys are disabled."""
+    from ha_mcp import config as ha_mcp_config
+
+    for f in (
+        "ENABLE_YAML_PACKAGES_AUTOMATION",
+        "ENABLE_YAML_PACKAGES_SCRIPT",
+        "ENABLE_YAML_PACKAGES_SCENE",
+    ):
+        monkeypatch.delenv(f, raising=False)
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+    fn, client = await _make_tool()
+    await fn(
+        file="themes/test-theme.yaml",
+        yaml_path="test-theme",
+        action="add",
+        content="primary-color: '#000000'",
+    )
+    assert _dispatch_call_count(client) == 1
+
+
+async def test_theme_collision_check_not_run(monkeypatch):
+    """Theme yaml_path does not start with 'lovelace.dashboards.' so
+    the dashboard collision check must not fire."""
+    fn, client = await _make_tool()
+    # Set up dashboard collision WS mock so we'd notice if called
+    client.send_websocket_message = AsyncMock(
+        return_value={
+            "result": [{"url_path": "test-theme", "mode": "storage", "id": "abc"}]
+        }
+    )
+    await fn(
+        file="themes/test-theme.yaml",
+        yaml_path="test-theme",
+        action="add",
+        content="primary-color: '#000000'",
+    )
+    client.send_websocket_message.assert_not_called()
+    assert _dispatch_call_count(client) == 1
+
+
+async def test_theme_nested_directory(monkeypatch):
+    """Nested theme directories (themes/custom/foo.yaml) are supported."""
+    fn, client = await _make_tool()
+    await fn(
+        file="themes/custom/nested-theme.yaml",
+        yaml_path="nested-theme",
+        action="add",
+        content="primary-color: '#123456'",
+    )
+    assert _dispatch_call_count(client) == 1
+    assert _dispatch_payloads(client)[0]["file"] == "themes/custom/nested-theme.yaml"
+
+
+async def test_theme_reload_failure_surfaces_warning(monkeypatch):
+    """A component-side reload_error must surface as a top-level warning,
+    not vanish behind success: True."""
+    fn, client = await _make_tool()
+
+    async def degraded_call_service(domain, service, payload, **kwargs):
+        if service == "get_caller_token":
+            from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+
+            return {
+                "service_response": {
+                    "success": True,
+                    "token": "test-token",
+                    "version": MIN_COMPONENT_VERSION,
+                }
+            }
+        return {
+            "success": True,
+            "file": "themes/test-theme.yaml",
+            "post_action": "reload_available",
+            "reload_service": "frontend.reload_themes",
+            "reload_error": "Reload service unavailable",
+        }
+
+    client.call_service = AsyncMock(side_effect=degraded_call_service)
+
+    result = await fn(
+        file="themes/test-theme.yaml",
+        yaml_path="test-theme",
+        action="add",
+        content="primary-color: '#000000'",
+    )
+
+    warnings = result.get("warnings")
+    assert isinstance(warnings, list) and warnings, f"warnings missing: {result}"
+    assert "Reload service unavailable" in warnings[0]
+    assert "frontend.reload_themes" in warnings[0]
