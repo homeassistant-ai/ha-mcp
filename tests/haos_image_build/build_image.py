@@ -1487,16 +1487,63 @@ def install_puppet_addon(ws: HAWebSocket) -> str:
     return slug
 
 
-def _wait_supervisor_ready(ws: HAWebSocket) -> None:
-    """Confirm the Supervisor responds via the WebSocket supervisor/api path.
+def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) -> None:
+    """Wait for the Supervisor to respond AND finish self-updating.
 
-    A single ping is enough — by the time HA Core has accepted the WS
-    handshake and our auth_ok arrived, the hassio integration has loaded
-    and supervisor/api commands route correctly.
+    HAOS pins only the OS version (HAOS_VERSION); the Supervisor it bundles
+    self-updates asynchronously after boot to the latest version on its
+    channel. Until that finishes, ``need_update`` is True and every store
+    operation guarded by ``JobCondition.SUPERVISOR_UPDATED`` (the first one
+    here is ``_add_repository`` -> POST /store/repositories, right after this
+    call) is rejected with "supervisor needs to be updated first". That race
+    is what broke the publish bake intermittently: a run that hit the store
+    before the self-update landed failed at add_repository; a run that caught
+    a later channel version sailed past it and failed elsewhere.
+
+    Poll /supervisor/info until ``update_available`` clears (the running
+    version reaches ``version_latest``) so the caller's store calls run
+    against an up-to-date Supervisor. The Supervisor version still floats to
+    the channel head per build: there is no clean way to pin the bundled
+    Supervisor offline (it ships as a container layer in the HAOS image, and
+    ``need_update`` is evaluated against the live channel), so this makes the
+    bake deterministic in outcome, not in the Supervisor version it lands on.
     """
     info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
     LOG.info(
-        "Supervisor ready: version=%s arch=%s", info.get("version"), info.get("arch")
+        "Supervisor ready: version=%s version_latest=%s arch=%s",
+        info.get("version"),
+        info.get("version_latest"),
+        info.get("arch"),
+    )
+    if not info.get("update_available"):
+        return
+
+    LOG.info(
+        "Supervisor self-update pending (%s -> %s); waiting before store ops...",
+        info.get("version"),
+        info.get("version_latest"),
+    )
+    deadline = time.monotonic() + update_timeout
+    last_version = info.get("version")
+    while time.monotonic() < deadline:
+        time.sleep(10.0)
+        try:
+            info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
+        except (RuntimeError, TimeoutError) as e:
+            # The Supervisor restarts while applying its self-update, so a
+            # transient WS/API failure here is expected; keep polling.
+            LOG.debug("Transient /supervisor/info error during update: %r", e)
+            continue
+        version = info.get("version")
+        if version != last_version:
+            LOG.info("Supervisor version changed: %s -> %s", last_version, version)
+            last_version = version
+        if not info.get("update_available"):
+            LOG.info("Supervisor self-update complete: version=%s", version)
+            return
+    raise TimeoutError(
+        f"Supervisor did not finish self-updating within {update_timeout:.0f}s "
+        f"(last version={last_version}, latest={info.get('version_latest')})"
     )
 
 
