@@ -41,8 +41,13 @@ class TestManageTheme:
         theme_names = set(listing["themes"])
         assert "Test Theme A" in theme_names, f"Missing Test Theme A: {listing}"
         assert "Test Theme B" in theme_names, f"Missing Test Theme B: {listing}"
-        assert listing["count"] == 2, (
-            f"Expected exactly 2 seeded themes, got {listing['count']}: {listing}"
+        # ``>= 2`` rather than ``== 2``: the seeded-name asserts above already
+        # guarantee both fixtures are present, and an exact count couples this
+        # module to the shared per-worker container's global theme state (the
+        # config_set_yaml lifecycle test adds/removes a theme on the same
+        # worker, so a failed cleanup there would otherwise break this read).
+        assert listing["count"] >= 2, (
+            f"Expected at least the 2 seeded themes, got {listing['count']}: {listing}"
         )
 
         logger.info(f"Installed themes: {listing}")

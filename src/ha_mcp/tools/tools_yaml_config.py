@@ -242,8 +242,13 @@ class YamlConfigTools:
         storage-mode and YAML-mode collections don't collide; use the
         dedicated storage-mode tools instead.
         Check ``post_action`` in the response: most keys need a full HA
-        restart; template, mqtt, group, automation, script, scene, and theme
-        files support reload. Preserves YAML comments and HA tags (``!include``,
+        restart. For ``themes/*.yaml`` this tool *performs* the reload itself
+        (``frontend.reload_themes``), so ``post_action`` is ``reload_performed``
+        (or ``reload_available`` plus ``reload_error`` if that reload failed).
+        For template, mqtt, group, automation, script, and scene it only
+        *advertises* the reload service (``post_action: reload_available`` with
+        a ``reload_service`` to call yourself); the edit is on disk but not yet
+        live. Preserves YAML comments and HA tags (``!include``,
         ``!secret``) on round-trip; ``replace`` swaps the subtree as-is.
 
         ``template-guidelines.md`` ships in this response under ``skill_content``

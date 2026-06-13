@@ -100,7 +100,7 @@ class ThemesTools:
         create or edit them. Installing community themes goes through HACS
         (ha_manage_hacs); editing custom theme files goes through
         ha_config_set_yaml (beta, edits themes/<name>.yaml keyed by theme name
-        and reloads themes automatically).
+        and attempts an automatic theme reload).
 
         When to use: action='list' discovers installed theme names and the
         current defaults; action='set' selects the backend default theme

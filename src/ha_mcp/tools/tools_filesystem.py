@@ -53,7 +53,11 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 # server-side behavior change requires it. Older components (no
 # ``version`` in the get_caller_token response, or a version below this)
 # get an actionable "update via HACS" error.
-MIN_COMPONENT_VERSION = "0.7.0"
+# 0.8.0: ``ha_config_set_yaml`` now depends on the component's
+# ``themes/*.yaml`` yaml_path scope; a <0.8.0 component reaches the old
+# handler and rejects ``themes/<name>.yaml`` with a misleading "not
+# allowed" message instead of this actionable update prompt.
+MIN_COMPONENT_VERSION = "0.8.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:

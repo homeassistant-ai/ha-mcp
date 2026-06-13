@@ -384,6 +384,30 @@ class TestThemeEditHandler:
         assert result["success"] is False
         assert "not allowed" in result["error"]
 
+    async def test_theme_dotfile_basename_rejected(
+        self, handler, hass, call_factory, tmp_path
+    ):
+        """A dotfile theme basename is rejected before write.
+
+        ``themes/.yaml`` matches the ``themes/*.yaml`` allowlist, but HA's
+        ``!include_dir_merge_named`` skips dotfiles, so writing it would
+        report a phantom ``reload_performed`` for a theme that never loads.
+        """
+        call = call_factory(
+            {
+                "file": "themes/.hidden.yaml",
+                "action": "add",
+                "yaml_path": "Hidden",
+                "content": "primary-color: '#000000'",
+                "backup": False,
+            }
+        )
+
+        result = await handler(call)
+
+        assert result["success"] is False
+        assert "dotfile" in result["error"]
+
     async def test_theme_reload_failure_degrades_gracefully(
         self, handler, tmp_path, call_factory
     ):
