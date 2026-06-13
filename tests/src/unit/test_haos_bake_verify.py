@@ -92,7 +92,9 @@ def test_guestfish_failure_raises_distinct_error_with_stderr() -> None:
     with (
         patch(
             "tests.haos_image_build.build_image.subprocess.run",
-            return_value=_proc(returncode=1, stderr="libguestfs: error: appliance closed"),
+            return_value=_proc(
+                returncode=1, stderr="libguestfs: error: appliance closed"
+            ),
         ),
         pytest.raises(RuntimeError) as exc,
     ):
