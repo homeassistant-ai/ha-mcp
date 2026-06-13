@@ -5,8 +5,7 @@ name: HAOS E2E Tests
 #
 # Image resolution strategy (per run):
 #   1. Try GitHub Actions cache (keyed on HAOS version + build inputs)
-#   2. Fall back to GHCR (published by build-haos-test-image.yml on master)
-#   3. Fall back to local build (build_image.py)
+#   2. On a cache miss, build locally (build_image.py) and save to the cache
 #
 # Single-job design: the qcow2 stays on the runner's local disk through
 # build → test, so there's no cross-job upload+download of the ~7 GB image
@@ -80,12 +79,12 @@ jobs:
         # hash is reproducible across runs (no mtime noise like `find`
         # would have).
         #
-        # INVARIANT — these paths MUST be mirrored by the master-push trigger
-        # in build-haos-test-image.yml. If a path is hashed here but missing
-        # there, a master commit changing it can leave GHCR stale, and every
-        # subsequent PR that doesn't itself touch a bake input pulls the
-        # outdated image. (Regression history: #1374 knx merge broke every
-        # open PR's HAOS E2E run until a manual dispatch.)
+        # INVARIANT: these paths MUST be mirrored by the master-push trigger
+        # in build-haos-test-image.yml so the published image stays in step
+        # with this cache key. A cache miss now rebuilds locally from the
+        # merge-ref rather than serving a stale image. (Regression history:
+        # #1374 knx merge broke every open PR's HAOS E2E run until a manual
+        # dispatch, back when a miss fell through to a stale GHCR pull.)
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \

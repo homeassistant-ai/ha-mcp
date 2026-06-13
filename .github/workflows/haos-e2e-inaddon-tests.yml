@@ -74,13 +74,13 @@ jobs:
 
       - name: Compute image cache key
         id: key
-        # Shared with haos-e2e-tests.yml — both lanes consume the same
+        # Shared with haos-e2e-tests.yml: both lanes consume the same
         # qcow2. The bake (build_image.py::build) unconditionally calls
-        # stage_dev_addon_source + install_ha_mcp_dev_addon, so the
-        # GHCR-published image is already addon-baked and works for both
-        # tiers. Inaddon's refresh_dev_addon_source_in_qcow2 overwrites
-        # the addon source at test time, so PR-level addon changes
-        # don't need to invalidate the cache here.
+        # stage_dev_addon_source + install_ha_mcp_dev_addon, so the baked
+        # image is already addon-baked and works for both tiers. Inaddon's
+        # refresh_dev_addon_source_in_qcow2 overwrites the addon source at
+        # test time, so PR-level addon changes don't need to invalidate the
+        # cache here.
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
@@ -156,9 +156,9 @@ jobs:
       # shared key on the next run.
       #
       # The shared-key bet is safe because both lanes consume the SAME
-      # byte-identical qcow2: the cache key hashes the bake-input
-      # paths only, the qcow2 is built once at publish time and
-      # pulled identically by both lanes, and PR-level addon/source
+      # byte-identical qcow2: the cache key hashes the bake-input paths
+      # only, so a cache miss builds one qcow2 that the saving lane writes
+      # to the shared key for both to restore, and PR-level addon/source
       # overrides happen *in-VM at test time* (see
       # ``refresh_dev_addon_source_in_qcow2`` /
       # ``refresh_recorder_in_qcow2`` in conftest.py) on each
