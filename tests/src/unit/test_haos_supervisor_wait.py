@@ -68,6 +68,8 @@ def test_raises_on_update_timeout() -> None:
     """update_available never clears within the budget -> TimeoutError."""
     ws = Mock()
     ws.supervisor_api.return_value = _info(update_available=True, version="2026.05.1")
-    with patch("tests.haos_image_build.build_image.time.sleep"):
-        with pytest.raises(TimeoutError):
-            _wait_supervisor_ready(ws, update_timeout=0.0)
+    with (
+        patch("tests.haos_image_build.build_image.time.sleep"),
+        pytest.raises(TimeoutError),
+    ):
+        _wait_supervisor_ready(ws, update_timeout=0.0)
