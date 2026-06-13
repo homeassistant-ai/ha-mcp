@@ -7,11 +7,12 @@ name: HAOS E2E Tests (inaddon)
 # when they install the addon + cloudflared on a real HAOS install.
 #
 # The HAOS_TEST_MODE=inaddon env flips conftest.py's HAOS dispatch:
-# refresh_dev_addon_source_in_qcow2 overwrites /supervisor/addons/local/ha_mcp_dev/
-# with PR source + bumps config.yaml ``version:`` → Supervisor detects an
-# update on next boot → trigger_dev_addon_update calls supervisor/api
-# addons/{slug}/update via WS → Docker rebuilds with layer cache → addon
-# restarts with PR source → mcp_client connects via HTTP transport.
+# refresh_dev_addon_source_in_qcow2 overwrites the addon source (apps/local
+# on Supervisor 2026.06.0+, else legacy addons/local) with PR source + bumps
+# config.yaml ``version:`` → Supervisor detects an update on next boot →
+# trigger_dev_addon_update calls supervisor/api addons/{slug}/update via WS →
+# Docker rebuilds with layer cache → addon restarts with PR source →
+# mcp_client connects via HTTP transport.
 #
 # v1 scope: run ONLY tests/src/e2e/haos_only/ (the canary suite) so the
 # initial green CI gives us a fast feedback loop. Once the full inaddon
@@ -51,12 +52,10 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
-  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
   LIBGUESTFS_BACKEND: direct
 
 jobs:
@@ -245,9 +244,9 @@ jobs:
             # Addon-specific: capture the dev addon's source dir AND its
             # config.yaml version after refresh, so we can verify the PR source
             # actually landed on the booted overlay. Supervisor 2026.06.0
-            # (home-assistant/supervisor#6865) renamed addons/local -> apps/local
-            # (migrated on boot), so probe BOTH store roots; the live one lands,
-            # the other no-ops under the || echo guard.
+            # (home-assistant/supervisor#6865) renamed the on-disk local store
+            # (addons/local -> apps/local, migrated on boot), so probe BOTH roots;
+            # the live one lands, the other no-ops under the || echo guard.
             for store in apps addons; do
               guestfish --ro -a "$img" run \
                 : mount /dev/sda8 / \

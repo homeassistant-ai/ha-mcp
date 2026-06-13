@@ -640,6 +640,23 @@ def _reload_store(ws: HAWebSocket) -> None:
 # flaky apt mirror / npm registry / base-image pull a moment to recover.
 _ADDON_INSTALL_RETRY_DELAY = 20.0
 
+# Transient errors while the Supervisor restarts to apply its self-update (see
+# _wait_supervisor_ready). Supervisor self-update restarts Supervisor, and Core
+# may return a structured WSCommandError OR drop the WS transport during that
+# restart window. websockets lives only in the build venv, so fold its drop
+# exception in lazily.
+try:
+    from websockets.exceptions import WebSocketException as _WebSocketException
+
+    _SUPERVISOR_WAIT_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
+        WSCommandError,
+        OSError,
+        TimeoutError,
+        _WebSocketException,
+    )
+except ImportError:
+    _SUPERVISOR_WAIT_TRANSIENT_ERRORS = (WSCommandError, OSError, TimeoutError)
+
 
 def _install_addon_with_retry(
     ws: HAWebSocket, slug: str, *, timeout: float, attempts: int = 2
@@ -1515,7 +1532,7 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
         info.get("version_latest"),
         info.get("arch"),
     )
-    if not info.get("update_available"):
+    if not info.get("update_available") and info.get("version_latest"):
         return
 
     LOG.info(
@@ -1525,27 +1542,36 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
     )
     deadline = time.monotonic() + update_timeout
     last_version = info.get("version")
+    last_error: BaseException | None = None
     while time.monotonic() < deadline:
         time.sleep(10.0)
         try:
             info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
-        except (WSCommandError, TimeoutError) as e:
-            # The Supervisor restarts while applying its self-update, so a
-            # transient WS/API failure here is expected; keep polling. Narrow
-            # to WSCommandError (the only error supervisor_api raises) so an
-            # unrelated bug propagates instead of looping until the timeout.
-            LOG.debug("Transient /supervisor/info error during update: %r", e)
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as e:
+            # A Supervisor self-update restarts Supervisor; Core may return a
+            # structured WSCommandError OR drop the WS transport during that
+            # restart window. Record the error so a persistent failure is
+            # reported in the timeout message, then best-effort reconnect and
+            # keep polling.
+            last_error = e
+            LOG.debug("Transient error polling /supervisor/info: %r", e)
+            try:
+                ws.reconnect()
+            except (OSError, RuntimeError, TimeoutError) as reconnect_err:
+                LOG.debug("reconnect during update wait failed: %r", reconnect_err)
             continue
         version = info.get("version")
         if version != last_version:
             LOG.info("Supervisor version changed: %s -> %s", last_version, version)
             last_version = version
-        if not info.get("update_available"):
+        if not info.get("update_available") and info.get("version_latest"):
             LOG.info("Supervisor self-update complete: version=%s", version)
             return
+    last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
     raise TimeoutError(
         f"Supervisor did not finish self-updating within {update_timeout:.0f}s "
-        f"(last version={last_version}, latest={info.get('version_latest')})"
+        f"(last version={last_version}, "
+        f"latest={info.get('version_latest')}{last_err_suffix})"
     )
 
 

@@ -1136,6 +1136,13 @@ def trigger_dev_addon_update(
     )
     LOG.info("Connecting to HA WS for Supervisor update: %s", ws_url)
 
+    next_msg_id = 0
+
+    def _next_id() -> int:
+        nonlocal next_msg_id
+        next_msg_id += 1
+        return next_msg_id
+
     def _await_supervisor_result(
         msg_id: int, op_endpoint: str, op_deadline: float
     ) -> None:
@@ -1170,8 +1177,68 @@ def trigger_dev_addon_update(
                 raise RuntimeError(f"supervisor/api {op_endpoint} failed: {err!r}")
             return
         raise TimeoutError(
-            f"supervisor/api {op_endpoint} did not complete within deadline "
-            f"({op_deadline - (op_deadline - timeout):.0f}s after start)"
+            f"supervisor/api {op_endpoint} did not complete before its deadline"
+        )
+
+    def _wait_supervisor_update_done(deadline: float) -> None:
+        """Poll /supervisor/info until the Supervisor self-update clears.
+
+        The cached qcow2 boots a fresh Supervisor that re-floats to its channel
+        head. /store/reload and /addons/{slug}/update below are both
+        SUPERVISOR_UPDATED-guarded and error ("supervisor needs to be updated
+        first" / "No update available", #1594) if they fire while need_update
+        is still True. Mirror build_image._wait_supervisor_ready: wait until
+        update_available is false (and a version_latest is present, so a
+        pre-fetch latest=None does not read as a false clear).
+        """
+        while time.monotonic() < deadline:
+            info_id = _next_id()
+            ws.send(
+                json.dumps(
+                    {
+                        "id": info_id,
+                        "type": "supervisor/api",
+                        "endpoint": "/supervisor/info",
+                        "method": "get",
+                        "timeout": 30,
+                    }
+                )
+            )
+            result: dict | None = None
+            while time.monotonic() < deadline:
+                remaining = max(deadline - time.monotonic(), 1.0)
+                try:
+                    raw = ws.recv(timeout=remaining)
+                except TimeoutError:
+                    continue
+                if not isinstance(raw, str):
+                    raw = raw.decode()
+                resp = json.loads(raw)
+                if resp.get("id") != info_id:
+                    continue
+                if not resp.get("success", False):
+                    raise RuntimeError(
+                        f"supervisor/api /supervisor/info failed: "
+                        f"{resp.get('error') or resp!r}"
+                    )
+                result = resp.get("result") or {}
+                break
+            if result is None:
+                break
+            if not result.get("update_available") and result.get("version_latest"):
+                LOG.info(
+                    "Supervisor self-update settled (version=%s); proceeding",
+                    result.get("version"),
+                )
+                return
+            LOG.info(
+                "Supervisor self-update pending (%s -> %s); waiting before store ops",
+                result.get("version"),
+                result.get("version_latest"),
+            )
+            time.sleep(10.0)
+        raise TimeoutError(
+            "Supervisor did not finish self-updating before the update deadline"
         )
 
     with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
@@ -1185,6 +1252,8 @@ def trigger_dev_addon_update(
         auth_resp = json.loads(ws.recv())
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+        _wait_supervisor_update_done(time.monotonic() + timeout)
 
         # Reload the Supervisor store BEFORE asking for the update: the
         # refresh bumped the local addon's version, but Supervisor's persisted
@@ -1201,7 +1270,7 @@ def trigger_dev_addon_update(
         # store a failed reload falls through to ``/update`` returning the
         # original #1594 "No update available", now with this warning naming the
         # reload as the suspect.
-        msg_id = 1
+        msg_id = _next_id()
         reload_endpoint = "/store/reload"
         try:
             ws.send(
@@ -1228,7 +1297,7 @@ def trigger_dev_addon_update(
 
         # Trigger the update. ``backup=false`` skips Supervisor's pre-update
         # snapshot (saves ~30s, irrelevant for CI).
-        msg_id = 2
+        msg_id = _next_id()
         update_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/update"
         ws.send(
             json.dumps(
@@ -1248,7 +1317,7 @@ def trigger_dev_addon_update(
         # Explicit start after update — Supervisor leaves the addon in
         # boot_fail state otherwise, with the new image built but no
         # running container. See docstring for the CI log evidence.
-        msg_id = 3
+        msg_id = _next_id()
         start_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/start"
         ws.send(
             json.dumps(

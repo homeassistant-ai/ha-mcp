@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
+from websockets.exceptions import WebSocketException
 
 from tests.haos_image_build.build_image import WSCommandError, _wait_supervisor_ready
 
@@ -54,27 +55,62 @@ def test_waits_until_update_clears() -> None:
 
 
 def test_tolerates_transient_error_during_update() -> None:
-    """A transient WS error mid-update (Supervisor restart) keeps polling."""
+    """Transient errors mid-update (Supervisor restart) keep polling."""
     ws = Mock()
     ws.supervisor_api.side_effect = [
         _info(update_available=True, version="2026.05.1"),
-        WSCommandError("supervisor restarting", code="unknown_error"),
+        WSCommandError("restart", code="system_error"),
+        OSError("connection reset"),
+        WebSocketException("connection closed"),
         _info(update_available=False, version="2026.06.1"),
     ]
     with patch("tests.haos_image_build.build_image.time.sleep") as sleep:
         _wait_supervisor_ready(ws)
-    # Reached the 3rd call + slept twice — proves it resumed past the error
-    # rather than aborting on it.
-    assert ws.supervisor_api.call_count == 3
-    assert sleep.call_count == 2
+    # Reached the 5th call + slept four times — proves it resumed past all three
+    # transients (WSCommandError, OSError, WebSocketException).
+    assert ws.supervisor_api.call_count == 5
+    assert sleep.call_count == 4
 
 
 def test_raises_on_update_timeout() -> None:
     """update_available never clears within the budget -> TimeoutError."""
     ws = Mock()
     ws.supervisor_api.return_value = _info(update_available=True, version="2026.05.1")
+    # Monotonic sequence: starts at 0, advances past deadline on 3rd call
+    monotonic_values = [0.0, 5.0, 15.0]
     with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=monotonic_values,
+        ),
         patch("tests.haos_image_build.build_image.time.sleep"),
         pytest.raises(TimeoutError),
     ):
-        _wait_supervisor_ready(ws, update_timeout=0.0)
+        _wait_supervisor_ready(ws, update_timeout=10.0)
+    # Should have made at least 2 calls (initial + 1 loop iteration before timeout)
+    assert ws.supervisor_api.call_count >= 2
+
+
+def test_persistent_error_surfaced_in_timeout() -> None:
+    """Persistent WSCommandError -> timeout message includes last error."""
+    ws = Mock()
+    # Initial read sees a pending update; the poll then hits a persistent
+    # WSCommandError until the deadline (the initial read is outside the
+    # tolerant loop, so it must succeed for the loop to be exercised).
+    ws.supervisor_api.side_effect = [
+        _info(update_available=True, version="2026.05.1"),
+        WSCommandError("supervisor unavailable", code="system_error"),
+    ]
+    # Monotonic sequence: deadline calc, loop-entry check, post-error check (>deadline)
+    monotonic_values = [0.0, 5.0, 15.0]
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=monotonic_values,
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep"),
+        pytest.raises(TimeoutError, match=r"last error.*WSCommandError"),
+    ):
+        _wait_supervisor_ready(ws, update_timeout=10.0)
+    # Loop ran at least once before timing out
+    assert ws.supervisor_api.call_count >= 2
