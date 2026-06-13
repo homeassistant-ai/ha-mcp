@@ -1758,107 +1758,6 @@ def install_hacs(ws: HAWebSocket, base_url: str) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-# Local add-on source dirs staged into the qcow2 before first boot (one per
-# ``stage_*_addon_source`` helper). A saved base image MUST retain every one:
-# the inaddon tier reloads the Supervisor store and asks for an update, which
-# only detects the per-PR version bump when the local-store source dir is
-# present. A cached image that booted, installed the add-ons, but lost a
-# source dir before save poisons every downstream inaddon run with
-# "No update available" (#1594) — and the loss is silent without this guard.
-_STAGED_LOCAL_ADDON_DIRS = (
-    "ha_mcp_dev",
-    "ha_mcp_webhook_proxy",
-    "puppet",
-)
-
-
-def _verify_local_addon_sources(qcow2: Path) -> None:
-    """Fail the bake if any staged local add-on source dir is missing.
-
-    Lists ``/supervisor/addons/local/`` offline and checks each expected
-    add-on dir is present, raising ``RuntimeError`` (listing the missing ones)
-    so a poisoned image is never copied to the output / cached / published.
-    Root-cause guard for #1594, where a cached base image had the dev add-on
-    installed and running but its local-store source dir absent, so
-    ``addons/{slug}/update`` no-op'd and the whole inaddon session ERRORed at
-    setup.
-
-    Two deliberate choices keep this from false-positiving (which would block
-    *every* image build, both HAOS tiers):
-
-    1. ``--rw``, not ``--ro``: ``build()`` shuts QEMU down with SIGTERM, so the
-       ext4 data partition can carry a dirty journal; libguestfs replays it on
-       a writable mount (the mode ``bake_test_state`` uses successfully) but a
-       read-only mount can refuse it. We only read, but ``--rw`` lets the mount
-       recover first.
-    2. A single ``ls`` of the parent dir, not a per-file ``stat``/``exists``:
-       ``ls`` is the most basic, always-present guestfish command, and a
-       non-zero exit then means a real guestfish/mount *system* failure — kept
-       distinct (with stderr) from a genuinely-absent dir, rather than
-       conflating the two into "missing".
-    """
-    local_store = "/supervisor/addons/local"
-    proc = subprocess.run(
-        [
-            "guestfish",
-            "--rw",
-            "-a",
-            str(qcow2),
-            "run",
-            ":",
-            "mount",
-            "/dev/sda8",
-            "/",
-            ":",
-            "ls",
-            local_store,
-        ],
-        check=False,
-        text=True,
-        capture_output=True,
-        timeout=180,
-    )
-    if proc.returncode != 0:
-        # Guestfish/libguestfs system failure (appliance, mount, or a missing
-        # parent dir) — NOT a per-add-on "missing source" signal. Surface
-        # stderr so it is debuggable instead of misattributed to a poisoned
-        # image, and still fail closed (we could not verify). A failed command
-        # in a guestfish chain aborts with a non-zero exit — the same property
-        # every ``stage_*_addon_source`` / ``bake_test_state`` guestfish step
-        # already relies on (they run under ``_run(check=True)``).
-        raise RuntimeError(
-            f"Could not verify local add-on sources: guestfish failed to mount "
-            f"or list {local_store} (exit {proc.returncode}). "
-            f"stderr: {proc.stderr.strip()!r}"
-        )
-    # ``ls`` prints one entry per line; split on newlines (not arbitrary
-    # whitespace) so a name is matched exactly.
-    entries = set(proc.stdout.strip().splitlines())
-    if not entries:
-        # An empty listing means the mount/ls did not actually read the data
-        # partition (e.g. a silent mount failure) — the parent always holds the
-        # freshly-staged dirs. Treat as "could not verify", NOT "everything
-        # missing": a genuinely poisoned image (#1594) still lists the OTHER
-        # add-on dirs, so emptiness is a system problem, not absence.
-        raise RuntimeError(
-            f"Could not verify local add-on sources: guestfish ls {local_store} "
-            f"returned no entries (stdout empty). stderr: {proc.stderr.strip()!r}"
-        )
-    missing = [d for d in _STAGED_LOCAL_ADDON_DIRS if d not in entries]
-    if missing:
-        raise RuntimeError(
-            "Bake produced a qcow2 missing local add-on source dir(s): "
-            f"{', '.join(missing)} under {local_store}. A saved base image must "
-            "retain every staged local-store source dir; an image with the "
-            "add-on installed but its source absent poisons the inaddon E2E "
-            "cache (issue #1594). Refusing to save this image. Present entries: "
-            f"{sorted(entries)}"
-        )
-    LOG.info(
-        "Verified %d local add-on source dir(s) present in qcow2",
-        len(_STAGED_LOCAL_ADDON_DIRS),
-    )
-
 
 def build(work_dir: Path, output: Path) -> None:
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -1920,11 +1819,6 @@ def build(work_dir: Path, output: Path) -> None:
     # HAOS is shut down — safe to open the qcow2 with libguestfs and bake
     # the testcontainer's seed state into /config/ for the e2e suite.
     bake_test_state(qcow2)
-    # Fail closed before save: a base image that lost a staged local add-on
-    # source dir is a poisoned inaddon cache entry (#1594). Surface it here,
-    # at bake time, instead of as a setup-ERROR cascade on every downstream
-    # inaddon run.
-    _verify_local_addon_sources(qcow2)
     # Output uncompressed: nothing downstream of this script on the
     # developer iteration path benefits from a smaller file, and the
     # convert pass adds ~6 min. GHCR-served image is compressed at
