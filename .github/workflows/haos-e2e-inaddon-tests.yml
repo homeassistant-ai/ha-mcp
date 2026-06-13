@@ -272,39 +272,61 @@ jobs:
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
           mkdir -p /tmp/haos-inaddon-diagnostics
-          # /supervisor/homeassistant/.storage state + log files (HA Core).
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : ll /supervisor/homeassistant \
-            > /tmp/haos-inaddon-diagnostics/config-dir-listing.txt 2>&1 \
-            || echo "directory listing failed"
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : tar-out /supervisor/homeassistant/.storage /tmp/haos-inaddon-diagnostics/storage.tar \
-            || echo ".storage tar-out failed"
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : glob copy-out '/supervisor/homeassistant/*.log*' /tmp/haos-inaddon-diagnostics/ \
-            || echo "log glob copy failed"
-          # Addon-specific: capture the dev addon's source dir AND its
-          # config.yaml version after refresh, so we can verify the PR
-          # source actually landed.
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : ll /supervisor/addons/local/ha_mcp_dev \
-            > /tmp/haos-inaddon-diagnostics/addon-dir-listing.txt 2>&1 \
-            || echo "addon dir listing failed"
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : copy-out /supervisor/addons/local/ha_mcp_dev/config.yaml /tmp/haos-inaddon-diagnostics/ \
-            || echo "addon config.yaml copy-out failed"
-          ls -la /tmp/haos-inaddon-diagnostics/ || true
-          echo '--- config dir listing ---'
-          cat /tmp/haos-inaddon-diagnostics/config-dir-listing.txt || true
-          echo '--- addon dir listing ---'
-          cat /tmp/haos-inaddon-diagnostics/addon-dir-listing.txt || true
-          echo '--- addon config.yaml ---'
-          cat /tmp/haos-inaddon-diagnostics/config.yaml || true
+          # In pytest-xdist (parallel) mode each worker boots its OWN
+          # backing-file overlay (haos-test-image-<worker>.qcow2); the base
+          # /tmp/haos-test-image.qcow2 is never booted, so the per-PR source
+          # refresh and the HA Core runtime state live on the OVERLAYS, not
+          # the base. The overlays persist after the session (the worker
+          # fixture registers no teardown unlink), and guestfish reads them
+          # through their absolute backing path. Probe every overlay; fall
+          # back to the base image only for a single-worker (master) run that
+          # mutates it directly. #1594 secondary defect: the old step probed
+          # only the un-refreshed base, so the addon-dir / config.yaml checks
+          # could never observe the refresh result they claimed to verify.
+          shopt -s nullglob
+          targets=(/tmp/haos-test-image-gw*.qcow2)
+          if [ ${#targets[@]} -eq 0 ]; then
+            targets=(/tmp/haos-test-image.qcow2)
+          fi
+          for img in "${targets[@]}"; do
+            label=$(basename "$img" .qcow2)
+            outdir=/tmp/haos-inaddon-diagnostics/$label
+            mkdir -p "$outdir"
+            echo "=== extracting diagnostics from $img ==="
+            # /supervisor/homeassistant/.storage state + log files (HA Core).
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : ll /supervisor/homeassistant \
+              > "$outdir/config-dir-listing.txt" 2>&1 \
+              || echo "directory listing failed for $img"
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : tar-out /supervisor/homeassistant/.storage "$outdir/storage.tar" \
+              || echo ".storage tar-out failed for $img"
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : glob copy-out '/supervisor/homeassistant/*.log*' "$outdir/" \
+              || echo "log glob copy failed for $img"
+            # Addon-specific: capture the dev addon's source dir AND its
+            # config.yaml version after refresh, so we can verify the PR
+            # source actually landed on the booted overlay.
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : ll /supervisor/addons/local/ha_mcp_dev \
+              > "$outdir/addon-dir-listing.txt" 2>&1 \
+              || echo "addon dir listing failed for $img"
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : copy-out /supervisor/addons/local/ha_mcp_dev/config.yaml "$outdir/" \
+              || echo "addon config.yaml copy-out failed for $img"
+            echo "--- [$label] config dir listing ---"
+            cat "$outdir/config-dir-listing.txt" || true
+            echo "--- [$label] addon dir listing ---"
+            cat "$outdir/addon-dir-listing.txt" || true
+            echo "--- [$label] addon config.yaml ---"
+            cat "$outdir/config.yaml" || true
+          done
+          ls -laR /tmp/haos-inaddon-diagnostics/ || true
 
       - name: Upload HAOS inaddon diagnostics
         if: always()

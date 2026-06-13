@@ -1758,6 +1758,76 @@ def install_hacs(ws: HAWebSocket, base_url: str) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
+# Local add-on source dirs staged into the qcow2 before first boot (one per
+# ``stage_*_addon_source`` helper). A saved base image MUST retain every one:
+# the inaddon tier reloads the Supervisor store and asks for an update, which
+# only detects the per-PR version bump when the local-store source dir is
+# present. A cached image that booted, installed the add-ons, but lost a
+# source dir before save poisons every downstream inaddon run with
+# "No update available" (#1594) — and the loss is silent without this guard.
+_STAGED_LOCAL_ADDON_DIRS = (
+    "ha_mcp_dev",
+    "ha_mcp_webhook_proxy",
+    "puppet",
+)
+
+
+def _verify_local_addon_sources(qcow2: Path) -> None:
+    """Fail the bake if any staged local add-on source dir is missing.
+
+    Reads the data partition offline and checks each
+    ``/supervisor/addons/local/<dir>/config.yaml`` is present, raising
+    ``RuntimeError`` (listing the missing paths) so a poisoned image is never
+    copied to the output / cached / published. Root-cause guard for #1594,
+    where a cached base image had the dev add-on installed and running but its
+    local-store source dir absent, so ``addons/{slug}/update`` no-op'd and the
+    whole inaddon session ERRORed at setup.
+    """
+    missing: list[str] = []
+    for addon_dir in _STAGED_LOCAL_ADDON_DIRS:
+        config_path = f"/supervisor/addons/local/{addon_dir}/config.yaml"
+        # Use ``stat`` (not ``exists``) so presence is signalled by guestfish's
+        # EXIT CODE, not by parsing a ``true``/``false`` stdout string we never
+        # got to verify: ``stat`` on a present file exits 0, and on a missing
+        # path guestfish errors and exits non-zero. Any non-zero (missing path
+        # OR a guestfish/mount failure) is treated as "cannot confirm present"
+        # → missing, which keeps the guard fail-closed without risking a
+        # false-positive bake failure on a stdout-format quirk.
+        proc = subprocess.run(
+            [
+                "guestfish",
+                "--ro",
+                "-a",
+                str(qcow2),
+                "run",
+                ":",
+                "mount",
+                "/dev/sda8",
+                "/",
+                ":",
+                "stat",
+                config_path,
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        if proc.returncode != 0:
+            missing.append(config_path)
+    if missing:
+        raise RuntimeError(
+            "Bake produced a qcow2 missing local add-on source dir(s): "
+            f"{', '.join(missing)}. A saved base image must retain every "
+            "staged local-store source dir; an image with the add-on "
+            "installed but its source absent poisons the inaddon E2E cache "
+            "(issue #1594). Refusing to save this image."
+        )
+    LOG.info(
+        "Verified %d local add-on source dir(s) present in qcow2",
+        len(_STAGED_LOCAL_ADDON_DIRS),
+    )
+
 
 def build(work_dir: Path, output: Path) -> None:
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -1819,6 +1889,11 @@ def build(work_dir: Path, output: Path) -> None:
     # HAOS is shut down — safe to open the qcow2 with libguestfs and bake
     # the testcontainer's seed state into /config/ for the e2e suite.
     bake_test_state(qcow2)
+    # Fail closed before save: a base image that lost a staged local add-on
+    # source dir is a poisoned inaddon cache entry (#1594). Surface it here,
+    # at bake time, instead of as a setup-ERROR cascade on every downstream
+    # inaddon run.
+    _verify_local_addon_sources(qcow2)
     # Output uncompressed: nothing downstream of this script on the
     # developer iteration path benefits from a smaller file, and the
     # convert pass adds ~6 min. GHCR-served image is compressed at

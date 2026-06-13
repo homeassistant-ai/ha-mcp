@@ -1048,13 +1048,15 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
 def trigger_dev_addon_update(
     base_url: str, token: str, *, timeout: float = 600.0
 ) -> None:
-    """Trigger Supervisor's ``addons/{slug}/update`` then start the dev addon.
+    """Reload the store, trigger ``addons/{slug}/update``, then start the addon.
 
     The cached qcow2 ships with the addon installed at the bake-time
     source version; ``refresh_dev_addon_source_in_qcow2`` has just
     overwritten ``/supervisor/addons/local/ha_mcp_dev/`` with the PR's source and
-    bumped the addon's ``config.yaml`` version. Asking Supervisor to
-    update detects the new version, rebuilds the addon's Docker image
+    bumped the addon's ``config.yaml`` version. A best-effort
+    ``/store/reload`` below nudges Supervisor to re-scan the local store
+    (see the inline comment for why), after which asking Supervisor to
+    update detects the new version and rebuilds the addon's Docker image
     (Docker layer cache → only COPY src/ + uv-sync-project layers
     re-execute) — but does NOT auto-restart the container. We explicitly
     call ``/start`` after update completes; without this, the addon ends
@@ -1125,9 +1127,57 @@ def trigger_dev_addon_update(
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
 
+        # Reload the Supervisor store BEFORE asking for the update. The
+        # refresh (``refresh_dev_addon_source_in_qcow2``) rewrote the local
+        # addon source on the per-worker overlay and bumped its
+        # ``config.yaml`` version, but Supervisor's persisted store registry
+        # (inherited from the base image's data partition) does not re-scan
+        # local addons on its own. On a base image whose store state never
+        # registered the local addon at the new version, ``/update`` then
+        # returns "No update available" and the whole inaddon session ERRORs
+        # at setup (issue #1594). ``/store/reload`` forces the re-scan so the
+        # bumped local version becomes the store's available version — the
+        # same endpoint and purpose as ``build_image._reload_store``, which
+        # the bake uses to make freshly-staged local addons visible before
+        # install.
+        #
+        # Best-effort, NOT hard-fail: the reload sits on the setup path of
+        # every inaddon test, so a transient ``/store/reload`` hiccup (or a
+        # future Supervisor regression there) must not fail tests that don't
+        # actually depend on it. On an already-consistent store the reload is
+        # a no-op and ``/update`` detects the bump regardless; on a stale
+        # store a failed reload falls through to ``/update`` returning the
+        # original #1594 "No update available", now with this warning naming
+        # the reload as the suspect. So we narrow the fail-closed surface to
+        # ``/update`` itself rather than widening it to the reload.
+        msg_id = 1
+        reload_endpoint = "/store/reload"
+        try:
+            ws.send(
+                json.dumps(
+                    {
+                        "id": msg_id,
+                        "type": "supervisor/api",
+                        "endpoint": reload_endpoint,
+                        "method": "post",
+                        "timeout": 120,
+                    }
+                )
+            )
+            _await_supervisor_result(msg_id, reload_endpoint, time.monotonic() + 120)
+            LOG.info("Supervisor store reloaded; triggering dev addon update")
+        except (RuntimeError, TimeoutError) as reload_err:
+            LOG.warning(
+                "Supervisor /store/reload failed (%r); proceeding to /update "
+                "anyway. If the addon store is stale this will surface as "
+                "'No update available' (#1594); if the store was already "
+                "consistent the update still detects the bumped version.",
+                reload_err,
+            )
+
         # Trigger the update. ``backup=false`` skips Supervisor's pre-update
         # snapshot (saves ~30s, irrelevant for CI).
-        msg_id = 1
+        msg_id = 2
         update_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/update"
         ws.send(
             json.dumps(
@@ -1147,7 +1197,7 @@ def trigger_dev_addon_update(
         # Explicit start after update — Supervisor leaves the addon in
         # boot_fail state otherwise, with the new image built but no
         # running container. See docstring for the CI log evidence.
-        msg_id = 2
+        msg_id = 3
         start_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/start"
         ws.send(
             json.dumps(
