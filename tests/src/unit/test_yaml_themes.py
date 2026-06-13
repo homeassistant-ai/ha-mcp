@@ -389,9 +389,10 @@ class TestThemeEditHandler:
     ):
         """A dotfile theme basename is rejected before write.
 
-        ``themes/.yaml`` matches the ``themes/*.yaml`` allowlist, but HA's
-        ``!include_dir_merge_named`` skips dotfiles, so writing it would
-        report a phantom ``reload_performed`` for a theme that never loads.
+        ``themes/.hidden.yaml`` matches the ``themes/*.yaml`` allowlist, but
+        HA's ``!include_dir_merge_named`` skips dot-prefixed files, so writing
+        it would report a phantom ``reload_performed`` for a theme that never
+        loads.
         """
         call = call_factory(
             {
@@ -406,7 +407,61 @@ class TestThemeEditHandler:
         result = await handler(call)
 
         assert result["success"] is False
-        assert "dotfile" in result["error"]
+        assert "dot-prefixed" in result["error"]
+
+    async def test_theme_dot_prefixed_directory_rejected(
+        self, handler, hass, call_factory, tmp_path
+    ):
+        """A theme file under a dot-prefixed subdirectory is rejected.
+
+        ``themes/.foo/bar.yaml`` matches ``themes/*.yaml`` (fnmatch ``*`` spans
+        ``/``) and its basename ``bar.yaml`` is not a dotfile, but HA's
+        ``_find_files`` prunes dot-prefixed directories from the walk, so the
+        theme never loads — the same phantom ``reload_performed`` the basename
+        guard catches, one directory level up.
+        """
+        call = call_factory(
+            {
+                "file": "themes/.foo/bar.yaml",
+                "action": "add",
+                "yaml_path": "Bar",
+                "content": "primary-color: '#000000'",
+                "backup": False,
+            }
+        )
+
+        result = await handler(call)
+
+        assert result["success"] is False
+        assert "dot-prefixed" in result["error"]
+
+    async def test_theme_mid_name_dot_allowed(
+        self, handler, hass, call_factory, tmp_path
+    ):
+        """A dot mid-name (not segment-prefix) is allowed.
+
+        ``themes/my.theme.yaml`` has a dot in the basename, but the segment
+        ``my.theme.yaml`` does not START with '.', so HA's loader keeps it and
+        the guard must not reject it. Pins the predicate against a regression
+        to a naive ``"." in seg`` check.
+        """
+        theme_file = tmp_path / "themes" / "my.theme.yaml"
+        theme_file.parent.mkdir(parents=True, exist_ok=True)
+
+        call = call_factory(
+            {
+                "file": "themes/my.theme.yaml",
+                "action": "add",
+                "yaml_path": "MyTheme",
+                "content": "primary-color: '#abcdef'",
+                "backup": False,
+            }
+        )
+
+        result = await handler(call)
+
+        assert result["success"] is True
+        assert theme_file.exists()
 
     async def test_theme_reload_failure_degrades_gracefully(
         self, handler, tmp_path, call_factory

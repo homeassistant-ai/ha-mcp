@@ -711,19 +711,23 @@ def _build_edit_yaml_config_handler(hass):
                 ),
             }
 
-        # ``themes/*.yaml`` matches a dotfile basename (fnmatch's ``*`` matches a
-        # leading ``.``), but HA's ``!include_dir_merge_named themes`` skips
-        # dotfiles, so such a file would be written and then silently never
-        # loaded — the handler would report a phantom ``reload_performed``.
-        # Reject it up front with an actionable message.
-        if is_theme and os.path.basename(normalized).startswith("."):
+        # ``themes/*.yaml`` matches dot-prefixed paths (fnmatch's ``*`` matches a
+        # leading ``.`` and spans ``/``), but HA's ``!include_dir_merge_named``
+        # loader skips them: ``annotatedyaml``'s ``_find_files`` filters every
+        # walked directory AND file basename through ``_is_file_valid`` (which
+        # is ``return not name.startswith(".")``), so a dot-prefixed file
+        # (``themes/.hidden.yaml``) OR directory (``themes/.foo/bar.yaml``) is
+        # pruned and the theme never loads — a phantom ``reload_performed``.
+        # Reject if any path segment is dot-prefixed, mirroring the loader,
+        # rather than only checking the basename.
+        if is_theme and any(seg.startswith(".") for seg in normalized.split("/")):
             return {
                 "success": False,
                 "error": (
-                    f"Theme file '{rel_path}' has a dotfile basename. Home "
-                    "Assistant's !include_dir_merge_named skips files whose name "
-                    "starts with '.', so it would never load. Use a name that "
-                    "does not start with a dot."
+                    f"Theme path '{rel_path}' has a dot-prefixed file or "
+                    "directory segment. Home Assistant's !include_dir_merge_named "
+                    "skips any path segment whose name starts with '.', so it "
+                    "would never load. Use a path with no dot-prefixed segment."
                 ),
             }
 
