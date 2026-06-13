@@ -308,17 +308,22 @@ jobs:
               : glob copy-out '/supervisor/homeassistant/*.log*' "$outdir/" \
               || echo "log glob copy failed for $img"
             # Addon-specific: capture the dev addon's source dir AND its
-            # config.yaml version after refresh, so we can verify the PR
-            # source actually landed on the booted overlay.
-            guestfish --ro -a "$img" run \
-              : mount /dev/sda8 / \
-              : ll /supervisor/addons/local/ha_mcp_dev \
-              > "$outdir/addon-dir-listing.txt" 2>&1 \
-              || echo "addon dir listing failed for $img"
-            guestfish --ro -a "$img" run \
-              : mount /dev/sda8 / \
-              : copy-out /supervisor/addons/local/ha_mcp_dev/config.yaml "$outdir/" \
-              || echo "addon config.yaml copy-out failed for $img"
+            # config.yaml version after refresh, so we can verify the PR source
+            # actually landed on the booted overlay. Supervisor 2026.06.0
+            # (home-assistant/supervisor#6865) renamed addons/local -> apps/local
+            # (migrated on boot), so probe BOTH store roots; the live one lands,
+            # the other no-ops under the || echo guard.
+            for store in apps addons; do
+              guestfish --ro -a "$img" run \
+                : mount /dev/sda8 / \
+                : ll "/supervisor/$store/local/ha_mcp_dev" \
+                >> "$outdir/addon-dir-listing.txt" 2>&1 \
+                || echo "addon dir listing failed for $img ($store/local)"
+              guestfish --ro -a "$img" run \
+                : mount /dev/sda8 / \
+                : copy-out "/supervisor/$store/local/ha_mcp_dev/config.yaml" "$outdir/" \
+                || echo "addon config.yaml copy-out failed for $img ($store/local)"
+            done
             echo "--- [$label] config dir listing ---"
             cat "$outdir/config-dir-listing.txt" || true
             echo "--- [$label] addon dir listing ---"

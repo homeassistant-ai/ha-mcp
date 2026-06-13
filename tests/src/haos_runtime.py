@@ -476,6 +476,56 @@ def refresh_recorder_in_qcow2(
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _resolve_local_store_dir(image_path: Path) -> str:
+    """Return the live Supervisor local add-on store path inside ``image_path``.
+
+    Supervisor 2026.06.0 (home-assistant/supervisor#6865) renamed the on-disk
+    local store ``/supervisor/addons/local`` → ``/supervisor/apps/local`` and
+    renames the legacy path to the new one on boot, but only when the new path
+    does not already exist. The bake-produced base carries whichever path the
+    Supervisor that booted during the bake used.
+
+    Probe the offline qcow2 and return the directory that EXISTS (preferring the
+    new ``apps/local``), so the refresh lands on the path the test-boot
+    Supervisor will actually read. Returning the existing path also matters on
+    an older ``addons/local`` base: writing there leaves ``apps/local`` absent,
+    so Supervisor's on-boot rename still moves the WHOLE store (every staged
+    add-on) across; pre-creating ``apps/local`` would suppress that rename and
+    orphan the other add-ons. Falls back to ``apps/local`` when neither exists
+    (a corrupted/incomplete base) so the refresh still completes and the test
+    surfaces the real failure at boot.
+    """
+    for candidate in ("/supervisor/apps/local", "/supervisor/addons/local"):
+        # ``--rw`` even though this only reads: libguestfs needs write access to
+        # replay a SIGTERM-dirtied ext4 journal (same as ``bake_test_state``); a
+        # ``--ro`` mount can refuse a dirty fs. ``ll`` exits 0 iff the dir exists
+        # (exit-code probe, no stdout parsing), the same exit-code contract the
+        # staging and diagnostics guestfish calls already rely on; CI validates.
+        proc = subprocess.run(
+            [
+                "guestfish",
+                "--rw",
+                "-a",
+                str(image_path),
+                "run",
+                ":",
+                "mount",
+                "/dev/sda8",
+                "/",
+                ":",
+                "ll",
+                candidate,
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        if proc.returncode == 0:
+            return candidate
+    return "/supervisor/apps/local"
+
+
 def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
     """Overwrite the staged ha-mcp dev addon source with the PR's current source.
 
@@ -491,8 +541,11 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
        Bump format: ``<base>-pr-<GITHUB_SHA[:7] or "local">`` so every
        distinct PR commit produces a distinct version (Supervisor caches
        by exact version string).
-    3. libguestfs replaces the /supervisor/addons/local/ha_mcp_dev/
-       directory (rm-rf + tar-in of parent) on the offline qcow2.
+    3. libguestfs replaces the ``ha_mcp_dev/`` directory (rm-rf + tar-in of
+       parent) under the live Supervisor local store on the offline qcow2:
+       ``apps/local`` on Supervisor >= 2026.06.0, else the legacy
+       ``addons/local`` (resolved by ``_resolve_local_store_dir``; the rename
+       landed in home-assistant/supervisor#6865).
 
     Subsequent boot + ``addons/{slug}/update`` via Supervisor WS picks up
     the new files and rebuilds the addon's Docker image. Because the
@@ -580,10 +633,12 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
         config_path.write_text("".join(new_lines))
         LOG.info("Bumped addon version to pr-%s for update-detection", sha)
 
-        # Build the tar, then replace /supervisor/addons/local/ha_mcp_dev/ in the qcow2.
+        # Build the tar, then replace ``<local_store>/ha_mcp_dev/`` in the qcow2.
         # rm-rf + tar-in (rather than tar-in alone) so removed files in the
         # PR source actually disappear from the addon dir — leftover files
-        # would be picked up by the next Docker build.
+        # would be picked up by the next Docker build. ``local_store`` is the
+        # live Supervisor path (``apps/local`` post-2026.06.0, else the legacy
+        # ``addons/local``); ``mkdir-p`` covers the poisoned-base fallback.
         seed_tar = workdir / "ha_mcp_dev.tar"
         subprocess.run(
             [
@@ -602,6 +657,7 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
             text=True,
             timeout=60,
         )
+        local_store = _resolve_local_store_dir(image_path)
         try:
             subprocess.run(
                 [
@@ -615,17 +671,15 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
                     "/dev/sda8",
                     "/",
                     ":",
-                    # Parity with the bake's staging call — tar-in fails if
-                    # the destination directory does not exist.
                     "mkdir-p",
-                    "/supervisor/addons/local",
+                    local_store,
                     ":",
                     "rm-rf",
-                    "/supervisor/addons/local/ha_mcp_dev",
+                    f"{local_store}/ha_mcp_dev",
                     ":",
                     "tar-in",
                     str(seed_tar),
-                    "/supervisor/addons/local",
+                    local_store,
                 ],
                 check=True,
                 capture_output=True,
@@ -642,7 +696,11 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
                 err.stderr,
             )
             raise
-        LOG.info("Refreshed ha-mcp dev addon source in %s", image_path)
+        LOG.info(
+            "Refreshed ha-mcp dev addon source at %s/ha_mcp_dev in %s",
+            local_store,
+            image_path,
+        )
     finally:
         _shutil.rmtree(workdir, ignore_errors=True)
 
@@ -1127,29 +1185,21 @@ def trigger_dev_addon_update(
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
 
-        # Reload the Supervisor store BEFORE asking for the update. The
-        # refresh (``refresh_dev_addon_source_in_qcow2``) rewrote the local
-        # addon source on the per-worker overlay and bumped its
-        # ``config.yaml`` version, but Supervisor's persisted store registry
-        # (inherited from the base image's data partition) does not re-scan
-        # local addons on its own. On a base image whose store state never
-        # registered the local addon at the new version, ``/update`` then
-        # returns "No update available" and the whole inaddon session ERRORs
-        # at setup (issue #1594). ``/store/reload`` forces the re-scan so the
-        # bumped local version becomes the store's available version — the
-        # same endpoint and purpose as ``build_image._reload_store``, which
-        # the bake uses to make freshly-staged local addons visible before
-        # install.
+        # Reload the Supervisor store BEFORE asking for the update: the
+        # refresh bumped the local addon's version, but Supervisor's persisted
+        # store registry (inherited from the base image) does not re-scan local
+        # addons on its own, so ``/update`` returns "No update available" and
+        # the inaddon session ERRORs at setup (issue #1594). ``/store/reload``
+        # forces the re-scan, like ``build_image._reload_store`` does before the
+        # bake installs its freshly-staged local addons.
         #
-        # Best-effort, NOT hard-fail: the reload sits on the setup path of
-        # every inaddon test, so a transient ``/store/reload`` hiccup (or a
-        # future Supervisor regression there) must not fail tests that don't
-        # actually depend on it. On an already-consistent store the reload is
-        # a no-op and ``/update`` detects the bump regardless; on a stale
+        # Best-effort, NOT hard-fail: the reload sits on the setup path of every
+        # inaddon test, so a transient ``/store/reload`` hiccup must not fail
+        # tests that don't depend on it. On an already-consistent store the
+        # reload is a no-op and ``/update`` detects the bump anyway; on a stale
         # store a failed reload falls through to ``/update`` returning the
-        # original #1594 "No update available", now with this warning naming
-        # the reload as the suspect. So we narrow the fail-closed surface to
-        # ``/update`` itself rather than widening it to the reload.
+        # original #1594 "No update available", now with this warning naming the
+        # reload as the suspect.
         msg_id = 1
         reload_endpoint = "/store/reload"
         try:
