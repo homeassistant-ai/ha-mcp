@@ -602,6 +602,20 @@ def _build_app(
             handlers["save_feature_flags"],
             methods=["POST"],
         ),
+        # Theme / accessibility prefs (#1574 review). The sidecar is the
+        # very mode these exist for: its random per-spawn port makes every
+        # session a fresh localStorage origin, so the server-side copy is
+        # what carries the user's choices across restarts.
+        Route(
+            f"{secret_prefix}/api/settings/theme",
+            handlers["get_theme_prefs"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/settings/theme",
+            handlers["save_theme_prefs"],
+            methods=["POST"],
+        ),
         # Custom filesystem directories (issue #1567). The sub-form is rendered
         # in the features panel, so the stdio sidecar must serve these too — its
         # route list is hand-maintained and does NOT derive from

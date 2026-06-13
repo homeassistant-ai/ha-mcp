@@ -257,9 +257,13 @@ def extract_script_body(source: str, *, source_label: str = "<source>") -> str:
     and attributed forms like Astro's ``<script define:vars={...}>``.
     The body is everything between the opening tag's ``>`` and the next
     ``</script>``. External scripts (``<script src=...></script>``) are
-    skipped — they have no inline body to extract. Astro frontmatter is
-    skipped before searching so ``<script>`` mentions in frontmatter
-    comments don't match.
+    skipped — they have no inline body to extract. Scripts carrying a
+    ``data-purpose="…"`` attribute are also skipped: that marker tags
+    auxiliary inline snippets (anti-FOUC theme resolver, toggle-binding
+    handlers) that are intentionally separate from the page's main
+    inline script, so callers asking for "the inline script body" mean
+    the main one. Astro frontmatter is skipped before searching so
+    ``<script>`` mentions in frontmatter comments don't match.
 
     ``source_label`` (e.g. a file path) is included in the raised
     ``ValueError`` so callers know which surface was malformed.
@@ -268,6 +272,8 @@ def extract_script_body(source: str, *, source_label: str = "<source>") -> str:
     for match in re.finditer(r"<script\b([^>]*)>", search_source):
         attrs = match.group(1)
         if re.search(r"\bsrc\s*=", attrs):
+            continue
+        if re.search(r"\bdata-purpose\s*=", attrs):
             continue
         start = match.end()
         end = search_source.find("</script>", start)
@@ -346,6 +352,12 @@ def discover_script_surfaces() -> list[ScriptSurface]:
     ``_PY_RENDERERS`` below) or any ``site/src/**/*.astro`` page are
     picked up automatically, so the parse-time guard extends without
     code changes to the test.
+
+    This includes ``data-purpose`` scripts (anti-FOUC, theme-toggle,
+    server-prefs) because they must parse correctly even though they are
+    auxiliary to the main script. Each gets a distinct surface ID that
+    incorporates the ``data-purpose`` value so test output shows which
+    one broke.
     """
     repo_root = Path(__file__).resolve().parents[3]
     surfaces: list[ScriptSurface] = []
@@ -357,7 +369,10 @@ def discover_script_surfaces() -> list[ScriptSurface]:
             raise RuntimeError(
                 f"discover_script_surfaces: cannot import {module_name}: {exc}",
             ) from exc
-        body = extract_script_body(render(), source_label=module_name)
+        html = render()
+        # Extract the main script body (data-purpose scripts are skipped
+        # by extract_script_body, as documented in that function).
+        body = extract_script_body(html, source_label=module_name)
         surfaces.append(
             ScriptSurface(
                 surface_id=surface_id,
@@ -366,6 +381,23 @@ def discover_script_surfaces() -> list[ScriptSurface]:
                 language="js",
             ),
         )
+        # Now discover every data-purpose script in the same HTML as a
+        # separate surface (anti-FOUC, server-prefs, etc.).
+        for match in re.finditer(
+            r'<script\b[^>]*\bdata-purpose\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)</script>',
+            html,
+            re.DOTALL,
+        ):
+            purpose = match.group(1)
+            script_body = match.group(2)
+            surfaces.append(
+                ScriptSurface(
+                    surface_id=f"{surface_id}_data-purpose-{purpose}",
+                    source_path=Path(module.__file__),
+                    script=script_body,
+                    language="js",
+                ),
+            )
 
     # Astro pages and layouts. The site lives outside the package; walk
     # the static source. Raise rather than silently skip when site/src/
@@ -391,7 +423,16 @@ def discover_script_surfaces() -> list[ScriptSurface]:
                 continue
             body = text[match.end() : end]
             rel = path.relative_to(site_dir).with_suffix("")
-            surface_id = f"astro_{rel.as_posix().replace('/', '_')}"
+            base_id = f"astro_{rel.as_posix().replace('/', '_')}"
+            # Check if this is a data-purpose script and incorporate that
+            # into the surface ID so we can tell them apart in test output.
+            purpose_match = re.search(
+                r'\bdata-purpose\s*=\s*["\']([^"\']+)["\']', attrs
+            )
+            if purpose_match:
+                surface_id = f"{base_id}_data-purpose-{purpose_match.group(1)}"
+            else:
+                surface_id = base_id
             surfaces.append(
                 ScriptSurface(
                     surface_id=surface_id,
