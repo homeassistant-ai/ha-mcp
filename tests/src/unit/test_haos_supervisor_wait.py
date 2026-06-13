@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from tests.haos_image_build.build_image import _wait_supervisor_ready
+from tests.haos_image_build.build_image import WSCommandError, _wait_supervisor_ready
 
 
 def _info(update_available: bool, version: str = "2026.06.1") -> dict[str, Any]:
@@ -46,9 +46,11 @@ def test_waits_until_update_clears() -> None:
         _info(update_available=True, version="2026.05.1"),
         _info(update_available=False, version="2026.06.1"),
     ]
-    with patch("tests.haos_image_build.build_image.time.sleep"):
+    with patch("tests.haos_image_build.build_image.time.sleep") as sleep:
         _wait_supervisor_ready(ws)
     assert ws.supervisor_api.call_count == 3
+    # Slept before the 2nd and 3rd polls — proves a paced loop, not a tight spin.
+    assert sleep.call_count == 2
 
 
 def test_tolerates_transient_error_during_update() -> None:
@@ -56,12 +58,15 @@ def test_tolerates_transient_error_during_update() -> None:
     ws = Mock()
     ws.supervisor_api.side_effect = [
         _info(update_available=True, version="2026.05.1"),
-        RuntimeError("supervisor restarting"),
+        WSCommandError("supervisor restarting", code="unknown_error"),
         _info(update_available=False, version="2026.06.1"),
     ]
-    with patch("tests.haos_image_build.build_image.time.sleep"):
+    with patch("tests.haos_image_build.build_image.time.sleep") as sleep:
         _wait_supervisor_ready(ws)
+    # Reached the 3rd call + slept twice — proves it resumed past the error
+    # rather than aborting on it.
     assert ws.supervisor_api.call_count == 3
+    assert sleep.call_count == 2
 
 
 def test_raises_on_update_timeout() -> None:

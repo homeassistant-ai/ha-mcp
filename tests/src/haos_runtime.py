@@ -1110,7 +1110,8 @@ def trigger_dev_addon_update(
 
     The cached qcow2 ships with the addon installed at the bake-time
     source version; ``refresh_dev_addon_source_in_qcow2`` has just
-    overwritten ``/supervisor/addons/local/ha_mcp_dev/`` with the PR's source and
+    overwritten the local store's ``ha_mcp_dev/`` (``apps/local`` on Supervisor
+    2026.06.0+, else legacy ``addons/local``) with the PR's source and
     bumped the addon's ``config.yaml`` version. A best-effort
     ``/store/reload`` below nudges Supervisor to re-scan the local store
     (see the inline comment for why), after which asking Supervisor to

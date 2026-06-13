@@ -1529,9 +1529,11 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
         time.sleep(10.0)
         try:
             info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
-        except (RuntimeError, TimeoutError) as e:
+        except (WSCommandError, TimeoutError) as e:
             # The Supervisor restarts while applying its self-update, so a
-            # transient WS/API failure here is expected; keep polling.
+            # transient WS/API failure here is expected; keep polling. Narrow
+            # to WSCommandError (the only error supervisor_api raises) so an
+            # unrelated bug propagates instead of looping until the timeout.
             LOG.debug("Transient /supervisor/info error during update: %r", e)
             continue
         version = info.get("version")
