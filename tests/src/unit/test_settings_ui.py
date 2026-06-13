@@ -26,6 +26,7 @@ from ha_mcp.settings_ui import (
     _get_config_path,
     _get_tool_metadata,
     _ingress_only,
+    _render_settings_html,
     apply_tool_visibility,
     get_http_settings_prefix,
     load_tool_config,
@@ -477,9 +478,17 @@ class TestSettingsJsExtraction:
     def test_injection_tokens_fully_substituted(self) -> None:
         """No sentinel token may survive into the rendered JS — an unfilled
         token would mean a broken page that still 'looks' extracted.
+
+        ``_SETTINGS_HTML`` is allowed exactly one documented exception: the
+        ``__HA_MCP_THEME_PREFS__`` placeholder in the ``server-prefs`` head
+        script is substituted per request by ``_render_settings_html()``
+        (the prefs file can change between requests), so the import-time
+        constant must still carry it while the served page must not.
         """
         assert "__HA_MCP_" not in _SETTINGS_JS
-        assert "__HA_MCP_" not in _SETTINGS_HTML
+        assert _SETTINGS_HTML.count("__HA_MCP_THEME_PREFS__") == 1
+        assert "__HA_MCP_" not in _SETTINGS_HTML.replace("__HA_MCP_THEME_PREFS__", "")
+        assert "__HA_MCP_" not in _render_settings_html()
 
     def test_injected_constant_lists_have_expected_values(self) -> None:
         """Each sentinel must be replaced with the *correct* value, not just

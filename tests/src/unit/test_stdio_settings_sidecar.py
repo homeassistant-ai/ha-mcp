@@ -81,6 +81,9 @@ class TestBuildSettingsHandlers:
             "settings_info",
             "get_feature_flags",
             "save_feature_flags",
+            # Theme / accessibility prefs (#1574 review).
+            "get_theme_prefs",
+            "save_theme_prefs",
             # Auto-backup handlers (#1288).
             "list_backups",
             "view_backup",

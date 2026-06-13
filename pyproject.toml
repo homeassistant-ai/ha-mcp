@@ -32,7 +32,7 @@ dependencies = [
     "websockets==16.0",
     "cryptography==48.0.0",
     "pydantic-monty==0.0.18",
-    "tzdata>=2024.1; sys_platform == 'linux'",
+    "tzdata>=2024.1",
 ]
 
 [project.urls]

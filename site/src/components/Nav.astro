@@ -41,6 +41,71 @@ const links = [
             {link.label}
           </a>
         ))}
+        <label class="theme-control ml-2">
+          <span class="theme-control-label">Theme</span>
+          <select id="themeToggle" class="theme-toggle" aria-label="Theme: light or dark mode">
+            <option value="auto">Auto (OS)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <div class="relative">
+          <button
+            id="a11yToggle"
+            type="button"
+            class="theme-toggle ml-1"
+            aria-label="Accessibility settings"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            title="Accessibility settings"
+          >Accessibility</button>
+          <div
+            id="a11yPanel"
+            class="a11y-panel"
+            role="dialog"
+            aria-label="Accessibility settings"
+            hidden
+          >
+            <p class="a11y-contrast-warning" id="a11y-storage-note" hidden>
+              Your browser is blocking site storage; choices apply for this
+              session only.</p>
+            <section class="a11y-section">
+              <h3 class="a11y-section-title">Theme</h3>
+              <fieldset class="a11y-options">
+                <legend class="visually-hidden">Theme preset</legend>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="dark" /> <span class="a11y-preset-chip" data-chip="dark" aria-hidden="true">Aa</span> Dark</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="light" /> <span class="a11y-preset-chip" data-chip="light" aria-hidden="true">Aa</span> Light</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="auto" /> <span class="a11y-preset-chip" data-chip="auto" aria-hidden="true"></span> Auto</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="paper" /> <span class="a11y-preset-chip" data-chip="paper" aria-hidden="true">Aa</span> Paper</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="gray" /> <span class="a11y-preset-chip" data-chip="gray" aria-hidden="true">Aa</span> Gray</label>
+                <label class="a11y-option"><input type="radio" name="a11y-preset" value="contrast" /> <span class="a11y-preset-chip" data-chip="contrast" aria-hidden="true">Aa</span> High Contrast</label>
+              </fieldset>
+            </section>
+            <section class="a11y-section">
+              <h3 class="a11y-section-title">Text size</h3>
+              <fieldset class="a11y-options">
+                <legend class="visually-hidden">Text size</legend>
+                <label class="a11y-option"><input type="radio" name="a11y-font-size" value="100" /> 100%</label>
+                <label class="a11y-option"><input type="radio" name="a11y-font-size" value="115" /> 115%</label>
+                <label class="a11y-option"><input type="radio" name="a11y-font-size" value="130" /> 130%</label>
+                <label class="a11y-option"><input type="radio" name="a11y-font-size" value="150" /> 150%</label>
+              </fieldset>
+            </section>
+            <section class="a11y-section">
+              <h3 class="a11y-section-title">Custom colors</h3>
+              <div class="a11y-swatches">
+                <label class="a11y-swatch">Background <input type="color" id="a11y-custom-bg" data-custom="bg" /></label>
+                <label class="a11y-swatch">Text <input type="color" id="a11y-custom-text" data-custom="text" /></label>
+                <label class="a11y-swatch">Accent <input type="color" id="a11y-custom-accent" data-custom="accent" /></label>
+              </div>
+              <p class="a11y-contrast-warning" id="a11y-contrast-warning" hidden>
+                Heads-up: the chosen background and text colors fall below a 4.5:1
+                contrast ratio and may be hard to read together.</p>
+              <button id="a11y-custom-clear" type="button" class="a11y-reset">Clear custom colors</button>
+            </section>
+            <button id="a11yReset" type="button" class="a11y-reset">Reset to defaults</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

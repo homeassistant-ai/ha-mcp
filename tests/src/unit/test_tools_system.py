@@ -865,6 +865,22 @@ class TestGetSystemHealthConfigCheck:
         assert any("repairs" in w for w in result.get("warnings", []))
 
     @pytest.mark.asyncio
+    async def test_themes_section_reported_unavailable_when_ws_fails(self):
+        """include='themes' with WS baseline failure embeds error in themes."""
+        client = MagicMock()
+        client.check_config = AsyncMock(return_value={"result": "valid"})
+        tools = SystemTools(client)
+        with patch.object(
+            SystemTools,
+            "_fetch_health_info",
+            new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
+        ):
+            result = await tools.ha_get_system_health(include="themes,config_check")
+        assert result["success"] is True
+        assert "error" in result["themes"]
+        assert "WebSocket" in result["themes"]["error"]
+
+    @pytest.mark.asyncio
     async def test_bare_call_raises_when_health_ws_unavailable(self):
         """A bare ha_get_system_health() (the health baseline IS the deliverable)
         must still RAISE on a WS-baseline failure — degradation only applies when

@@ -1,6 +1,25 @@
 
   :root {
+    /* Native form controls / scrollbars follow the scheme (MDN: color-scheme);
+       the light block below flips it. */
+    color-scheme: dark;
+    /* Accent used AS TEXT on tinted chips (a11y options): the base accent
+       (#0a84ff) doesn't meet contrast requirements, so text gets its own
+       readable shade. */
+    --accent-text: #66b3ff;
     --bg: #1c1c1e; --surface: #2c2c2e; --surface-hover: #3a3a3c;
+    /* Semantic tokens for surfaces that previously hard-coded per-scheme
+       hex pairs (review on #1574: tokenize so presets and custom colors
+       can retune them). Values unchanged from the old literals. */
+    --ok-bg: #0d3b1e;
+    --badge-readonly-bg: #1a2a3a; --badge-readonly-text: #6cb4ff;
+    --badge-destructive-bg: #3a1a1a; --badge-destructive-text: #ff6b6b;
+    --badge-mandatory-bg: #1a3a1a; --badge-mandatory-text: #6bff6b;
+    --danger-border: #7a1a1a; --danger-text: #ff9090; --danger-hover-bg: #2a0e0e;
+    --danger-soft-bg: #3a1a1a; --danger-soft-text: #ff6b6b;
+    --field-locked-bg: #2a2520; --field-locked-text: #f4b860;
+    --diff-add: #6bff6b; --diff-rem: #ff6b6b; --diff-hdr: #6cb4ff;
+    --code-bg: #111; --save-note-bg: rgba(255, 152, 0, 0.08);
     --text: #f5f5f7; --text-secondary: #98989d; --accent: #0a84ff;
     --accent-hover: #409cff; --danger: #ff453a; --success: #30d158;
     --warning: #ffd60a; --border: #38383a; --disabled-bg: #1a1a1c;
@@ -19,13 +38,15 @@
   .header h1 { font-size: 1.5rem; font-weight: 600; }
   .status { font-size: 0.85rem; padding: 4px 12px; border-radius: 12px;
     background: var(--surface); color: var(--text-secondary); }
-  .status.saved { background: #0d3b1e; color: var(--success); }
+  .status.saved { background: var(--ok-bg); color: var(--success); }
   .search { width: 100%; padding: 10px 16px; border-radius: 10px; border: 1px solid var(--border);
     background: var(--surface); color: var(--text); font-size: 0.95rem; margin-bottom: 16px;
     outline: none; }
   .search:focus { border-color: var(--accent); }
-  .readonly-notice { background: #1a2a3a; border: 1px solid #1a4a7a; border-radius: 10px;
-    padding: 12px 16px; margin-bottom: 16px; font-size: 0.85rem; color: #6cb4ff; }
+  .readonly-notice { background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--surface));
+    border-left: 4px solid var(--accent); border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 16px; font-size: 0.85rem; color: var(--text); }
   .group { background: var(--surface); border-radius: 12px; margin-bottom: 8px;
     overflow: hidden; border: 1px solid var(--border); }
   .group-header { display: flex; align-items: center; justify-content: space-between;
@@ -52,9 +73,9 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .badge { display: inline-block; font-size: 0.7rem; padding: 1px 6px;
     border-radius: 4px; margin-left: 6px; font-weight: 500; }
-  .badge.readonly { background: #1a2a3a; color: #6cb4ff; }
-  .badge.destructive { background: #3a1a1a; color: #ff6b6b; }
-  .badge.mandatory { background: #1a3a1a; color: #6bff6b; }
+  .badge.readonly { background: var(--badge-readonly-bg); color: var(--badge-readonly-text); }
+  .badge.destructive { background: var(--badge-destructive-bg); color: var(--badge-destructive-text); }
+  .badge.mandatory { background: var(--badge-mandatory-bg); color: var(--badge-mandatory-text); }
   .tool-toggles { display: flex; gap: 16px; align-items: center; }
   .toggle-group { display: flex; flex-direction: column; align-items: center; gap: 2px;
     font-size: 0.7rem; color: var(--text-secondary); }
@@ -73,11 +94,15 @@
   .summary { display: flex; gap: 16px; padding: 8px 0; margin-bottom: 16px;
     font-size: 0.85rem; color: var(--text-secondary); flex-wrap: wrap; }
   .summary span { background: var(--surface); padding: 4px 12px; border-radius: 8px; }
-  .pin-notice { background: #3a2e1a; border: 1px solid #7a5a1a; border-radius: 10px;
-    padding: 10px 16px; margin-bottom: 12px; font-size: 0.85rem; color: #ffd680; display: none; }
+  .pin-notice { background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--surface));
+    border-left: 4px solid var(--warning); border-radius: 10px;
+    padding: 10px 16px; margin-bottom: 12px; font-size: 0.85rem; color: var(--text); display: none; }
   .pin-notice.show { display: block; }
-  .restart-notice { background: #3a1a1a; border: 1px solid #7a1a1a; border-radius: 10px;
-    padding: 12px 16px; margin-bottom: 12px; font-size: 0.9rem; color: #ff9090;
+  .restart-notice { background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--surface));
+    border-left: 4px solid var(--danger); border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 12px; font-size: 0.9rem; color: var(--text);
     font-weight: 500; display: none; align-items: center; justify-content: space-between; gap: 12px; }
   .restart-notice.show { display: flex; }
   .restart-notice-text { flex: 1; }
@@ -91,9 +116,9 @@
      obviously not a routine click. Matches the restart-notice red
      family so the danger semantic reads even without label text. */
   .danger-btn { padding: 7px 14px; border-radius: 8px;
-    border: 1px solid #7a1a1a; background: transparent; color: #ff9090;
+    border: 1px solid var(--danger-border); background: transparent; color: var(--danger-text);
     font-weight: 600; cursor: pointer; font-size: 0.8rem; flex-shrink: 0; }
-  .danger-btn:hover { background: #2a0e0e; }
+  .danger-btn:hover { background: var(--danger-hover-bg); }
   .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   /* Tabs — generic structure other tabs can stack onto without
      touching existing markup. New tabs add a button to .tabs and
@@ -113,7 +138,7 @@
   .backup-filters button { padding: 8px 12px; border-radius: 8px; border: none;
     background: var(--surface); color: var(--text); font-size: 0.85rem; cursor: pointer; }
   .backup-filters button:hover { background: var(--surface-hover); }
-  .backup-filters button.danger { background: #3a1a1a; color: #ff6b6b; }
+  .backup-filters button.danger { background: var(--danger-soft-bg); color: var(--danger-soft-text); }
   .backup-state { background: var(--surface); border-radius: 10px; padding: 10px 16px; margin-bottom: 12px;
     font-size: 0.85rem; color: var(--text-secondary); display: flex; gap: 16px; flex-wrap: wrap; }
   .backup-state span { display: inline-block; }
@@ -139,7 +164,7 @@
   .backup-field-control input[type="number"] { width: 120px; padding: 6px 10px;
     border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
   .backup-field-control input[type="number"]:disabled { opacity: 0.55; cursor: not-allowed; }
-  .backup-field-locked { background: #2a2520; color: #f4b860; font-size: 0.78rem;
+  .backup-field-locked { background: var(--field-locked-bg); color: var(--field-locked-text); font-size: 0.78rem;
     padding: 2px 8px; border-radius: 999px; }
   .backup-field-help { font-size: 0.75rem; color: var(--text-secondary); flex-basis: 100%; margin-left: 200px; }
   .backup-config-actions { display: flex; align-items: center; gap: 12px; margin-top: 10px;
@@ -162,9 +187,9 @@
   .modal-body { flex: 1; overflow: auto; padding: 16px; }
   .modal-body pre { background: var(--surface); padding: 12px; border-radius: 8px;
     font-size: 0.8rem; overflow: auto; line-height: 1.4; }
-  .diff-add { color: #6bff6b; }
-  .diff-rem { color: #ff6b6b; }
-  .diff-hdr { color: #6cb4ff; }
+  .diff-add { color: var(--diff-add); }
+  .diff-rem { color: var(--diff-rem); }
+  .diff-hdr { color: var(--diff-hdr); }
   /* Server-settings rows (#863). One row per FEATURE_FLAG_FIELDS
      entry. Locked rows (env / addon origin) get the dim treatment +
      a small inline note pointing at the env var to adjust. */
@@ -177,7 +202,7 @@
   .feature-name { font-size: 0.9rem; font-weight: 500; }
   .feature-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;
     line-height: 1.4; }
-  .feature-help code { background: #111; padding: 1px 5px; border-radius: 4px;
+  .feature-help code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
     font-size: 0.72rem; }
   .feature-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px;
     font-style: italic; }
@@ -243,7 +268,7 @@
      because most surfaces have many of them; the Save row gets a
      dedicated, larger primary style so users don't miss the action.
      Duplicated at top and bottom so scrolling either way reaches it. */
-  .adv-save-note { background: rgba(255, 152, 0, 0.08);
+  .adv-save-note { background: var(--save-note-bg);
     border-left: 3px solid var(--warning); padding: 10px 14px;
     border-radius: 6px; margin: 12px 0; color: var(--text);
     font-size: 0.85rem; line-height: 1.4; }
@@ -267,7 +292,7 @@
   .adv-name { font-size: 0.9rem; font-weight: 500; }
   .adv-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px;
     line-height: 1.4; }
-  .adv-help code { background: #111; padding: 1px 5px; border-radius: 4px;
+  .adv-help code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
     font-size: 0.72rem; }
   .adv-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px;
     font-style: italic; }
@@ -329,3 +354,120 @@
     color: var(--text); font-size: 0.85rem; margin: 0 6px; }
   .policy-save-status { margin-left: 10px; font-size: 0.8rem;
     color: var(--text-secondary); }
+  /* Light color-scheme override (#1572). Selector is :root[data-theme="light"]
+     — the inline head script in settings_ui.py sets data-theme to "light",
+     "dark", or auto-resolved from prefers-color-scheme before this CSS
+     evaluates, so the user can override the OS preference via the header
+     toggle. Inverts surface + text variables and provides explicit light
+     pairs for every hand-picked dark hex in the dark base palette (notices,
+     status badges, danger button, diff colors, inline code, slider track).
+     Each foreground/background pair is targeted at WCAG AA or better, with
+     AAA on body and primary surfaces — the contrast bar for low-vision
+     readers, not the typical-user default. */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --accent-text: #0051a3;
+    --bg: #f5f5f7; --surface: #ffffff; --surface-hover: #ebebed;
+    --text: #1d1d1f; --text-secondary: #525252; --accent: #0066cc;
+    --accent-hover: #0051a3; --danger: #cc0000; --success: #1a7f3e;
+    --warning: #a25c00; --border: #d2d2d7; --disabled-bg: #ebebed;
+  }
+  :root[data-theme="light"] {
+    --ok-bg: #d4edda;
+    --badge-readonly-bg: #d4e7fc; --badge-readonly-text: #0049a8;
+    --badge-destructive-bg: #fbe5e5; --badge-destructive-text: #a30000;
+    --badge-mandatory-bg: #d4edda; --badge-mandatory-text: #155724;
+    --danger-border: #c95151; --danger-text: #a30000; --danger-hover-bg: #fbe5e5;
+    --danger-soft-bg: #fbe5e5; --danger-soft-text: #a30000;
+    --field-locked-bg: #fff4d6; --field-locked-text: #6b4500;
+    --diff-add: #155724; --diff-rem: #a30000; --diff-hdr: #0049a8;
+    --code-bg: #f0f0f0; --save-note-bg: rgba(255, 152, 0, 0.18);
+  }
+  :root[data-theme="light"] .slider { background: #909090; }
+  /* Switch knob inherits var(--text) as background; in light mode that's
+     near-black, which disappears on the blue active track and clashes on
+     the gray idle track. Use --surface (white) so the knob stays light,
+     plus a subtle drop shadow for definition (WCAG 1.4.11 wants ≥3:1 for
+     adjacent UI components; the idle track sits just above that line
+     against a white knob, so the shadow is reinforcement, not the gate). */
+  :root[data-theme="light"] .slider::before { background: var(--surface);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
+
+  /* Theme control — visible "Theme" label + small <select> in the header.
+     Picks up the surface palette so it fits each scheme automatically. */
+  .theme-control { display: inline-flex; align-items: center; gap: 6px; }
+  .theme-control-label { font-size: 0.8rem; color: var(--text-secondary); }
+  .theme-toggle { background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px 8px; font-size: 0.8rem; cursor: pointer;
+    font-family: inherit; outline: none; }
+  .theme-toggle:focus { border-color: var(--accent); }
+
+  /* Accessibility tab (#1572). Each section is one knob the user can flip;
+     options render as radio chips with a clear active state. Layout uses
+     rem-based gaps so font-size scaling pulls them along with the labels. */
+  .a11y-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 12px; }
+  .a11y-section-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 4px; }
+  .a11y-section-help { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 12px; }
+  .a11y-options { display: flex; flex-wrap: wrap; gap: 8px; }
+  /* The option groups are native fieldsets (group name in a hidden legend,
+     announced by screen readers); strip the default chrome. */
+  fieldset.a11y-options { border: 0; padding: 0; margin: 0; min-inline-size: auto; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0;
+    margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+  .a11y-option { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+    border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 0.85rem;
+    background: var(--bg); user-select: none; }
+  .a11y-option:hover { background: var(--surface-hover); }
+  .a11y-option:has(input:checked) { border-color: var(--accent); color: var(--accent-text);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+  .a11y-option input { accent-color: var(--accent); }
+
+  /* Preset chips (#1574 review): one-click theme presets modeled on
+     Firefox Reader View's Colors menu. Each chip shows a miniature
+     swatch of its actual scheme, so users see the choice instead of
+     having to read it — the swatch colors are fixed previews by design. */
+  .a11y-preset-chip { width: 22px; height: 22px; border-radius: 6px; display: inline-flex;
+    align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 600;
+    border: 1px solid var(--border); flex-shrink: 0; }
+  .a11y-preset-chip[data-chip="dark"] { background: #1c1c1e; color: #f5f5f7; }
+  .a11y-preset-chip[data-chip="light"] { background: #f5f5f7; color: #1d1d1f; }
+  .a11y-preset-chip[data-chip="auto"] { background: linear-gradient(135deg, #1c1c1e 50%, #f5f5f7 50%); color: #8e8e93; }
+  .a11y-preset-chip[data-chip="paper"] { background: #f4ede0; color: #1d1d1f; }
+  .a11y-preset-chip[data-chip="gray"] { background: #d4d6da; color: #1d1d1f; }
+  .a11y-preset-chip[data-chip="contrast"] { background: #ffffff; color: #000000; font-weight: 800; border-color: #000000; }
+
+  /* Custom color swatches — native pickers so the OS provides the visual
+     selection UI; no hex typing required. */
+  .a11y-swatches { display: flex; flex-wrap: wrap; gap: 12px; }
+  .a11y-swatch { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+  .a11y-swatch input[type="color"] { width: 40px; height: 28px; border: 1px solid var(--border);
+    border-radius: 8px; padding: 2px; background: var(--surface); cursor: pointer; }
+  .a11y-contrast-warning { color: var(--warning); font-size: 0.8rem; margin-top: 10px; }
+
+  /* Light-mode background shade picker (#1572). "off-white" is the baseline
+     light palette already defined above (--bg: #f5f5f7). "paper" warms the
+     background toward a low-blue-light cream; "pure" maximises brightness
+     for users who prefer it. Only the page background flips — surfaces
+     (cards, notices, badges) keep their own palette so contrast pairs the
+     light/dark CSS above hand-tuned stay intact. */
+  :root[data-theme="light"][data-shade="paper"] { --bg: #f4ede0; }
+  :root[data-theme="light"][data-shade="gray"]  { --bg: #d4d6da; }
+  :root[data-theme="light"][data-shade="pure"]  { --bg: #ffffff; }
+
+  /* High-contrast tier (#1572). Set via the Accessibility panel
+     (data-contrast="high"), targeting the WCAG 2.2 1.4.6 AAA threshold (7:1
+     for body text). The dark scheme pushes foregrounds toward pure white and
+     tightens borders; the light scheme pushes toward pure black. Body weight
+     bumps to 500 so the strokes carry the extra contrast (a known APCA lever
+     for low-vision readers). Scope: lifts the four primary text/UI
+     variables — notices and badges (.pin-notice, .readonly-notice,
+     .danger-btn, diff hues) keep their own hand-tuned palette so they read as
+     the same callout in both tiers. */
+  :root[data-contrast="high"] body { font-weight: 500; }
+  :root[data-contrast="high"][data-theme="dark"] {
+    --text: #ffffff; --text-secondary: #e0e0e0; --border: #6c6c70; --accent: #4ca8ff;
+  }
+  :root[data-contrast="high"][data-theme="light"] {
+    --text: #000000; --text-secondary: #1a1a1a; --border: #6c6c70; --accent: #003d99;
+  }

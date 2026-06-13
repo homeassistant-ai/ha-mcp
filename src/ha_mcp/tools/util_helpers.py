@@ -10,7 +10,10 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from datetime import tzinfo as _TZInfo
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastmcp.exceptions import ToolError
 from pydantic import BeforeValidator, ValidationError
@@ -34,6 +37,23 @@ def websocket_error_message(error: Any) -> str:
     if isinstance(error, dict):
         return str(error.get("message", error))
     return str(error)
+
+
+def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
+    """Summarize a ``frontend/get_themes`` result into names plus defaults.
+
+    Returns theme NAMES, not the full per-theme CSS variable dicts (installed
+    community themes can carry hundreds of variables; listings are a
+    discovery/verify surface, not a content dump).
+    """
+    themes_value = raw_themes.get("themes") or {}
+    theme_names = sorted(themes_value.keys() if isinstance(themes_value, dict) else [])
+    return {
+        "themes": theme_names,
+        "count": len(theme_names),
+        "default_theme": raw_themes.get("default_theme"),
+        "default_dark_theme": raw_themes.get("default_dark_theme"),
+    }
 
 
 def strip_internal_fields(obj: Any, _seen: set[int] | None = None) -> Any:
@@ -579,26 +599,30 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
 async def add_timezone_metadata(
     client: Any, data: dict[str, Any], include_metadata: bool = True
 ) -> dict[str, Any]:
-    """Add Home Assistant timezone to tool responses for local time context.
+    """Add Home Assistant timezone to tool responses and convert timestamps to local time.
 
-    Wraps *data* in ``{"data": ..., "metadata": {...}}``.  Pass
-    ``include_metadata=False`` to return *data* unchanged — the ``metadata``
-    wrapper is then omitted entirely.
+    Fetches ``time_zone`` from ``/api/config``, converts every
+    ``last_changed``, ``last_updated``, ``last_reported``, ``when``, and
+    ``last_triggered`` field found anywhere in *data* from UTC to that local
+    timezone, then wraps the result in ``{"data": ..., "metadata": {...}}``.
+
+    Pass ``include_metadata=False`` to return *data* unchanged — the
+    ``metadata`` wrapper is then omitted entirely.
+
+    Conversion notes:
+    - Offset-aware strings (``+00:00``) are converted directly.
+    - Naive strings (no offset) are assumed to be UTC before conversion.
+    - ``ZoneInfoNotFoundError`` (tzdata not installed) falls back to UTC.
+    - Any config-fetch failure also falls back to UTC without conversion.
     """
     if not include_metadata:
         return data
+
+    ha_timezone = "UTC"
+    fetch_failed = False
     try:
         config = await client.get_config()
         ha_timezone = config.get("time_zone", "UTC")
-
-        return {
-            "data": data,
-            "metadata": {
-                "home_assistant_timezone": ha_timezone,
-                "timestamp_format": "ISO 8601 (UTC)",
-                "note": f"All timestamps are in UTC. Home Assistant timezone is {ha_timezone}.",
-            },
-        }
     except (
         HomeAssistantConnectionError,
         HomeAssistantAPIError,
@@ -606,20 +630,72 @@ async def add_timezone_metadata(
         TimeoutError,
         OSError,
     ) as _tz_exc:
+        fetch_failed = True
         logger.warning(
             "add_timezone_metadata: failed to fetch HA timezone config — "
-            "falling back to 'Unknown': %s",
+            "falling back to UTC: %s",
             _tz_exc,
             exc_info=True,
         )
+
+    if fetch_failed:
         return {
             "data": data,
             "metadata": {
-                "home_assistant_timezone": "Unknown",
+                "home_assistant_timezone": "UTC",
                 "timestamp_format": "ISO 8601 (UTC)",
-                "note": "All timestamps are in UTC. Could not fetch Home Assistant timezone.",
+                "note": "Could not fetch Home Assistant timezone — timestamps are in UTC.",
             },
         }
+
+    try:
+        local_tz: _TZInfo = ZoneInfo(ha_timezone)
+    except ZoneInfoNotFoundError:
+        logger.warning(
+            "add_timezone_metadata: ZoneInfo(%r) not found "
+            "(tzdata package missing?) — falling back to UTC",
+            ha_timezone,
+        )
+        local_tz = UTC
+        ha_timezone = "UTC"
+
+    _TS_FIELDS = {
+        "last_changed",
+        "last_updated",
+        "last_reported",
+        "when",
+        "last_triggered",
+    }
+
+    def _convert(obj: Any) -> Any:
+        if isinstance(obj, list):
+            return [_convert(i) for i in obj]
+        if isinstance(obj, dict):
+            out = {}
+            for k, v in obj.items():
+                if k in _TS_FIELDS and isinstance(v, str) and v:
+                    try:
+                        parsed = datetime.fromisoformat(v)
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=UTC)
+                        out[k] = parsed.astimezone(local_tz).isoformat()
+                    except (ValueError, TypeError):
+                        out[k] = v
+                else:
+                    out[k] = _convert(v)
+            return out
+        return obj
+
+    converted_data = _convert(data)
+
+    return {
+        "data": converted_data,
+        "metadata": {
+            "home_assistant_timezone": ha_timezone,
+            "timestamp_format": f"ISO 8601 ({ha_timezone})",
+            "note": f"Per-record timestamp fields (last_changed, last_updated, last_reported, when, last_triggered) have been converted to {ha_timezone} local time. Query-window boundary fields (period, start_time, end_time) remain in UTC.",
+        },
+    }
 
 
 # --- WS-event-driven wait helpers (#1152) -----------------------------------
