@@ -65,6 +65,14 @@ async def test_stale_synthetic_tool_returns_refresh_hint(monkeypatch, name):
     msg = body["error"]["message"]
     assert "Tool Search" in msg
     assert ("reconnect" in msg.lower()) or ("refresh" in msg.lower())
+    # the counter-intuitive insight users most need: a server restart won't help
+    assert "does not refresh" in msg.lower()
+    # the actionable recovery guidance is the whole point of the change
+    suggestions = body["error"]["suggestions"]
+    assert len(suggestions) == 2
+    assert any(
+        ("reconnect" in s.lower()) or ("refresh" in s.lower()) for s in suggestions
+    )
     # context fields are spread at the top level by create_error_response
     assert body["tool_name"] == name
     assert body["enable_tool_search"] is False
@@ -91,6 +99,24 @@ async def test_synthetic_name_not_masked_when_tool_search_on(monkeypatch):
 
     with pytest.raises(NotFoundError):
         await mcp.call_tool("ha_search_tools", {"query": "x"})
+
+
+@pytest.mark.asyncio
+async def test_deep_notfound_with_other_name_not_rewritten(monkeypatch):
+    """A NotFoundError whose message names a DIFFERENT tool (e.g. one bubbling
+    up from inside an executing proxy) is not a top-level miss for the called
+    name, so it must propagate unchanged rather than be relabeled stale-cache —
+    even when the called name is synthetic and Tool Search is off."""
+    _patch_tool_search(monkeypatch, enabled=False)
+    mw = ToolSearchHintMiddleware()
+    context = SimpleNamespace(message=SimpleNamespace(name="ha_search_tools"))
+
+    async def call_next(_ctx):
+        raise NotFoundError("Unknown tool: 'some_inner_tool'")
+
+    with pytest.raises(NotFoundError) as exc_info:
+        await mw.on_call_tool(context, call_next)
+    assert "some_inner_tool" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

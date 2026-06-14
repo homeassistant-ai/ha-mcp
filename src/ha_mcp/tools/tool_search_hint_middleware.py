@@ -6,18 +6,19 @@ never registered (the ``CategorizedSearchTransform`` is not installed). If a
 client calls one of them anyway, FastMCP raises a bare ``NotFoundError``
 ("Unknown tool: 'ha_search_tools'") with no recovery guidance.
 
-That is exactly what happens when an MCP client (e.g. a ChatGPT connector) is
-still advertising a *cached* tool list captured from a previous session when
-Tool Search was on: the client shows ``ha_search_tools`` as available, calls
-it, and the live server — now in Tool-Search-off mode — rejects it. Restarting
-the add-on or Home Assistant does not help because the stale list lives in the
-client, not the server.
+That is exactly what happens when an MCP client that caches its tool list is
+still advertising one captured from a previous session when Tool Search was on:
+the client shows ``ha_search_tools`` as available, calls it, and the live
+server — now in Tool-Search-off mode — rejects it. Restarting the add-on or
+Home Assistant does not help because the stale list lives in the client, not
+the server.
 
 This middleware intercepts that one case and replaces the opaque "Unknown tool"
 with a structured error that tells the user their tool list is stale and to
-reconnect/refresh the MCP server. It only acts when Tool Search is off (the
-only state in which those four names fail to resolve); in every other case the
-original ``NotFoundError`` propagates unchanged.
+reconnect/refresh the MCP server. It only acts on a *top-level* resolution miss
+for one of those four names while Tool Search is off; in every other case —
+including a ``NotFoundError`` bubbling up from inside an executing tool — the
+original error propagates unchanged.
 """
 
 from __future__ import annotations
@@ -45,14 +46,20 @@ class ToolSearchHintMiddleware(Middleware):
     ) -> Any:
         try:
             return await call_next(context)
-        except NotFoundError:
+        except NotFoundError as exc:
             name = context.message.name
-            # Only the four tool-search synthetic tools are affected, and only
-            # when Tool Search is off (when it is on they resolve normally, so
-            # a NotFoundError here would be a different, real problem we must
-            # not mask).
+            # Only rewrite a TOP-LEVEL "Unknown tool" miss for one of the four
+            # tool-search synthetic names while Tool Search is off:
+            #  - match the dispatch-layer message so a NotFoundError bubbling up
+            #    from INSIDE an executing tool (a different name) is never
+            #    mislabeled as a stale cache; on any wording change this simply
+            #    fails closed and re-raises the original error.
+            #  - require Tool Search to be off (when on, the names resolve, so a
+            #    miss would be a different, real problem we must not mask).
+            top_level_miss = str(exc) == f"Unknown tool: {name!r}"
             if (
-                name in PROXY_META_TOOLS
+                top_level_miss
+                and name in PROXY_META_TOOLS
                 and not get_global_settings().enable_tool_search
             ):
                 logger.info(
@@ -76,11 +83,15 @@ class ToolSearchHintMiddleware(Middleware):
                             f"so {name} is not needed."
                         ),
                         suggestions=[
-                            "Reconnect or refresh the ha-mcp MCP server in your client "
-                            "to reload the current tool list.",
-                            "Then call the tool you need directly by its name (with "
-                            "Tool Search off, ha_search_tools and the ha_call_* "
-                            "proxies do not exist).",
+                            (
+                                "Reconnect or refresh the ha-mcp MCP server in your "
+                                "client to reload the current tool list."
+                            ),
+                            (
+                                "Then call the tool you need directly by its name "
+                                "(with Tool Search off, ha_search_tools and the "
+                                "ha_call_* proxies do not exist)."
+                            ),
                         ],
                         context={"tool_name": name, "enable_tool_search": False},
                     )
