@@ -143,6 +143,51 @@ async def test_union_param_malformed_container_names_param_not_union_tags():
 
 
 @pytest.mark.asyncio
+async def test_list_element_error_keeps_index_in_message():
+    """A bad ELEMENT in a list[dict] param keeps its index (`monday.1`), not
+    just the param name. Grouping must collapse union-arm tags WITHOUT dropping
+    real path elements like list indices (regression for the #1601 grouping)."""
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_schedule(monday: list[dict]) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        # element 1 is a string, not a dict object
+        await mcp.call_tool("ha_test_schedule", {"monday": [{"from": "07:00"}, "oops"]})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "monday.1" in msg
+
+
+@pytest.mark.asyncio
+async def test_union_error_details_are_deduped():
+    """`details` collapses duplicate error types from union arms (#1601)."""
+    from typing import Annotated
+
+    from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_union_details(
+        entity_id: Annotated[str | list[str], JSON_STRING_COERCION],
+    ) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_test_union_details", {"entity_id": '{"a": 1}'})
+
+    details = json.loads(str(exc_info.value))["error"].get("details", "")
+    # both arms fail; each distinct type appears at most once
+    assert details.count("string_type") <= 1
+    assert details.count("list_type") <= 1
+
+
+@pytest.mark.asyncio
 async def test_tool_error_from_tool_body_passes_through_unconverted():
     """A ToolError raised inside the tool is NOT re-wrapped by the middleware."""
     mcp = FastMCP("test")

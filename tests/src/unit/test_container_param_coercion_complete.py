@@ -2,10 +2,12 @@
 
 Issue #1581/#1601 root cause: some MCP clients (Claude Desktop, Cowork/Agent
 SDK) serialize object/array tool arguments as JSON-encoded *strings* before
-they reach the server. PR #1582 added the `JSON_STRING_COERCION` BeforeValidator
-and applied it to *some* dict/list params — but by hand, one call site at a
-time, which is exactly the pattern that let the #1485/#1487/#1492 regression
-slip through (tolerance was tied to the annotation and silently dropped).
+they reach the server. The #1485/#1487/#1492 series intentionally narrowed
+these params from `str | dict` to `dict` (a schema cleanup so models stop being
+told a JSON string is valid) — and that narrowing is what broke stringified-
+object clients (#1581). PR #1582 restored tolerance via the `JSON_STRING_COERCION`
+BeforeValidator, but applied it by hand, one call site at a time — the same
+per-annotation pattern that makes a missed param easy to overlook.
 
 This test makes the contract structural and impossible to regress: it walks
 *every* registered MCP tool parameter, and for every parameter whose declared
@@ -87,7 +89,9 @@ def _register_module(mcp: Any, module: Any, func_name: str | None) -> None:
             (
                 getattr(module, attr)
                 for attr in dir(module)
-                if attr.startswith("register_") and attr.endswith("_tools")
+                if attr.startswith("register_")
+                and attr.endswith("_tools")
+                and callable(getattr(module, attr))
             ),
             None,
         )
@@ -231,6 +235,101 @@ def test_container_param_passes_non_json_through_unchanged(
 
     ann = _param_annotation(tool_name, param_name)
     assert TypeAdapter(ann).validate_python(value) == value
+
+
+def _type_allows_str(annotation: Any) -> bool:
+    """True if `str` is a legitimate arm of the param's type (so it may validly
+    advertise a string in its schema)."""
+    if typing.get_origin(annotation) is typing.Annotated:
+        annotation = typing.get_args(annotation)[0]
+    args = typing.get_args(annotation)
+    if not args:
+        return annotation is str
+    return any(arg is str for arg in args)
+
+
+def _schema_advertises_string(schema: dict[str, Any]) -> bool:
+    return schema.get("type") == "string" or any(
+        variant.get("type") == "string" for variant in schema.get("anyOf", [])
+    )
+
+
+def test_dict_or_list_only_params_advertise_no_string_arm() -> None:
+    """Registry-driven companion to test_config_param_no_string_schema.py: every
+    container param that CANNOT be a `str` must not advertise a string arm in its
+    MCP schema. Walking all registered tools (not a hand-list) means a future
+    revert to `str | dict` on ANY of the coerced params re-introduces the #1485
+    regression here, not silently."""
+    if not _TOOLS_CACHE:
+        _TOOLS_CACHE.update(_all_registered_tools())
+
+    leaks: list[str] = []
+    for tool_name, tool in _TOOLS_CACHE.items():
+        props = tool.parameters.get("properties", {})
+        for param_name, param in inspect.signature(tool.fn).parameters.items():
+            annotation = param.annotation
+            if annotation is inspect.Parameter.empty:
+                continue
+            if not _type_can_be_container(annotation):
+                continue
+            if _type_allows_str(annotation):
+                continue  # union legitimately advertises a string arm
+            if (tool_name, param_name) in COERCION_EXEMPT:
+                continue
+            schema = props.get(param_name)
+            if schema and _schema_advertises_string(schema):
+                leaks.append(f"{tool_name}.{param_name}: {schema}")
+
+    assert not leaks, (
+        "dict/list-only params advertising a string arm (re-teaches models to "
+        "send JSON strings — the #1485 regression):\n  " + "\n  ".join(sorted(leaks))
+    )
+
+
+# Behavioral coercion for the dict-only params added in this PR — the guardrail
+# proves the validator is *present*; these prove it actually *works* end-to-end.
+@pytest.mark.parametrize(
+    ("tool_name", "param_name", "json_value", "expected"),
+    [
+        ("ha_manage_addon", "options", '{"ssl": true}', {"ssl": True}),
+        ("ha_manage_addon", "network", '{"5800/tcp": 8081}', {"5800/tcp": 8081}),
+        (
+            "ha_manage_energy_prefs",
+            "config",
+            '{"energy_sources": []}',
+            {"energy_sources": []},
+        ),
+    ],
+)
+def test_dict_only_param_coerces_json_object_string(
+    tool_name: str, param_name: str, json_value: str, expected: Any
+) -> None:
+    from pydantic import TypeAdapter
+
+    ann = _param_annotation(tool_name, param_name)
+    assert TypeAdapter(ann).validate_python(json_value) == expected
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "param_name"),
+    [
+        ("ha_manage_addon", "options"),
+        ("ha_manage_energy_prefs", "config"),
+    ],
+)
+def test_dict_only_param_rejects_malformed_and_array(
+    tool_name: str, param_name: str
+) -> None:
+    """A non-JSON string and a JSON *array* string both still fail dict
+    validation (keeps #1491's actionable error for genuinely-wrong input)."""
+    from pydantic import TypeAdapter, ValidationError
+
+    ann = _param_annotation(tool_name, param_name)
+    adapter = TypeAdapter(ann)
+    with pytest.raises(ValidationError):
+        adapter.validate_python("not valid json {")
+    with pytest.raises(ValidationError):
+        adapter.validate_python("[1, 2, 3]")
 
 
 def test_exempt_params_still_exist() -> None:

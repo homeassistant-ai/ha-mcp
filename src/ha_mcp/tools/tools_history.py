@@ -429,6 +429,9 @@ def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
     """Parse entity_ids parameter into a list of strings."""
     if isinstance(entity_ids, str):
         if entity_ids.startswith("["):
+            # Belt-and-suspenders: JSON_STRING_COERCION on the param already
+            # parses a JSON-array string to a list upstream, so a string reaching
+            # here is normally CSV/single. This branch stays as a fallback.
             parsed_ids = parse_string_list_param(entity_ids, "entity_ids")
             if parsed_ids is None:
                 raise_tool_error(

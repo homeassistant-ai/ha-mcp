@@ -43,14 +43,20 @@ class ValidationErrorMiddleware(Middleware):
             return await call_next(context)
         except PydanticValidationError as exc:
             errors = exc.errors(include_url=False)
-            # Group by the real argument name (the first loc element). A union
-            # param like `str | list[str]` emits one error per arm with loc
-            # (param, "str"), (param, "list[str]"); without grouping the user
-            # saw `param.str` / `param.list[str]` instead of `param` (#1601).
+            # Group by the real argument path. A union param like
+            # `str | list[str]` emits one error per arm with loc (param, "str"),
+            # (param, "list[str]"); without grouping the user saw `param.str` /
+            # `param.list[str]` instead of `param` (#1601). We keep the param
+            # name plus any numeric list indices (so a bad element still reports
+            # `monday.1`) but drop the non-numeric union-arm tags.
             grouped: dict[str, list[Any]] = {}
             for err in errors:
                 loc = [str(p) for p in err.get("loc", ()) if p != "__root__"]
-                grouped.setdefault(loc[0] if loc else "", []).append(err)
+                if loc:
+                    key = ".".join([loc[0], *(p for p in loc[1:] if p.isdigit())])
+                else:
+                    key = ""
+                grouped.setdefault(key, []).append(err)
 
             parts: list[str] = []
             for param, errs in grouped.items():
