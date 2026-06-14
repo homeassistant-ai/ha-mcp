@@ -22,7 +22,11 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .tools_voice_assistant import KNOWN_ASSISTANTS
-from .util_helpers import parse_json_param, parse_string_list_param
+from .util_helpers import (
+    JSON_STRING_COERCION,
+    parse_json_param,
+    parse_string_list_param,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -596,6 +600,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         options: Annotated[
             dict[str, dict[str, Any]] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Per-domain entity registry options (e.g. sensor 'display_precision', "
@@ -641,6 +646,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         categories: Annotated[
             dict[str, str | None] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Category assignment as a dict mapping scope to category_id. "
@@ -667,6 +673,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = "set",
         expose_to: Annotated[
             dict[str, bool] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. "

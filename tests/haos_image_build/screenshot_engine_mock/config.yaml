@@ -1,0 +1,31 @@
+name: HA-MCP Screenshot Engine (test mock)
+version: "1.0.0"
+# Config slug ``puppet`` -> Supervisor local slug ``local_puppet`` -> matches
+# the ``_puppet`` discovery suffix in src/ha_mcp/dashboard_screenshot/provision.py,
+# exactly as balloob's real Puppet add-on would. This is a drop-in mock for the
+# HAOS e2e bake (the test's SCREENSHOT_ADDON_SLUG stays ``local_puppet``); it is
+# NEVER shipped to users, who install balloob's actual add-on.
+slug: puppet
+description: >-
+  Test-only mock of the dashboard screenshot engine for the HAOS e2e bake.
+  Serves the same HTTP contract as balloob's Puppet add-on
+  (GET /<path>?viewport=WxH&format=png -> image/png) but returns a synthetic
+  PNG instead of launching Chromium, and gates rendering on validating the
+  configured access_token against Home Assistant. Never shipped to users.
+arch:
+  - aarch64
+  - amd64
+# python:3.13-slim is not an HA base image (no s6 init), so run our own CMD.
+init: false
+ports:
+  "10000/tcp": 10000
+options:
+  access_token: ""
+  keep_browser_open: false
+  home_assistant_url: "http://homeassistant:8123"
+schema:
+  access_token: str
+  keep_browser_open: bool
+  home_assistant_url: str
+# Mirrors balloob's puppet add-on so the discovery + options surface match.
+homeassistant_api: true

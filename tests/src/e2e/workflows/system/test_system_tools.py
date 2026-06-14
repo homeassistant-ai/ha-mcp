@@ -18,7 +18,11 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    extract_error_message,
+    parse_mcp_result,
+    safe_call_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -605,6 +609,45 @@ class TestSystemTools:
         )
 
         logger.info(f"Unknown include warnings: {data['warnings']}")
+
+    @pytest.mark.asyncio
+    async def test_get_system_health_with_themes(self, mcp_client):
+        """
+        Test: Get system health with themes data.
+
+        Verifies that include='themes' adds theme names and defaults to the
+        system health response. Live instances may have zero themes (minimal
+        installs), so count >= 0 is the only hard assertion.
+        """
+        logger.info("Testing get system health with themes include...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "themes"}
+        )
+        data = parse_mcp_result(result)
+
+        if not data.get("success"):
+            error_msg = extract_error_message(data)
+            if "not available" in error_msg.lower():
+                pytest.skip("system_health not available in test environment")
+            else:
+                pytest.fail(f"Get system health with themes failed: {error_msg}")
+
+        assert "health_info" in data, "Missing 'health_info' field"
+        assert "themes" in data, "Missing 'themes' field when include='themes'"
+
+        themes = data["themes"]
+        assert "themes" in themes, "Themes should contain 'themes' list"
+        assert "count" in themes, "Themes should contain 'count'"
+        assert "default_theme" in themes, "Themes should contain 'default_theme'"
+        assert "default_dark_theme" in themes, (
+            "Themes should contain 'default_dark_theme' (None when unset)"
+        )
+        assert isinstance(themes["themes"], list), "Themes list should be a list"
+        assert isinstance(themes["count"], int), "Count should be an int"
+        assert themes["count"] >= 0, "Count should be non-negative"
+
+        logger.info(f"System health with themes: {themes['count']} themes found")
 
 
 @pytest.mark.system

@@ -32,6 +32,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
@@ -182,18 +183,319 @@ def _badge_matches(badge: Any, entity_id: str) -> bool:
     return entity_id == badge_entity
 
 
+# Keys under which a card nests other cards, by descent rule (issue #1599):
+#   - ``cards`` (list): vertical/horizontal-stack, grid, and any custom wrapper
+#     following the stack convention.
+#   - ``card`` (dict): conditional and wrapper cards such as
+#     ``custom:auto-entities``.
+#   - ``custom_fields`` (dict of field-configs): ``custom:button-card`` embeds
+#     sub-cards under ``custom_fields.<name>.card`` (a very common pattern that
+#     wraps an entire view in one button-card). Each field-config is descended
+#     as a node, so its own ``card`` / ``cards`` are picked up by the recursion.
+#   - ``states`` (name->card map): ``custom:state-switch`` swaps a whole card per
+#     source state. Each value is itself a card, descended directly as a node.
+# Picture-elements ``elements`` is deliberately NOT traversed: it is not one of
+# the descent keys above, so a node carrying it is disclosed at the response
+# boundary instead of being walked (see ``_UNTRAVERSED_NESTED_KEYS`` and the
+# find-card warnings). A blanket "descend every dict with a ``type``" walk is
+# intentionally avoided: tile ``features`` and view ``conditions`` also carry
+# ``type`` and would false-match as cards.
+_NESTED_CARDS_KEY = "cards"
+_NESTED_CARD_KEY = "card"
+_NESTED_CUSTOM_FIELDS_KEY = "custom_fields"
+_NESTED_STATES_KEY = "states"
+# Child-bearing keys recognised but deliberately NOT traversed. A walked card
+# carrying one of these (with a truthy value) cannot be fully covered, so it is
+# its *presence* — not the absence of matches — that the response discloses
+# (issue #1599: disclose by presence, not by absence-inference). picture-elements
+# ``elements`` is the canonical case.
+_UNTRAVERSED_NESTED_KEYS = ("elements",)
+# Defensive bound against pathological/malformed configs. Real dashboards nest
+# only a handful of levels; this guards recursion depth far above any real use.
+_MAX_CARD_DEPTH = 50
+
+
+def _py_key(name: str) -> str:
+    """Render a mapping key as a Python subscript segment (``['name']``).
+
+    ``repr`` quotes and escapes the key, so a name containing a quote (e.g.
+    ``o'brien``) yields a valid literal; a raw ``['{name}']`` interpolation would
+    splice an unterminated string into ``python_transform``.
+    """
+    return f"[{name!r}]"
+
+
+def _jq_key(name: str) -> str:
+    """Render a mapping key as a jq path segment.
+
+    Identifier-safe keys use dot notation (``.name``); any other key (a dot, a
+    space, a quote) is emitted as a bracketed JSON string (``["weird.key"]``) so
+    jq does not read an embedded dot as further nesting.
+    """
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return f".{name}"
+    return f"[{json.dumps(name)}]"
+
+
+def _log_non_str_key(container_key: str, name: object, jq_prefix: str) -> None:
+    """Breadcrumb a non-string mapping key under a card-bearing container.
+
+    Dashboard config arrives as JSON, so keys are normally strings; a non-string
+    key (from a corrupted or hand-edited config) cannot form a valid path, so the
+    entry is skipped rather than crashing the walk via ``_jq_key`` / ``_py_key``.
+    """
+    logger.debug(
+        "Card-search skipping non-string %s key at %s (%r, %s)",
+        container_key,
+        jq_prefix,
+        name,
+        type(name).__name__,
+    )
+
+
+def _walk_card(
+    card: Any,
+    entity_id: str | None,
+    card_type: str | None,
+    heading: str | None,
+    *,
+    jq_prefix: str,
+    python_prefix: str,
+    view_index: int,
+    section_index: int | None,
+    card_index: int | None,
+    depth: int = 0,
+    truncation: list[str] | None = None,
+    uncovered: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return matches for ``card`` and every card nested beneath it.
+
+    Descends ``cards`` (list), ``card`` (dict), each ``custom_fields`` value, and
+    each ``states`` value (custom:state-switch), for nested as well as top-level
+    cards, up to ``_MAX_CARD_DEPTH``.
+
+    ``jq_prefix`` / ``python_prefix`` locate ``card`` itself — the former in jq
+    dot-notation, the latter as a Python subscript chain usable (appended after
+    ``config``) directly in ``ha_config_set_dashboard(python_transform=...)``.
+    Nested descendants extend both prefixes per level, so the path strings are
+    the authoritative locator for nested cards (the flat ``view_index`` /
+    ``section_index`` / ``card_index`` identify the top-level container only and
+    are carried unchanged into nested matches for back-compat).
+
+    Only a dict carrying a ``type`` key is treated as a card; this keeps non-card
+    dicts reached under these keys (action targets, style blocks, entity rows)
+    from matching. If ``truncation`` is provided, the prefix of any subtree
+    skipped at the depth bound is appended to it. If ``uncovered`` is provided,
+    the path of any walked card carrying a non-traversed child-bearing key (see
+    ``_UNTRAVERSED_NESTED_KEYS``) is appended to it, so the caller can disclose
+    the incompleteness regardless of whether the search matched anything.
+    """
+    matches: list[dict[str, Any]] = []
+    if not isinstance(card, dict):
+        # Structurally-present but malformed slot (e.g. a string where a card
+        # dict is expected): skip, but breadcrumb so it is not a silent drop.
+        if card is not None:
+            logger.debug(
+                "Card-search skipping non-dict node at %s (%s)",
+                jq_prefix,
+                type(card).__name__,
+            )
+        return matches
+    if depth > _MAX_CARD_DEPTH:
+        # Stop, but make the truncation visible rather than silently dropping
+        # any cards nested below this point. Only reachable on pathological or
+        # malformed configs (real dashboards nest a handful of levels).
+        logger.warning(
+            "Card-search depth bound (%d) exceeded at %s; not descending further",
+            _MAX_CARD_DEPTH,
+            jq_prefix,
+        )
+        if truncation is not None:
+            truncation.append(jq_prefix)
+        return matches
+
+    if "type" in card:
+        if _card_matches(card, entity_id, card_type, heading):
+            matches.append(
+                {
+                    "view_index": view_index,
+                    "section_index": section_index,
+                    "card_index": card_index,
+                    "jq_path": jq_prefix,
+                    "python_path": python_prefix,
+                    "card_type": card.get("type"),
+                    "card_config": card,
+                }
+            )
+        # Disclose un-coverable nesting by presence during the walk, not by the
+        # absence of matches: a card that carries e.g. picture-elements
+        # ``elements`` hides content this search cannot reach whether or not it
+        # (or anything else) matched.
+        if uncovered is not None:
+            for key in _UNTRAVERSED_NESTED_KEYS:
+                if card.get(key):
+                    uncovered.append(f"{jq_prefix}.{key}")
+                    break
+
+    nested_list = card.get(_NESTED_CARDS_KEY)
+    if isinstance(nested_list, list):
+        for i, child in enumerate(nested_list):
+            matches.extend(
+                _walk_card(
+                    child,
+                    entity_id,
+                    card_type,
+                    heading,
+                    jq_prefix=f"{jq_prefix}.{_NESTED_CARDS_KEY}[{i}]",
+                    python_prefix=f"{python_prefix}['{_NESTED_CARDS_KEY}'][{i}]",
+                    view_index=view_index,
+                    section_index=section_index,
+                    card_index=card_index,
+                    depth=depth + 1,
+                    truncation=truncation,
+                    uncovered=uncovered,
+                )
+            )
+    elif nested_list is not None:
+        # ``cards`` key present but not a list — structurally malformed slot.
+        logger.debug(
+            "Card-search skipping non-list '%s' under %s (%s)",
+            _NESTED_CARDS_KEY,
+            jq_prefix,
+            type(nested_list).__name__,
+        )
+
+    nested_card = card.get(_NESTED_CARD_KEY)
+    if isinstance(nested_card, dict):
+        matches.extend(
+            _walk_card(
+                nested_card,
+                entity_id,
+                card_type,
+                heading,
+                jq_prefix=f"{jq_prefix}.{_NESTED_CARD_KEY}",
+                python_prefix=f"{python_prefix}['{_NESTED_CARD_KEY}']",
+                view_index=view_index,
+                section_index=section_index,
+                card_index=card_index,
+                depth=depth + 1,
+                truncation=truncation,
+                uncovered=uncovered,
+            )
+        )
+    elif nested_card is not None:
+        # ``card`` key present but not a dict — structurally malformed slot.
+        logger.debug(
+            "Card-search skipping non-dict '%s' under %s (%s)",
+            _NESTED_CARD_KEY,
+            jq_prefix,
+            type(nested_card).__name__,
+        )
+
+    # custom:button-card and similar embed sub-cards under custom_fields.<name>.
+    # Descend each field-config as a node; its own card/cards (and the type gate)
+    # are handled by the recursion, so a field that is not itself a card
+    # contributes nothing but is still traversed for nested cards. Keys are
+    # rendered quote/dot-safe so a field name like ``o'brien`` yields a usable
+    # python_path/jq_path (issue #1599: handle a quote/dot in the field name).
+    custom_fields = card.get(_NESTED_CUSTOM_FIELDS_KEY)
+    if isinstance(custom_fields, dict):
+        for name, field in custom_fields.items():
+            if not isinstance(name, str):
+                _log_non_str_key(_NESTED_CUSTOM_FIELDS_KEY, name, jq_prefix)
+                continue
+            matches.extend(
+                _walk_card(
+                    field,
+                    entity_id,
+                    card_type,
+                    heading,
+                    jq_prefix=f"{jq_prefix}.{_NESTED_CUSTOM_FIELDS_KEY}{_jq_key(name)}",
+                    python_prefix=(
+                        f"{python_prefix}['{_NESTED_CUSTOM_FIELDS_KEY}']{_py_key(name)}"
+                    ),
+                    view_index=view_index,
+                    section_index=section_index,
+                    card_index=card_index,
+                    depth=depth + 1,
+                    truncation=truncation,
+                    uncovered=uncovered,
+                )
+            )
+    elif custom_fields is not None:
+        logger.debug(
+            "Card-search skipping non-dict '%s' under %s (%s)",
+            _NESTED_CUSTOM_FIELDS_KEY,
+            jq_prefix,
+            type(custom_fields).__name__,
+        )
+
+    # custom:state-switch swaps a whole card per source state under states.<name>.
+    # Each value is itself a card (not a field-config wrapper), descended
+    # directly — the same quote/dot-safe key rendering applies for state names
+    # like ``on'hold`` (issue #1599: state-switch nests a card per state).
+    states = card.get(_NESTED_STATES_KEY)
+    if isinstance(states, dict):
+        for name, child in states.items():
+            if not isinstance(name, str):
+                _log_non_str_key(_NESTED_STATES_KEY, name, jq_prefix)
+                continue
+            matches.extend(
+                _walk_card(
+                    child,
+                    entity_id,
+                    card_type,
+                    heading,
+                    jq_prefix=f"{jq_prefix}.{_NESTED_STATES_KEY}{_jq_key(name)}",
+                    python_prefix=(
+                        f"{python_prefix}['{_NESTED_STATES_KEY}']{_py_key(name)}"
+                    ),
+                    view_index=view_index,
+                    section_index=section_index,
+                    card_index=card_index,
+                    depth=depth + 1,
+                    truncation=truncation,
+                    uncovered=uncovered,
+                )
+            )
+    elif states is not None:
+        logger.debug(
+            "Card-search skipping non-dict '%s' under %s (%s)",
+            _NESTED_STATES_KEY,
+            jq_prefix,
+            type(states).__name__,
+        )
+
+    return matches
+
+
 def _find_cards_in_config(
     config: dict[str, Any],
     entity_id: str | None = None,
     card_type: str | None = None,
     heading: str | None = None,
+    truncation: list[str] | None = None,
+    uncovered: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Find cards, badges, and header cards in a dashboard config matching the search criteria.
 
     Returns a list of matches with location info and card/badge/header config.
     Searches cards (in sections and flat views), view-level badges, and
-    sections-view header cards (views[n].header.card).
+    sections-view header cards (views[n].header.card). Card search recurses into
+    nested containers (``cards`` lists in stacks/grids, ``card`` dicts in
+    conditional/wrapper cards, ``custom_fields`` sub-cards in button-card, and
+    ``states`` sub-cards in custom:state-switch), so a nested card is found like
+    a top-level one (issue #1599) — up to a depth bound.
+
+    Each match carries both ``jq_path`` (jq dot-notation) and ``python_path``
+    (a Python subscript chain appended after ``config`` for
+    ``ha_config_set_dashboard(python_transform)``); these locate nested as well
+    as top-level cards. The flat ``*_index`` fields identify the top-level
+    container only. If ``truncation`` is provided, the prefixes of any subtrees
+    skipped at the depth bound are appended to it. If ``uncovered`` is provided,
+    the paths of any walked cards carrying a non-traversed child-bearing key
+    (e.g. picture-elements ``elements``) are appended to it.
     """
     matches: list[dict[str, Any]] = []
 
@@ -214,38 +516,47 @@ def _find_cards_in_config(
             badges = view.get("badges", [])
             for badge_idx, badge in enumerate(badges):
                 if _badge_matches(badge, entity_id):
-                    badge_config = (
-                        badge if isinstance(badge, dict) else {"entity": badge}
-                    )
-                    matches.append(
-                        {
-                            "view_index": view_idx,
-                            "section_index": None,
-                            "card_index": None,
-                            "badge_index": badge_idx,
-                            "jq_path": f".views[{view_idx}].badges[{badge_idx}]",
-                            "card_type": "badge",
-                            "card_config": badge_config,
-                        }
-                    )
+                    is_dict_badge = isinstance(badge, dict)
+                    badge_config = badge if is_dict_badge else {"entity": badge}
+                    badge_match: dict[str, Any] = {
+                        "view_index": view_idx,
+                        "section_index": None,
+                        "card_index": None,
+                        "badge_index": badge_idx,
+                        "jq_path": f".views[{view_idx}].badges[{badge_idx}]",
+                        "card_type": "badge",
+                        "card_config": badge_config,
+                    }
+                    # A bare-string badge (the common form) is not subscript-
+                    # assignable, so a python_path spliced into python_transform
+                    # would raise TypeError. Only advertise python_path for dict
+                    # badges; string badges must be converted to dict form first.
+                    if is_dict_badge:
+                        badge_match["python_path"] = (
+                            f"['views'][{view_idx}]['badges'][{badge_idx}]"
+                        )
+                    matches.append(badge_match)
 
         # Search sections-view header card (views[n].header.card)
         # The header accepts a card (typically Markdown) that can contain entity refs
         header = view.get("header", {})
         if isinstance(header, dict):
             header_card = header.get("card")
-            if isinstance(header_card, dict) and _card_matches(
-                header_card, entity_id, card_type, heading
-            ):
-                matches.append(
-                    {
-                        "view_index": view_idx,
-                        "section_index": None,
-                        "card_index": None,
-                        "jq_path": f".views[{view_idx}].header.card",
-                        "card_type": header_card.get("type"),
-                        "card_config": header_card,
-                    }
+            if isinstance(header_card, dict):
+                matches.extend(
+                    _walk_card(
+                        header_card,
+                        entity_id,
+                        card_type,
+                        heading,
+                        jq_prefix=f".views[{view_idx}].header.card",
+                        python_prefix=f"['views'][{view_idx}]['header']['card']",
+                        view_index=view_idx,
+                        section_index=None,
+                        card_index=None,
+                        truncation=truncation,
+                        uncovered=uncovered,
+                    )
                 )
 
         view_type = view.get("type", "masonry")
@@ -258,36 +569,40 @@ def _find_cards_in_config(
                     continue
                 cards = section.get("cards", [])
                 for card_idx, card in enumerate(cards):
-                    if not isinstance(card, dict):
-                        continue
-                    if _card_matches(card, entity_id, card_type, heading):
-                        matches.append(
-                            {
-                                "view_index": view_idx,
-                                "section_index": section_idx,
-                                "card_index": card_idx,
-                                "jq_path": f".views[{view_idx}].sections[{section_idx}].cards[{card_idx}]",
-                                "card_type": card.get("type"),
-                                "card_config": card,
-                            }
+                    matches.extend(
+                        _walk_card(
+                            card,
+                            entity_id,
+                            card_type,
+                            heading,
+                            jq_prefix=f".views[{view_idx}].sections[{section_idx}].cards[{card_idx}]",
+                            python_prefix=f"['views'][{view_idx}]['sections'][{section_idx}]['cards'][{card_idx}]",
+                            view_index=view_idx,
+                            section_index=section_idx,
+                            card_index=card_idx,
+                            truncation=truncation,
+                            uncovered=uncovered,
                         )
+                    )
         else:
             # Flat view (masonry, panel, sidebar)
             cards = view.get("cards", [])
             for card_idx, card in enumerate(cards):
-                if not isinstance(card, dict):
-                    continue
-                if _card_matches(card, entity_id, card_type, heading):
-                    matches.append(
-                        {
-                            "view_index": view_idx,
-                            "section_index": None,
-                            "card_index": card_idx,
-                            "jq_path": f".views[{view_idx}].cards[{card_idx}]",
-                            "card_type": card.get("type"),
-                            "card_config": card,
-                        }
+                matches.extend(
+                    _walk_card(
+                        card,
+                        entity_id,
+                        card_type,
+                        heading,
+                        jq_prefix=f".views[{view_idx}].cards[{card_idx}]",
+                        python_prefix=f"['views'][{view_idx}]['cards'][{card_idx}]",
+                        view_index=view_idx,
+                        section_index=None,
+                        card_index=card_idx,
+                        truncation=truncation,
+                        uncovered=uncovered,
                     )
+                )
 
     return matches
 
@@ -686,9 +1001,12 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
             bool,
             Field(
                 description="In search mode: include each matched card's own configuration "
-                "object in results (increases output size). Does not affect whether the full "
-                "dashboard config is returned — search mode always returns matches only, "
-                "not the full dashboard. Ignored outside search mode."
+                "object in results (increases output size). Note that a matched container "
+                "card's config contains its descendants, which are themselves separate "
+                "matches with their own config, so deeply-nested stacks multiply the "
+                "payload — keep the default (False) unless you need the bodies. Does not "
+                "affect whether the full dashboard config is returned — search mode always "
+                "returns matches only, not the full dashboard. Ignored outside search mode."
             ),
         ] = False,
         include_screenshot: Annotated[
@@ -715,9 +1033,20 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
           Lists all storage-mode dashboards with metadata (url_path, title, icon).
 
         MODE 2 — Search: any of entity_id / card_type / heading provided
-          Finds cards, badges, and header cards matching the criteria.
-          Returns matches with jq_path for use with ha_config_set_dashboard(python_transform=...).
+          Finds cards, badges, and header cards matching the criteria, including
+          cards nested inside stacks, grids, conditional cards, button-card
+          custom_fields, and state-switch states. Each match carries a
+          python_path and a jq_path that locate the card for nested as well as
+          top-level cards. The python_path is a Python subscript chain to be
+          appended after `config` — e.g.
+          python_transform=f'config{m["python_path"]}["icon"] = "mdi:x"' (it is
+          NOT valid on its own without the `config` prefix). jq_path is the same
+          location in jq dot-notation.
           Multiple criteria are AND-ed. Always fetches fresh config (force=True).
+          Search covers cards/card/custom_fields/states containers up to a depth
+          bound; if the dashboard carries a non-traversed child-bearing shape
+          (e.g. picture-elements `elements`), the result carries a `warnings`
+          entry naming where, so its hidden content is not mistaken for absent.
           Strategy dashboards are not searchable (no explicit cards).
 
         MODE 3 — Get: Active when list_only=False and no search parameters are provided.
@@ -741,7 +1070,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         2. ha_config_set_dashboard(
                url_path="my-dash",
                config_hash=find["config_hash"],
-               python_transform=f'config{find["matches"][0]["jq_path"]}["icon"] = "mdi:lamp"'
+               python_transform=f'config{find["matches"][0]["python_path"]}["icon"] = "mdi:lamp"'
            )
 
         Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
@@ -858,13 +1187,62 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                         )
                     )
 
-                matches = _find_cards_in_config(config, entity_id, card_type, heading)
+                truncation: list[str] = []
+                uncovered: list[str] = []
+                matches = _find_cards_in_config(
+                    config,
+                    entity_id,
+                    card_type,
+                    heading,
+                    truncation=truncation,
+                    uncovered=uncovered,
+                )
 
                 if not include_config:
                     for match in matches:
                         del match["card_config"]
 
                 config_hash: str | None = compute_config_hash(config)
+
+                # Warn-don't-truncate (AGENTS.md Return Values): the walker covers
+                # cards / card / custom_fields / states containers and stops at
+                # the depth bound, so neither a depth-truncated search nor a
+                # search over a dashboard carrying a non-traversed child-bearing
+                # shape may read as an authoritative complete result. Disclosure
+                # keys off the *presence* of such a shape (collected during the
+                # walk), not off a 0-match — a matching un-walkable container no
+                # longer suppresses the warning, and a true negative over a
+                # fully-coverable dashboard no longer cries wolf.
+                warnings: list[str] = []
+                if truncation:
+                    warnings.append(
+                        f"Search stopped at the nesting depth bound "
+                        f"(_MAX_CARD_DEPTH={_MAX_CARD_DEPTH}) in "
+                        f"{len(truncation)} place(s); cards nested deeper were not "
+                        "searched, so results may be incomplete."
+                    )
+                if uncovered:
+                    locations = ", ".join(sorted(set(uncovered)))
+                    warnings.append(
+                        "Cards nesting content under keys this search does not "
+                        "traverse (e.g. picture-elements 'elements') are present at: "
+                        f"{locations}. That nested content is not searched; fetch the "
+                        "full config (ha_config_get_dashboard without search params) "
+                        "to inspect those."
+                    )
+
+                if matches:
+                    hint = (
+                        "Use python_path with "
+                        "ha_config_set_dashboard(python_transform=...) for targeted "
+                        "updates"
+                    )
+                else:
+                    hint = (
+                        "No matches in searched containers. Try other criteria, or "
+                        "fetch the full config (no search params) to inspect nesting "
+                        "shapes this search does not cover."
+                    )
 
                 search_result: dict[str, Any] = {
                     "success": True,
@@ -878,13 +1256,10 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     },
                     "matches": matches,
                     "match_count": len(matches),
-                    "hint": (
-                        "Use jq_path with ha_config_set_dashboard(python_transform=...) "
-                        "for targeted updates"
-                        if matches
-                        else "No matches found. Try broader search criteria."
-                    ),
+                    "hint": hint,
                 }
+                if warnings:
+                    search_result["warnings"] = warnings
                 if search_resolved_from is not None:
                     search_result["resolved_from"] = search_resolved_from
                 _note_screenshot_ignored(
@@ -1021,6 +1396,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         ],
         config: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Dashboard configuration with views and cards. "
                 "Omit or set to None to create dashboard without initial config. "
@@ -1369,14 +1745,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     message, suggestions = format_sandbox_error(e, python_transform)
                     # A path-shape mismatch (IndexError/KeyError) is almost always
                     # a hallucinated path; steer the retry toward search mode so
-                    # the next transform is built from a verified jq_path.
+                    # the next transform is built from a verified python_path.
                     if isinstance(e, PythonSandboxExecutionError) and isinstance(
                         e.__cause__, (IndexError, KeyError)
                     ):
                         suggestions = [
                             "Call ha_config_get_dashboard with card_type=..., "
                             "entity_id=..., or heading=... to get the verified "
-                            "jq_path for the target card, then build "
+                            "python_path for the target card, then build "
                             "python_transform from that path",
                             *suggestions,
                         ]

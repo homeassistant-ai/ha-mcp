@@ -35,6 +35,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     apply_entity_category,
     attach_skill_content,
     augment_error_dict_with_skill_content,
@@ -3686,6 +3687,7 @@ class HelperConfigTools:
         ] = None,
         config: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Config dict for flow-based helper types and "

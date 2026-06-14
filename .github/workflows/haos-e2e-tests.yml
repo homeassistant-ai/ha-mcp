@@ -5,31 +5,22 @@ name: HAOS E2E Tests
 #
 # Image resolution strategy (per run):
 #   1. Try GitHub Actions cache (keyed on HAOS version + build inputs)
-#   2. Fall back to GHCR (published by build-haos-test-image.yml on master)
-#   3. Fall back to local build (build_image.py)
+#   2. On a cache miss, build locally (build_image.py) and save to the cache
 #
 # Single-job design: the qcow2 stays on the runner's local disk through
 # build → test, so there's no cross-job upload+download of the ~7 GB image
 # (previously cost ~5 min per PR).
 
 on:
+  # No workflow-level `paths:` filter on purpose. This check is a REQUIRED
+  # status check, and a path-filtered workflow that doesn't trigger leaves the
+  # required check Pending forever, wedging the merge of any PR that doesn't
+  # touch the listed paths. Instead we trigger on every PR and let the
+  # `changes` job below decide whether the heavy suite runs: a job skipped via
+  # `if:` reports Success to a required check (unlike a workflow-level
+  # path-skip, which reports nothing). See the `changes` job for the run/skip
+  # rule (skip only pure docs/website; addon + bake inputs always run).
   pull_request:
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'homeassistant-addon/**'
-      # Bake inputs — see INVARIANT in build-haos-test-image.yml and
-      # the "Compute image cache key" step below. A PR touching only
-      # these would otherwise skip HAOS E2E despite changing what gets
-      # baked into the qcow2 the suite tests against.
-      - 'custom_components/ha_mcp_tools/**'
-      - 'homeassistant-addon-webhook-proxy/**'
-      - '.github/workflows/haos-e2e-tests.yml'
-      # Trigger on inaddon workflow changes too — both lanes share the
-      # qcow2 cache key, so a change to either workflow's cache logic
-      # needs the other lane to re-run for parity verification.
-      - '.github/workflows/haos-e2e-inaddon-tests.yml'
   workflow_dispatch:
     inputs:
       pytest_args:
@@ -37,23 +28,83 @@ on:
         type: string
         required: false
         default: ''
+      force_local_build:
+        description: 'Build the qcow2 locally even on a cache hit (ignore the cached image)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
-  packages: read
 
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
-  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
   # libguestfs defaults to libvirt which isn't running on GitHub-hosted
   # runners (per-user libvirtd socket missing for the unprivileged
   # runner UID). Direct backend bypasses libvirt and uses QEMU directly.
   LIBGUESTFS_BACKEND: direct
 
 jobs:
+  # Gate the heavy suite: run on any code/test/config/addon change, skip ONLY
+  # when every changed file is pure docs/website. Skipping happens at the JOB
+  # level (via `if:` below) so a skipped run reports Success to the required
+  # check; a workflow-level `paths:` skip would instead report nothing and
+  # wedge the merge. Add-on + bake-input dirs are baked into the qcow2, so
+  # their docs DO affect the suite and always count as code.
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Classify changed files
+        id: filter
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Fail-closed gate: default to RUNNING the suite; skip ONLY when we can
+          # prove the PR changed nothing but docs/website. Any classifier failure
+          # (non-PR event, base fetch / rev-parse / diff error, empty diff) leaves
+          # run=true — branch protection treats a skipped REQUIRED job as passing,
+          # so a fail-open classifier could let code merge untested.
+          run=true
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+            && git fetch --depth=1 origin "$BASE_REF" \
+            && base_sha=$(git rev-parse "origin/$BASE_REF") \
+            && changed=$(git diff --name-only --diff-filter=ACMRD "$base_sha" HEAD) \
+            && [ -n "$changed" ]; then
+            echo "Changed files:"; printf '%s\n' "$changed" | sed 's/^/  /'
+            run=false
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              case "$f" in
+                # Bake inputs / addon dirs are baked into the qcow2 / shipped —
+                # their docs change what the suite tests, so they count as code.
+                homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
+                  run=true; break ;;
+                # Pure docs / website do not, on their own, warrant the suite.
+                *.md|*.mdx|docs/*|site/*)
+                  continue ;;
+                # Anything else (code, tests, config, workflows, lockfile, ...) runs.
+                *)
+                  run=true; break ;;
+              esac
+            done <<< "$changed"
+          else
+            echo "Non-PR event or unresolved diff — running suite (fail-closed)."
+          fi
+          echo "run=$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   haos-e2e:
     name: HAOS E2E Tests
+    needs: changes
+    # A skipped job reports Success to the required status check (unlike a
+    # workflow-level path-skip, which never reports). See the `changes` job.
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 45
 
@@ -63,9 +114,7 @@ jobs:
           # Required for tests/src/e2e/tools/test_skills_resources.py — the
           # skills bundle lives at src/ha_mcp/resources/skills-vendor.
           submodules: true
-          # Full history needed for the bake-changes detection step below
-          # (``git diff origin/<base>...HEAD``). Default depth=1 doesn't
-          # have the base ref locally.
+          # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
       - name: Compute image cache key
@@ -77,12 +126,12 @@ jobs:
         # hash is reproducible across runs (no mtime noise like `find`
         # would have).
         #
-        # INVARIANT — these paths MUST be mirrored by the master-push trigger
-        # in build-haos-test-image.yml. If a path is hashed here but missing
-        # there, a master commit changing it can leave GHCR stale, and every
-        # subsequent PR that doesn't itself touch a bake input pulls the
-        # outdated image. (Regression history: #1374 knx merge broke every
-        # open PR's HAOS E2E run until a manual dispatch.)
+        # INVARIANT: these paths MUST be mirrored by the master-push trigger
+        # in build-haos-test-image.yml so the published image stays in step
+        # with this cache key. A cache miss now rebuilds locally from the
+        # merge-ref rather than serving a stale image. (Regression history:
+        # #1374 knx merge broke every open PR's HAOS E2E run until a manual
+        # dispatch, back when a miss fell through to a stale GHCR pull.)
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
@@ -100,9 +149,9 @@ jobs:
           key: ${{ steps.key.outputs.cache-key }}
 
       - name: Report image-acquisition path
-        # Surfaces whether this run hit the (master-primed) Actions cache or
-        # falls through to the GHCR pull — so the cache-prime's effect is
-        # observable in the run summary. See build-haos-test-image.yml.
+        # Surfaces whether this run restored the (master-primed) Actions
+        # cache or falls through to a local build, so the cache-prime's
+        # effect is observable in the run summary.
         run: |
           echo "::notice title=HAOS image cache::cache-hit=${{ steps.restore-cache.outputs.cache-hit }} key=${{ steps.key.outputs.cache-key }}"
 
@@ -126,94 +175,16 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Detect PR-modified bake inputs
-        # GHCR's ``:HAOS_VERSION-latest`` tag is published from master, so
-        # any PR that modifies the qcow2's bake inputs (custom_components,
-        # initial_test_state, the build script itself, or the webhook-proxy
-        # source the bake stages) would otherwise see a stale image with
-        # master's content. The cache key already invalidates on these
-        # paths (see ``Compute image cache key`` above), but the GHCR
-        # fallback below would still hand back master's image. Detect the
-        # condition here and skip GHCR — fall straight through to the
-        # local-build step instead. Keep this list in sync with the cache
-        # key's ``git ls-tree`` paths.
-        id: bake-changes
-        if: github.event_name == 'pull_request'
-        run: |
-          if git diff --name-only \
-              "origin/${{ github.base_ref }}...HEAD" \
-              | grep -qE '^(tests/haos_image_build/|tests/initial_test_state/|custom_components/ha_mcp_tools/|homeassistant-addon-webhook-proxy/)'; then
-            echo "bake_inputs_changed=true" >> "$GITHUB_OUTPUT"
-            echo "PR modifies bake inputs; skipping GHCR fallback (would return stale master image)."
-          fi
-
-      - name: Try pulling from GHCR
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.bake-changes.outputs.bake_inputs_changed != 'true'
-        id: ghcr-pull
-        continue-on-error: true
-        run: |
-          version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
-          tag="${IMAGE_REPO}:${version}-latest"
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
-            -u ${{ github.actor }} --password-stdin
-          curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
-            | tar -xz -C /tmp oras
-
-          dest=/tmp/haos-pull
-          # Bail to the local build on a genuine hang — zero download progress
-          # for 4 minutes. A slow-but-moving pull (legit pulls have taken
-          # ~10 min) is never interrupted; only a dead-connection stall (the
-          # ~17 min zero-progress hang in #1515) is killed. We do NOT re-pull:
-          # the local-build fallback is only ~10 min (build_image.py), so on a
-          # stall deferring to it is cheaper and more reliable than gambling on
-          # a same-runner re-pull that may just stall again. The 45-min job cap
-          # stays the hard backstop.
-          stall_secs=240
-
-          pull_once() {
-            rm -rf "$dest"; mkdir -p "$dest"
-            # exec => $! is the oras PID, so the kill below reaches oras itself.
-            ( cd "$dest" && exec /tmp/oras pull "$tag" ) &
-            local pid=$! last=0 last_progress=$SECONDS size
-            while kill -0 "$pid" 2>/dev/null; do
-              sleep 30
-              size=$(du -sb "$dest" 2>/dev/null | cut -f1) || size=0
-              size=${size:-0}
-              if [ "$size" -gt "$last" ]; then
-                last=$size; last_progress=$SECONDS          # any growth resets the clock
-              elif [ $(( SECONDS - last_progress )) -ge "$stall_secs" ]; then
-                echo "::warning::oras pull made zero progress for ${stall_secs}s (stuck at ${size} bytes) — using local build"
-                kill "$pid" 2>/dev/null || true
-                wait "$pid" 2>/dev/null || true
-                return 1
-              fi
-            done
-            wait "$pid"                                       # propagate oras's own exit code
-          }
-
-          if ! pull_once; then
-            echo "::warning::GHCR pull stalled/failed — falling through to the local build"
-            exit 1
-          fi
-          # Explicit source path so a future oras layout change that drops
-          # files into a subdirectory of pwd doesn't silently no-op the mv.
-          mv "$dest"/haos-test-image.qcow2 /tmp/haos-test-image.qcow2
-
-      - name: Free disk space for local build (cache miss + GHCR miss only)
-        # GitHub-hosted Linux runners ship with ~30 GB of pre-installed
-        # tooling (dotnet, swift, ghc, android sdk) that the HAOS bake
-        # doesn't use, and only ~14 GB of usable SSD. The local-build
-        # path's qcow2 download (~1.5 GB xz) + decompress (~7 GB qcow2)
-        # + boot+addon-install (qcow2 grows to ~12 GB apparent / ~5 GB
-        # allocated) + ``cp`` to ``/tmp/haos-test-image.qcow2`` (another
-        # ~5 GB if reflink fails) peaks at the edge of available disk.
-        # Without this prune, PRs that touch ``tests/haos_image_build/``
-        # (which forces the local-build path via the ``Detect PR-modified
-        # bake inputs`` gate above) trip "No space left on device"
-        # mid-bake. The directories below are well-known unused on
-        # standard runners; we deliberately keep ``/opt/hostedtoolcache``
-        # because Python from there is still on PATH for build_image.py.
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+      - name: Free disk space for the local build
+        # On a cache miss (or a forced rebuild) the qcow2 is built locally;
+        # its download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot +
+        # addon-install (qcow2 grows to ~12 GB apparent) + ``cp`` to
+        # /tmp/haos-test-image.qcow2 peaks at the edge of the runner's
+        # ~14 GB SSD, so prune the ~30 GB of preinstalled tooling (dotnet,
+        # swift, ghc, android sdk) the bake does not use. Keep
+        # ``/opt/hostedtoolcache``: Python from there is on PATH for
+        # build_image.py.
+        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
@@ -222,24 +193,22 @@ jobs:
           docker system prune -af --volumes || true
           df -h /
 
-      - name: Install build-script Python deps (cache miss + GHCR miss)
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+      - name: Install build-script Python deps (cache miss or forced rebuild)
+        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: pip install -r tests/haos_image_build/requirements.txt
 
-      - name: Build image locally (cache miss + GHCR miss)
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+      - name: Build image locally (cache miss or forced rebuild)
+        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
       - name: Save image to cache (cache miss only)
-        # Save whenever the runtime cache missed — covers both the
-        # local-build path AND a successful GHCR pull. Without saving on
-        # the GHCR-served branch, the actions/cache entry stays empty
-        # forever and every future run pays the GHCR pull cost again.
-        # This is the sole writer for the shared cache key (#1407 +
-        # #1428) — the inaddon lane intentionally doesn't save, see the
-        # block comment at the same position in
+        # Save whenever the runtime cache missed so the locally-built
+        # qcow2 populates the shared key and future runs restore it
+        # instead of rebuilding. This is the sole writer for the shared
+        # cache key (#1407 + #1428); the inaddon lane intentionally
+        # doesn't save, see the block comment at the same position in
         # ``haos-e2e-inaddon-tests.yml``.
         if: steps.restore-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5

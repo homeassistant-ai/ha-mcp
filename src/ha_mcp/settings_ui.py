@@ -12,9 +12,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import html
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -664,6 +666,122 @@ _SETTINGS_HTML = (
      /favicon.ico (which would 404 and log a console error, since the
      settings server serves no such asset in any deployment mode). -->
 <link rel="icon" href="data:,">
+<script data-purpose="server-prefs" data-prefs="__HA_MCP_THEME_PREFS__">
+  // #1574 review: theme/accessibility prefs also persist server-side
+  // (theme_prefs.json) because stdio respawns its settings sidecar on a
+  // random port — a fresh origin whose localStorage starts empty. The page
+  // handler substitutes the data-prefs attribute at request time; this
+  // seeds only MISSING localStorage keys (the browser's own latest choice
+  // wins) before the anti-FOUC resolver below reads them. The docs site is
+  // a static build and stays localStorage-only.
+  (function () {
+    var el = document.currentScript;
+    var raw = el ? el.getAttribute("data-prefs") : "";
+    if (!raw || raw.charAt(0) !== "{") return; // unsubstituted placeholder
+    var KEYS = {
+      theme: "ha-mcp-theme",
+      fontSize: "ha-mcp-font-size",
+      contrast: "ha-mcp-contrast",
+      shade: "ha-mcp-shade",
+      custom: "ha-mcp-custom-colors",
+    };
+    try {
+      var prefs = JSON.parse(raw);
+      for (var p in KEYS) {
+        if (typeof prefs[p] !== "string" || !prefs[p]) continue;
+        try {
+          if (localStorage.getItem(KEYS[p]) === null) {
+            localStorage.setItem(KEYS[p], prefs[p]);
+          }
+        } catch (e) { /* storage blocked — the runtime module shows a note */ }
+      }
+    } catch (e) {
+      // Malformed substitution — defaults apply; warn like the anti-FOUC
+      // resolver does so the breakage is visible in the console.
+      console.warn("ha-mcp: malformed server prefs, using defaults:", e);
+    }
+  })();
+</script>
+<script data-purpose="anti-fouc">
+  // #1572 accessibility-pref resolver — runs before CSS evaluates so
+  // data-theme / data-contrast / data-shade and the root font-size are set
+  // on <html> ahead of paint (no FOUC, no jump). Reads saved choices from
+  // localStorage with safe defaults. Auto is the default (#1574 review:
+  // follow the OS preference out of the box); Dark stays one click away
+  // as a preset.
+  // Same logic as in site/src/layouts/Layout.astro head — both surfaces use
+  // the same localStorage key names interpreted identically, but storage is
+  // per-origin, so each surface keeps its own saved values. Any change here
+  // must be mirrored there (and vice versa) or the surfaces drift apart.
+  // Enforced by tests/src/unit/test_anti_fouc_parity.py.
+  (function () {
+    var root = document.documentElement;
+    function readPref(key, fallback) {
+      try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
+    }
+    try {
+      var themePref = readPref("ha-mcp-theme", "auto");
+      var theme = themePref === "auto"
+        ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+        : themePref;
+      root.setAttribute("data-theme", theme);
+
+      var contrastPref = readPref("ha-mcp-contrast", "normal");
+      if (contrastPref === "high") root.setAttribute("data-contrast", "high");
+
+      var shadePref = readPref("ha-mcp-shade", "off-white");
+      if (shadePref !== "off-white") root.setAttribute("data-shade", shadePref);
+
+      var sizePref = parseInt(readPref("ha-mcp-font-size", "100"), 10);
+      // Range = the UI's offered values; clamps a hand-edited localStorage
+      // value rather than silently honoring arbitrary input.
+      if (!isNaN(sizePref) && sizePref >= 100 && sizePref <= 150 && sizePref !== 100) {
+        // The browser default is 16px; scale the root so every rem-based
+        // size (the bulk of this stylesheet) cascades proportionally.
+        root.style.fontSize = (16 * sizePref / 100) + "px";
+      }
+
+      // Custom colors layer on top of the preset as inline styles (inline
+      // beats stylesheet rules). Both surfaces' variable names are written;
+      // names a surface does not use are inert. Malformed JSON or non-hex
+      // values are ignored without disturbing the already-applied theme.
+      try {
+        var customRaw = readPref("ha-mcp-custom-colors", "");
+        if (customRaw) {
+          var custom = JSON.parse(customRaw);
+          var hexOk = function (v) { return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v); };
+          var channels = function (v) {
+            return parseInt(v.slice(1, 3), 16) + " " + parseInt(v.slice(3, 5), 16) + " " + parseInt(v.slice(5, 7), 16);
+          };
+          if (hexOk(custom.bg)) {
+            root.style.setProperty("--bg", custom.bg);
+            root.style.setProperty("--surface-0", channels(custom.bg));
+          }
+          if (hexOk(custom.text)) {
+            root.style.setProperty("--text", custom.text);
+            root.style.setProperty("--text-primary", custom.text);
+          }
+          if (hexOk(custom.accent)) {
+            root.style.setProperty("--accent", custom.accent);
+            root.style.setProperty("--accent-text", custom.accent);
+            root.style.setProperty("--brand", channels(custom.accent));
+          }
+        }
+      } catch (e2) {
+        // Corrupted custom-colors JSON would re-fail on every load; drop
+        // it so the next visit starts clean instead of wedged.
+        try { localStorage.removeItem("ha-mcp-custom-colors"); } catch (e3) { /* storage blocked */ }
+      }
+    } catch (e) {
+      // localStorage is already guarded inside readPref — this catch
+      // guards everything else (matchMedia, attribute writes). Warn so a
+      // shipped bug here is visible in the console instead of hiding
+      // behind the silent dark fallback.
+      console.warn("ha-mcp accessibility prefs failed to apply:", e);
+      root.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
 <style>"""
     + _SETTINGS_CSS
     + """</style>
@@ -671,13 +789,24 @@ _SETTINGS_HTML = (
 <body>
 <div class="header">
   <h1>HA-MCP Settings</h1>
-  <span id="status" class="status">Loading...</span>
+  <div style="display:flex;align-items:center;gap:8px">
+    <label class="theme-control">
+      <span class="theme-control-label">Theme</span>
+      <select id="themeToggle" class="theme-toggle" aria-label="Theme: light or dark mode">
+        <option value="auto">Auto (OS)</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
+    <span id="status" class="status">Loading...</span>
+  </div>
 </div>
 <div class="tabs">
   <button class="tab active" data-panel="tools">Tools</button>
   <button class="tab" data-panel="server">Server Settings</button>
   <button class="tab" data-panel="backups">Backups</button>
   <button class="tab" data-panel="tool-security-policies">Tool Security Policies</button>
+  <button class="tab" data-panel="accessibility">Accessibility</button>
 </div>
 <div class="restart-notice" id="restartNotice">
   <span class="restart-notice-text" id="restartNoticeText">
@@ -873,6 +1002,60 @@ _SETTINGS_HTML = (
       <a href="#" data-panel-link="tools">Tools</a> tab.
     </div>
     <div id="policy-rules-list"></div>
+  </section>
+</div>
+<div class="panel" id="panel-accessibility">
+  <p class="tool-desc" style="margin-bottom:16px">
+    These settings apply immediately and are saved in this browser and on the
+    server, so they survive restarts in every mode (including stdio, where the
+    settings page moves to a fresh port each session). The docs site offers
+    the same controls in its navigation bar; it has no server and saves per
+    browser.
+  </p>
+  <p class="a11y-contrast-warning" id="a11y-storage-note" hidden>
+    Your browser is blocking site storage; choices apply for this session
+    only.</p>
+  <section class="a11y-section">
+    <h3 class="a11y-section-title">Theme</h3>
+    <p class="a11y-section-help">One-click color schemes. Auto is the default &mdash; it follows
+      your OS preference and flips live when it changes.</p>
+    <fieldset class="a11y-options">
+      <legend class="visually-hidden">Theme preset</legend>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="dark"> <span class="a11y-preset-chip" data-chip="dark" aria-hidden="true">Aa</span> Dark</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="light"> <span class="a11y-preset-chip" data-chip="light" aria-hidden="true">Aa</span> Light</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="auto"> <span class="a11y-preset-chip" data-chip="auto" aria-hidden="true"></span> Auto</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="paper"> <span class="a11y-preset-chip" data-chip="paper" aria-hidden="true">Aa</span> Paper</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="gray"> <span class="a11y-preset-chip" data-chip="gray" aria-hidden="true">Aa</span> Gray</label>
+      <label class="a11y-option"><input type="radio" name="a11y-preset" value="contrast"> <span class="a11y-preset-chip" data-chip="contrast" aria-hidden="true">Aa</span> High Contrast</label>
+    </fieldset>
+  </section>
+  <section class="a11y-section">
+    <h3 class="a11y-section-title">Text size</h3>
+    <p class="a11y-section-help">Scales the root font size. Browser zoom (Ctrl/Cmd +) still works on top of this.</p>
+    <fieldset class="a11y-options">
+      <legend class="visually-hidden">Text size</legend>
+      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="100"> 100%</label>
+      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="115"> 115%</label>
+      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="130"> 130%</label>
+      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="150"> 150%</label>
+    </fieldset>
+  </section>
+  <section class="a11y-section">
+    <h3 class="a11y-section-title">Custom colors</h3>
+    <p class="a11y-section-help">Pick your own colors on top of the selected theme. Each swatch
+      opens your system's visual color picker.</p>
+    <div class="a11y-swatches">
+      <label class="a11y-swatch">Background <input type="color" id="a11y-custom-bg" data-custom="bg"></label>
+      <label class="a11y-swatch">Text <input type="color" id="a11y-custom-text" data-custom="text"></label>
+      <label class="a11y-swatch">Accent <input type="color" id="a11y-custom-accent" data-custom="accent"></label>
+    </div>
+    <p class="a11y-contrast-warning" id="a11y-contrast-warning" hidden>
+      Heads-up: the chosen background and text colors fall below a 4.5:1 contrast
+      ratio and may be hard to read together.</p>
+    <button id="a11y-custom-clear" class="a11y-reset" type="button" style="margin-top:12px">Clear custom colors</button>
+  </section>
+  <section class="a11y-section">
+    <button id="a11y-reset" class="restart-btn" type="button">Reset to defaults</button>
   </section>
 </div>
 <div class="modal-backdrop" id="modalBackdrop">
@@ -1164,6 +1347,141 @@ def _get_override_file_lock() -> asyncio.Lock:
     return _OVERRIDE_FILE_LOCK
 
 
+# ---- Theme / accessibility prefs persistence (#1574 review) ----
+#
+# The browser keeps these in localStorage for synchronous pre-paint reads,
+# but localStorage is origin-scoped and the stdio settings sidecar binds a
+# random free port per spawn — every session is a fresh origin that starts
+# empty. The server-side copy below survives that: POSTs land in
+# ``theme_prefs.json`` next to the other settings files, and the page
+# handler seeds them back into the served HTML (``server-prefs`` head
+# script) so a fresh origin paints with the user's saved choices.
+
+_THEME_PREFS_FILENAME = "theme_prefs.json"
+
+# Allowed values mirror exactly what the settings UI offers; anything else
+# (hand-edited file, hand-rolled request) is dropped rather than persisted
+# and re-injected into the served page.
+_THEME_PREF_VALUES: dict[str, tuple[str, ...]] = {
+    "theme": ("auto", "light", "dark"),
+    "fontSize": ("100", "115", "130", "150"),
+    "contrast": ("normal", "high"),
+    "shade": ("off-white", "paper", "gray", "pure"),
+}
+_CUSTOM_COLOR_PARTS = ("bg", "text", "accent")
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+# Same single-loop rationale as ``_OVERRIDE_FILE_LOCK`` above; separate
+# lock because it serializes a different file (``theme_prefs.json``).
+_THEME_PREFS_LOCK: asyncio.Lock | None = None
+
+# Keys already warned about by ``_load_theme_prefs`` — it runs on every
+# page view, so each invalid entry logs once per process, not per view.
+_WARNED_DROPPED_THEME_PREFS: set[str] = set()
+
+
+def _get_theme_prefs_lock() -> asyncio.Lock:
+    global _THEME_PREFS_LOCK
+    if _THEME_PREFS_LOCK is None:
+        _THEME_PREFS_LOCK = asyncio.Lock()
+    return _THEME_PREFS_LOCK
+
+
+def _sanitize_theme_prefs(raw: object) -> dict[str, str] | None:
+    """Reduce ``raw`` to the known pref keys with offered values.
+
+    Returns ``None`` when ``raw`` is not a JSON object at all. The
+    ``custom`` value is itself a JSON string of hex colors; it is parsed,
+    filtered to valid ``#rrggbb`` parts, and re-serialized so nothing but
+    vetted color literals ever reaches the persisted file or the served
+    HTML. An explicit empty string is kept — it records "cleared".
+    """
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, str] = {}
+    for key, allowed in _THEME_PREF_VALUES.items():
+        value = raw.get(key)
+        if isinstance(value, str) and value in allowed:
+            out[key] = value
+    custom = raw.get("custom")
+    if custom == "":
+        out["custom"] = ""
+    elif isinstance(custom, str):
+        try:
+            parsed = json.loads(custom)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            clean = {
+                part: value
+                for part, value in parsed.items()
+                if part in _CUSTOM_COLOR_PARTS
+                and isinstance(value, str)
+                and _HEX_COLOR_RE.match(value)
+            }
+            if clean:
+                out["custom"] = json.dumps(clean, separators=(",", ":"))
+    return out
+
+
+def _load_theme_prefs() -> dict[str, str]:
+    """Best-effort read of the persisted theme prefs.
+
+    Missing file is the normal first-run state; corrupt or unreadable
+    files degrade to client-side defaults (these prefs are cosmetic and
+    trivially re-settable, unlike feature flags there is nothing to
+    protect by refusing).
+    """
+    path = get_data_dir() / _THEME_PREFS_FILENAME
+    try:
+        raw = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Cannot read theme prefs at %s", path, exc_info=True)
+        return {}
+    sanitized = _sanitize_theme_prefs(raw) or {}
+    if isinstance(raw, dict):
+        # Hand-edited values outside the offered sets are dropped on load
+        # AND overwritten by the next save's RMW merge — leave a trail so
+        # the edit's author can see why their value never sticks. Warn
+        # once per key per process: _render_settings_html() calls this on
+        # every page view, and a permanently stale key (e.g. left behind
+        # by a future version) must not spam the log forever (#1574
+        # review).
+        dropped = set(raw) - set(sanitized) - _WARNED_DROPPED_THEME_PREFS
+        if dropped:
+            _WARNED_DROPPED_THEME_PREFS.update(dropped)
+            logger.warning("Ignoring invalid theme pref entries: %s", sorted(dropped))
+    return sanitized
+
+
+def _render_settings_html() -> str:
+    """Substitute the persisted theme prefs into the served settings page.
+
+    The ``server-prefs`` head script carries a ``data-prefs`` attribute
+    with a placeholder token; request-time substitution keeps
+    ``_SETTINGS_HTML`` a static import-time constant (and keeps the script
+    body itself parseable at rest for the script-surface tests). Values
+    are sanitized enums / vetted hex colors and the JSON is HTML-escaped,
+    so the attribute cannot break out of its quoting context.
+    """
+    payload = html.escape(
+        json.dumps(_load_theme_prefs(), separators=(",", ":")), quote=True
+    )
+    rendered = _SETTINGS_HTML.replace("__HA_MCP_THEME_PREFS__", payload, 1)
+    if "__HA_MCP_THEME_PREFS__" in rendered:
+        # str.replace silently no-ops when the placeholder vanishes in a
+        # refactor; the unit contract test catches that in CI, this line
+        # catches it loudly in a live deployment instead of quietly
+        # serving a page without server-side prefs.
+        logger.error(
+            "server-prefs placeholder was not substituted; theme prefs "
+            "will not survive fresh origins"
+        )
+    return rendered
+
+
 # Delay (seconds) before the background self-restart task fires the
 # supervisor POST. Picked to give Starlette + uvicorn time to serialize
 # the JSONResponse onto the socket and have HA ingress flush it to the
@@ -1268,10 +1586,67 @@ def build_settings_handlers(
     """
 
     async def _root_page(_: Request) -> HTMLResponse:
-        return HTMLResponse(_SETTINGS_HTML)
+        return HTMLResponse(_render_settings_html())
 
     async def _settings_page(_: Request) -> HTMLResponse:
-        return HTMLResponse(_SETTINGS_HTML)
+        return HTMLResponse(_render_settings_html())
+
+    async def _get_theme_prefs(_: Request) -> JSONResponse:
+        return JSONResponse({"prefs": _load_theme_prefs()})
+
+    async def _save_theme_prefs(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Body must be valid JSON",
+                ),
+                status_code=400,
+            )
+        sanitized = _sanitize_theme_prefs(body)
+        if sanitized is None:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Body must be a JSON object",
+                ),
+                status_code=400,
+            )
+        if not sanitized:
+            return JSONResponse(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "No valid theme preference fields in body",
+                ),
+                status_code=400,
+            )
+        path = get_data_dir() / _THEME_PREFS_FILENAME
+        # Same RMW-under-lock + tmp-then-rename shape as the feature-flag
+        # save above. One deliberate divergence: a corrupt existing file is
+        # overwritten (with a warning) instead of returning 409 — theme
+        # prefs are cosmetic and trivially re-settable, so recovering
+        # beats refusing.
+        async with _get_theme_prefs_lock():
+            existing = _load_theme_prefs()
+            existing.update(sanitized)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            try:
+                tmp.write_text(json.dumps(existing, indent=2))
+                os.replace(tmp, path)
+            except OSError as exc:
+                logger.warning("Could not write %s", path, exc_info=True)
+                with contextlib.suppress(FileNotFoundError, OSError):
+                    tmp.unlink()
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        f"Could not persist theme prefs: {exc}",
+                    ),
+                    status_code=500,
+                )
+        return JSONResponse({"success": True, "applied": sanitized})
 
     async def _get_tools(_: Request) -> JSONResponse:
         if server is not None:
@@ -3109,6 +3484,8 @@ def build_settings_handlers(
         "settings_info": _settings_info,
         "get_feature_flags": _get_feature_flags,
         "save_feature_flags": _save_feature_flags,
+        "get_theme_prefs": _get_theme_prefs,
+        "save_theme_prefs": _save_theme_prefs,
         "get_advanced_settings": _get_advanced_settings,
         "save_advanced_settings": _save_advanced_settings,
         "list_backups": _list_backups,
@@ -3278,6 +3655,10 @@ def register_settings_routes(
         ("/api/settings/info", ["GET"], "settings_info"),
         ("/api/settings/features", ["GET"], "get_feature_flags"),
         ("/api/settings/features", ["POST"], "save_feature_flags"),
+        # Theme / accessibility prefs (#1574 review) — server-side copy so
+        # they survive the stdio sidecar's per-spawn origin change
+        ("/api/settings/theme", ["GET"], "get_theme_prefs"),
+        ("/api/settings/theme", ["POST"], "save_theme_prefs"),
         # Advanced settings endpoints
         ("/api/settings/advanced", ["GET"], "get_advanced_settings"),
         ("/api/settings/advanced", ["POST"], "save_advanced_settings"),

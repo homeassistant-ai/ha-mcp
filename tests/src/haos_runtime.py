@@ -24,7 +24,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -476,6 +476,56 @@ def refresh_recorder_in_qcow2(
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _resolve_local_store_dir(image_path: Path) -> str:
+    """Return the live Supervisor local add-on store path inside ``image_path``.
+
+    Supervisor 2026.06.0 (home-assistant/supervisor#6865) renamed the on-disk
+    local store ``/supervisor/addons/local`` → ``/supervisor/apps/local`` and
+    renames the legacy path to the new one on boot, but only when the new path
+    does not already exist. The bake-produced base carries whichever path the
+    Supervisor that booted during the bake used.
+
+    Probe the offline qcow2 and return the directory that EXISTS (preferring the
+    new ``apps/local``), so the refresh lands on the path the test-boot
+    Supervisor will actually read. Returning the existing path also matters on
+    an older ``addons/local`` base: writing there leaves ``apps/local`` absent,
+    so Supervisor's on-boot rename still moves the WHOLE store (every staged
+    add-on) across; pre-creating ``apps/local`` would suppress that rename and
+    orphan the other add-ons. Falls back to ``apps/local`` when neither exists
+    (a corrupted/incomplete base) so the refresh still completes and the test
+    surfaces the real failure at boot.
+    """
+    for candidate in ("/supervisor/apps/local", "/supervisor/addons/local"):
+        # ``--rw`` even though this only reads: libguestfs needs write access to
+        # replay a SIGTERM-dirtied ext4 journal (same as ``bake_test_state``); a
+        # ``--ro`` mount can refuse a dirty fs. ``ll`` exits 0 iff the dir exists
+        # (exit-code probe, no stdout parsing), the same exit-code contract the
+        # staging and diagnostics guestfish calls already rely on; CI validates.
+        proc = subprocess.run(
+            [
+                "guestfish",
+                "--rw",
+                "-a",
+                str(image_path),
+                "run",
+                ":",
+                "mount",
+                "/dev/sda8",
+                "/",
+                ":",
+                "ll",
+                candidate,
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        if proc.returncode == 0:
+            return candidate
+    return "/supervisor/apps/local"
+
+
 def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
     """Overwrite the staged ha-mcp dev addon source with the PR's current source.
 
@@ -491,8 +541,11 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
        Bump format: ``<base>-pr-<GITHUB_SHA[:7] or "local">`` so every
        distinct PR commit produces a distinct version (Supervisor caches
        by exact version string).
-    3. libguestfs replaces the /supervisor/addons/local/ha_mcp_dev/
-       directory (rm-rf + tar-in of parent) on the offline qcow2.
+    3. libguestfs replaces the ``ha_mcp_dev/`` directory (rm-rf + tar-in of
+       parent) under the live Supervisor local store on the offline qcow2:
+       ``apps/local`` on Supervisor >= 2026.06.0, else the legacy
+       ``addons/local`` (resolved by ``_resolve_local_store_dir``; the rename
+       landed in home-assistant/supervisor#6865).
 
     Subsequent boot + ``addons/{slug}/update`` via Supervisor WS picks up
     the new files and rebuilds the addon's Docker image. Because the
@@ -580,10 +633,12 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
         config_path.write_text("".join(new_lines))
         LOG.info("Bumped addon version to pr-%s for update-detection", sha)
 
-        # Build the tar, then replace /supervisor/addons/local/ha_mcp_dev/ in the qcow2.
+        # Build the tar, then replace ``<local_store>/ha_mcp_dev/`` in the qcow2.
         # rm-rf + tar-in (rather than tar-in alone) so removed files in the
         # PR source actually disappear from the addon dir — leftover files
-        # would be picked up by the next Docker build.
+        # would be picked up by the next Docker build. ``local_store`` is the
+        # live Supervisor path (``apps/local`` post-2026.06.0, else the legacy
+        # ``addons/local``); ``mkdir-p`` covers the poisoned-base fallback.
         seed_tar = workdir / "ha_mcp_dev.tar"
         subprocess.run(
             [
@@ -602,31 +657,50 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
             text=True,
             timeout=60,
         )
-        subprocess.run(
-            [
-                "guestfish",
-                "--rw",
-                "-a",
-                str(image_path),
-                "run",
-                ":",
-                "mount",
-                "/dev/sda8",
-                "/",
-                ":",
-                "rm-rf",
-                "/supervisor/addons/local/ha_mcp_dev",
-                ":",
-                "tar-in",
-                str(seed_tar),
-                "/supervisor/addons/local",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=180,
+        local_store = _resolve_local_store_dir(image_path)
+        try:
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--rw",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    "mkdir-p",
+                    local_store,
+                    ":",
+                    "rm-rf",
+                    f"{local_store}/ha_mcp_dev",
+                    ":",
+                    "tar-in",
+                    str(seed_tar),
+                    local_store,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except subprocess.CalledProcessError as err:
+            # Without this, capture_output swallows guestfish's actual error
+            # text and the test log only shows "exit status 1".
+            LOG.error(
+                "guestfish addon refresh failed (exit %s)\nstdout:\n%s\nstderr:\n%s",
+                err.returncode,
+                err.stdout,
+                err.stderr,
+            )
+            raise
+        LOG.info(
+            "Refreshed ha-mcp dev addon source at %s/ha_mcp_dev in %s",
+            local_store,
+            image_path,
         )
-        LOG.info("Refreshed ha-mcp dev addon source in %s", image_path)
     finally:
         _shutil.rmtree(workdir, ignore_errors=True)
 
@@ -1029,16 +1103,115 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
             proc.wait()
 
 
+def _wait_supervisor_update_done(
+    ws: Any,
+    deadline: float,
+    next_id: Callable[[], int],
+    *,
+    log: logging.Logger = LOG,
+) -> None:
+    """Poll /supervisor/info until the Supervisor self-update clears.
+
+    The cached qcow2 boots a fresh Supervisor that re-floats to its channel
+    head. ``/store/reload`` and ``/addons/{slug}/update`` are both
+    SUPERVISOR_UPDATED-guarded and error ("supervisor needs to be updated
+    first" / "No update available", #1594) if they fire while need_update is
+    still True. Mirror ``build_image._wait_supervisor_ready``: wait until
+    update_available is false (and a version_latest is present, so a pre-fetch
+    latest=None does not read as a false clear).
+
+    Both this and the build-side sibling poll the same HA-Core-proxied WS
+    (``/api/websocket`` with ``supervisor/api`` commands). While the Supervisor
+    backend restarts mid-self-update, Core forwards a structured
+    ``success=False`` frame (typically ``ERR_UNKNOWN_ERROR``); the WS transport
+    stays up — this is exactly the window the wait exists to span — so the
+    failure frame is recorded and polling continues, with the last failure
+    surfaced in the final ``TimeoutError``. The build-side sibling additionally
+    catches a *dropped* WS transport and ``ws.reconnect()``s (its long-lived
+    bake connection can drop); this runtime path tolerates the structured
+    frame via record-and-continue instead.
+
+    ``ws`` is a connected ``websockets.sync.client`` connection; ``next_id``
+    returns the next strictly-increasing WS message id (shared with the
+    reload/update/start calls so HA Core's ERR_ID_REUSE never triggers).
+    """
+    last_error: str | None = None
+    while time.monotonic() < deadline:
+        info_id = next_id()
+        ws.send(
+            json.dumps(
+                {
+                    "id": info_id,
+                    "type": "supervisor/api",
+                    "endpoint": "/supervisor/info",
+                    "method": "get",
+                    "timeout": 30,
+                }
+            )
+        )
+        result: dict | None = None
+        transient_failure = False
+        while time.monotonic() < deadline:
+            remaining = max(deadline - time.monotonic(), 1.0)
+            try:
+                raw = ws.recv(timeout=remaining)
+            except TimeoutError:
+                continue
+            try:
+                if not isinstance(raw, str):
+                    raw = raw.decode()
+                resp = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"supervisor/api /supervisor/info: malformed WS frame: "
+                    f"{exc} (raw={raw!r})"
+                ) from exc
+            if resp.get("id") != info_id:
+                continue
+            if not resp.get("success", False):
+                err = resp.get("error") or resp
+                last_error = f"supervisor/api /supervisor/info failed: {err!r}"
+                log.debug("Transient /supervisor/info failure: %s", last_error)
+                transient_failure = True
+                break
+            result = resp.get("result") or {}
+            break
+        if transient_failure:
+            time.sleep(10.0)
+            continue
+        if result is None:
+            break
+        if not result.get("update_available") and result.get("version_latest"):
+            log.info(
+                "Supervisor self-update settled (version=%s); proceeding",
+                result.get("version"),
+            )
+            return
+        log.info(
+            "Supervisor self-update pending (%s -> %s); waiting before store ops",
+            result.get("version"),
+            result.get("version_latest"),
+        )
+        time.sleep(10.0)
+    suffix = f"; last error: {last_error}" if last_error else ""
+    raise TimeoutError(
+        f"Supervisor did not finish self-updating before the update deadline{suffix}"
+    )
+
+
 def trigger_dev_addon_update(
     base_url: str, token: str, *, timeout: float = 600.0
 ) -> None:
-    """Trigger Supervisor's ``addons/{slug}/update`` then start the dev addon.
+    """Reload the store, trigger ``addons/{slug}/update``, then start the addon.
 
     The cached qcow2 ships with the addon installed at the bake-time
     source version; ``refresh_dev_addon_source_in_qcow2`` has just
-    overwritten ``/supervisor/addons/local/ha_mcp_dev/`` with the PR's source and
-    bumped the addon's ``config.yaml`` version. Asking Supervisor to
-    update detects the new version, rebuilds the addon's Docker image
+    overwritten the local store's ``ha_mcp_dev/`` (``apps/local`` on Supervisor
+    2026.06.0+, else legacy ``addons/local``) with the PR's source and
+    bumped the addon's ``config.yaml`` version. A best-effort
+    ``/store/reload`` below nudges Supervisor to re-scan the local store
+    (see the inline comment for why), after which asking Supervisor to
+    update detects the new version and rebuilds the addon's Docker image
     (Docker layer cache → only COPY src/ + uv-sync-project layers
     re-execute) — but does NOT auto-restart the container. We explicitly
     call ``/start`` after update completes; without this, the addon ends
@@ -1058,6 +1231,13 @@ def trigger_dev_addon_update(
         + "/api/websocket"
     )
     LOG.info("Connecting to HA WS for Supervisor update: %s", ws_url)
+
+    next_msg_id = 0
+
+    def _next_id() -> int:
+        nonlocal next_msg_id
+        next_msg_id += 1
+        return next_msg_id
 
     def _await_supervisor_result(
         msg_id: int, op_endpoint: str, op_deadline: float
@@ -1093,8 +1273,7 @@ def trigger_dev_addon_update(
                 raise RuntimeError(f"supervisor/api {op_endpoint} failed: {err!r}")
             return
         raise TimeoutError(
-            f"supervisor/api {op_endpoint} did not complete within deadline "
-            f"({op_deadline - (op_deadline - timeout):.0f}s after start)"
+            f"supervisor/api {op_endpoint} did not complete before its deadline"
         )
 
     with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
@@ -1109,9 +1288,51 @@ def trigger_dev_addon_update(
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
 
+        _wait_supervisor_update_done(ws, time.monotonic() + timeout, _next_id)
+
+        # Reload the Supervisor store BEFORE asking for the update: the
+        # refresh bumped the local addon's version, but Supervisor's persisted
+        # store registry (inherited from the base image) does not re-scan local
+        # addons on its own, so ``/update`` returns "No update available" and
+        # the inaddon session ERRORs at setup (issue #1594). ``/store/reload``
+        # forces the re-scan, like ``build_image._reload_store`` does before the
+        # bake installs its freshly-staged local addons.
+        #
+        # Best-effort, NOT hard-fail: the reload sits on the setup path of every
+        # inaddon test, so a transient ``/store/reload`` hiccup must not fail
+        # tests that don't depend on it. On an already-consistent store the
+        # reload is a no-op and ``/update`` detects the bump anyway; on a stale
+        # store a failed reload falls through to ``/update`` returning the
+        # original #1594 "No update available", now with this warning naming the
+        # reload as the suspect.
+        msg_id = _next_id()
+        reload_endpoint = "/store/reload"
+        try:
+            ws.send(
+                json.dumps(
+                    {
+                        "id": msg_id,
+                        "type": "supervisor/api",
+                        "endpoint": reload_endpoint,
+                        "method": "post",
+                        "timeout": 120,
+                    }
+                )
+            )
+            _await_supervisor_result(msg_id, reload_endpoint, time.monotonic() + 120)
+            LOG.info("Supervisor store reloaded; triggering dev addon update")
+        except (RuntimeError, TimeoutError) as reload_err:
+            LOG.warning(
+                "Supervisor /store/reload failed (%r); proceeding to /update "
+                "anyway. If the addon store is stale this will surface as "
+                "'No update available' (#1594); if the store was already "
+                "consistent the update still detects the bumped version.",
+                reload_err,
+            )
+
         # Trigger the update. ``backup=false`` skips Supervisor's pre-update
         # snapshot (saves ~30s, irrelevant for CI).
-        msg_id = 1
+        msg_id = _next_id()
         update_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/update"
         ws.send(
             json.dumps(
@@ -1131,7 +1352,7 @@ def trigger_dev_addon_update(
         # Explicit start after update — Supervisor leaves the addon in
         # boot_fail state otherwise, with the new image built but no
         # running container. See docstring for the CI log evidence.
-        msg_id = 2
+        msg_id = _next_id()
         start_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/start"
         ws.send(
             json.dumps(

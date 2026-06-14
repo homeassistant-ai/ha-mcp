@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastmcp.exceptions import ToolError
-from pydantic import ValidationError
+from pydantic import BeforeValidator, ValidationError
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -34,6 +34,23 @@ def websocket_error_message(error: Any) -> str:
     if isinstance(error, dict):
         return str(error.get("message", error))
     return str(error)
+
+
+def summarize_theme_listing(raw_themes: dict[str, Any]) -> dict[str, Any]:
+    """Summarize a ``frontend/get_themes`` result into names plus defaults.
+
+    Returns theme NAMES, not the full per-theme CSS variable dicts (installed
+    community themes can carry hundreds of variables; listings are a
+    discovery/verify surface, not a content dump).
+    """
+    themes_value = raw_themes.get("themes") or {}
+    theme_names = sorted(themes_value.keys() if isinstance(themes_value, dict) else [])
+    return {
+        "themes": theme_names,
+        "count": len(theme_names),
+        "default_theme": raw_themes.get("default_theme"),
+        "default_dark_theme": raw_themes.get("default_dark_theme"),
+    }
 
 
 def strip_internal_fields(obj: Any, _seen: set[int] | None = None) -> Any:
@@ -117,6 +134,35 @@ def parse_json_param(
     raise ValueError(
         f"{param_name} must be string, dict, list, or None, got {type(param).__name__}"
     )
+
+
+def _loads_if_json_container_str(value: Any) -> Any:
+    """Parse a JSON-encoded object/array string into its container value.
+
+    Anything that isn't a string encoding a JSON object or array passes
+    through unchanged, so Pydantic still raises dict_type/list_type for
+    genuinely-malformed input (which ValidationErrorMiddleware rewrites
+    into an actionable message).
+    """
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (ValueError, RecursionError):
+            # RecursionError (deeply-nested input) must not escape: Pydantic
+            # only converts ValueError/AssertionError into ValidationError.
+            return value
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    return value
+
+
+# Annotated metadata for MCP-exposed dict/list params (issue #1581): coerces a
+# JSON-encoded string to its parsed container before validation, without
+# re-advertising string in the tool schema (the #1485/#1487/#1492 fix). Some
+# MCP client stacks (Claude Desktop stdio among them) pass model-emitted
+# stringified objects through unrepaired, so the strict schema boundary alone
+# rejects previously-valid traffic.
+JSON_STRING_COERCION = BeforeValidator(_loads_if_json_container_str)
 
 
 def _parse_json_to_str_list(s: str, param_name: str) -> list[str]:

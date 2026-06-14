@@ -1,21 +1,24 @@
 """Dashboard screenshot-engine addon runtime E2E for the HAOS test tier.
 
-The screenshot engine is balloob's **Puppet** add-on, vendored as a pinned
-submodule and staged as a local add-on (``local_puppet``) into the qcow2 with
+The screenshot engine here is a tiny in-repo MOCK (slug ``local_puppet``)
+staged as a local add-on into the qcow2 with
 ``boot: manual`` and an empty ``access_token`` (see
-``tests/haos_image_build/build_image.py::stage_puppet_addon_source`` /
-``install_puppet_addon``). The bake validates that the addon installs cleanly
-and pre-builds its Chromium Docker image.
+``tests/haos_image_build/build_image.py::stage_screenshot_engine_source`` /
+``install_screenshot_engine``). It serves balloob Puppet's HTTP contract
+without Chromium: a viewport-sized PNG, gated on validating the configured
+``access_token`` against Home Assistant. This keeps the HAOS-specific coverage
+— Supervisor add-on discovery (``provision.py`` mode 2), the addon lifecycle,
+and the tool's request/parse path — while dropping the heavy, fragile Chromium
+build (real Chromium rendering exercises balloob's add-on, not ha-mcp, and is
+covered against a fake engine in ``test_dashboard_screenshot_sidecar.py``).
 
-The engine authenticates the headless browser with a Home Assistant
-long-lived/user access token — the add-on's Supervisor token is NOT a valid
-frontend credential (HA Core rejects it with 401), so without a real token the
-engine can only reach the login screen. Rather than bake a token into the
-cached qcow2, the module fixture mints one at runtime via the same login flow
-the rest of the suite uses (``conftest`` exposes it as
-``ha_container_with_fresh_config['token']``), writes it to the engine's
-``access_token`` option, and starts the addon. A ~30-min access token is ample
-for one module's renders.
+The mock authenticates as the real engine does in spirit: a valid HA access
+token renders, an invalid one is rejected. The add-on's Supervisor token is NOT
+a valid frontend credential, so the module fixture mints a real token at
+runtime via the same login flow the rest of the suite uses (``conftest``
+exposes it as ``ha_container_with_fresh_config['token']``), writes it to the
+engine's ``access_token`` option, and starts the addon — rather than baking a
+credential into the cached qcow2.
 
 Tests:
 
@@ -26,10 +29,10 @@ Tests:
 4. ``ha_config_set_dashboard(return_screenshot=True)`` returns the write
    result + a PNG (the dashboard create-and-see loop).
 5. AUTH PROOF: replacing the valid token with a deliberately-invalid one means
-   the HA frontend rejects it and the engine can only reach the login screen,
-   so it FAILS to reproduce the working render. The contrast proves the
-   configured access token is what authenticates (fails closed: if the token
-   were ignored, both renders would match).
+   HA Core rejects it, so the engine cannot render and the tool fails — it does
+   NOT reproduce the working render. The contrast proves the configured access
+   token is what authenticates (fails closed: if the token were ignored, both
+   renders would match).
 """
 
 from __future__ import annotations
@@ -57,10 +60,11 @@ LOG = logging.getLogger(__name__)
 # constraint the port= proxy test documents in test_manage_addon_modes.py.
 pytestmark = [pytest.mark.haos_only, pytest.mark.inaddon_only]
 
-# balloob's Puppet add-on, vendored as a pinned submodule and staged as a LOCAL
-# add-on by the bake (see build_image.py stage_puppet_addon_source /
-# install_puppet_addon). Supervisor assigns local add-ons the slug
-# ``local_<config-slug>``; Puppet's config slug is ``puppet`` → ``local_puppet``.
+# The mock screenshot engine, staged as a LOCAL add-on by the bake (see
+# build_image.py stage_screenshot_engine_source / install_screenshot_engine).
+# Supervisor assigns local add-ons the slug ``local_<config-slug>``; the mock's
+# config slug is ``puppet`` → ``local_puppet`` (matches the ``_puppet``
+# discovery suffix, exactly as balloob's real add-on would).
 SCREENSHOT_ADDON_SLUG = "local_puppet"
 DEFAULT_DASHBOARD_PATH = "lovelace/0"
 
@@ -68,15 +72,17 @@ STOPPED_STATES: frozenset[str] = frozenset({"stopped", "boot_fail", "unknown", "
 
 _STATE_POLL_TIMEOUT = 90.0
 _STATE_POLL_INTERVAL = 1.0
-# Chromium cold-start + first render inside the addon is slow; give the
-# engine generous time to begin serving valid screenshots after start.
+# Generous budget for the addon to build (first cache miss), start, and bind
+# its HTTP server before it serves valid screenshots.
 _ENGINE_READY_TIMEOUT = 180.0
-# Transient + during-boot signals that should be retried (not treated as a
+# Transient + during-startup signals that should be retried (not treated as a
 # hard failure) while polling the engine. ValueError is included because
-# _png_dimensions raises it on a not-yet-PNG body during cold start — a
-# retryable domain condition, not a bug. Genuine bugs (AssertionError,
-# TypeError, KeyError) and ToolError still surface immediately rather than burn
-# the timeout (#1266), per the repo style guide on test polling loops.
+# _png_dimensions raises it on a not-yet-PNG body — a retryable domain
+# condition, not a bug. A ToolError (engine transport error, incl.
+# CONNECTION_FAILED before the server binds) is also retried via
+# _POLLING_TRANSIENT_ERRORS so the poll spans engine startup; genuine logic bugs
+# (AssertionError, TypeError, KeyError) still surface immediately rather than
+# burn the timeout (#1266), per the repo style guide on test polling loops.
 _ENGINE_POLL_RETRY_ERRORS = (*_POLLING_TRANSIENT_ERRORS, ValueError)
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -111,8 +117,8 @@ def _png_dimensions(data: bytes) -> tuple[int, int]:
     """Return (width, height) from a PNG's IHDR chunk.
 
     Raises :class:`ValueError` (a retryable domain condition, not a bug) on a
-    non-PNG body, so the engine-polling loop can retry during Chromium cold
-    start without swallowing genuine bugs.
+    non-PNG body, so the engine-polling loop can retry during engine startup
+    without swallowing genuine bugs.
     """
     if data[:8] != _PNG_MAGIC:
         raise ValueError(
@@ -230,12 +236,12 @@ async def _wait_engine_serving(
 ) -> None:
     """Poll the standalone tool until the engine returns a valid PNG.
 
-    Retries only on transient transport blips and on ValueError (the engine
-    returns a not-yet-PNG body during Chromium cold start; _png_dimensions /
-    _screenshot raise ValueError on it). Any other exception — AssertionError,
-    TypeError, KeyError — is a genuine wiring/config failure and surfaces
-    immediately instead of burning the timeout — see wait_helpers.py /
-    issue #1266.
+    Retries transient transport blips and ValueError (a not-yet-PNG body) so the
+    poll can span engine startup — before the addon's HTTP server binds, a
+    screenshot call surfaces as a ToolError(CONNECTION_FAILED), which is in the
+    retry tuple (_POLLING_TRANSIENT_ERRORS). A genuine logic bug — AssertionError,
+    TypeError, KeyError — surfaces immediately instead of burning the timeout
+    (see wait_helpers.py / issue #1266).
     """
     deadline = time.monotonic() + _ENGINE_READY_TIMEOUT
     last_err: Exception | None = None
@@ -316,9 +322,10 @@ async def test_get_dashboard_screenshot_returns_png(
 ) -> None:
     """ha_get_dashboard_screenshot returns a valid PNG of the requested size.
 
-    A valid, correctly-dimensioned, non-trivial PNG proves the engine launched
-    Chromium, authenticated to HA Core with the configured access token,
-    navigated the dashboard, and rendered.
+    A valid, correctly-dimensioned, non-trivial PNG proves the engine
+    authenticated to HA Core with the configured access token and served the
+    image, and that the tool discovered the engine, built the request, and
+    returned the bytes as an Image.
     """
     png = await _screenshot(mcp_client, DEFAULT_DASHBOARD_PATH, width=1024, height=768)
     width, height = _png_dimensions(png)
@@ -427,20 +434,18 @@ async def test_token_is_what_authenticates(
     ha_container_with_fresh_config: Any,
     screenshot_engine_started: Any,
 ) -> None:
-    """A valid token renders a real dashboard; an invalid token cannot.
+    """A valid token renders; an invalid token cannot.
 
     The fixture configured a valid HA access token, so the engine renders a
     valid PNG (asserted as the baseline). Replacing it with a
-    deliberately-invalid ``access_token`` gives the engine a credential the HA
-    frontend rejects, so it can only reach the login screen — it does NOT
-    reproduce the working dashboard render.
+    deliberately-invalid ``access_token`` gives the engine a credential HA Core
+    rejects, so it cannot render — it does NOT reproduce the working render.
 
     This is deterministic without depending on the engine's exact bad-auth
-    behavior: whether it fails to render (engine raises) or renders a
-    different (login) page, the outcome must differ from the working baseline.
-    If the token were ignored, both would render the same page and match — so
-    this fails closed on a regression. Runs last; restores the valid token in
-    ``finally`` and verifies the restore committed.
+    behavior: whether it fails to render (engine raises) or returns a different
+    image, the outcome must differ from the working baseline. If the token were
+    ignored, both would match — so this fails closed on a regression. Runs last;
+    restores the valid token in ``finally`` and verifies the restore committed.
     """
     slug = SCREENSHOT_ADDON_SLUG
     good_token = ha_container_with_fresh_config["token"]
