@@ -222,7 +222,17 @@ def _walk_card(
     back-compat; they do not express nesting depth (use the path strings).
     """
     matches: list[dict[str, Any]] = []
-    if not isinstance(card, dict) or depth > _MAX_CARD_DEPTH:
+    if not isinstance(card, dict):
+        return matches
+    if depth > _MAX_CARD_DEPTH:
+        # Stop, but make the truncation visible rather than silently dropping
+        # any cards nested below this point. Only reachable on pathological or
+        # malformed configs (real dashboards nest a handful of levels).
+        logger.warning(
+            "Card-search depth bound (%d) exceeded at %s; not descending further",
+            _MAX_CARD_DEPTH,
+            jq_prefix,
+        )
         return matches
 
     if _card_matches(card, entity_id, card_type, heading):

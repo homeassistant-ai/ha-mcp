@@ -321,3 +321,47 @@ class TestNestedCardSearch:
         config = {"views": [{"cards": [node]}]}
         matches = _find_cards_in_config(config, entity_id="light.too_deep")
         assert matches == []  # below the depth bound, not found, no exception
+
+    def test_finds_nested_heading_card(self):
+        """The heading search axis also reaches cards nested in a stack."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "vertical-stack",
+                            "cards": [
+                                {"type": "heading", "heading": "Nested Section"},
+                            ],
+                        }
+                    ]
+                }
+            ]
+        }
+        matches = _find_cards_in_config(config, heading="nested")
+        assert len(matches) == 1
+        assert matches[0]["card_type"] == "heading"
+        assert matches[0]["jq_path"] == ".views[0].cards[0].cards[0]"
+
+    def test_finds_card_nested_inside_header_card(self):
+        """A card nested inside a sections-view header card is found."""
+        config = {
+            "views": [
+                {
+                    "type": "sections",
+                    "header": {
+                        "card": {
+                            "type": "vertical-stack",
+                            "cards": [
+                                {"type": "tile", "entity": "light.header_nested"},
+                            ],
+                        }
+                    },
+                    "sections": [],
+                }
+            ]
+        }
+        matches = _find_cards_in_config(config, entity_id="light.header_nested")
+        assert len(matches) == 1
+        assert matches[0]["jq_path"] == ".views[0].header.card.cards[0]"
+        assert matches[0]["python_path"] == "['views'][0]['header']['card']['cards'][0]"
