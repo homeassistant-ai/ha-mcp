@@ -11,6 +11,8 @@ Two independent guards:
    ``sys.exit(1)`` instead of a silent exit 0.
 """
 
+import asyncio
+
 import pytest
 
 from ha_mcp.__main__ import _http_run_kwargs, _run_with_shutdown
@@ -64,3 +66,56 @@ async def test_run_with_shutdown_surfaces_server_exception():
 
     with pytest.raises(ValueError, match="does not support stateless mode"):
         await _run_with_shutdown(failing_server())
+
+
+async def test_run_with_shutdown_returns_when_server_finishes_cleanly():
+    """A server task that returns normally (no shutdown signal) must not raise.
+
+    Exercises the same new ``elif server_task in done`` branch as the exception
+    test, but for the clean-return case: ``server_task.result()`` returns
+    harmlessly and _run_with_shutdown completes without error.
+    """
+
+    async def clean_server():
+        return None
+
+    await _run_with_shutdown(clean_server())  # must not raise
+
+
+async def test_run_with_shutdown_cleans_up_when_server_fails(monkeypatch):
+    """Resources are still cleaned up when a self-terminating server fails.
+
+    The failure surfaces (covered above), but the finally block must still run
+    _cleanup_resources so a crash on startup doesn't leak resources.
+    """
+    import ha_mcp.__main__ as main_mod
+
+    cleaned = False
+
+    async def fake_cleanup():
+        nonlocal cleaned
+        cleaned = True
+
+    monkeypatch.setattr(main_mod, "_cleanup_resources", fake_cleanup)
+
+    async def failing_server():
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"):
+        await _run_with_shutdown(failing_server())
+    assert cleaned, "cleanup must run even when the server task fails"
+
+
+async def test_run_with_shutdown_surfaces_unexpected_cancellation():
+    """Regression #1544: a server task cancelled with no shutdown signal is a
+    hard stop, not a graceful one — it must propagate rather than exit 0.
+
+    Without the _shutdown_event.is_set() gate, the re-raised CancelledError is
+    caught and logged as a benign "Server task cancelled", silently exiting 0.
+    """
+
+    async def self_cancelling_server():
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_with_shutdown(self_cancelling_server())
