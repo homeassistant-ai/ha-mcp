@@ -1286,6 +1286,116 @@ class TestFetchDeadEntities:
             await SystemTools(client)._fetch_dead_entities()
 
     @pytest.mark.asyncio
+    async def test_tool_error_propagates_not_embedded(self):
+        """A ToolError from a source fetch must propagate (MCP isError
+        contract), not be demoted to a section error string by the outer
+        except — guards the `except ToolError: raise` chain order."""
+        client = _make_dead_entities_client(
+            states=None,
+            states_exc=ToolError("boom"),
+        )
+        with pytest.raises(ToolError):
+            await SystemTools(client)._fetch_dead_entities()
+
+    @pytest.mark.asyncio
+    async def test_orphan_bucket_truncates_at_limit(self):
+        """The orphan bucket caps + flags truncation independently of the stale
+        bucket (the two tiers populate via different code paths)."""
+        registry = [
+            {
+                "entity_id": f"sensor.orphan_{i}",
+                "platform": "removed",
+                "config_entry_id": "gone_entry",
+                "disabled_by": None,
+            }
+            for i in range(60)
+        ]
+        client = _make_dead_entities_client(
+            states=[],
+            registry=registry,
+            entries=[{"entry_id": "live_entry", "domain": "hue"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        bucket = result["config_entry_orphans"]
+        assert bucket["count"] == 50
+        assert bucket["total_count"] == 60
+        assert bucket["truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_entity_without_config_entry_id_classifies_as_stale(self):
+        """A restored-unavailable entry with config_entry_id=None (e.g. a
+        YAML/helper entity its provider no longer supplies) is not an orphan
+        (no config entry to be missing) but still surfaces as stale_restored,
+        carrying config_entry_id: None."""
+        client = _make_dead_entities_client(
+            states=[_state("sensor.no_cfg", "unavailable", restored=True)],
+            registry=[
+                {
+                    "entity_id": "sensor.no_cfg",
+                    "platform": "template",
+                    "config_entry_id": None,
+                    "disabled_by": None,
+                }
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "hue"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert result["config_entry_orphans"]["items"] == []
+        stale = result["stale_restored"]["items"]
+        assert len(stale) == 1
+        assert stale[0]["entity_id"] == "sensor.no_cfg"
+        assert stale[0]["config_entry_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_empty_sources_return_zero_counts(self):
+        """All sources empty-but-successful → baseline structure with zeros, no
+        error, no crash on len()."""
+        client = _make_dead_entities_client(states=[], registry=[], entries=[])
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert "error" not in result
+        assert result["config_entry_orphans"]["count"] == 0
+        assert result["stale_restored"]["count"] == 0
+        assert result["summary"] == {"candidate_total": 0, "registry_total": 0}
+        assert result["config_entries_checked"] is True
+
+    @pytest.mark.asyncio
+    async def test_entities_sharing_config_entry_classified_independently(self):
+        """Set-membership is per-entity: two entries on a live entry are not
+        orphans, a third on a gone entry is — no first-match-wins bug."""
+        client = _make_dead_entities_client(
+            states=[],
+            registry=[
+                {
+                    "entity_id": "light.a",
+                    "platform": "hue",
+                    "config_entry_id": "live_entry",
+                    "disabled_by": None,
+                },
+                {
+                    "entity_id": "light.b",
+                    "platform": "hue",
+                    "config_entry_id": "live_entry",
+                    "disabled_by": None,
+                },
+                {
+                    "entity_id": "light.c",
+                    "platform": "removed",
+                    "config_entry_id": "gone_entry",
+                    "disabled_by": None,
+                },
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "hue"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        orphans = result["config_entry_orphans"]["items"]
+        assert len(orphans) == 1
+        assert orphans[0]["entity_id"] == "light.c"
+
+    @pytest.mark.asyncio
     async def test_stale_bucket_truncates_at_limit(self):
         """The stale bucket caps its item list and reports truncation + totals so
         large installs stay token-friendly."""

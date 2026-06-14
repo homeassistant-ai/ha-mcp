@@ -39,8 +39,9 @@ def _reraise_if_fatal(exc: BaseException) -> None:
     embedded section error: task cancellation and interpreter exit
     (``CancelledError``/``KeyboardInterrupt``/``SystemExit`` are all
     ``BaseException`` but not ``Exception``) plus ``ToolError`` (which carries
-    the MCP ``isError`` contract). Mirrors the re-raise pre-pass on the ws
-    ``sections`` gather in ``ha_get_system_health``. Recoverable
+    the MCP ``isError`` contract). Encapsulates the same policy as the
+    re-raise pre-pass on the ws ``sections`` gather in ``ha_get_system_health``
+    — keep both in sync when adding exception classes. Recoverable
     ``Exception``-level failures fall through to the caller's embed-as-error
     handling, matching every sibling section helper.
     """
@@ -993,7 +994,9 @@ class SystemTools:
         also gone — those still surface as orphans). The ``restored`` flag is
         what HA sets when it rebuilds a state object from the registry's cached
         last state because no live platform currently provides the entity; it is
-        the discriminator between "dead" and "temporarily offline".
+        the discriminator between "dead" and "temporarily offline". (This tracks
+        HA Core's state-restoration behaviour; re-verify if classification drifts
+        after an HA upgrade.)
 
         Entities can appear under ``stale_restored`` transiently right after a
         restart, before integrations finish loading; ``note`` flags this.
@@ -1145,6 +1148,12 @@ class SystemTools:
                 "candidate_total": len(orphans) + len(stale),
                 "registry_total": len(registry),
             }
+        except ToolError:
+            # A ToolError (incl. one re-raised by _reraise_if_fatal) carries the
+            # MCP isError contract — let it reach ha_get_system_health's own
+            # ``except ToolError: raise`` instead of being demoted to a section
+            # error string here (AGENTS.md error-handling guard pattern).
+            raise
         except Exception as e:
             logger.warning("Failed to compute dead entities: %s", e)
             dead["error"] = f"Dead-entities diff not available: {e}"
