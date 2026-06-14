@@ -2,6 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 import Nav from '../components/Nav.astro';
 import PlatformIcon from '../components/PlatformIcon.astro';
+import type { IconName } from '../components/PlatformIcon.astro';
 
 const base = import.meta.env.BASE_URL;
 
@@ -232,20 +233,20 @@ const clientsData = [
   },
 ].map(c => ({ ...c, logo: withBase(c.logo) }));
 
-const platformsData = [
+const platformsData: { id: string; name: string; icon: IconName; order: number }[] = [
   {"id": "macos", "name": "macOS", "icon": "apple", "order": 1},
   {"id": "linux", "name": "Linux", "icon": "linux", "order": 2},
   {"id": "windows", "name": "Windows", "icon": "windows", "order": 3},
   {"id": "docker", "name": "Docker", "icon": "docker", "order": 4},
 ];
 
-const connectionsData = [
+const connectionsData: { id: string; name: string; transport: string; description: string; icon: IconName; order: number }[] = [
   {"id": "local", "name": "Local Machine", "transport": "stdio", "description": "Run ha-mcp on the same computer as your AI client", "icon": "computer", "order": 1},
   {"id": "network", "name": "Local Network", "transport": "http", "description": "Run ha-mcp as an HTTP server accessible on your LAN", "icon": "network", "order": 2},
   {"id": "remote", "name": "Remote (Internet)", "transport": "https", "description": "Access ha-mcp from anywhere via secure HTTPS", "icon": "globe", "order": 3},
 ];
 
-const deploymentData = [
+const deploymentData: { id: string; name: string; description: string; icon: IconName; forConnections: string[]; order: number }[] = [
   {"id": "uvx", "name": "uvx (Python)", "description": "Run ha-mcp directly via Python package manager", "icon": "python", "forConnections": ["local", "network"], "order": 1},
   {"id": "docker", "name": "Docker", "description": "Run ha-mcp in a container", "icon": "docker", "forConnections": ["local", "network", "remote"], "order": 2},
   {"id": "ha-addon", "name": "Home Assistant Add-on", "description": "Run ha-mcp inside Home Assistant OS", "icon": "home-assistant", "forConnections": ["network", "remote"], "order": 3},

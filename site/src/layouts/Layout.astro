@@ -395,7 +395,7 @@ const { title } = Astro.props;
         const copyIcon = `<svg ${svgAttrs}><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`;
         const checkIcon = `<svg ${svgAttrs}><path d="M20 6L9 17l-5-5"/></svg>`;
 
-        async function copyText(text) {
+        async function copyText(text: string) {
           if (navigator.clipboard?.writeText) {
             await navigator.clipboard.writeText(text);
           } else {
@@ -413,6 +413,7 @@ const { title } = Astro.props;
         window.initCopyButtons = function() {
           document.querySelectorAll('pre').forEach(pre => {
             if (pre.parentElement?.classList.contains('pre-wrapper')) return;
+            if (!pre.parentNode) return;
             const wrapper = document.createElement('div');
             wrapper.className = 'pre-wrapper';
             pre.parentNode.insertBefore(wrapper, pre);
