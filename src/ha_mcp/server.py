@@ -236,6 +236,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         self.mcp.add_middleware(ValidationErrorMiddleware())
 
+        # Replace the opaque "Unknown tool" FastMCP raises when a client calls
+        # ha_search_tools / the ha_call_* proxies while Tool Search is off
+        # (stale client tool-list cache) with an actionable refresh hint.
+        from .tools.tool_search_hint_middleware import ToolSearchHintMiddleware
+
+        self.mcp.add_middleware(ToolSearchHintMiddleware())
+
         # Read Only Mode write blocker (discussion #1569) — always
         # installed, consults the live flag per call. Before
         # PolicyMiddleware so a write blocked by Read Only Mode never

@@ -233,6 +233,15 @@ See [Cloudflared add-on documentation](https://github.com/brenner-tobias/addon-c
 
 The add-on has minimal configuration - most settings are automatic.
 
+> 🔄 **After changing any setting, refresh your client's tool list.** When a
+> setting changes the tools the server exposes (Tool Search, Read Only Mode,
+> enabled/disabled/pinned tools, etc.), your AI client keeps serving its
+> **cached** tool list until it re-fetches. Restarting the add-on or Home
+> Assistant does **not** refresh the client — you must reconnect or refresh
+> the MCP server in your AI client (e.g. re-add/refresh the connector in
+> ChatGPT, or close and reopen Claude Desktop). Symptom if you skip this:
+> tools shown as available return `Unknown tool` when called.
+
 ### backup_hint (Advanced)
 
 **Default:** `normal`

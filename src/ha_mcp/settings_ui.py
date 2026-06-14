@@ -812,6 +812,10 @@ _SETTINGS_HTML = (
   <span class="restart-notice-text" id="restartNoticeText">
     ⚠ Changes saved. Restart ha-mcp for them to take effect — disabled
     tools will be fully removed from the MCP tool list on next startup.
+    Then reconnect or refresh the MCP server in your AI client (e.g.
+    re-add/refresh the connector in ChatGPT, or close and reopen Claude
+    Desktop) so it reloads the tool list — restarting the add-on or Home
+    Assistant does NOT refresh your client's cached tool list.
   </span>
   <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
 </div>
@@ -857,8 +861,10 @@ _SETTINGS_HTML = (
 </div>
 <div class="panel" id="panel-server">
   <div class="features-sub">
-    Tool Search, advanced settings. Changes require an MCP-host restart
-    to take effect (close + reopen Claude Desktop, restart the add-on, etc.).
+    Tool Search, advanced settings. Changes take effect only after you
+    restart the add-on (applies the change server-side) AND reconnect or
+    refresh the MCP server in your AI client (reloads the tool list) — e.g.
+    re-add/refresh the connector in ChatGPT, or close + reopen Claude Desktop.
   </div>
 
   <!-- Two-step note + top Save button. The Save +
