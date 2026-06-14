@@ -20,18 +20,15 @@ name: HAOS E2E Tests (inaddon)
 # external_only / inaddon_only markers).
 
 on:
+  # No workflow-level `paths:` filter on purpose. This check is a REQUIRED
+  # status check, and a path-filtered workflow that doesn't trigger leaves the
+  # required check Pending forever, wedging the merge of any PR that doesn't
+  # touch the listed paths. Instead we trigger on every PR and let the
+  # `changes` job below decide whether the heavy suite runs: a job skipped via
+  # `if:` reports Success to a required check (unlike a workflow-level
+  # path-skip, which reports nothing). See the `changes` job for the run/skip
+  # rule (skip only pure docs/website; addon + bake inputs always run).
   pull_request:
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'homeassistant-addon/**'
-      - 'homeassistant-addon-dev/**'
-      - '.github/workflows/haos-e2e-inaddon-tests.yml'
-      # Trigger on external workflow changes too — both lanes share the
-      # qcow2 cache key, so a change to either workflow's cache logic
-      # needs the other lane to re-run for parity verification.
-      - '.github/workflows/haos-e2e-tests.yml'
   workflow_dispatch:
     inputs:
       pytest_args:
@@ -59,8 +56,65 @@ env:
   LIBGUESTFS_BACKEND: direct
 
 jobs:
+  # Gate the heavy suite: run on any code/test/config/addon change, skip ONLY
+  # when every changed file is pure docs/website. Skipping happens at the JOB
+  # level (via `if:` below) so a skipped run reports Success to the required
+  # check; a workflow-level `paths:` skip would instead report nothing and
+  # wedge the merge. Add-on + bake-input dirs are baked into the qcow2, so
+  # their docs DO affect the suite and always count as code.
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Classify changed files
+        id: filter
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Fail-closed gate: default to RUNNING the suite; skip ONLY when we can
+          # prove the PR changed nothing but docs/website. Any classifier failure
+          # (non-PR event, base fetch / rev-parse / diff error, empty diff) leaves
+          # run=true — branch protection treats a skipped REQUIRED job as passing,
+          # so a fail-open classifier could let code merge untested.
+          run=true
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+            && git fetch --depth=1 origin "$BASE_REF" \
+            && base_sha=$(git rev-parse "origin/$BASE_REF") \
+            && changed=$(git diff --name-only --diff-filter=ACMRD "$base_sha" HEAD) \
+            && [ -n "$changed" ]; then
+            echo "Changed files:"; printf '%s\n' "$changed" | sed 's/^/  /'
+            run=false
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              case "$f" in
+                # Bake inputs / addon dirs are baked into the qcow2 / shipped —
+                # their docs change what the suite tests, so they count as code.
+                homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
+                  run=true; break ;;
+                # Pure docs / website do not, on their own, warrant the suite.
+                *.md|*.mdx|docs/*|site/*)
+                  continue ;;
+                # Anything else (code, tests, config, workflows, lockfile, ...) runs.
+                *)
+                  run=true; break ;;
+              esac
+            done <<< "$changed"
+          else
+            echo "Non-PR event or unresolved diff — running suite (fail-closed)."
+          fi
+          echo "run=$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   haos-e2e-inaddon:
     name: HAOS E2E Tests (inaddon)
+    needs: changes
+    # A skipped job reports Success to the required status check (unlike a
+    # workflow-level path-skip, which never reports). See the `changes` job.
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 45
 

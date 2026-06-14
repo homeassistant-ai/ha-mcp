@@ -59,12 +59,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Required for the bake's submodules: the skills bundle at
-          # src/ha_mcp/resources/skills-vendor (test_skills_resources.py) AND
-          # the vendored Puppet add-on at
-          # tests/haos_image_build/vendor/home-assistant-addons, which
-          # stage_puppet_addon_source bakes into the qcow2 (it hard-fails
-          # without the submodule checked out).
+          # Required for the skills bundle submodule at
+          # src/ha_mcp/resources/skills-vendor (test_skills_resources.py).
           submodules: true
 
       - name: Install build dependencies
@@ -102,13 +98,11 @@ jobs:
 
       - name: Free disk space for the bake
         # The cache-prime always local-builds the qcow2, so it hits the same
-        # disk peak the e2e local-build path guards against. The Puppet
-        # (Chromium) add-on is the largest and last build, so it is the first
-        # to trip the runner's ~14 GB SSD: the e2e lanes build Puppet fine
-        # with this exact prune, while the cache-prime (which lacked it)
-        # failed at the Puppet build. The df -h bookends make the reclaimed
-        # headroom visible. Keep /opt/hostedtoolcache: Python from there is
-        # on PATH for build_image.py.
+        # disk peak the e2e local-build path guards against: the ~7 GB qcow2
+        # plus the in-qcow2 add-on image builds (dev addon, webhook proxy,
+        # screenshot-engine mock) grow it toward the runner's ~14 GB SSD. The
+        # df -h bookends make the reclaimed headroom visible. Keep
+        # /opt/hostedtoolcache: Python from there is on PATH for build_image.py.
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
