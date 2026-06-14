@@ -33,6 +33,12 @@ def _is_ssl_error(exc: BaseException) -> bool:
 
 logger = logging.getLogger(__name__)
 
+# Transient gateway statuses from a reverse proxy / Supervisor ingress — HA Core
+# restarting or briefly overloaded behind it. The upstream couldn't be reached,
+# so the request did not execute and retrying is safe even for writes.
+_RETRYABLE_STATUS = frozenset({502, 503, 504})
+_MAX_REQUEST_ATTEMPTS = 3
+
 
 class HomeAssistantError(Exception):
     """Base exception for Home Assistant API errors."""
@@ -180,7 +186,8 @@ class HomeAssistantClient:
 
         Handles auth, HTTP 4xx/5xx, and transport errors in one place.
         Callers parse the body themselves (JSON via `_request`, text via
-        `get_addon_logs`, etc.).
+        `get_addon_logs`, etc.). Transient gateway errors (502/503/504) are
+        retried with bounded exponential backoff before surfacing.
 
         Raises:
             HomeAssistantAuthError: 401 response.
@@ -188,44 +195,62 @@ class HomeAssistantClient:
                 response_data set from JSON body when possible).
             HomeAssistantConnectionError: Network, timeout, or transport error.
         """
-        try:
-            response = await self.httpx_client.request(method, endpoint, **kwargs)
+        backoff = 0.5
+        for attempt in range(1, _MAX_REQUEST_ATTEMPTS + 1):
+            try:
+                response = await self.httpx_client.request(method, endpoint, **kwargs)
 
-            if response.status_code == 401:
-                raise HomeAssistantAuthError("Invalid authentication token")
+                if response.status_code == 401:
+                    raise HomeAssistantAuthError("Invalid authentication token")
 
-            if response.status_code >= 400:
-                try:
-                    error_data = response.json()
-                except Exception:
-                    error_data = {"message": response.text}
+                if response.status_code >= 400:
+                    try:
+                        error_data = response.json()
+                    except Exception:
+                        error_data = {"message": response.text}
 
-                message = error_data.get("message")
-                if not message or not message.strip():
-                    message = response.reason_phrase or "<empty body>"
+                    message = error_data.get("message")
+                    if not message or not message.strip():
+                        message = response.reason_phrase or "<empty body>"
 
-                raise HomeAssistantAPIError(
-                    f"API error: {response.status_code} - {message}",
-                    status_code=response.status_code,
-                    response_data=error_data,
-                )
+                    if (
+                        response.status_code in _RETRYABLE_STATUS
+                        and attempt < _MAX_REQUEST_ATTEMPTS
+                    ):
+                        logger.warning(
+                            f"Transient {response.status_code} from Home Assistant "
+                            f"(attempt {attempt}/{_MAX_REQUEST_ATTEMPTS}), retrying "
+                            f"in {backoff}s: {message}"
+                        )
+                        await asyncio.sleep(backoff)
+                        backoff *= 2
+                        continue
 
-            return response
+                    raise HomeAssistantAPIError(
+                        f"API error: {response.status_code} - {message}",
+                        status_code=response.status_code,
+                        response_data=error_data,
+                    )
 
-        except httpx.ConnectError as e:
-            if _is_ssl_error(e) and self.verify_ssl:
+                return response
+
+            except httpx.ConnectError as e:
+                if _is_ssl_error(e) and self.verify_ssl:
+                    raise HomeAssistantConnectionError(
+                        f"TLS verification failed for {self.base_url}: {e}. "
+                        "If this is a self-signed certificate or hostname "
+                        "mismatch, set HA_VERIFY_SSL=false to skip verification."
+                    ) from e
                 raise HomeAssistantConnectionError(
-                    f"TLS verification failed for {self.base_url}: {e}. "
-                    "If this is a self-signed certificate or hostname "
-                    "mismatch, set HA_VERIFY_SSL=false to skip verification."
+                    f"Failed to connect to Home Assistant: {e}"
                 ) from e
-            raise HomeAssistantConnectionError(
-                f"Failed to connect to Home Assistant: {e}"
-            ) from e
-        except httpx.TimeoutException as e:
-            raise HomeAssistantConnectionError(f"Request timeout: {e}") from e
-        except httpx.HTTPError as e:
-            raise HomeAssistantConnectionError(f"HTTP error: {e}") from e
+            except httpx.TimeoutException as e:
+                raise HomeAssistantConnectionError(f"Request timeout: {e}") from e
+            except httpx.HTTPError as e:
+                raise HomeAssistantConnectionError(f"HTTP error: {e}") from e
+
+        # Unreachable: the final attempt takes the non-retry branch and raises.
+        raise AssertionError("_raw_request retry loop exhausted without returning")
 
     async def _request(
         self, method: str, endpoint: str, **kwargs: Any
