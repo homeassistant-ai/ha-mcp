@@ -1842,8 +1842,9 @@ ingress:
             }
           }, null, 2);
         } else {
-          // Default JSON shape (e.g. Raycast): mcpServers + a "type" field set to
-          // "http" for Streamable HTTP (Raycast's documented key — not "transport").
+          // Generic fallback for any JSON client without a dedicated branch
+          // (e.g. Raycast): mcpServers + a "type" field set to "http" for Streamable
+          // HTTP (the documented key for these clients — not "transport").
           config = JSON.stringify({
             mcpServers: {
               "home-assistant": {

@@ -188,3 +188,74 @@ async def test_get_405_logs_annotated_note(mcp_app, caplog):
     assert any(
         "NORMAL for most non-SSE connections" in r.getMessage() for r in caplog.records
     )
+
+
+def test_filter_drops_favicon_404_even_in_sse_mode():
+    """Favicon 404s are dropped regardless of drop_mcp_405 (SSE mode included)."""
+    f = ProbeAccessLogFilter("/mcp", drop_mcp_405=False)
+    assert f.filter(_access_record("GET", "/favicon.ico", 404)) is False
+
+
+def test_filter_drops_favicon_with_query_and_slash():
+    """Favicon drop survives query strings and trailing slashes."""
+    f = ProbeAccessLogFilter("/mcp")
+    assert f.filter(_access_record("GET", "/favicon.ico?v=2", 404)) is False
+    assert f.filter(_access_record("HEAD", "/favicon.ico/", 404)) is False
+
+
+def test_filter_drops_405_on_root_mcp_path():
+    """A root MCP path '/' normalizes correctly and its GET-405 probe is dropped."""
+    f = ProbeAccessLogFilter("/")
+    assert f.filter(_access_record("GET", "/", 405)) is False
+
+
+def test_filter_keeps_record_with_non_int_status():
+    """A record whose status isn't an int (unexpected format) fails open (kept)."""
+    f = ProbeAccessLogFilter("/mcp")
+    rec = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %s',
+        ("1.2.3.4:5678", "GET", "/mcp", "1.1", "405"),
+        None,
+    )
+    assert f.filter(rec) is True
+
+
+def test_register_does_not_double_attach_same_path():
+    """Registering the same path twice attaches only one filter (dedup guard)."""
+    server = FastMCP("test")
+    register_browser_landing(server, "/mcp")
+    register_browser_landing(server, "/mcp")
+    access_logger = logging.getLogger("uvicorn.access")
+    attached = [f for f in access_logger.filters if isinstance(f, ProbeAccessLogFilter)]
+    assert len(attached) == 1
+
+
+def test_register_quiet_probe_log_false_keeps_mcp_405():
+    """quiet_probe_log=False (SSE) wires drop_mcp_405=False, so the attached filter
+    keeps a /mcp GET-405 instead of dropping it."""
+    server = FastMCP("test")
+    register_browser_landing(server, "/mcp", quiet_probe_log=False)
+    access_logger = logging.getLogger("uvicorn.access")
+    attached = [f for f in access_logger.filters if isinstance(f, ProbeAccessLogFilter)]
+    assert len(attached) == 1
+    assert attached[0].filter(_access_record("GET", "/mcp", 405)) is True
+
+
+@pytest.mark.asyncio
+async def test_head_405_logs_annotated_note(mcp_app, caplog):
+    """HEAD also reaches the landing handler (Starlette auto-routes it) and logs
+    the annotated note."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=mcp_app), base_url="http://test"
+    ) as client:
+        with caplog.at_level(logging.INFO):
+            resp = await client.head("/mcp")
+
+    assert resp.status_code == 405
+    assert any(
+        "NORMAL for most non-SSE connections" in r.getMessage() for r in caplog.records
+    )

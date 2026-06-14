@@ -433,7 +433,9 @@ class ProbeAccessLogFilter(logging.Filter):
         if status == 404 and path == "/favicon.ico":
             return False  # browser favicon auto-request — pure noise
         # By-design probe 405 on the MCP path; the handler logs an annotated line
-        # instead. Kept in SSE mode (drop_mcp_405=False), where a 405 is a real fault.
+        # instead. This trusts that the landing route is the only GET/HEAD responder
+        # on the MCP path (true today). Kept in SSE mode (drop_mcp_405=False), where
+        # a GET answers 200 and a 405 is a real fault.
         is_dropped_probe = (
             status == 405 and path == self._mcp_path and self._drop_mcp_405
         )
@@ -912,6 +914,10 @@ def register_browser_landing(
     Args:
         mcp_instance: The FastMCP server to register the route on.
         path: The MCP endpoint path (e.g. "/mcp" or a secret path).
+        quiet_probe_log: When True (default, for Streamable HTTP), drop the
+            by-design GET/HEAD-405 probe line on the MCP path from the uvicorn
+            access log (the handler logs an annotated replacement). Pass False
+            for SSE, where a GET answers 200 and a 405 is a genuine fault.
     """
     if path in _registered_landing_paths:
         logger.warning(
