@@ -43,6 +43,7 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +342,7 @@ class EnergyTools:
         ],
         config: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Full prefs payload for mode='set'. Must contain the "
@@ -362,9 +364,12 @@ class EnergyTools:
                     "Hash from a previous mode='get' call. REQUIRED for "
                     "mode='set' unless dry_run=True. Two forms: str (full-"
                     "blob lock) or dict (per-key lock, taken from the "
-                    "config_hash_per_key field of mode='get'). See the tool "
-                    "docstring for fail-closed semantics. Ignored by "
-                    "convenience modes."
+                    "config_hash_per_key field of mode='get'). Pass the dict "
+                    "form as a native object, NOT a JSON-encoded string — a "
+                    "stringified dict is treated as a full-blob token and will "
+                    "report RESOURCE_LOCKED; clients that can only send strings "
+                    "should use the str full-blob form. See the tool docstring "
+                    "for fail-closed semantics. Ignored by convenience modes."
                 ),
                 default=None,
             ),
@@ -438,6 +443,7 @@ class EnergyTools:
         ] = False,
         source: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Single energy_sources entry for mode='add_source'. Must "

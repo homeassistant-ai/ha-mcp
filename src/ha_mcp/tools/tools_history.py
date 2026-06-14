@@ -30,6 +30,7 @@ from .helpers import (
     safe_progress,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     add_timezone_metadata,
     build_pagination_metadata,
     parse_string_list_param,
@@ -136,6 +137,7 @@ class HistoryTools:
         self,
         entity_ids: Annotated[
             str | list[str],
+            JSON_STRING_COERCION,
             Field(
                 description="Entity ID(s) to query. Can be a single ID, comma-separated string, or JSON array."
             ),
@@ -206,6 +208,7 @@ class HistoryTools:
         ] = "day",
         statistic_types: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description='Statistics types: "mean", "min", "max", "sum", "state", "change". Default: all. Ignored when source="history"',
                 default=None,
@@ -224,6 +227,7 @@ class HistoryTools:
         ] = "desc",
         fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(

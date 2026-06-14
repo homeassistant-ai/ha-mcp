@@ -3500,6 +3500,7 @@ class HelperConfigTools:
         ] = None,
         labels: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(description="Labels to categorize the helper", default=None),
         ] = None,
         min_value: Annotated[
@@ -3535,6 +3536,7 @@ class HelperConfigTools:
         ] = None,
         options: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="List of options for input_select (required for input_select)",
                 default=None,
@@ -3582,6 +3584,7 @@ class HelperConfigTools:
         ] = None,
         monday: Annotated[
             list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes (e.g. {'from': '07:00', 'to': '22:00', 'data': {'mode': 'comfort'}})",
                 default=None,
@@ -3589,6 +3592,7 @@ class HelperConfigTools:
         ] = None,
         tuesday: Annotated[
             list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Schedule time ranges for Tuesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
@@ -3596,6 +3600,7 @@ class HelperConfigTools:
         ] = None,
         wednesday: Annotated[
             list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Schedule time ranges for Wednesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
@@ -3603,6 +3608,7 @@ class HelperConfigTools:
         ] = None,
         thursday: Annotated[
             list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Schedule time ranges for Thursday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
@@ -3610,6 +3616,7 @@ class HelperConfigTools:
         ] = None,
         friday: Annotated[
             list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Schedule time ranges for Friday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
@@ -3617,6 +3624,7 @@ class HelperConfigTools:
         ] = None,
         saturday: Annotated[
             list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Schedule time ranges for Saturday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
@@ -3624,6 +3632,7 @@ class HelperConfigTools:
         ] = None,
         sunday: Annotated[
             list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Schedule time ranges for Sunday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
                 default=None,
@@ -3654,6 +3663,7 @@ class HelperConfigTools:
         ] = None,
         device_trackers: Annotated[
             list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="List of device_tracker entity IDs for person", default=None
             ),

@@ -107,6 +107,42 @@ async def test_error_is_structured():
 
 
 @pytest.mark.asyncio
+async def test_union_param_malformed_container_names_param_not_union_tags():
+    """A wrong-container value on a `str | list[str]` param yields ONE message
+    keyed by the real param name, not pydantic union-arm tags (`str`/`list[str]`).
+
+    Regression for #1601: extending JSON_STRING_COERCION to ~28 union params
+    widened the surface where a malformed container (e.g. a JSON-object string)
+    fails every union arm and pydantic emits one error per arm. Without grouping,
+    the user saw `entity_id.str` / `entity_id.list[str]` instead of `entity_id`.
+    """
+    from typing import Annotated
+
+    from ha_mcp.tools.util_helpers import JSON_STRING_COERCION
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_union_param(
+        entity_id: Annotated[str | list[str], JSON_STRING_COERCION],
+    ) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        # A JSON-object string coerces to a dict, which fails both the str and
+        # the list[str] arm of the union.
+        await mcp.call_tool("ha_test_union_param", {"entity_id": '{"a": 1}'})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "entity_id" in msg
+    # No leaked pydantic union-arm tags, and a single line for the single param.
+    assert "list[str]" not in msg
+    assert "`str`" not in msg
+    assert ";" not in msg
+
+
+@pytest.mark.asyncio
 async def test_tool_error_from_tool_body_passes_through_unconverted():
     """A ToolError raised inside the tool is NOT re-wrapped by the middleware."""
     mcp = FastMCP("test")

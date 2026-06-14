@@ -43,15 +43,27 @@ class ValidationErrorMiddleware(Middleware):
             return await call_next(context)
         except PydanticValidationError as exc:
             errors = exc.errors(include_url=False)
-            parts: list[str] = []
+            # Group by the real argument name (the first loc element). A union
+            # param like `str | list[str]` emits one error per arm with loc
+            # (param, "str"), (param, "list[str]"); without grouping the user
+            # saw `param.str` / `param.list[str]` instead of `param` (#1601).
+            grouped: dict[str, list[Any]] = {}
             for err in errors:
-                loc = err.get("loc", ())
-                param = ".".join(str(p) for p in loc if p != "__root__")
-                hint = _TYPE_HINTS.get(err["type"], err["msg"])
+                loc = [str(p) for p in err.get("loc", ()) if p != "__root__"]
+                grouped.setdefault(loc[0] if loc else "", []).append(err)
+
+            parts: list[str] = []
+            for param, errs in grouped.items():
+                # Prefer an actionable container hint when any arm produced one
+                # (dict_type/list_type); else fall back to the first raw message.
+                hint = next(
+                    (_TYPE_HINTS[e["type"]] for e in errs if e["type"] in _TYPE_HINTS),
+                    errs[0]["msg"],
+                )
                 parts.append(f"`{param}`: {hint}" if param else hint)
             raise_tool_error(
                 create_validation_error(
                     "; ".join(parts) if parts else "Invalid argument types.",
-                    details=", ".join(err["type"] for err in errors),
+                    details=", ".join(dict.fromkeys(err["type"] for err in errors)),
                 )
             )
