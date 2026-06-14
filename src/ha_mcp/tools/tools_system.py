@@ -938,7 +938,11 @@ class SystemTools:
         """
         if isinstance(resp, BaseException) or not isinstance(resp, dict):
             return None
-        if resp.get("success") is False:
+        # Require success truthy before trusting ``result`` — matches the
+        # ``if result.get("success")`` convention used by the other WS handlers
+        # in this file (and treats a malformed envelope missing the key as a
+        # failure rather than reading a half-built result).
+        if not resp.get("success"):
             return None
         result = resp.get("result")
         return result if isinstance(result, list) else None
