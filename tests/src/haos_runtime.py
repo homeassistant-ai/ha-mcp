@@ -24,7 +24,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -1103,6 +1103,102 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
             proc.wait()
 
 
+def _wait_supervisor_update_done(
+    ws: Any,
+    deadline: float,
+    next_id: Callable[[], int],
+    *,
+    log: logging.Logger = LOG,
+) -> None:
+    """Poll /supervisor/info until the Supervisor self-update clears.
+
+    The cached qcow2 boots a fresh Supervisor that re-floats to its channel
+    head. ``/store/reload`` and ``/addons/{slug}/update`` are both
+    SUPERVISOR_UPDATED-guarded and error ("supervisor needs to be updated
+    first" / "No update available", #1594) if they fire while need_update is
+    still True. Mirror ``build_image._wait_supervisor_ready``: wait until
+    update_available is false (and a version_latest is present, so a pre-fetch
+    latest=None does not read as a false clear).
+
+    Both this and the build-side sibling poll the same HA-Core-proxied WS
+    (``/api/websocket`` with ``supervisor/api`` commands). While the Supervisor
+    backend restarts mid-self-update, Core forwards a structured
+    ``success=False`` frame (typically ``ERR_UNKNOWN_ERROR``); the WS transport
+    stays up — this is exactly the window the wait exists to span — so the
+    failure frame is recorded and polling continues, with the last failure
+    surfaced in the final ``TimeoutError``. The build-side sibling additionally
+    catches a *dropped* WS transport and ``ws.reconnect()``s (its long-lived
+    bake connection can drop); this runtime path tolerates the structured
+    frame via record-and-continue instead.
+
+    ``ws`` is a connected ``websockets.sync.client`` connection; ``next_id``
+    returns the next strictly-increasing WS message id (shared with the
+    reload/update/start calls so HA Core's ERR_ID_REUSE never triggers).
+    """
+    last_error: str | None = None
+    while time.monotonic() < deadline:
+        info_id = next_id()
+        ws.send(
+            json.dumps(
+                {
+                    "id": info_id,
+                    "type": "supervisor/api",
+                    "endpoint": "/supervisor/info",
+                    "method": "get",
+                    "timeout": 30,
+                }
+            )
+        )
+        result: dict | None = None
+        transient_failure = False
+        while time.monotonic() < deadline:
+            remaining = max(deadline - time.monotonic(), 1.0)
+            try:
+                raw = ws.recv(timeout=remaining)
+            except TimeoutError:
+                continue
+            try:
+                if not isinstance(raw, str):
+                    raw = raw.decode()
+                resp = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    f"supervisor/api /supervisor/info: malformed WS frame: "
+                    f"{exc} (raw={raw!r})"
+                ) from exc
+            if resp.get("id") != info_id:
+                continue
+            if not resp.get("success", False):
+                err = resp.get("error") or resp
+                last_error = f"supervisor/api /supervisor/info failed: {err!r}"
+                log.debug("Transient /supervisor/info failure: %s", last_error)
+                transient_failure = True
+                break
+            result = resp.get("result") or {}
+            break
+        if transient_failure:
+            time.sleep(10.0)
+            continue
+        if result is None:
+            break
+        if not result.get("update_available") and result.get("version_latest"):
+            log.info(
+                "Supervisor self-update settled (version=%s); proceeding",
+                result.get("version"),
+            )
+            return
+        log.info(
+            "Supervisor self-update pending (%s -> %s); waiting before store ops",
+            result.get("version"),
+            result.get("version_latest"),
+        )
+        time.sleep(10.0)
+    suffix = f"; last error: {last_error}" if last_error else ""
+    raise TimeoutError(
+        f"Supervisor did not finish self-updating before the update deadline{suffix}"
+    )
+
+
 def trigger_dev_addon_update(
     base_url: str, token: str, *, timeout: float = 600.0
 ) -> None:
@@ -1180,88 +1276,6 @@ def trigger_dev_addon_update(
             f"supervisor/api {op_endpoint} did not complete before its deadline"
         )
 
-    def _wait_supervisor_update_done(deadline: float) -> None:
-        """Poll /supervisor/info until the Supervisor self-update clears.
-
-        The cached qcow2 boots a fresh Supervisor that re-floats to its channel
-        head. /store/reload and /addons/{slug}/update below are both
-        SUPERVISOR_UPDATED-guarded and error ("supervisor needs to be updated
-        first" / "No update available", #1594) if they fire while need_update
-        is still True. Mirror build_image._wait_supervisor_ready: wait until
-        update_available is false (and a version_latest is present, so a
-        pre-fetch latest=None does not read as a false clear).
-
-        ``/supervisor/api`` is proxied by HA Core; while the Supervisor backend
-        restarts mid-self-update, Core forwards a structured ``success=False``
-        frame (typically ``ERR_UNKNOWN_ERROR``). The WS transport stays up —
-        this is exactly the window the wait exists to span — so the failure
-        frame is recorded and polling continues. On deadline-without-success
-        the last failure frame is surfaced in the TimeoutError. The build-side
-        sibling ``_wait_supervisor_ready`` tolerates an equivalent restart
-        window via exception-catch + ``ws.reconnect()`` because it polls over a
-        direct Supervisor WS that can drop transport during the restart; this
-        runtime-side path polls over the Core-proxied WS where the transport
-        stays up, so the tolerate-and-surface here is structured-frame-based
-        rather than exception-based.
-        """
-        last_error: str | None = None
-        while time.monotonic() < deadline:
-            info_id = _next_id()
-            ws.send(
-                json.dumps(
-                    {
-                        "id": info_id,
-                        "type": "supervisor/api",
-                        "endpoint": "/supervisor/info",
-                        "method": "get",
-                        "timeout": 30,
-                    }
-                )
-            )
-            result: dict | None = None
-            transient_failure = False
-            while time.monotonic() < deadline:
-                remaining = max(deadline - time.monotonic(), 1.0)
-                try:
-                    raw = ws.recv(timeout=remaining)
-                except TimeoutError:
-                    continue
-                if not isinstance(raw, str):
-                    raw = raw.decode()
-                resp = json.loads(raw)
-                if resp.get("id") != info_id:
-                    continue
-                if not resp.get("success", False):
-                    err = resp.get("error") or resp
-                    last_error = f"supervisor/api /supervisor/info failed: {err!r}"
-                    LOG.debug("Transient /supervisor/info failure: %s", last_error)
-                    transient_failure = True
-                    break
-                result = resp.get("result") or {}
-                break
-            if transient_failure:
-                time.sleep(10.0)
-                continue
-            if result is None:
-                break
-            if not result.get("update_available") and result.get("version_latest"):
-                LOG.info(
-                    "Supervisor self-update settled (version=%s); proceeding",
-                    result.get("version"),
-                )
-                return
-            LOG.info(
-                "Supervisor self-update pending (%s -> %s); waiting before store ops",
-                result.get("version"),
-                result.get("version_latest"),
-            )
-            time.sleep(10.0)
-        suffix = f"; last error: {last_error}" if last_error else ""
-        raise TimeoutError(
-            f"Supervisor did not finish self-updating before the update "
-            f"deadline{suffix}"
-        )
-
     with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
         first_frame = json.loads(ws.recv())
         if first_frame.get("type") != "auth_required":
@@ -1274,7 +1288,7 @@ def trigger_dev_addon_update(
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
 
-        _wait_supervisor_update_done(time.monotonic() + timeout)
+        _wait_supervisor_update_done(ws, time.monotonic() + timeout, _next_id)
 
         # Reload the Supervisor store BEFORE asking for the update: the
         # refresh bumped the local addon's version, but Supervisor's persisted

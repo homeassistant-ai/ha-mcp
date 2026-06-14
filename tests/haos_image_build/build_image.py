@@ -4,12 +4,13 @@
 The script boots a vanilla HAOS qcow2 inside QEMU/KVM, runs first-user
 onboarding to obtain a long-lived access token, registers the ha-mcp addon
 repository, installs the addons listed in ``ADDONS``, performs the HACS
-bootstrap, then powers HAOS off and emits a compressed qcow2 ready for upload
-to GHCR via oras.
+bootstrap, then powers HAOS off and emits an uncompressed qcow2 image.
 
 Invoke from a Linux host with /dev/kvm available — both the local developer
 flow and the build-haos-test-image.yml workflow follow the same path. The
-output file is ``<work-dir>/haos-test-image.qcow2.xz``.
+build's own output is the uncompressed ``<work-dir>/haos-test-image.qcow2``;
+the workflow then compresses it, uploads it as an artifact, and (on master)
+primes the shared Actions cache that the e2e lanes restore.
 """
 
 from __future__ import annotations
@@ -1564,12 +1565,11 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
                 # here via _SUPERVISOR_WAIT_TRANSIENT_ERRORS. RuntimeError stays
                 # for symmetry with the poll-catch above (generic Supervisor
                 # restart-window RuntimeError that isn't a WSCommandError).
-                # WARNING level: a reconnect failure on its own is recoverable
-                # (the next poll re-tries on the same ws and the broker may
-                # have re-accepted by then), but a persistent reconnect failure
-                # silently consumes the entire update_timeout budget surfacing
-                # only the *poll* error in the final TimeoutError — WARNING
-                # makes that pattern visible at INFO-level CI logs.
+                # WARNING level: surface the reconnect failure in CI logs. A
+                # one-off failure is harmless (the loop keeps polling until the
+                # deadline); a persistent one would otherwise only show up as
+                # the *poll* error in the final TimeoutError, so WARNING makes
+                # the reconnect pattern visible.
                 LOG.warning("reconnect during update wait failed: %r", reconnect_err)
             continue
         version = info.get("version")
@@ -1908,9 +1908,9 @@ def build(work_dir: Path, output: Path) -> None:
     bake_test_state(qcow2)
     # Output uncompressed: nothing downstream of this script on the
     # developer iteration path benefits from a smaller file, and the
-    # convert pass adds ~6 min. GHCR-served image is compressed at
-    # publish time by build-haos-test-image.yml's ``Compress qcow2
-    # in-format`` step (#1428, measured 12 GB → 5.1 GB / 2.3x).
+    # convert pass adds ~6 min. The cached image is compressed by
+    # build-haos-test-image.yml's ``Compress qcow2 in-format`` step
+    # (#1428, measured 12 GB → 5.1 GB / 2.3x).
     LOG.info("Copying qcow2 to %s (uncompressed)", output)
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(["cp", "--reflink=auto", str(qcow2), str(output)])
