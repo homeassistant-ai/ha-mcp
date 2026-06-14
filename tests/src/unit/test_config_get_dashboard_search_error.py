@@ -173,3 +173,122 @@ class TestGetDashboardListOnlyUnexpectedShape:
             f"expected an 'unexpected shape' warning naming the response "
             f"type; got {[rec.message for rec in caplog.records]}"
         )
+
+
+class TestFindCardDisclosureWarnings:
+    """Response-level ``warnings[]`` for the find-card disclosure layer.
+
+    Pins the issue #1599 round-2 item-1 behaviour at the tool boundary: the
+    warning keys off the *presence* of a non-traversed child-bearing shape
+    (collected during the walk), not off a 0-match — so a matching un-walkable
+    container no longer suppresses it and a true negative no longer cries wolf.
+    """
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def get_dashboard_tool(self, mock_mcp, mock_client):
+        register_config_dashboard_tools(mock_mcp, mock_client)
+        return self.registered_tools["ha_config_get_dashboard"]
+
+    async def _search(self, tool, mock_client, config, **criteria):
+        # url_path="default" → effective_url_path is None, so no lazy-resolve
+        # retry: the single websocket reply carries the config under "result".
+        mock_client.send_websocket_message.return_value = {"result": config}
+        return await tool(url_path="default", **criteria)
+
+    @pytest.mark.asyncio
+    async def test_warns_on_uncoverable_shape_even_when_matched(
+        self, get_dashboard_tool, mock_client
+    ):
+        """A picture-elements card that itself matches still triggers the warning
+        — the suppressible-warning bug is closed."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "picture-elements",
+                            "image": "/local/x.png",
+                            "elements": [{"type": "state-badge", "entity": "light.pe"}],
+                        }
+                    ]
+                }
+            ]
+        }
+        result = await self._search(
+            get_dashboard_tool,
+            mock_client,
+            config,
+            card_type="picture-elements",
+        )
+        assert result["match_count"] == 1  # the container matched
+        warnings = result.get("warnings", [])
+        assert any("elements" in w for w in warnings), warnings
+        assert any(".views[0].cards[0].elements" in w for w in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_silent_on_true_negative_without_shape(
+        self, get_dashboard_tool, mock_client
+    ):
+        """A 0-match over a fully-coverable dashboard emits no disclosure warning
+        — the cry-wolf bug is closed."""
+        config = {"views": [{"cards": [{"type": "tile", "entity": "light.plain"}]}]}
+        result = await self._search(
+            get_dashboard_tool, mock_client, config, card_type="nonexistent"
+        )
+        assert result["match_count"] == 0
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_silent_on_empty_dashboard(self, get_dashboard_tool, mock_client):
+        """An empty dashboard (no cards) emits no disclosure warning."""
+        config = {"views": [{"cards": []}]}
+        result = await self._search(
+            get_dashboard_tool, mock_client, config, card_type="tile"
+        )
+        assert result["match_count"] == 0
+        assert "warnings" not in result
+
+    @pytest.mark.asyncio
+    async def test_response_warnings_is_top_level_list_of_str(
+        self, get_dashboard_tool, mock_client
+    ):
+        """When present, ``warnings`` is a top-level ``list[str]`` (return
+        contract), never nested under ``data`` nor a singular string."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "picture-elements",
+                            "elements": [{"type": "state-badge"}],
+                        }
+                    ]
+                }
+            ]
+        }
+        result = await self._search(
+            get_dashboard_tool, mock_client, config, card_type="tile"
+        )
+        assert isinstance(result["warnings"], list)
+        assert all(isinstance(w, str) for w in result["warnings"])
