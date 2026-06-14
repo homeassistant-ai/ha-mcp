@@ -290,17 +290,28 @@ def _setup_standard_mode() -> None:
     _log_startup_version()
 
 
-def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict:
-    """Build common run_async kwargs for HTTP-based transports."""
-    return {
+def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict[str, Any]:
+    """Build common run_async kwargs for HTTP-based transports.
+
+    ``stateless_http`` is a Streamable-HTTP concept and is only valid for the
+    ``http``/``streamable-http`` transports. Passing it alongside
+    ``transport="sse"`` makes fastmcp's ``run_async`` raise
+    ``ValueError("SSE transport does not support stateless mode")``. Gating it to
+    non-SSE transports keeps SSE startup working. (Before this fix that raise was
+    also swallowed into a silent exit 0; ``_run_with_shutdown`` now surfaces a
+    self-terminating server task's exception instead.) See #1544.
+    """
+    kwargs: dict[str, Any] = {
         "transport": transport,
         "host": host,
         "port": port,
         "path": path,
         "show_banner": _get_show_banner(),
-        "stateless_http": True,
         "uvicorn_config": {"log_config": _get_timestamped_uvicorn_log_config()},
     }
+    if transport != "sse":
+        kwargs["stateless_http"] = True
+    return kwargs
 
 
 def _create_server() -> "HomeAssistantSmartMCPServer":
@@ -572,9 +583,23 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
                 # Expected: we just cancelled server_task above; swallow its
                 # CancelledError so shutdown can proceed to cleanup.
                 pass
+        elif server_task in done:
+            # Server task finished on its own (no shutdown signal). Re-raise any
+            # exception it captured so a hard startup failure surfaces as a
+            # logged sys.exit(1) instead of a silent exit 0 — without this the
+            # exception on the already-done task is never retrieved. See #1544.
+            server_task.result()
 
     except asyncio.CancelledError:
-        logger.info("Server task cancelled")
+        # A shutdown-initiated cancel is a graceful stop. A cancel without a
+        # shutdown signal — including one re-raised by server_task.result()
+        # above — is a hard stop masquerading as success; re-raise it so it
+        # becomes a logged sys.exit(1) rather than a silent exit 0. See #1544.
+        if _shutdown_event is not None and _shutdown_event.is_set():
+            logger.info("Server task cancelled")
+        else:
+            logger.error("Server task cancelled without a shutdown signal")
+            raise
     finally:
         try:
             await asyncio.wait_for(
@@ -583,7 +608,12 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
         except TimeoutError:
             logger.warning("Resource cleanup timed out")
 
-        await _cancel_tasks(server_task, shutdown_task)
+        try:
+            await _cancel_tasks(server_task, shutdown_task)
+        except Exception as e:
+            # Teardown must never mask the exception being propagated from the
+            # try block (Python drops the original if finally raises).
+            logger.warning(f"Task cancellation during shutdown failed: {e}")
 
 
 def _run_entrypoint(coro: Coroutine[Any, Any, Any], label: str) -> None:
@@ -597,7 +627,7 @@ def _run_entrypoint(coro: Coroutine[Any, Any, Any], label: str) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        logger.error(f"{label} error: {e}")
+        logger.error(f"{label} error: {e}", exc_info=True)
         sys.exit(1)
 
     sys.exit(0)
