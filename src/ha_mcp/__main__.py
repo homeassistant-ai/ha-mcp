@@ -402,6 +402,46 @@ class ToolValidationLogFilter(logging.Filter):
         return True
 
 
+class ProbeAccessLogFilter(logging.Filter):
+    """Drop benign, non-MCP HTTP probe noise from the uvicorn access log.
+
+    * ``GET``/``HEAD`` ``/favicon.ico`` -> ``404``: browsers auto-request a
+      favicon that doesn't exist. Pure noise, always dropped.
+    * ``GET``/``HEAD`` on the MCP path -> ``405``: a non-MCP caller (browser,
+      health check, reverse proxy, or a connector's SSE-style pre-flight) hit a
+      POST-only Streamable HTTP endpoint. The raw access line is dropped and the
+      landing handler logs one annotated "(NORMAL for most non-SSE connections)"
+      line in its place. Dropped only when ``drop_mcp_405`` is set — SSE callers
+      pass False, since there a GET answers 200 and a GET-405 is a genuine fault.
+    """
+
+    def __init__(self, mcp_path: str, *, drop_mcp_405: bool = True) -> None:
+        super().__init__()
+        self._mcp_path = mcp_path.rstrip("/") or "/"
+        self._drop_mcp_405 = drop_mcp_405
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn.access records carry structured args: (client, method, path,
+        # http_version, status_int). Match on those, not the formatted string.
+        args = record.args
+        if not isinstance(args, tuple) or len(args) != 5:
+            return True
+        method, raw_path, status = args[1], args[2], args[4]
+        if method not in ("GET", "HEAD"):
+            return True
+        path = str(raw_path).split("?", 1)[0].rstrip("/") or "/"
+        if status == 404 and path == "/favicon.ico":
+            return False  # browser favicon auto-request — pure noise
+        # By-design probe 405 on the MCP path; the handler logs an annotated line
+        # instead. This trusts that the landing route is the only GET/HEAD responder
+        # on the MCP path (true today). Kept in SSE mode (drop_mcp_405=False), where
+        # a GET answers 200 and a 405 is a real fault.
+        is_dropped_probe = (
+            status == 405 and path == self._mcp_path and self._drop_mcp_405
+        )
+        return not is_dropped_probe
+
+
 def _setup_logging(log_level_str: str, force: bool = False) -> None:
     """Configure root logger with consistent timestamp format."""
     logging.basicConfig(
@@ -858,7 +898,12 @@ async def _run_http_with_graceful_shutdown(
 _registered_landing_paths: set[str] = set()
 
 
-def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) -> None:
+def register_browser_landing(
+    mcp_instance: "FastMCP | _DeferredMCP",
+    path: str,
+    *,
+    quiet_probe_log: bool = True,
+) -> None:
     """Register a GET handler that returns 405 with a helpful message.
 
     Browsers and misconfigured clients that send GET instead of POST will see
@@ -869,6 +914,10 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
     Args:
         mcp_instance: The FastMCP server to register the route on.
         path: The MCP endpoint path (e.g. "/mcp" or a secret path).
+        quiet_probe_log: When True (default, for Streamable HTTP), drop the
+            by-design GET/HEAD-405 probe line on the MCP path from the uvicorn
+            access log (the handler logs an annotated replacement). Pass False
+            for SSE, where a GET answers 200 and a 405 is a genuine fault.
     """
     if path in _registered_landing_paths:
         logger.warning(
@@ -905,6 +954,12 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
     # Custom routes are registered at lowest precedence (after the MCP route).
     @mcp_instance.custom_route(path, methods=["GET"])
     async def _browser_landing(_: Request) -> PlainTextResponse:
+        # Any GET here is a non-MCP caller (browser, health check, proxy, or a
+        # connector's SSE-style pre-flight) hitting this POST-only Streamable HTTP
+        # endpoint, which answers 405 by design. Log one annotated line so the 405
+        # reads as expected; ProbeAccessLogFilter drops the raw uvicorn access line
+        # so there's no cryptic duplicate.
+        logger.info("GET %s -> 405 (NORMAL for most non-SSE connections)", path)
         return PlainTextResponse(
             _landing_message,
             status_code=405,
@@ -912,6 +967,16 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
             # session termination), even though this deployment uses stateless mode.
             headers={"Allow": "POST, DELETE"},
         )
+
+    # Tidy uvicorn's access log: always drop browser favicon 404s, and drop the
+    # raw by-design GET/HEAD-405 probe line on the MCP path (the handler above logs
+    # an annotated replacement). The 405 drop is skipped for SSE
+    # (quiet_probe_log=False), where a GET answers 200 and a 405 is a real fault.
+    # Attach to uvicorn.access directly — it has propagate=False, so a root-logger
+    # filter would miss it.
+    logging.getLogger("uvicorn.access").addFilter(
+        ProbeAccessLogFilter(path, drop_mcp_405=quiet_probe_log)
+    )
 
 
 def _log_settings_url(host: str, port: int, path: str) -> None:
@@ -946,7 +1011,9 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
 
     host, port, path = _get_http_runtime(default_port)
     _warn_if_default_path_exposed(host, port, path)
-    register_browser_landing(_get_mcp(), path)
+    # SSE transport answers GET with 200 (the event stream), so a GET->405 there
+    # would be a real fault, not a benign probe — keep its access log intact.
+    register_browser_landing(_get_mcp(), path, quiet_probe_log=transport != "sse")
     register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
     _log_settings_url(host, port, path)
 
