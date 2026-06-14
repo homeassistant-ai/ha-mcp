@@ -4,12 +4,13 @@
 The script boots a vanilla HAOS qcow2 inside QEMU/KVM, runs first-user
 onboarding to obtain a long-lived access token, registers the ha-mcp addon
 repository, installs the addons listed in ``ADDONS``, performs the HACS
-bootstrap, then powers HAOS off and emits a compressed qcow2 ready for upload
-to GHCR via oras.
+bootstrap, then powers HAOS off and emits an uncompressed qcow2 image.
 
 Invoke from a Linux host with /dev/kvm available — both the local developer
 flow and the build-haos-test-image.yml workflow follow the same path. The
-output file is ``<work-dir>/haos-test-image.qcow2.xz``.
+build's own output is the uncompressed ``<work-dir>/haos-test-image.qcow2``;
+the workflow then compresses it, uploads it as an artifact, and (on master)
+primes the shared Actions cache that the e2e lanes restore.
 """
 
 from __future__ import annotations
@@ -639,6 +640,23 @@ def _reload_store(ws: HAWebSocket) -> None:
 # Wall-clock pause before retrying a transient add-on build failure, giving a
 # flaky apt mirror / npm registry / base-image pull a moment to recover.
 _ADDON_INSTALL_RETRY_DELAY = 20.0
+
+# Transient errors while the Supervisor restarts to apply its self-update (see
+# _wait_supervisor_ready). Supervisor self-update restarts Supervisor, and Core
+# may return a structured WSCommandError OR drop the WS transport during that
+# restart window. websockets lives only in the build venv, so fold its drop
+# exception in lazily.
+try:
+    from websockets.exceptions import WebSocketException as _WebSocketException
+
+    _SUPERVISOR_WAIT_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
+        WSCommandError,
+        OSError,
+        TimeoutError,
+        _WebSocketException,
+    )
+except ImportError:
+    _SUPERVISOR_WAIT_TRANSIENT_ERRORS = (WSCommandError, OSError, TimeoutError)
 
 
 def _install_addon_with_retry(
@@ -1487,16 +1505,85 @@ def install_puppet_addon(ws: HAWebSocket) -> str:
     return slug
 
 
-def _wait_supervisor_ready(ws: HAWebSocket) -> None:
-    """Confirm the Supervisor responds via the WebSocket supervisor/api path.
+def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) -> None:
+    """Wait for the Supervisor to respond AND finish self-updating.
 
-    A single ping is enough — by the time HA Core has accepted the WS
-    handshake and our auth_ok arrived, the hassio integration has loaded
-    and supervisor/api commands route correctly.
+    HAOS pins only the OS version (HAOS_VERSION); the Supervisor it bundles
+    self-updates asynchronously after boot to the latest version on its
+    channel. Until that finishes, ``need_update`` is True and every store
+    operation guarded by ``JobCondition.SUPERVISOR_UPDATED`` (the first one
+    here is ``_add_repository`` -> POST /store/repositories, right after this
+    call) is rejected with "supervisor needs to be updated first". That race
+    is what broke the publish bake intermittently: a run that hit the store
+    before the self-update landed failed at add_repository; a run that caught
+    a later channel version sailed past it and failed elsewhere.
+
+    Poll /supervisor/info until ``update_available`` clears (the running
+    version reaches ``version_latest``) so the caller's store calls run
+    against an up-to-date Supervisor. The Supervisor version still floats to
+    the channel head per build: there is no clean way to pin the bundled
+    Supervisor offline (it ships as a container layer in the HAOS image, and
+    ``need_update`` is evaluated against the live channel), so this makes the
+    bake deterministic in outcome, not in the Supervisor version it lands on.
     """
     info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
     LOG.info(
-        "Supervisor ready: version=%s arch=%s", info.get("version"), info.get("arch")
+        "Supervisor ready: version=%s version_latest=%s arch=%s",
+        info.get("version"),
+        info.get("version_latest"),
+        info.get("arch"),
+    )
+    if not info.get("update_available") and info.get("version_latest"):
+        return
+
+    LOG.info(
+        "Supervisor self-update pending (%s -> %s); waiting before store ops...",
+        info.get("version"),
+        info.get("version_latest"),
+    )
+    deadline = time.monotonic() + update_timeout
+    last_version = info.get("version")
+    last_error: BaseException | None = None
+    while time.monotonic() < deadline:
+        time.sleep(10.0)
+        try:
+            info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as e:
+            # A Supervisor self-update restarts Supervisor; Core may return a
+            # structured WSCommandError OR drop the WS transport during that
+            # restart window. Record the error so a persistent failure is
+            # reported in the timeout message, then best-effort reconnect and
+            # keep polling.
+            last_error = e
+            LOG.debug("Transient error polling /supervisor/info: %r", e)
+            try:
+                ws.reconnect()
+            except _SUPERVISOR_WAIT_TRANSIENT_ERRORS + (RuntimeError,) as reconnect_err:
+                # Handshake-stage WS errors (InvalidStatus / InvalidHandshake /
+                # ConnectionClosed) raise WebSocketException, which is NOT a
+                # subclass of OSError / RuntimeError / TimeoutError — covered
+                # here via _SUPERVISOR_WAIT_TRANSIENT_ERRORS. RuntimeError stays
+                # for symmetry with the poll-catch above (generic Supervisor
+                # restart-window RuntimeError that isn't a WSCommandError).
+                # WARNING level: surface the reconnect failure in CI logs. A
+                # one-off failure is harmless (the loop keeps polling until the
+                # deadline); a persistent one would otherwise only show up as
+                # the *poll* error in the final TimeoutError, so WARNING makes
+                # the reconnect pattern visible.
+                LOG.warning("reconnect during update wait failed: %r", reconnect_err)
+            continue
+        version = info.get("version")
+        if version != last_version:
+            LOG.info("Supervisor version changed: %s -> %s", last_version, version)
+            last_version = version
+        if not info.get("update_available") and info.get("version_latest"):
+            LOG.info("Supervisor self-update complete: version=%s", version)
+            return
+    last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
+    raise TimeoutError(
+        f"Supervisor did not finish self-updating within {update_timeout:.0f}s "
+        f"(last version={last_version}, "
+        f"latest={info.get('version_latest')}{last_err_suffix})"
     )
 
 
@@ -1821,9 +1908,9 @@ def build(work_dir: Path, output: Path) -> None:
     bake_test_state(qcow2)
     # Output uncompressed: nothing downstream of this script on the
     # developer iteration path benefits from a smaller file, and the
-    # convert pass adds ~6 min. GHCR-served image is compressed at
-    # publish time by build-haos-test-image.yml's ``Compress qcow2
-    # in-format`` step (#1428, measured 12 GB → 5.1 GB / 2.3x).
+    # convert pass adds ~6 min. The cached image is compressed by
+    # build-haos-test-image.yml's ``Compress qcow2 in-format`` step
+    # (#1428, measured 12 GB → 5.1 GB / 2.3x).
     LOG.info("Copying qcow2 to %s (uncompressed)", output)
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(["cp", "--reflink=auto", str(qcow2), str(output)])
