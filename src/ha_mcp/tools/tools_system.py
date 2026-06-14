@@ -354,6 +354,15 @@ class SystemTools:
           - "config_check": Validate HA configuration via POST /config/core/check_config
             (the pre-restart safety check; ha_restart runs it automatically). Returns
             {result: valid|invalid, is_valid, errors}; read-only/idempotent, takes no args.
+          - "dead_entities": Surface orphaned/stale entity-registry entries by diffing
+            the registry against the state machine and the live config-entries set.
+            Returns confidence-tiered buckets — ``config_entry_orphans`` (owning
+            integration instance gone; definitively dead) and ``stale_restored`` (HA
+            restored the entity from the registry on startup but the loaded integration
+            no longer provides it). Each item carries entity_id + platform so a client
+            can propose cleanup with ha_remove_entity. Deliberately excludes
+            ``unknown``-state entities and merely-offline devices to keep false positives
+            low. Read-only; takes no args.
           - Example: include="repairs,zha_network,zwave_network,config_check"
           - Example: include="diagnostics", config_entry_id="abc123..."
         - include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when "repairs" is in `include`.
@@ -416,16 +425,19 @@ class SystemTools:
                 # catch cannot swallow an unrelated ToolError.
                 #
                 # Degrade gracefully ONLY when the caller asked for a REST-based
-                # section (config_check / diagnostics) that can still be served
-                # without the WebSocket. config_check is the pure-REST
-                # replacement for the removed ha_check_config tool, so it must
-                # not depend on the health WebSocket (the system_health/info
-                # command carries its own 10s timeout and can hang/be absent on
-                # some installs). If the caller asked for nothing (the health
-                # baseline itself) or only WS-backed sections, the baseline WAS
-                # the deliverable: re-raise so the failure surfaces as
-                # isError=true, exactly as before this change.
-                if not (includes & {"config_check", "diagnostics"}):
+                # section (config_check / diagnostics / dead_entities) that can
+                # still be served without the WebSocket. config_check is the
+                # pure-REST replacement for the removed ha_check_config tool, so
+                # it must not depend on the health WebSocket (the
+                # system_health/info command carries its own 10s timeout and can
+                # hang/be absent on some installs). dead_entities uses the REST
+                # client's own per-client WebSocket bridge for the registry +
+                # config-entries (not this health ws_client), so it is likewise
+                # independent of the baseline. If the caller asked for nothing
+                # (the health baseline itself) or only WS-backed sections, the
+                # baseline WAS the deliverable: re-raise so the failure surfaces
+                # as isError=true, exactly as before this change.
+                if not (includes & {"config_check", "diagnostics", "dead_entities"}):
                     raise
                 logger.warning("system_health baseline unavailable: %s", health_err)
                 ws_client = None
@@ -450,6 +462,7 @@ class SystemTools:
                 "diagnostics",
                 "config_check",
                 "themes",
+                "dead_entities",
             }
             unknown = includes - VALID_INCLUDES
             if unknown:
@@ -634,6 +647,13 @@ class SystemTools:
                 # ``if`` (not chained to diagnostics) so both can be requested
                 # in one call.
                 result["config_check"] = await self._fetch_config_check()
+
+            if "dead_entities" in includes:
+                # REST + the REST client's own per-client WebSocket bridge
+                # (states via /api/states, registry + config-entries via the
+                # bridge), not the health ws_client — so it runs inline like
+                # config_check and survives a baseline-WS-down install.
+                result["dead_entities"] = await self._fetch_dead_entities()
 
             return result
 
@@ -904,6 +924,191 @@ class SystemTools:
             logger.warning("Failed to fetch themes: %s", e)
             themes_data["error"] = f"Themes data not available: {e}"
         return themes_data
+
+    @staticmethod
+    def _ws_result_list(resp: Any) -> list[dict[str, Any]] | None:
+        """Unwrap a ``send_websocket_message`` response into a list, or None.
+
+        ``send_websocket_message`` returns the HA WebSocket envelope
+        (``{"success": bool, "result": [...]}``) on success and
+        ``{"success": False, "error": ...}`` on failure; ``return_exceptions``
+        in the caller's ``gather`` can also hand back a raw exception. Returns
+        the ``result`` list on success, else ``None`` so the caller can treat a
+        backend failure as "source unavailable".
+        """
+        if isinstance(resp, BaseException) or not isinstance(resp, dict):
+            return None
+        if resp.get("success") is False:
+            return None
+        result = resp.get("result")
+        return result if isinstance(result, list) else None
+
+    async def _fetch_dead_entities(self) -> dict[str, Any]:
+        """Surface orphaned/stale entity-registry entries.
+
+        Diffs the entity registry against the state machine and the live
+        config-entries set, classifying findings into confidence tiers:
+
+        - ``config_entry_orphans`` (definitive): registry entries whose
+          ``config_entry_id`` is no longer present in ``config/entries/get`` —
+          the owning integration instance was removed, leaving the registry
+          entry behind.
+        - ``stale_restored`` (likely): entries HA recreated from the registry on
+          startup — state ``unavailable`` with ``restored: true`` — whose owning
+          config entry still exists. The integration is loaded but no longer
+          provides the entity (renamed/removed device, re-paired Zigbee).
+
+        Deliberately NEVER flagged, to keep false positives low: ``unknown``
+        state (alive, just no current value — e.g. weather/disaster-alert
+        sensors), bare ``unavailable`` without ``restored`` (a loaded
+        integration reporting a device merely offline right now), and entries
+        disabled via ``disabled_by`` (intentional, unless their config entry is
+        also gone — those still surface as orphans). The ``restored`` flag is
+        what HA sets when it rebuilds a state object from the registry's cached
+        last state because no live platform currently provides the entity; it is
+        the discriminator between "dead" and "temporarily offline".
+
+        Entities can appear under ``stale_restored`` transiently right after a
+        restart, before integrations finish loading; ``note`` flags this.
+
+        Instance method (not @staticmethod): uses the REST client
+        (``self._client``) for states plus its per-client WebSocket bridge for
+        the registry + config entries, so it needs no system_health ws_client
+        and runs even when the health baseline is unavailable.
+        """
+        DEAD_ENTITIES_LIMIT = 50
+        dead: dict[str, Any] = {
+            "config_entry_orphans": {"items": [], "count": 0, "total_count": 0},
+            "stale_restored": {"items": [], "count": 0, "total_count": 0},
+            "summary": {"candidate_total": 0, "registry_total": 0},
+            "note": (
+                "Excludes 'unknown'-state entities and merely-offline devices "
+                "(bare 'unavailable' without 'restored'). Entries can appear "
+                "under stale_restored transiently right after a restart; re-run "
+                "if HA restarted recently. Remove a confirmed-dead entity with "
+                "ha_remove_entity(entity_id)."
+            ),
+        }
+        try:
+            # Index the gather result (rather than tuple-unpack) so mypy can
+            # type each element through the return_exceptions=True overload;
+            # mirrors smart_search/_entities.py::_fetch_search_entities.
+            results = await asyncio.gather(
+                self._client.get_states(),
+                self._client.send_websocket_message(
+                    {"type": "config/entity_registry/list"}
+                ),
+                self._client.send_websocket_message({"type": "config/entries/get"}),
+                return_exceptions=True,
+            )
+            states = results[0]
+
+            if isinstance(states, BaseException) or not isinstance(states, list):
+                dead["error"] = f"Could not fetch entity states: {states}"
+                return dead
+            registry = self._ws_result_list(results[1])
+            if registry is None:
+                dead["error"] = (
+                    "Could not fetch entity registry "
+                    "(config/entity_registry/list unavailable)"
+                )
+                return dead
+
+            # config-entries is the only optional source: without it the
+            # definitive orphan tier can't be computed, but stale_restored still
+            # can — so degrade rather than fail the whole section.
+            entries = self._ws_result_list(results[2])
+            live_entry_ids: set[str] | None = None
+            if entries is None:
+                dead["config_entries_checked"] = False
+                dead.setdefault("warnings", []).append(
+                    "config/entries/get unavailable; config_entry_orphans tier "
+                    "skipped (stale_restored still computed)."
+                )
+            else:
+                live_entry_ids = {
+                    e["entry_id"]
+                    for e in entries
+                    if isinstance(e, dict) and e.get("entry_id")
+                }
+                dead["config_entries_checked"] = True
+
+            state_by_id = {
+                s["entity_id"]: s
+                for s in states
+                if isinstance(s, dict) and s.get("entity_id")
+            }
+
+            orphans: list[dict[str, Any]] = []
+            stale: list[dict[str, Any]] = []
+            for entry in registry:
+                if not isinstance(entry, dict):
+                    continue
+                eid = entry.get("entity_id")
+                if not eid:
+                    continue
+                cfg = entry.get("config_entry_id")
+                disabled_by = entry.get("disabled_by")
+
+                # Tier 1 — config-entry orphan (only when the live set loaded).
+                # Covers disabled leftovers too: a disabled entity whose config
+                # entry is gone is still dead cruft (disabled_by is surfaced on
+                # the item so the client sees why it lingered).
+                if live_entry_ids is not None and cfg and cfg not in live_entry_ids:
+                    orphans.append(
+                        {
+                            "entity_id": eid,
+                            "platform": entry.get("platform"),
+                            "config_entry_id": cfg,
+                            "disabled_by": disabled_by,
+                            "has_state": eid in state_by_id,
+                        }
+                    )
+                    continue
+
+                # Tier 2 — stale restored. Skip intentionally-disabled entries
+                # (they normally have no state object anyway).
+                if disabled_by is not None:
+                    continue
+                state_obj = state_by_id.get(eid)
+                if state_obj is None:
+                    continue
+                attrs = state_obj.get("attributes") or {}
+                if state_obj.get("state") == "unavailable" and attrs.get("restored"):
+                    stale.append(
+                        {
+                            "entity_id": eid,
+                            "platform": entry.get("platform"),
+                            "config_entry_id": cfg,
+                        }
+                    )
+
+            def _bucket(items: list[dict[str, Any]]) -> dict[str, Any]:
+                total = len(items)
+                capped = items[:DEAD_ENTITIES_LIMIT]
+                bucket: dict[str, Any] = {
+                    "items": capped,
+                    "count": len(capped),
+                    "total_count": total,
+                }
+                if total > DEAD_ENTITIES_LIMIT:
+                    bucket["truncated"] = True
+                    bucket["hint"] = (
+                        f"Showing {DEAD_ENTITIES_LIMIT} of {total}; "
+                        "remove cleanup candidates in batches and re-run."
+                    )
+                return bucket
+
+            dead["config_entry_orphans"] = _bucket(orphans)
+            dead["stale_restored"] = _bucket(stale)
+            dead["summary"] = {
+                "candidate_total": len(orphans) + len(stale),
+                "registry_total": len(registry),
+            }
+        except Exception as e:
+            logger.warning("Failed to compute dead entities: %s", e)
+            dead["error"] = f"Dead-entities diff not available: {e}"
+        return dead
 
     async def _fetch_config_check(self) -> dict[str, Any]:
         """Validate HA configuration via POST /config/core/check_config.

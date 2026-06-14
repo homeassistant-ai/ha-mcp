@@ -71,6 +71,50 @@ class TestSystemTools:
         logger.info("Config check test completed successfully")
 
     @pytest.mark.asyncio
+    async def test_dead_entities_via_system_health(self, mcp_client):
+        """
+        Test: Surface orphaned/stale registry entries via
+        ha_get_system_health(include="dead_entities").
+
+        Validates the section shape (tiered buckets + summary) against a real HA
+        instance. The clean test environment is not expected to carry dead
+        entries, so the assertion is on structure, not on specific findings.
+        """
+        logger.info("Fetching dead entities via system health...")
+
+        result = await mcp_client.call_tool(
+            "ha_get_system_health", {"include": "dead_entities"}
+        )
+        data = parse_mcp_result(result)
+
+        logger.info(f"System health (dead_entities) result: {data}")
+
+        assert data.get("success") is True, f"Health check failed: {data.get('error')}"
+
+        assert "dead_entities" in data, "Missing 'dead_entities' section"
+        dead = data["dead_entities"]
+        # Foundational sources (states + registry) must be reachable on a live
+        # instance — a section-level error here is a real failure.
+        assert "error" not in dead, f"dead_entities errored: {dead.get('error')}"
+
+        for tier in ("config_entry_orphans", "stale_restored"):
+            assert tier in dead, f"Missing '{tier}' tier"
+            bucket = dead[tier]
+            assert "items" in bucket and isinstance(bucket["items"], list)
+            assert "count" in bucket and "total_count" in bucket
+
+        assert "summary" in dead, "Missing 'summary'"
+        assert "registry_total" in dead["summary"]
+        assert dead["summary"]["registry_total"] > 0, (
+            "A live HA instance should have a non-empty entity registry"
+        )
+        # config/entries/get is available in the test env, so the definitive
+        # orphan tier should be active.
+        assert dead.get("config_entries_checked") is True
+
+        logger.info("Dead entities test completed successfully")
+
+    @pytest.mark.asyncio
     async def test_restart_without_confirmation(self, mcp_client):
         """
         Test: Restart without confirmation fails safely.

@@ -959,3 +959,316 @@ class TestGetSystemHealthConfigCheck:
         assert "repairs" in result
         assert "config_check" in result
         assert result["config_check"]["is_valid"] is True
+
+
+def _make_dead_entities_client(
+    states,
+    *,
+    registry=None,
+    entries=None,
+    registry_resp=None,
+    entries_resp=None,
+    states_exc=None,
+):
+    """Build a mock client for ``_fetch_dead_entities``.
+
+    ``get_states`` returns ``states`` (or raises ``states_exc``).
+    ``send_websocket_message`` dispatches on the message ``type`` and returns the
+    HA envelope for the registry / config-entries lists. Pass ``registry_resp`` /
+    ``entries_resp`` to inject a raw (e.g. failure) envelope instead of wrapping a
+    list.
+    """
+    client = MagicMock()
+    if states_exc is not None:
+        client.get_states = AsyncMock(side_effect=states_exc)
+    else:
+        client.get_states = AsyncMock(return_value=states)
+
+    async def _ws(message):
+        msg_type = message.get("type")
+        if msg_type == "config/entity_registry/list":
+            if registry_resp is not None:
+                return registry_resp
+            return {"success": True, "result": registry or []}
+        if msg_type == "config/entries/get":
+            if entries_resp is not None:
+                return entries_resp
+            return {"success": True, "result": entries or []}
+        return {"success": False, "error": f"unexpected ws message: {msg_type}"}
+
+    client.send_websocket_message = AsyncMock(side_effect=_ws)
+    return client
+
+
+def _state(entity_id, state, *, restored=None):
+    """Build a minimal state-machine object."""
+    attrs = {}
+    if restored is not None:
+        attrs["restored"] = restored
+    return {"entity_id": entity_id, "state": state, "attributes": attrs}
+
+
+class TestFetchDeadEntities:
+    """``_fetch_dead_entities`` diffs the registry against states + config
+    entries and classifies orphaned/stale registry entries (issue #1578)."""
+
+    @pytest.mark.asyncio
+    async def test_config_entry_orphan_surfaces(self):
+        """A registry entry whose config_entry_id is not in the live entries set
+        is a definitive orphan, regardless of whether it still has a state."""
+        client = _make_dead_entities_client(
+            states=[_state("sensor.ghost", "unavailable", restored=True)],
+            registry=[
+                {
+                    "entity_id": "sensor.ghost",
+                    "platform": "pi_hole",
+                    "config_entry_id": "gone_entry",
+                    "disabled_by": None,
+                }
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "hue"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        orphans = result["config_entry_orphans"]["items"]
+        assert len(orphans) == 1
+        assert orphans[0]["entity_id"] == "sensor.ghost"
+        assert orphans[0]["config_entry_id"] == "gone_entry"
+        assert orphans[0]["has_state"] is True
+        # An orphan must NOT be double-counted under stale_restored.
+        assert result["stale_restored"]["items"] == []
+        assert result["config_entries_checked"] is True
+        assert result["summary"]["candidate_total"] == 1
+
+    @pytest.mark.asyncio
+    async def test_stale_restored_surfaces(self):
+        """unavailable + restored, with the owning config entry still alive,
+        classifies as stale_restored (not orphan)."""
+        client = _make_dead_entities_client(
+            states=[_state("sensor.stale", "unavailable", restored=True)],
+            registry=[
+                {
+                    "entity_id": "sensor.stale",
+                    "platform": "mobile_app",
+                    "config_entry_id": "live_entry",
+                    "disabled_by": None,
+                }
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "mobile_app"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert result["config_entry_orphans"]["items"] == []
+        stale = result["stale_restored"]["items"]
+        assert len(stale) == 1
+        assert stale[0]["entity_id"] == "sensor.stale"
+
+    @pytest.mark.asyncio
+    async def test_unknown_state_never_flagged(self):
+        """An 'unknown'-state entity (alive, just no current value — e.g. a
+        disaster-alert sensor) must never be flagged. This is the core
+        false-positive guard from issue #1578."""
+        client = _make_dead_entities_client(
+            states=[_state("sensor.disaster_alert", "unknown")],
+            registry=[
+                {
+                    "entity_id": "sensor.disaster_alert",
+                    "platform": "weather",
+                    "config_entry_id": "live_entry",
+                    "disabled_by": None,
+                }
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "weather"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert result["config_entry_orphans"]["items"] == []
+        assert result["stale_restored"]["items"] == []
+        assert result["summary"]["candidate_total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_bare_unavailable_without_restored_not_flagged(self):
+        """A loaded integration reporting a device merely offline right now
+        (unavailable WITHOUT restored) is alive — must not be flagged."""
+        client = _make_dead_entities_client(
+            states=[_state("light.offline_now", "unavailable")],
+            registry=[
+                {
+                    "entity_id": "light.offline_now",
+                    "platform": "hue",
+                    "config_entry_id": "live_entry",
+                    "disabled_by": None,
+                }
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "hue"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert result["stale_restored"]["items"] == []
+        assert result["config_entry_orphans"]["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_disabled_entity_with_live_entry_not_flagged(self):
+        """An intentionally-disabled entry whose config entry still exists is a
+        user choice, not dead — excluded from both tiers."""
+        client = _make_dead_entities_client(
+            states=[],
+            registry=[
+                {
+                    "entity_id": "sensor.disabled",
+                    "platform": "hue",
+                    "config_entry_id": "live_entry",
+                    "disabled_by": "user",
+                }
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "hue"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert result["config_entry_orphans"]["items"] == []
+        assert result["stale_restored"]["items"] == []
+
+    @pytest.mark.asyncio
+    async def test_disabled_orphan_still_surfaces_with_disabled_by(self):
+        """A disabled entry whose config entry is ALSO gone is still dead cruft —
+        surfaces as an orphan with disabled_by preserved for client context."""
+        client = _make_dead_entities_client(
+            states=[],
+            registry=[
+                {
+                    "entity_id": "sensor.disabled_orphan",
+                    "platform": "removed_integration",
+                    "config_entry_id": "gone_entry",
+                    "disabled_by": "integration",
+                }
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "hue"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        orphans = result["config_entry_orphans"]["items"]
+        assert len(orphans) == 1
+        assert orphans[0]["disabled_by"] == "integration"
+        assert orphans[0]["has_state"] is False
+
+    @pytest.mark.asyncio
+    async def test_config_entries_unavailable_degrades_to_stale_only(self):
+        """If config/entries/get fails, the definitive orphan tier is skipped but
+        stale_restored is still computed — graceful degradation, not a hard
+        failure."""
+        client = _make_dead_entities_client(
+            states=[_state("sensor.stale", "unavailable", restored=True)],
+            registry=[
+                {
+                    "entity_id": "sensor.stale",
+                    "platform": "mobile_app",
+                    "config_entry_id": "some_entry",
+                    "disabled_by": None,
+                }
+            ],
+            entries_resp={"success": False, "error": "ws down"},
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert result["config_entries_checked"] is False
+        assert result["config_entry_orphans"]["items"] == []
+        assert len(result["stale_restored"]["items"]) == 1
+        assert any("config_entry_orphans" in w for w in result["warnings"])
+        assert "error" not in result
+
+    @pytest.mark.asyncio
+    async def test_registry_unavailable_is_section_error(self):
+        """The registry is the foundational source — if it can't be fetched, the
+        section returns an embedded error (never raises)."""
+        client = _make_dead_entities_client(
+            states=[],
+            registry_resp={"success": False, "error": "ws down"},
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert "error" in result
+        assert "registry" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_states_unavailable_is_section_error(self):
+        """A states-fetch failure surfaces as an embedded section error, not an
+        unhandled raise."""
+        client = _make_dead_entities_client(
+            states=None,
+            states_exc=RuntimeError("states boom"),
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert "error" in result
+        assert "states" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_stale_bucket_truncates_at_limit(self):
+        """The stale bucket caps its item list and reports truncation + totals so
+        large installs stay token-friendly."""
+        registry = [
+            {
+                "entity_id": f"sensor.stale_{i}",
+                "platform": "mobile_app",
+                "config_entry_id": "live_entry",
+                "disabled_by": None,
+            }
+            for i in range(60)
+        ]
+        states = [
+            _state(f"sensor.stale_{i}", "unavailable", restored=True) for i in range(60)
+        ]
+        client = _make_dead_entities_client(
+            states=states,
+            registry=registry,
+            entries=[{"entry_id": "live_entry", "domain": "mobile_app"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        bucket = result["stale_restored"]
+        assert bucket["count"] == 50
+        assert bucket["total_count"] == 60
+        assert bucket["truncated"] is True
+        assert result["summary"]["candidate_total"] == 60
+
+    @pytest.mark.asyncio
+    async def test_dead_entities_via_tool_routes_to_helper(self):
+        """include='dead_entities' routes to the helper and embeds its result."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        payload = {"summary": {"candidate_total": 0, "registry_total": 0}}
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools,
+                "_fetch_dead_entities",
+                new=AsyncMock(return_value=payload),
+            ) as mock_dead,
+        ):
+            result = await tools.ha_get_system_health(include="dead_entities")
+        assert result["dead_entities"] == payload
+        mock_dead.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_dead_entities_returns_when_health_ws_unavailable(self):
+        """dead_entities is REST-based, so it survives a WS-baseline failure —
+        mirrors the config_check / diagnostics degradation guarantee."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        payload = {"summary": {"candidate_total": 0, "registry_total": 0}}
+        with (
+            patch.object(
+                SystemTools,
+                "_fetch_health_info",
+                new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
+            ),
+            patch.object(
+                SystemTools,
+                "_fetch_dead_entities",
+                new=AsyncMock(return_value=payload),
+            ),
+        ):
+            result = await tools.ha_get_system_health(include="dead_entities")
+        assert result["success"] is True
+        assert result["baseline_available"] is False
+        assert result["dead_entities"] == payload
