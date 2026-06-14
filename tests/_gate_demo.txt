@@ -1,0 +1,4 @@
+Throwaway non-docs file to flip the e2e gate to run=true on this PR.
+Not under a bake-input path (tests/haos_image_build, tests/initial_test_state,
+custom_components/ha_mcp_tools, homeassistant-addon-webhook-proxy), so the HAOS
+cache key is unchanged and the lanes cache-hit instead of full-baking.
