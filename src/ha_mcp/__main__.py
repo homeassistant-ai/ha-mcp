@@ -290,17 +290,29 @@ def _setup_standard_mode() -> None:
     _log_startup_version()
 
 
-def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict:
-    """Build common run_async kwargs for HTTP-based transports."""
-    return {
+def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict[str, Any]:
+    """Build common run_async kwargs for HTTP-based transports.
+
+    ``stateless_http`` is a Streamable-HTTP concept and is only valid for the
+    ``http``/``streamable-http`` transports. Passing it alongside
+    ``transport="sse"`` makes fastmcp's ``run_async`` raise
+    ``ValueError("SSE transport does not support stateless mode")``. That raise
+    is swallowed (the server task is already done, so ``_cancel_tasks`` skips it
+    and the exception is never retrieved), so ``_run_entrypoint`` exits 0 and the
+    SSE entrypoint appears to start, then silently dies. Gate it to non-SSE
+    transports. See #1544.
+    """
+    kwargs: dict[str, Any] = {
         "transport": transport,
         "host": host,
         "port": port,
         "path": path,
         "show_banner": _get_show_banner(),
-        "stateless_http": True,
         "uvicorn_config": {"log_config": _get_timestamped_uvicorn_log_config()},
     }
+    if transport != "sse":
+        kwargs["stateless_http"] = True
+    return kwargs
 
 
 def _create_server() -> "HomeAssistantSmartMCPServer":
@@ -532,6 +544,12 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
                 # Expected: we just cancelled server_task above; swallow its
                 # CancelledError so shutdown can proceed to cleanup.
                 pass
+        elif server_task in done:
+            # Server task finished on its own (no shutdown signal). Re-raise any
+            # exception it captured so a hard startup failure surfaces as a
+            # logged sys.exit(1) instead of a silent exit 0 — without this the
+            # exception on the already-done task is never retrieved. See #1544.
+            server_task.result()
 
     except asyncio.CancelledError:
         logger.info("Server task cancelled")
