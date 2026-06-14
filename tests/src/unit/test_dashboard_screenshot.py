@@ -8,7 +8,8 @@ Covers everything that runs inside ha-mcp itself — no container, no engine:
 - the capture HTTP client (URL/param building, PNG return, error -> ToolError)
 - the graceful get/set screenshot helper (feature-off / failure -> warning)
 
-The headless-Chromium engine is exercised end to end in the HAOS lane
+The Supervisor auto-discovery branch + addon lifecycle are exercised end to end
+against a mock engine in the HAOS inaddon lane
 (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py).
 """
 
@@ -231,12 +232,12 @@ class TestDiscoverEngineViaSupervisor:
                 "/addons": {
                     "data": {
                         "addons": [
-                            {"slug": "abc_ha_mcp_screenshot"},  # legacy, stopped
-                            {"slug": "def_puppet"},  # stock, started
+                            {"slug": "abc_puppet"},  # stopped
+                            {"slug": "def_puppet"},  # started
                         ]
                     }
                 },
-                "/addons/abc_ha_mcp_screenshot/info": {"data": {"state": "stopped"}},
+                "/addons/abc_puppet/info": {"data": {"state": "stopped"}},
                 "/addons/def_puppet/info": {
                     "data": {"state": "started", "hostname": "def-puppet"}
                 },

@@ -202,18 +202,17 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # ``_ha_mcp`` / ``_ha_mcp_dev``, so the dev addon installed just before this
 # one (slug=``local_ha_mcp_dev``) is the discovery target.
 HA_MCP_WEBHOOK_PROXY_ADDON_SLUG = "local_ha_mcp_webhook_proxy"
-# Screenshot engine = balloob's Puppet add-on, VENDORED as a pinned git
-# submodule (tests/haos_image_build/vendor/home-assistant-addons) rather than
-# registering balloob's live add-on repo in Supervisor. Pinning decouples the
-# bake from balloob's repo HEAD / availability and makes a transient repo-side
-# issue a Renovate-PR failure instead of a random master-build failure;
-# Renovate's git-submodules manager bumps the pin via reviewed, CI-gated PRs.
-# Staged into the qcow2 as a LOCAL add-on (stage_puppet_addon_source), so
-# Supervisor assigns slug ``local_<config-slug>`` -> ``local_puppet``.
-PUPPET_VENDOR_DIR = (
-    Path(__file__).resolve().parent / "vendor" / "home-assistant-addons" / "puppet"
-)
-PUPPET_ADDON_SLUG = "local_puppet"
+# Screenshot engine for the bake: a tiny in-repo MOCK (screenshot_engine_mock/)
+# that serves balloob Puppet's HTTP contract WITHOUT Chromium. The real Puppet
+# add-on's heavy ``debian:bullseye-slim`` + Chromium + ``npm ci`` build is what
+# repeatedly broke the bake under floating Supervisor versions, and real
+# Chromium rendering exercises balloob's add-on, not ha-mcp -- so the bake
+# stages the mock and the screenshot tool's discovery + request + auth-token
+# plumbing is exercised against it. Real users still install balloob's add-on;
+# the mock never ships. Slug ``puppet`` -> ``local_puppet`` (matches the
+# ``_puppet`` discovery suffix), staged as a LOCAL add-on.
+SCREENSHOT_ENGINE_MOCK_DIR = Path(__file__).resolve().parent / "screenshot_engine_mock"
+SCREENSHOT_ENGINE_SLUG = "local_puppet"
 # Advanced SSH addon user/password set at install time so the runtime
 # helper (``haos_runtime.ssh_exec``) can authenticate non-interactively.
 # CI-test-only credential — overridable via env so the value never has
@@ -664,11 +663,10 @@ def _install_addon_with_retry(
 ) -> None:
     """POST an add-on install, retrying once on a transient build/connection failure.
 
-    Heavy add-on images build inside Supervisor and occasionally fail when a
-    base-image pull, an apt mirror, or the npm registry hiccups mid-build.
-    balloob's Puppet add-on (apt-installs Chromium + ``npm ci`` from
-    ``debian:bullseye-slim``) is the usual victim — it has failed ~13 s into the
-    build, while the very same version builds cleanly on a re-run. The failure
+    The bake's local add-ons (the ha-mcp dev addon, the webhook proxy, and the
+    mock screenshot engine) build their images inside Supervisor, which can fail
+    transiently when a base-image pull or apt mirror hiccups mid-build — the same
+    version then builds cleanly on a re-run. The failure
     surfaces two ways and we retry both: Supervisor returns a ``WSCommandError``,
     OR — because the build can outlast a flaky link (the motivating failure also
     logged a Bad-file-descriptor WS drop mid-bake) — the WS connection drops and
@@ -1161,34 +1159,33 @@ def stage_webhook_proxy_addon_source(qcow2: Path) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def stage_puppet_addon_source(qcow2: Path) -> None:
-    """Bake the vendored Puppet screenshot add-on into the qcow2 as a local add-on.
+def stage_screenshot_engine_source(qcow2: Path) -> None:
+    """Bake the mock screenshot engine into the qcow2 as a local add-on.
 
     Runs BEFORE first start_qemu so HAOS boots with the local add-on visible to
-    Supervisor's local store (slug ``local_puppet``). The source is the pinned
-    ``home-assistant-addons`` submodule's ``puppet/`` directory, copied verbatim:
-    its config.yaml has no ``image:`` field (so Supervisor builds from the local
-    Dockerfile) and the Dockerfile's ``COPY ha-puppet/ ...`` paths are already
-    addon-dir-relative, so unlike the ha-mcp dev add-on no Dockerfile patch or
-    ``image:`` strip is needed. ``install_puppet_addon`` builds it during the
-    running phase, so the heavy Chromium build is cached into the qcow2 once.
+    Supervisor's local store (slug ``local_puppet``). The source is the in-repo
+    ``screenshot_engine_mock/`` directory, copied verbatim: its config.yaml has
+    no ``image:`` field (so Supervisor builds from the local Dockerfile) and the
+    Dockerfile (``python:3.13-slim`` + a stdlib server) needs no patch or
+    ``image:`` strip. ``install_screenshot_engine`` builds it during the running
+    phase — a fast, reliable build (unlike balloob's Chromium image, which broke
+    the bake under floating Supervisor versions).
     """
-    src = PUPPET_VENDOR_DIR
+    src = SCREENSHOT_ENGINE_MOCK_DIR
     if not (src / "config.yaml").exists() or not (src / "Dockerfile").exists():
         raise RuntimeError(
-            f"Vendored Puppet add-on source not found at {src} — the "
-            f"home-assistant-addons submodule is not checked out. Run "
-            f"`git submodule update --init`."
+            f"Mock screenshot engine source not found at {src}; the checkout "
+            f"is incomplete."
         )
 
     LOG.info(
-        "Staging vendored Puppet add-on source into qcow2 "
+        "Staging mock screenshot engine source into qcow2 "
         "/supervisor/addons/local/puppet/"
     )
-    workdir = Path(tempfile.mkdtemp(prefix="haos-puppet-addon-"))
+    workdir = Path(tempfile.mkdtemp(prefix="haos-screenshot-engine-"))
     try:
         staging = workdir / "puppet"
-        shutil.copytree(src, staging)
+        shutil.copytree(src, staging, ignore=shutil.ignore_patterns("__pycache__"))
 
         seed_tar = workdir / "puppet.tar"
         _run(
@@ -1224,7 +1221,7 @@ def stage_puppet_addon_source(qcow2: Path) -> None:
                 "/supervisor/addons/local",
             ]
         )
-        LOG.info("Puppet add-on source staged at /supervisor/addons/local/puppet/")
+        LOG.info("Mock screenshot engine staged at /supervisor/addons/local/puppet/")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -1454,15 +1451,15 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
     return slug
 
 
-def install_puppet_addon(ws: HAWebSocket) -> str:
-    """Install the vendored Puppet screenshot engine as a LOCAL add-on.
+def install_screenshot_engine(ws: HAWebSocket) -> str:
+    """Install the mock screenshot engine as a LOCAL add-on.
 
     The add-on source is staged into /supervisor/addons/local/puppet/ before
-    first boot (``stage_puppet_addon_source``), so Supervisor's local-store
+    first boot (``stage_screenshot_engine_source``), so Supervisor's local-store
     scanner picks it up as ``local_puppet``. We reload the store to be explicit,
-    then install — which builds the Chromium image into the cached qcow2 (the
-    heavy build is paid once per cache-key change). No balloob repo is
-    registered; the pinned submodule is the only source.
+    then install — which builds the mock's small python:3.13-slim image into the
+    cached qcow2. No balloob repo or submodule is involved; the in-repo
+    ``screenshot_engine_mock/`` dir is the only source.
 
     Install-only — ``boot`` is set to ``manual`` so the cached qcow2 doesn't
     auto-start it on resume (the haos_only test starts it via a module
@@ -1475,23 +1472,21 @@ def install_puppet_addon(ws: HAWebSocket) -> str:
     Returns the installed slug (``local_puppet``).
     """
     _reload_store(ws)
-    slug = PUPPET_ADDON_SLUG
+    slug = SCREENSHOT_ENGINE_SLUG
     LOG.info(
-        "Installing vendored Puppet screenshot engine (slug=%s) — building the "
-        "Chromium Docker image; this is the slowest addon build, cached in the qcow2...",
+        "Installing mock screenshot engine (slug=%s) — building its small "
+        "python:3.13-slim image into the qcow2...",
         slug,
     )
-    # Generous timeout: Debian + Chromium + Node + npm-ci is the heaviest
-    # addon build in the bake.
-    _install_addon_with_retry(ws, slug, timeout=1800.0)
+    _install_addon_with_retry(ws, slug, timeout=300.0)
 
-    LOG.info("Setting Puppet addon options (boot=manual, empty token)")
+    LOG.info("Setting screenshot engine options (boot=manual, empty token)")
     ws.supervisor_api(
         f"/addons/{slug}/options",
         method="post",
         data={
-            # Seed all of Puppet's required options; the runtime fixture only
-            # overwrites access_token with a real token before starting.
+            # Seed all required options; the runtime fixture only overwrites
+            # access_token with a real token before starting.
             "options": {
                 "access_token": "",
                 "keep_browser_open": False,
@@ -1501,7 +1496,7 @@ def install_puppet_addon(ws: HAWebSocket) -> str:
         },
         timeout=60.0,
     )
-    LOG.info("Puppet screenshot engine installed (not started); slug=%s", slug)
+    LOG.info("Mock screenshot engine installed (not started); slug=%s", slug)
     return slug
 
 
@@ -1860,11 +1855,12 @@ def build(work_dir: Path, output: Path) -> None:
     # independent), but the install order below DOES — the webhook-proxy's
     # auto-discovery needs the dev addon present at first start.
     stage_webhook_proxy_addon_source(qcow2)
-    # The screenshot engine (balloob's Puppet) is staged from the pinned
-    # home-assistant-addons submodule as a local add-on; install_puppet_addon
-    # builds its Chromium image into the cached qcow2 during the running phase
-    # below.
-    stage_puppet_addon_source(qcow2)
+    # The screenshot engine is a tiny in-repo MOCK (screenshot_engine_mock/)
+    # staged as a local add-on; install_screenshot_engine builds it (a fast
+    # python:3.13-slim image) into the cached qcow2 during the running phase
+    # below. See SCREENSHOT_ENGINE_MOCK_DIR for why the mock replaced balloob's
+    # heavy Chromium Puppet add-on.
+    stage_screenshot_engine_source(qcow2)
     qemu = start_qemu(qcow2, work_dir)
     base_url = f"http://127.0.0.1:{HA_HOST_PORT}"
     try:
@@ -1880,10 +1876,10 @@ def build(work_dir: Path, output: Path) -> None:
             # Supervisor auto-discovery (slug-suffix match on _ha_mcp_dev)
             # finds a target on first start.
             install_webhook_proxy_addon(ws)
-            # Screenshot engine = balloob's Puppet, staged as a local add-on
-            # from the pinned submodule (boot=manual, empty token; the runtime
-            # fixture injects a real HA access token and starts it).
-            install_puppet_addon(ws)
+            # Screenshot engine = the in-repo mock, staged as a local add-on
+            # (boot=manual, empty token; the runtime fixture injects a real HA
+            # access token and starts it).
+            install_screenshot_engine(ws)
             install_advanced_ssh(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
             # companion, Local Calendar, Sun verification) and mock RTSP/MQTT

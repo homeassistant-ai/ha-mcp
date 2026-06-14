@@ -1,11 +1,12 @@
 """Container/Docker-lane E2E for the dashboard screenshot sidecar path.
 
-The real Chromium engine is exercised only on the inaddon lane
-(``haos_only/test_dashboard_screenshot_addon.py``). This module covers the
-**Docker / Container deployment** instead — the explicit
+The inaddon lane (``haos_only/test_dashboard_screenshot_addon.py``) exercises
+the Supervisor auto-discovery branch (``resolve_engine_url`` mode 2) + addon
+lifecycle against a lightweight mock engine. This module covers the **Docker /
+Container deployment** instead — the explicit
 ``HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL`` sidecar path (``resolve_engine_url``
-mode 1), which is a different resolution branch from the inaddon lane's
-Supervisor auto-discovery and is otherwise untested.
+mode 1), a different resolution branch that is otherwise untested. Neither lane
+runs real Chromium: that exercises balloob's add-on, not ha-mcp.
 
 A faithful FAKE engine stands in for ha-puppet, mirroring the real engine's
 HTTP contract so the capture client is exercised against the same wire shape it
