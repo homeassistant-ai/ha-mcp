@@ -1194,10 +1194,15 @@ def trigger_dev_addon_update(
         ``/supervisor/api`` is proxied by HA Core; while the Supervisor backend
         restarts mid-self-update, Core forwards a structured ``success=False``
         frame (typically ``ERR_UNKNOWN_ERROR``). The WS transport stays up —
-        this is exactly the window the wait exists to span — so a failure
+        this is exactly the window the wait exists to span — so the failure
         frame is recorded and polling continues. On deadline-without-success
-        the last failure frame is surfaced in the TimeoutError. Mirrors the
-        build-side ``_wait_supervisor_ready`` tolerate-and-surface discipline.
+        the last failure frame is surfaced in the TimeoutError. The build-side
+        sibling ``_wait_supervisor_ready`` tolerates an equivalent restart
+        window via exception-catch + ``ws.reconnect()`` because it polls over a
+        direct Supervisor WS that can drop transport during the restart; this
+        runtime-side path polls over the Core-proxied WS where the transport
+        stays up, so the tolerate-and-surface here is structured-frame-based
+        rather than exception-based.
         """
         last_error: str | None = None
         while time.monotonic() < deadline:

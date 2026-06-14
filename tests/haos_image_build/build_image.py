@@ -1564,7 +1564,13 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
                 # here via _SUPERVISOR_WAIT_TRANSIENT_ERRORS. RuntimeError stays
                 # for symmetry with the poll-catch above (generic Supervisor
                 # restart-window RuntimeError that isn't a WSCommandError).
-                LOG.debug("reconnect during update wait failed: %r", reconnect_err)
+                # WARNING level: a reconnect failure on its own is recoverable
+                # (the next poll re-tries on the same ws and the broker may
+                # have re-accepted by then), but a persistent reconnect failure
+                # silently consumes the entire update_timeout budget surfacing
+                # only the *poll* error in the final TimeoutError — WARNING
+                # makes that pattern visible at INFO-level CI logs.
+                LOG.warning("reconnect during update wait failed: %r", reconnect_err)
             continue
         version = info.get("version")
         if version != last_version:

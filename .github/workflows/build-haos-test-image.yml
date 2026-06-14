@@ -31,7 +31,7 @@ on:
       - 'custom_components/ha_mcp_tools/**'
       - 'homeassistant-addon-webhook-proxy/**'
       - 'homeassistant-addon-dev/**'
-      # The workflow itself — bumping the build script or env triggers a republish.
+      # The workflow itself — bumping the build script or env triggers a cache refresh.
       - '.github/workflows/build-haos-test-image.yml'
   schedule:
     # Weekly Monday 06:00 UTC — keeps the image current with addon updates
@@ -101,13 +101,14 @@ jobs:
         run: pip install -r tests/haos_image_build/requirements.txt
 
       - name: Free disk space for the bake
-        # The publish always local-builds the qcow2, so it hits the same disk
-        # peak the e2e local-build path guards against. The Puppet (Chromium)
-        # add-on is the largest and last build, so it is the first to trip the
-        # runner's ~14 GB SSD: the e2e lanes build Puppet fine with this exact
-        # prune, while the publish (which lacked it) failed at the Puppet
-        # build. The df -h bookends make the reclaimed headroom visible. Keep
-        # /opt/hostedtoolcache: Python from there is on PATH for build_image.py.
+        # The cache-prime always local-builds the qcow2, so it hits the same
+        # disk peak the e2e local-build path guards against. The Puppet
+        # (Chromium) add-on is the largest and last build, so it is the first
+        # to trip the runner's ~14 GB SSD: the e2e lanes build Puppet fine
+        # with this exact prune, while the cache-prime (which lacked it)
+        # failed at the Puppet build. The df -h bookends make the reclaimed
+        # headroom visible. Keep /opt/hostedtoolcache: Python from there is
+        # on PATH for build_image.py.
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
@@ -119,7 +120,7 @@ jobs:
       - name: Build image
         run: python3 tests/haos_image_build/build_image.py --verbose --output haos-test-image.qcow2
 
-      - name: Extract publish-build diagnostics (always)
+      - name: Extract bake diagnostics (always)
         # On build failure (boot timeout, onboarding rejection, addon
         # install error, bake step crash) Python's stdout via --verbose
         # is the only signal otherwise. Grab the serial log + a
@@ -130,43 +131,44 @@ jobs:
         if: always()
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
-          mkdir -p /tmp/haos-publish-diagnostics
+          mkdir -p /tmp/haos-bake-diagnostics
           intermediate=/tmp/haos-build/haos-test-image.qcow2
           if [ -f "$intermediate" ]; then
             guestfish --ro -a "$intermediate" run \
               : mount /dev/sda8 / \
               : ll /supervisor/homeassistant \
-              > /tmp/haos-publish-diagnostics/config-dir-listing.txt 2>&1 \
+              > /tmp/haos-bake-diagnostics/config-dir-listing.txt 2>&1 \
               || echo "directory listing failed (qcow2 may not be baked yet)"
             guestfish --ro -a "$intermediate" run \
               : mount /dev/sda8 / \
               : tar-out /supervisor/homeassistant/.storage \
-                /tmp/haos-publish-diagnostics/storage.tar \
+                /tmp/haos-bake-diagnostics/storage.tar \
               || echo ".storage tar-out failed"
           else
             echo "intermediate qcow2 not present — build failed before bake" \
-              > /tmp/haos-publish-diagnostics/no-qcow2.txt
+              > /tmp/haos-bake-diagnostics/no-qcow2.txt
           fi
           # build_image.start_qemu writes the serial log to <work_dir>/
           # haos-serial.log (default work_dir = /tmp/haos-build); copy
           # it out for upload.
-          cp /tmp/haos-build/haos-serial.log /tmp/haos-publish-diagnostics/ \
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-bake-diagnostics/ \
             2>/dev/null || true
-          ls -la /tmp/haos-publish-diagnostics/ || true
+          ls -la /tmp/haos-bake-diagnostics/ || true
 
-      - name: Upload publish-build diagnostics
+      - name: Upload bake diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: haos-publish-diagnostics-${{ github.sha }}
-          path: /tmp/haos-publish-diagnostics/
+          name: haos-bake-diagnostics-${{ github.sha }}
+          path: /tmp/haos-bake-diagnostics/
           if-no-files-found: warn
           retention-days: 14
 
       - name: Compress qcow2 in-format (qemu-img convert -c)
         # Re-pack the qcow2 with qcow2-native zlib *cluster* compression
-        # before the artifact upload + shared-cache save below. The
-        # post-bake file is ~12 GB *apparent* size on disk — sparse, with
+        # before downstream consumers (the artifact upload always; the
+        # shared-cache save on master only). The post-bake file is ~12 GB
+        # *apparent* size on disk — sparse, with
         # ~5 GB actually allocated; the rest is un-allocated holes from
         # ``qemu-img resize 32G`` in ``fetch_haos_qcow2``. Both the
         # Actions artifact upload and the Actions cache save serialise
