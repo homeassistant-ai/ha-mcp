@@ -110,10 +110,10 @@ const scriptsBase = 'https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/m
             <details class="mt-4">
               <summary class="text-slate-400 hover:text-white cursor-pointer font-medium">Manual setup (if the installer doesn't work)</summary>
               <div class="mt-4 pl-4 border-l-2 border-slate-700">
-                <h4 class="font-medium text-white mb-2">Install uv</h4>
+                <h3 class="font-medium text-white mb-2">Install uv</h3>
                 <pre class="code-block mb-4"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
 
-                <h4 class="font-medium text-white mb-2">Register the server</h4>
+                <h3 class="font-medium text-white mb-2">Register the server</h3>
                 <pre class="code-block"><code>{`claude mcp add home-assistant --scope user \\
   --env HOMEASSISTANT_URL=${demoUrl} \\
   --env HOMEASSISTANT_TOKEN=demo \\
@@ -181,10 +181,10 @@ const scriptsBase = 'https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/m
             <details class="mt-4">
               <summary class="text-slate-400 hover:text-white cursor-pointer font-medium">Manual Installation (if the installer doesn't work)</summary>
               <div class="mt-4 pl-4 border-l-2 border-slate-700">
-                <h4 class="font-medium text-white mb-2">Install uv</h4>
+                <h3 class="font-medium text-white mb-2">Install uv</h3>
                 <pre class="code-block mb-4"><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
 
-                <h4 class="font-medium text-white mb-2">Configure Claude Desktop</h4>
+                <h3 class="font-medium text-white mb-2">Configure Claude Desktop</h3>
                 <ol class="text-slate-300 space-y-2 mb-4">
                   <li>1. Open Claude Desktop</li>
                   <li>2. <strong>Settings</strong> &rarr; <strong>Developer</strong> &rarr; <strong>Edit Config</strong></li>
@@ -257,7 +257,7 @@ const scriptsBase = 'https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/m
         <div class="step-content">
           <p class="text-slate-300 mb-4">Ready to use your own Home Assistant? You'll need a long-lived access token:</p>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mb-6">
-            <h4 class="font-medium text-amber-300 mb-2">To get your token:</h4>
+            <h3 class="font-medium text-amber-300 mb-2">To get your token:</h3>
             <ol class="text-amber-200/80 space-y-1 text-sm">
               <li>1. Open Home Assistant in your browser</li>
               <li>2. Click your username (bottom left)</li>
@@ -266,7 +266,7 @@ const scriptsBase = 'https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/m
             </ol>
           </div>
 
-          <h4 class="font-medium text-white mb-2">Claude Code</h4>
+          <h3 class="font-medium text-white mb-2">Claude Code</h3>
           <p class="text-slate-400 text-sm mb-2">Re-register the server with your own URL and token:</p>
           <pre class="code-block mb-6"><code>{`claude mcp remove home-assistant --scope user
 claude mcp add home-assistant --scope user \\
@@ -274,7 +274,7 @@ claude mcp add home-assistant --scope user \\
   --env HOMEASSISTANT_TOKEN=your_long_lived_token \\
   -- uvx --python 3.13 ha-mcp@latest`}</code></pre>
 
-          <h4 class="font-medium text-white mb-2">Claude Desktop</h4>
+          <h3 class="font-medium text-white mb-2">Claude Desktop</h3>
           <p class="text-slate-400 text-sm mb-2">Open the config in your editor (swap <code class="bg-slate-800 px-1 rounded">nano</code> for your preferred one):</p>
           <pre class="code-block mb-4"><code>nano ~/.config/Claude/claude_desktop_config.json</code></pre>
           <p class="text-slate-300 mb-2">Replace the demo values:</p>

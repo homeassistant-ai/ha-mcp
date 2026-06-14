@@ -130,6 +130,44 @@ jobs:
           echo "::warning file=AGENTS.md::AGENTS.md is ${size} chars (>40k). Claude Code will show a startup performance warning."
         fi
 
+  # Anchors the docs-site accessibility work (#1574/#1595): astro check (types
+  # + a11y diagnostics), eslint-plugin-astro + jsx-a11y, and an axe-core audit
+  # over the built pages — all blocking. The baseline is clean, so any
+  # regression fails the PR.
+  site-checks:
+    name: Site (astro check + eslint a11y)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: site
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup Node
+      uses: actions/setup-node@v6
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: site/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Astro type & diagnostics check
+      run: npm run check
+
+    - name: ESLint (eslint-plugin-astro + jsx-a11y)
+      run: npm run lint
+
+    - name: Build site
+      run: npm run build
+
+    - name: Accessibility audit (axe-core)
+      # Blocking: the baseline is clean (0 violations across all pages), so a
+      # new axe-core violation fails the PR rather than slipping through.
+      run: npm run audit:a11y
+
   lint:
     name: Ruff Lint
     runs-on: ubuntu-latest

@@ -290,10 +290,10 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 
       <!-- Get Started Quick Options -->
       <div class="mb-8">
-        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-green-900/30 text-green-400 text-sm mb-4">
+        <h2 class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-green-900/30 text-green-400 text-sm mb-4">
           <span class="inline-flex rounded-full h-2 w-2 bg-green-500"></span>
           Get Started - Easy Setup
-        </div>
+        </h2>
         <div class="grid md:grid-cols-3 gap-6 max-w-3xl mx-auto">
           <a href={withBase('/guide-macos')} class="quick-start-card group">
             <div class="flex items-center gap-4">
@@ -347,6 +347,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
               class="option-card group"
             >
               <div class="flex items-center gap-2 mb-1">
+                {/* eslint-disable-next-line astro/jsx-a11y/no-noninteractive-element-interactions -- onerror hides a broken decorative logo (alt=""); it is a load-failure fallback, not a user interaction, and must be inline so it catches images that fail before any delegated listener could attach */}
                 <img src={client.logo} alt="" class="w-8 h-8 rounded" onerror="this.style.display='none'" />
                 <div class="min-w-0">
                   <h3 class="font-medium text-white text-sm truncate group-hover:text-blue-400">{client.name}</h3>

@@ -216,18 +216,19 @@ function getBadgeInfo(annotations: Record<string, any>) {
                   <div class="border-t border-slate-700/50 pt-3 space-y-4">
                     {/* Full description */}
                     <div>
-                      <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Description</h4>
+                      <h3 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Description</h3>
                       <p class="desc-display text-sm text-slate-300 whitespace-pre-line">{tool.description}</p>
                       <textarea
                         class="desc-edit hidden w-full bg-slate-900/50 border border-slate-700/50 text-slate-300 text-sm rounded-lg p-3 resize-none focus:outline-none focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/25 whitespace-pre-line"
                         rows="4"
+                        aria-label={`Edit description for ${tool.name}`}
                       >{tool.description}</textarea>
                     </div>
 
                     {/* Parameters */}
                     {params.length > 0 && (
                       <div>
-                        <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Parameters</h4>
+                        <h3 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Parameters</h3>
                         <div class="space-y-2">
                           {params.map(([name, schema]: [string, any]) => {
                             const typeStr = schema.anyOf
