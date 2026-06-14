@@ -1190,7 +1190,16 @@ def trigger_dev_addon_update(
         is still True. Mirror build_image._wait_supervisor_ready: wait until
         update_available is false (and a version_latest is present, so a
         pre-fetch latest=None does not read as a false clear).
+
+        ``/supervisor/api`` is proxied by HA Core; while the Supervisor backend
+        restarts mid-self-update, Core forwards a structured ``success=False``
+        frame (typically ``ERR_UNKNOWN_ERROR``). The WS transport stays up —
+        this is exactly the window the wait exists to span — so a failure
+        frame is recorded and polling continues. On deadline-without-success
+        the last failure frame is surfaced in the TimeoutError. Mirrors the
+        build-side ``_wait_supervisor_ready`` tolerate-and-surface discipline.
         """
+        last_error: str | None = None
         while time.monotonic() < deadline:
             info_id = _next_id()
             ws.send(
@@ -1205,6 +1214,7 @@ def trigger_dev_addon_update(
                 )
             )
             result: dict | None = None
+            transient_failure = False
             while time.monotonic() < deadline:
                 remaining = max(deadline - time.monotonic(), 1.0)
                 try:
@@ -1217,12 +1227,16 @@ def trigger_dev_addon_update(
                 if resp.get("id") != info_id:
                     continue
                 if not resp.get("success", False):
-                    raise RuntimeError(
-                        f"supervisor/api /supervisor/info failed: "
-                        f"{resp.get('error') or resp!r}"
-                    )
+                    err = resp.get("error") or resp
+                    last_error = f"supervisor/api /supervisor/info failed: {err!r}"
+                    LOG.debug("Transient /supervisor/info failure: %s", last_error)
+                    transient_failure = True
+                    break
                 result = resp.get("result") or {}
                 break
+            if transient_failure:
+                time.sleep(10.0)
+                continue
             if result is None:
                 break
             if not result.get("update_available") and result.get("version_latest"):
@@ -1237,8 +1251,10 @@ def trigger_dev_addon_update(
                 result.get("version_latest"),
             )
             time.sleep(10.0)
+        suffix = f"; last error: {last_error}" if last_error else ""
         raise TimeoutError(
-            "Supervisor did not finish self-updating before the update deadline"
+            f"Supervisor did not finish self-updating before the update "
+            f"deadline{suffix}"
         )
 
     with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:

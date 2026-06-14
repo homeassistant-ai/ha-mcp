@@ -1557,7 +1557,13 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
             LOG.debug("Transient error polling /supervisor/info: %r", e)
             try:
                 ws.reconnect()
-            except (OSError, RuntimeError, TimeoutError) as reconnect_err:
+            except _SUPERVISOR_WAIT_TRANSIENT_ERRORS + (RuntimeError,) as reconnect_err:
+                # Handshake-stage WS errors (InvalidStatus / InvalidHandshake /
+                # ConnectionClosed) raise WebSocketException, which is NOT a
+                # subclass of OSError / RuntimeError / TimeoutError — covered
+                # here via _SUPERVISOR_WAIT_TRANSIENT_ERRORS. RuntimeError stays
+                # for symmetry with the poll-catch above (generic Supervisor
+                # restart-window RuntimeError that isn't a WSCommandError).
                 LOG.debug("reconnect during update wait failed: %r", reconnect_err)
             continue
         version = info.get("version")

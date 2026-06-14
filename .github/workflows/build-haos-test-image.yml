@@ -1,8 +1,11 @@
-name: Build HAOS Test Image (Publish to GHCR)
+name: Build HAOS Test Image (Prime Shared Cache)
 
-# Publishes the pre-baked HAOS qcow2 used by haos-e2e-tests.yml — see #1281.
+# Bakes the pre-baked HAOS qcow2 used by haos-e2e-tests.yml — see #1281.
 # The workflow's job on master is to local-build the qcow2 and warm the shared
 # Actions cache; the lanes restore from that cache and local-build on a miss.
+# The PR-time job uploads the qcow2 as a workflow artifact so reviewers can
+# sanity-check (e.g. on a Renovate HAOS-version bump PR) without re-running
+# the bake locally.
 #
 # Triggered on: manual dispatch, weekly cron (refreshes addon Docker layers),
 # and push to master that touches any input baked into the qcow2.
@@ -162,35 +165,38 @@ jobs:
 
       - name: Compress qcow2 in-format (qemu-img convert -c)
         # Re-pack the qcow2 with qcow2-native zlib *cluster* compression
-        # before upload. The post-bake file is ~12 GB *apparent* size on
-        # disk — sparse, with ~5 GB actually allocated; the rest is
-        # un-allocated holes from ``qemu-img resize 32G`` in
-        # ``fetch_haos_qcow2``. ORAS pushes/pulls
-        # ``application/octet-stream`` as a raw byte stream, so the
-        # sparse holes get serialised over the wire as actual zero bytes
-        # — the *apparent* size, not the allocated size, is what GHCR
-        # pull pays for.
+        # before the artifact upload + shared-cache save below. The
+        # post-bake file is ~12 GB *apparent* size on disk — sparse, with
+        # ~5 GB actually allocated; the rest is un-allocated holes from
+        # ``qemu-img resize 32G`` in ``fetch_haos_qcow2``. Both the
+        # Actions artifact upload and the Actions cache save serialise
+        # the file as a raw byte stream, so the sparse holes go over the
+        # wire as actual zero bytes — the *apparent* size, not the
+        # allocated size, is what storage + network pay for. The cache
+        # cap (10 GiB per repo) is the binding constraint: an
+        # uncompressed qcow2 LRU-evicts the cache much faster than the
+        # compressed one.
         #
         # ``qemu-img convert -c -O qcow2`` re-encodes the data densely
         # at the cluster level (default 64 KiB). The output stays a
-        # standard qcow2 (same OCI media-type, same consumer code path);
-        # QEMU decompresses clusters on-demand during VM I/O when the
-        # e2e workflow boots, so no upfront decompress step on the pull
-        # side. Trade-off worth knowing about: qcow2 cluster compression
-        # is read-only — the first write to any compressed cluster makes
+        # standard qcow2 (same consumer code path); QEMU decompresses
+        # clusters on-demand during VM I/O when the e2e workflow boots,
+        # so no upfront decompress step on the consumer side.
+        # Trade-off worth knowing about: qcow2 cluster compression is
+        # read-only — the first write to any compressed cluster makes
         # QEMU re-allocate it uncompressed in place. The e2e workflow's
         # boot is read-heavy (HA starts, recorder DB rebuilds, addon
         # containers come up), so write-side re-allocation cost is small
-        # relative to the pull-time saved, but it's why this convert
-        # pass lives at publish time and not at every consumer.
+        # relative to the cache-restore time saved, but it's why this
+        # convert pass lives at bake time and not at every consumer.
         #
-        # Measured at publish run 26361263298 step 11:
+        # Measured at run 26361263298 step 11:
         #   12 GB → 5.1 GB (2.3x ratio), convert pass took 6m 15s.
-        # First e2e run that consumed the result (runs 26361656780 +
-        # 26361656754) saw GHCR pull drop from ~6 min (uncompressed
-        # baseline) to 47–58 s.
+        # First e2e run that consumed the compressed result (runs
+        # 26361656780 + 26361656754) saw the image-acquisition step drop
+        # from ~6 min (uncompressed baseline) to 47–58 s.
         #
-        # Cost: the convert pass adds ~6 min to the publish runner —
+        # Cost: the convert pass adds ~6 min to the bake runner —
         # paid only on master push / weekly cron / manual dispatch,
         # not on PR runs.
         run: |
@@ -208,7 +214,7 @@ jobs:
           new_bytes=$(stat -c%s haos-test-image.qcow2)
           # Sanity floor: the baked HAOS image is gigabytes; anything
           # under 1 GiB after compress is corruption ``qemu-img check``
-          # didn't catch. Fail before the moving tag points at bad bytes.
+          # didn't catch. Fail before the shared cache stores bad bytes.
           if [ "$new_bytes" -lt 1073741824 ]; then
             echo "::error::compressed qcow2 suspiciously small: ${new_bytes} bytes"
             exit 1
@@ -251,8 +257,8 @@ jobs:
           # (the save step guards on a non-empty cache-key, so a failed move
           # leaves the key empty and skips the save). On GitHub-hosted runners
           # /tmp and the workspace share the root filesystem, so this is a
-          # rename, not a copy. The artifact upload + GHCR push above already
-          # consumed the workspace copy, so nothing later needs it.
+          # rename, not a copy. The artifact upload above already consumed
+          # the workspace copy, so nothing later needs it.
           mv haos-test-image.qcow2 /tmp/haos-test-image.qcow2
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
