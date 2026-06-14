@@ -546,7 +546,7 @@
   {
     "name": "ha_config_set_calendar_event",
     "title": "Create or Update Calendar Event",
-    "description": "Create a new event in a calendar.\n\nCreates a calendar event using the calendar.create_event service.\n\n**Parameters:**\n- entity_id: Calendar entity ID (e.g., 'calendar.family')\n- summary: Event title/summary\n- start: Event start datetime in ISO format\n- end: Event end datetime in ISO format\n- description: Optional event description\n- location: Optional event location\n\n**Example Usage:**\n```python\n# Create a simple event\nresult = ha_config_set_calendar_event(\n    \"calendar.family\",\n    summary=\"Doctor appointment\",\n    start=\"2024-01-15T14:00:00\",\n    end=\"2024-01-15T15:00:00\"\n)\n\n# Create an event with details\nresult = ha_config_set_calendar_event(\n    \"calendar.work\",\n    summary=\"Team meeting\",\n    start=\"2024-01-16T10:00:00\",\n    end=\"2024-01-16T11:00:00\",\n    description=\"Weekly sync meeting\",\n    location=\"Conference Room A\"\n)\n```\n\n**Returns:**\n- Success status and event details",
+    "description": "Create a new event in a calendar.\n\nCreates a one-off event via the calendar.create_event service, or a\nrecurring series via the WebSocket ``calendar/event/create`` command\nwhen ``rrule`` is provided (the REST service schema does not accept\nrecurrence rules).\n\n**Parameters:**\n- entity_id: Calendar entity ID (e.g., 'calendar.family')\n- summary: Event title/summary\n- start: Event start datetime in ISO format\n- end: Event end datetime in ISO format\n- description: Optional event description\n- location: Optional event location\n- rrule: Optional RFC 5545 recurrence rule (creates a recurring series)\n\n**Example Usage:**\n```python\n# Create a simple event\nresult = ha_config_set_calendar_event(\n    \"calendar.family\",\n    summary=\"Doctor appointment\",\n    start=\"2024-01-15T14:00:00\",\n    end=\"2024-01-15T15:00:00\"\n)\n\n# Create a recurring event (every Monday, 10 occurrences)\nresult = ha_config_set_calendar_event(\n    \"calendar.work\",\n    summary=\"Team meeting\",\n    start=\"2024-01-15T10:00:00\",\n    end=\"2024-01-15T11:00:00\",\n    rrule=\"FREQ=WEEKLY;BYDAY=MO;COUNT=10\"\n)\n```\n\n**Note:**\nNot every calendar integration supports event creation; recurring\nevents additionally require the integration to support recurrence\n(the built-in Local Calendar does).\n\n**Returns:**\n- Success status and event details",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -567,6 +567,10 @@
         },
         "location": {
           "type": "Annotated[str | None, Field(description='Optional event location', default=None)]",
+          "default": null
+        },
+        "rrule": {
+          "type": "Annotated[str | None, Field(description=\"Optional RFC 5545 recurrence rule, without 'RRULE:' prefix (e.g., 'FREQ=WEEKLY;BYDAY=MO' or 'FREQ=MONTHLY;BYDAY=3SA'). Creates a recurring event series.\", default=None)]",
           "default": null
         }
       },
