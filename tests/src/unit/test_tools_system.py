@@ -990,7 +990,7 @@ def _make_dead_entities_client(
             if registry_resp is not None:
                 return registry_resp
             return {"success": True, "result": registry or []}
-        if msg_type == "config/entries/get":
+        if msg_type == "config_entries/get":
             if entries_resp is not None:
                 return entries_resp
             return {"success": True, "result": entries or []}
@@ -1230,6 +1230,27 @@ class TestFetchDeadEntities:
         assert bucket["total_count"] == 60
         assert bucket["truncated"] is True
         assert result["summary"]["candidate_total"] == 60
+
+    @pytest.mark.asyncio
+    async def test_uses_canonical_ws_command_names(self):
+        """Pin the exact HA WebSocket command strings. A wrong name (e.g.
+        'config/entries/get' with a slash instead of 'config_entries/get')
+        returns 'Unknown command' against a real HA and silently degrades the
+        orphan tier — but a mock keyed to the wrong name would still pass. This
+        asserts the real names are sent so a typo is caught without live HA."""
+        client = _make_dead_entities_client(
+            states=[],
+            registry=[],
+            entries=[],
+        )
+        await SystemTools(client)._fetch_dead_entities()
+
+        sent_types = {
+            call.args[0].get("type")
+            for call in client.send_websocket_message.call_args_list
+        }
+        assert "config/entity_registry/list" in sent_types
+        assert "config_entries/get" in sent_types
 
     @pytest.mark.asyncio
     async def test_dead_entities_via_tool_routes_to_helper(self):

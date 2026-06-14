@@ -1002,7 +1002,7 @@ class SystemTools:
                 self._client.send_websocket_message(
                     {"type": "config/entity_registry/list"}
                 ),
-                self._client.send_websocket_message({"type": "config/entries/get"}),
+                self._client.send_websocket_message({"type": "config_entries/get"}),
                 return_exceptions=True,
             )
             states = results[0]
