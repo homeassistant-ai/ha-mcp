@@ -1011,13 +1011,6 @@ class SystemTools:
             "config_entry_orphans": {"items": [], "count": 0, "total_count": 0},
             "stale_restored": {"items": [], "count": 0, "total_count": 0},
             "summary": {"candidate_total": 0, "registry_total": 0},
-            "note": (
-                "Excludes 'unknown'-state entities and merely-offline devices "
-                "(bare 'unavailable' without 'restored'). Entries can appear "
-                "under stale_restored transiently right after a restart; re-run "
-                "if HA restarted recently. Remove a confirmed-dead entity with "
-                "ha_remove_entity(entity_id)."
-            ),
         }
         try:
             # Index the gather result (rather than tuple-unpack) so mypy can
@@ -1058,11 +1051,19 @@ class SystemTools:
             # can — so degrade rather than fail the whole section.
             entries = self._ws_result_list(results[2])
             live_entry_ids: set[str] | None = None
-            if entries is None:
+            # Treat an empty list like a failed fetch. A config-entry-linked
+            # registry entry implies its config entry exists, so an empty
+            # config_entries/get is either a genuinely integration-less install
+            # (no cfg-linked entries to orphan anyway) or a backend hiccup that
+            # masquerades as success. Either way we cannot tell a removed
+            # integration from the empty result — so skip the orphan tier rather
+            # than flag every cfg-linked entry as dead.
+            if not entries:
                 dead["config_entries_checked"] = False
                 dead.setdefault("warnings", []).append(
-                    "config_entries/get unavailable; config_entry_orphans tier "
-                    "skipped (stale_restored still computed)."
+                    "config_entries/get returned no entries; config_entry_orphans "
+                    "tier skipped (cannot distinguish a removed integration from "
+                    "an empty or failed fetch). stale_restored still computed."
                 )
             else:
                 live_entry_ids = {
@@ -1142,12 +1143,23 @@ class SystemTools:
                     )
                 return bucket
 
+            candidate_total = len(orphans) + len(stale)
             dead["config_entry_orphans"] = _bucket(orphans)
             dead["stale_restored"] = _bucket(stale)
             dead["summary"] = {
-                "candidate_total": len(orphans) + len(stale),
+                "candidate_total": candidate_total,
                 "registry_total": len(registry),
             }
+            # Only attach the guidance note when there is something to act on —
+            # no point spending tokens on cleanup advice for an empty result.
+            if candidate_total:
+                dead["note"] = (
+                    "Excludes 'unknown'-state entities and merely-offline "
+                    "devices (bare 'unavailable' without 'restored'). Entries "
+                    "can appear under stale_restored transiently right after a "
+                    "restart; re-run if HA restarted recently. Remove a "
+                    "confirmed-dead entity with ha_remove_entity(entity_id)."
+                )
         except ToolError:
             # A ToolError (incl. one re-raised by _reraise_if_fatal) carries the
             # MCP isError contract — let it reach ha_get_system_health's own

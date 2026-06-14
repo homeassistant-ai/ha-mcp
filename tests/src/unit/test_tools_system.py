@@ -1351,7 +1351,9 @@ class TestFetchDeadEntities:
     @pytest.mark.asyncio
     async def test_empty_sources_return_zero_counts(self):
         """All sources empty-but-successful → baseline structure with zeros, no
-        error, no crash on len()."""
+        error, no crash on len(). Empty config-entries degrades the orphan tier
+        (cannot distinguish a removed integration from an empty fetch), and the
+        guidance note is omitted when there is nothing to act on."""
         client = _make_dead_entities_client(states=[], registry=[], entries=[])
         result = await SystemTools(client)._fetch_dead_entities()
 
@@ -1359,7 +1361,52 @@ class TestFetchDeadEntities:
         assert result["config_entry_orphans"]["count"] == 0
         assert result["stale_restored"]["count"] == 0
         assert result["summary"] == {"candidate_total": 0, "registry_total": 0}
-        assert result["config_entries_checked"] is True
+        assert result["config_entries_checked"] is False
+        assert "note" not in result
+
+    @pytest.mark.asyncio
+    async def test_empty_config_entries_skips_orphan_tier(self):
+        """An empty-but-successful config_entries/get must NOT flag every
+        cfg-linked registry entry as an orphan — empty is treated like a failed
+        fetch (it is indistinguishable from a backend hiccup), so the orphan
+        tier is skipped rather than producing a mass false positive."""
+        client = _make_dead_entities_client(
+            states=[],
+            registry=[
+                {
+                    "entity_id": "sensor.has_cfg",
+                    "platform": "hue",
+                    "config_entry_id": "some_entry",
+                    "disabled_by": None,
+                }
+            ],
+            entries=[],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert result["config_entry_orphans"]["items"] == []
+        assert result["config_entries_checked"] is False
+        assert any("config_entry_orphans" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_note_present_when_candidates_found(self):
+        """The guidance note is attached when there is at least one candidate."""
+        client = _make_dead_entities_client(
+            states=[_state("sensor.stale", "unavailable", restored=True)],
+            registry=[
+                {
+                    "entity_id": "sensor.stale",
+                    "platform": "mobile_app",
+                    "config_entry_id": "live_entry",
+                    "disabled_by": None,
+                }
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "mobile_app"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert result["summary"]["candidate_total"] == 1
+        assert "ha_remove_entity" in result["note"]
 
     @pytest.mark.asyncio
     async def test_entities_sharing_config_entry_classified_independently(self):
