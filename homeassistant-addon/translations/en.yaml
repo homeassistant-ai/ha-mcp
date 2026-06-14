@@ -27,7 +27,10 @@ configuration:
       LLMs that lack native deferred tools (e.g. Claude Haiku, local
       OpenAI-compatible models) or with smaller context windows. Tools
       are found via ha_search_tools and executed via categorized proxies
-      (read/write/delete). Requires restart to take effect.
+      (read/write/delete). Requires an add-on restart to take effect — then
+      reconnect or refresh the MCP server in your AI client so it reloads the
+      tool list. Restarting the add-on alone does NOT refresh a client's
+      cached tool list; this applies after changing any setting here.
   enable_tool_security_policies:
     name: Enable Tool Security Policies (advanced)
     description: >-
