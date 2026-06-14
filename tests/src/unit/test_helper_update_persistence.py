@@ -609,6 +609,227 @@ class TestFlowHelperRouting:
             "sensor.daily_kwh_peak",
             "sensor.daily_kwh_offpeak",
         }
+        # icon was not passed, so no icon key may leak into the WS update.
+        assert all("icon" not in c for c in update_calls)
+
+    async def test_flow_helper_applies_icon_via_entity_registry(
+        self, register_tools, mock_client
+    ):
+        """A template (flow) helper accepts `icon` and applies it to the
+        resulting entity via config/entity_registry/update.
+
+        Flow helpers have no icon field in their config-flow form, but the
+        entity-registry icon override works for any entity (same mechanism as
+        area_id/labels), so `icon` is allowed and threaded through rather than
+        rejected as inapplicable.
+        """
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-tmpl",
+                "result": {
+                    "entry_id": "entry-tmpl",
+                    "title": "Flash Sensor",
+                    "domain": "template",
+                },
+            }
+        )
+        responses = [
+            # Bug 12 collision check: no existing helper with this slug.
+            {"success": True, "result": []},
+            # entity_registry/list: one entity for our config entry.
+            {
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "sensor.flash_sensor",
+                        "config_entry_id": "entry-tmpl",
+                    }
+                ],
+            },
+        ]
+        responses.extend([{"success": True}] * 5)  # entity_registry/update headroom
+        mock_client.send_websocket_message = AsyncMock(side_effect=responses)
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="template",
+            name="Flash Sensor",
+            config={"template_type": "sensor", "state": "{{ 1 }}"},
+            icon="mdi:flash",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["method"] == "config_flow"
+        assert result["icon"] == "mdi:flash"
+
+        # The entity_registry/update for our entity must carry the icon.
+        update_calls = [
+            call.args[0]
+            for call in mock_client.send_websocket_message.call_args_list
+            if isinstance(call.args[0], dict)
+            and call.args[0].get("type") == "config/entity_registry/update"
+        ]
+        assert len(update_calls) == 1
+        assert update_calls[0]["entity_id"] == "sensor.flash_sensor"
+        assert update_calls[0]["icon"] == "mdi:flash"
+
+    async def test_flow_helper_multi_entity_icon_applies_to_all(
+        self, register_tools, mock_client
+    ):
+        """icon on a multi-entity flow helper (utility_meter + 2 tariffs => 3
+        entities) is applied to every entity, like area_id/labels."""
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-um-icon",
+                "result": {
+                    "entry_id": "entry-um-icon",
+                    "title": "daily_kwh",
+                    "domain": "utility_meter",
+                },
+            }
+        )
+        # icon needs no registry-ID validation (unlike area_id/labels), so the
+        # sequence is just collision-check then entity-list then the updates.
+        responses = [
+            {"success": True, "result": []},
+            {
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "select.daily_kwh",
+                        "config_entry_id": "entry-um-icon",
+                    },
+                    {
+                        "entity_id": "sensor.daily_kwh_peak",
+                        "config_entry_id": "entry-um-icon",
+                    },
+                    {
+                        "entity_id": "sensor.daily_kwh_offpeak",
+                        "config_entry_id": "entry-um-icon",
+                    },
+                ],
+            },
+        ]
+        responses.extend([{"success": True}] * 5)
+        mock_client.send_websocket_message = AsyncMock(side_effect=responses)
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="utility_meter",
+            name="daily_kwh",
+            config={
+                "source": "sensor.energy",
+                "cycle": "daily",
+                "tariffs": ["peak", "offpeak"],
+            },
+            icon="mdi:flash",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["icon"] == "mdi:flash"
+        update_calls = [
+            call.args[0]
+            for call in mock_client.send_websocket_message.call_args_list
+            if isinstance(call.args[0], dict)
+            and call.args[0].get("type") == "config/entity_registry/update"
+        ]
+        assert {c["entity_id"] for c in update_calls} == {
+            "select.daily_kwh",
+            "sensor.daily_kwh_peak",
+            "sensor.daily_kwh_offpeak",
+        }
+        assert all(c["icon"] == "mdi:flash" for c in update_calls)
+
+    async def test_flow_helper_clears_icon_on_empty_string(
+        self, register_tools, mock_client
+    ):
+        """icon='' clears the override: the WS update carries icon=None and the
+        response echoes icon=None (mirrors the area/labels clear convention)."""
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-ic-clear",
+                "result": {
+                    "entry_id": "entry-ic-clear",
+                    "title": "t",
+                    "domain": "template",
+                },
+            }
+        )
+        responses = [
+            {"success": True, "result": []},
+            {
+                "success": True,
+                "result": [
+                    {"entity_id": "sensor.t", "config_entry_id": "entry-ic-clear"}
+                ],
+            },
+        ]
+        responses.extend([{"success": True}] * 3)
+        mock_client.send_websocket_message = AsyncMock(side_effect=responses)
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="template",
+            name="t",
+            config={"next_step_id": "sensor", "name": "t", "state": "{{ 1 }}"},
+            icon="",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["icon"] is None
+        update_calls = [
+            call.args[0]
+            for call in mock_client.send_websocket_message.call_args_list
+            if isinstance(call.args[0], dict)
+            and call.args[0].get("type") == "config/entity_registry/update"
+        ]
+        assert len(update_calls) == 1
+        assert "icon" in update_calls[0]
+        assert update_calls[0]["icon"] is None
+
+    async def test_flow_helper_update_applies_icon(self, register_tools, mock_client):
+        """icon is applied on the flow-helper UPDATE path (options flow), not
+        just create — the registry touchup is shared between both paths."""
+        mock_client.get_config_entry = AsyncMock(
+            return_value={"domain": "template", "entry_id": "entry-u-ic"}
+        )
+        mock_client.start_options_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-u-ic",
+                "result": {"entry_id": "entry-u-ic", "title": "t"},
+            }
+        )
+        responses = [
+            {
+                "success": True,
+                "result": [{"entity_id": "sensor.tu", "config_entry_id": "entry-u-ic"}],
+            },
+        ]
+        responses.extend([{"success": True}] * 3)
+        mock_client.send_websocket_message = AsyncMock(side_effect=responses)
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="template",
+            helper_id="entry-u-ic",
+            config={"state": "{{ 2 }}"},
+            icon="mdi:flash",
+            wait=False,
+        )
+
+        assert result["success"] is True
+        assert result["updated"] is True
+        assert result["icon"] == "mdi:flash"
+        update_calls = [
+            call.args[0]
+            for call in mock_client.send_websocket_message.call_args_list
+            if isinstance(call.args[0], dict)
+            and call.args[0].get("type") == "config/entity_registry/update"
+        ]
+        assert any(c.get("icon") == "mdi:flash" for c in update_calls)
 
     async def test_flow_helper_registry_update_failure_collects_warning(
         self, register_tools, mock_client
@@ -641,12 +862,19 @@ class TestFlowHelperRouting:
             name="grp",
             config={"group_type": "light", "entities": [], "hide_members": False},
             area_id="hallway",
+            icon="mdi:flash",
             wait=False,
         )
 
         assert result["success"] is True
         assert "warnings" in result
         assert any("light.grp" in w for w in result["warnings"])
+        # The update failed, so the optimistic top-level echo must NOT claim
+        # area_id/icon were applied — only the warning reflects reality.
+        assert "area_id" not in result
+        assert "icon" not in result
+        # The warning names which batched fields were in the failed update.
+        assert any("area_id" in w and "icon" in w for w in result["warnings"])
 
     async def test_flow_helper_registry_list_raises_surfaces_warning(
         self, register_tools, mock_client
