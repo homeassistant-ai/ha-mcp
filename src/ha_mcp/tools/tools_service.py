@@ -315,6 +315,7 @@ class ServiceTools:
         ] = False,
         result_fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -327,6 +328,7 @@ class ServiceTools:
         ] = None,
         result_attribute_keys: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -522,6 +524,7 @@ class ServiceTools:
         self,
         operation_id: Annotated[
             str | list[str],
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Single operation ID or list of operation IDs to check. "
@@ -544,23 +547,15 @@ class ServiceTools:
         For current entity states, use ha_get_state instead.
         """
         try:
-            # Handle JSON string coercion (MCP clients may send '["op1","op2"]')
-            resolved_id: str | list[str] = operation_id
-            if isinstance(operation_id, str):
-                try:
-                    parsed = parse_json_param(operation_id, "operation_id")
-                    if isinstance(parsed, list):
-                        resolved_id = [str(item) for item in parsed]
-                except ValueError:
-                    pass  # Plain string — treat as single operation ID
-
-            if isinstance(resolved_id, list):
+            # JSON_STRING_COERCION turns a '["op1","op2"]' string into a list
+            # before the body runs, so operation_id is already the final shape.
+            if isinstance(operation_id, list):
                 result = await self._device_tools.get_bulk_operation_status(
-                    operation_ids=resolved_id
+                    operation_ids=operation_id
                 )
                 return cast(dict[str, Any], result)
             result = await self._device_tools.get_device_operation_status(
-                operation_id=resolved_id, timeout_seconds=timeout_seconds
+                operation_id=operation_id, timeout_seconds=timeout_seconds
             )
             return cast(dict[str, Any], result)
         except ToolError:

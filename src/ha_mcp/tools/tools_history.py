@@ -30,6 +30,7 @@ from .helpers import (
     safe_progress,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     add_timezone_metadata,
     build_pagination_metadata,
     parse_string_list_param,
@@ -136,6 +137,7 @@ class HistoryTools:
         self,
         entity_ids: Annotated[
             str | list[str],
+            JSON_STRING_COERCION,
             Field(
                 description="Entity ID(s) to query. Can be a single ID, comma-separated string, or JSON array."
             ),
@@ -206,6 +208,7 @@ class HistoryTools:
         ] = "day",
         statistic_types: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description='Statistics types: "mean", "min", "max", "sum", "state", "change". Default: all. Ignored when source="history"',
                 default=None,
@@ -224,6 +227,7 @@ class HistoryTools:
         ] = "desc",
         fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -425,6 +429,9 @@ def _parse_entity_ids(entity_ids: str | list[str]) -> list[str]:
     """Parse entity_ids parameter into a list of strings."""
     if isinstance(entity_ids, str):
         if entity_ids.startswith("["):
+            # Belt-and-suspenders: JSON_STRING_COERCION on the param already
+            # parses a JSON-array string to a list upstream, so a string reaching
+            # here is normally CSV/single. This branch stays as a fallback.
             parsed_ids = parse_string_list_param(entity_ids, "entity_ids")
             if parsed_ids is None:
                 raise_tool_error(

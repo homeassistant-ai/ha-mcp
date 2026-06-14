@@ -26,6 +26,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     wait_for_entity_registered,
     wait_for_entity_removed,
 )
@@ -223,6 +224,7 @@ class GroupTools:
         ],
         entities: Annotated[
             list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="List of entity IDs for the group. Required when creating new group. When updating, replaces all entities (mutually exclusive with add_entities/remove_entities).",
                 default=None,
@@ -251,6 +253,7 @@ class GroupTools:
         ] = None,
         add_entities: Annotated[
             list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Add these entities to an existing group (mutually exclusive with entities)",
                 default=None,
@@ -258,6 +261,7 @@ class GroupTools:
         ] = None,
         remove_entities: Annotated[
             list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Remove these entities from an existing group (mutually exclusive with entities)",
                 default=None,

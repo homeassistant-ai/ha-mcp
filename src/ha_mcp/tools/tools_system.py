@@ -25,6 +25,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     fetch_integration_diagnostics,
     filter_active_repairs,
     parse_diagnostics_fields,
@@ -323,7 +324,9 @@ class SystemTools:
         include_dismissed_repairs: bool | None = False,
         config_entry_id: str | None = None,
         device_id: str | None = None,
-        diagnostics_fields: list[str] | str | None = None,
+        diagnostics_fields: Annotated[
+            list[str] | str | None, JSON_STRING_COERCION
+        ] = None,
         diagnostics_truncate_at_bytes: Annotated[int, Field(ge=1)] | None = None,
         diagnostics_data_path: str | None = None,
         diagnostics_data_offset: Annotated[int, Field(ge=0)] | None = 0,

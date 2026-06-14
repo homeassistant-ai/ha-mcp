@@ -21,6 +21,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     build_pagination_metadata,
     parse_string_list_param,
 )
@@ -627,6 +628,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         labels: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Labels to assign to the device (replaces existing labels)",
                 default=None,

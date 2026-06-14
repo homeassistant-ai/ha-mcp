@@ -41,7 +41,7 @@ from .helpers import (
     raise_tool_error,
     validate_identifier_not_empty,
 )
-from .util_helpers import ANSI_ESCAPE_RE
+from .util_helpers import ANSI_ESCAPE_RE, JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 
@@ -2712,6 +2712,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         ] = None,
         options: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Config mode: Add-on configuration values (the 'Configuration' tab in the UI).",
                 default=None,
@@ -2719,6 +2720,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         ] = None,
         network: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Config mode: Host port mappings (e.g., {'5800/tcp': 8081}).",
                 default=None,
@@ -2747,6 +2749,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         ] = None,
         array_patch: Annotated[
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Array-patch mode: atomically GET a JSON array endpoint, "
@@ -2760,6 +2763,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         ] = None,
         request_headers: Annotated[
             dict[str, str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Proxy/array-patch mode: extra HTTP headers to send to the addon API. "
