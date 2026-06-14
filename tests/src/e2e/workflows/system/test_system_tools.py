@@ -49,7 +49,9 @@ class TestSystemTools:
         logger.info(f"System health (config_check) result: {data}")
 
         # Verify the tool executed successfully
-        assert data.get("success") is True, f"Health check failed: {data.get('error')}"
+        assert data.get("success") is True, (
+            f"Health check failed: {extract_error_message(data)}"
+        )
 
         # Verify the folded config_check section is present with expected fields
         assert "config_check" in data, "Missing 'config_check' section"
@@ -89,7 +91,9 @@ class TestSystemTools:
 
         logger.info(f"System health (dead_entities) result: {data}")
 
-        assert data.get("success") is True, f"Health check failed: {data.get('error')}"
+        assert data.get("success") is True, (
+            f"Health check failed: {extract_error_message(data)}"
+        )
 
         assert "dead_entities" in data, "Missing 'dead_entities' section"
         dead = data["dead_entities"]

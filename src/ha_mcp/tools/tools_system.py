@@ -33,6 +33,21 @@ from .util_helpers import (
 
 logger = logging.getLogger(__name__)
 
+
+def _reraise_if_fatal(exc: BaseException) -> None:
+    """Re-raise exceptions that must unwind rather than be demoted to an
+    embedded section error: task cancellation and interpreter exit
+    (``CancelledError``/``KeyboardInterrupt``/``SystemExit`` are all
+    ``BaseException`` but not ``Exception``) plus ``ToolError`` (which carries
+    the MCP ``isError`` contract). Mirrors the re-raise pre-pass on the ws
+    ``sections`` gather in ``ha_get_system_health``. Recoverable
+    ``Exception``-level failures fall through to the caller's embed-as-error
+    handling, matching every sibling section helper.
+    """
+    if isinstance(exc, ToolError) or not isinstance(exc, Exception):
+        raise exc
+
+
 # Mapping of reload targets to their service domains and services
 RELOAD_TARGETS = {
     "all": None,  # Special case - reload all
@@ -939,7 +954,12 @@ class SystemTools:
         the ``result`` list on success, else ``None`` so the caller can treat a
         backend failure as "source unavailable".
         """
-        if isinstance(resp, BaseException) or not isinstance(resp, dict):
+        if isinstance(resp, BaseException):
+            # gather(return_exceptions=True) hands back the raw exception; let
+            # truly-fatal ones unwind instead of masking them as "unavailable".
+            _reraise_if_fatal(resp)
+            return None
+        if not isinstance(resp, dict):
             return None
         # Require success truthy before trusting ``result`` — matches the
         # ``if result.get("success")`` convention used by the other WS handlers
@@ -1010,8 +1030,17 @@ class SystemTools:
             )
             states = results[0]
 
-            if isinstance(states, BaseException) or not isinstance(states, list):
+            if isinstance(states, BaseException):
+                # Truly-fatal errors must propagate, not demote to a section
+                # error string (mirrors the ws sections gather pre-pass).
+                _reraise_if_fatal(states)
                 dead["error"] = f"Could not fetch entity states: {states}"
+                return dead
+            if not isinstance(states, list):
+                dead["error"] = (
+                    "Could not fetch entity states: expected list, got "
+                    f"{type(states).__name__}"
+                )
                 return dead
             registry = self._ws_result_list(results[1])
             if registry is None:

@@ -1275,6 +1275,17 @@ class TestFetchDeadEntities:
         assert "states" in result["error"]
 
     @pytest.mark.asyncio
+    async def test_fatal_cancellation_propagates_not_embedded(self):
+        """A CancelledError from a source fetch must unwind, not be demoted to a
+        section error string — guards the _reraise_if_fatal pre-pass."""
+        client = _make_dead_entities_client(
+            states=None,
+            states_exc=asyncio.CancelledError(),
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await SystemTools(client)._fetch_dead_entities()
+
+    @pytest.mark.asyncio
     async def test_stale_bucket_truncates_at_limit(self):
         """The stale bucket caps its item list and reports truncation + totals so
         large installs stay token-friendly."""
