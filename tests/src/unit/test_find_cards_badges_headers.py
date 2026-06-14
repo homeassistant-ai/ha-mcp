@@ -308,19 +308,44 @@ class TestNestedCardSearch:
         result = safe_execute(expr, config)
         assert result["views"][0]["cards"][0]["cards"][0]["name"] == "Renamed"
 
-    def test_deep_nesting_bounded(self):
-        """Pathologically deep nesting is bounded, not a crash."""
-        # Build nesting deeper than _MAX_CARD_DEPTH; the target leaf sits below
-        # the bound, so it is intentionally not returned (and nothing raises).
+    def test_leaf_at_depth_bound_is_found(self):
+        """Boundary-inside: a leaf exactly at _MAX_CARD_DEPTH is still returned."""
+        from ha_mcp.tools.tools_config_dashboards import _MAX_CARD_DEPTH
+
+        # Top-level card is depth 0; _MAX wrappers put the leaf at depth==_MAX.
+        leaf: dict[str, Any] = {"type": "tile", "entity": "light.at_bound"}
+        node = leaf
+        for _ in range(_MAX_CARD_DEPTH):
+            node = {"type": "vertical-stack", "cards": [node]}
+        config = {"views": [{"cards": [node]}]}
+        trunc: list[str] = []
+        matches = _find_cards_in_config(
+            config, entity_id="light.at_bound", truncation=trunc
+        )
+        assert len(matches) == 1
+        assert matches[0]["card_type"] == "tile"
+        assert trunc == []  # nothing truncated exactly at the bound
+
+    def test_leaf_past_depth_bound_dropped_flagged_and_warned(self, caplog):
+        """Boundary-outside + H2: a leaf one level past the bound is dropped, the
+        truncation accumulator is populated, and the warning fires."""
+        import logging
+
         from ha_mcp.tools.tools_config_dashboards import _MAX_CARD_DEPTH
 
         leaf: dict[str, Any] = {"type": "tile", "entity": "light.too_deep"}
         node = leaf
-        for _ in range(_MAX_CARD_DEPTH + 5):
+        for _ in range(_MAX_CARD_DEPTH + 1):
             node = {"type": "vertical-stack", "cards": [node]}
         config = {"views": [{"cards": [node]}]}
-        matches = _find_cards_in_config(config, entity_id="light.too_deep")
-        assert matches == []  # below the depth bound, not found, no exception
+        trunc: list[str] = []
+        with caplog.at_level(logging.WARNING):
+            matches = _find_cards_in_config(
+                config, entity_id="light.too_deep", truncation=trunc
+            )
+        assert matches == []  # past the bound, not found, no exception
+        assert trunc, "depth-bound truncation must be reported to the caller"
+        assert any("depth bound" in r.message.lower() for r in caplog.records)
 
     def test_finds_nested_heading_card(self):
         """The heading search axis also reaches cards nested in a stack."""
@@ -365,3 +390,216 @@ class TestNestedCardSearch:
         assert len(matches) == 1
         assert matches[0]["jq_path"] == ".views[0].header.card.cards[0]"
         assert matches[0]["python_path"] == "['views'][0]['header']['card']['cards'][0]"
+
+    def test_python_path_round_trips_sections_prefix(self):
+        """python_path for a sections-nested match executes in safe_execute."""
+        from ha_mcp.utils.python_sandbox import safe_execute
+
+        config = {
+            "views": [
+                {
+                    "type": "sections",
+                    "sections": [
+                        {
+                            "cards": [
+                                {
+                                    "type": "vertical-stack",
+                                    "cards": [{"type": "gauge", "entity": "sensor.x"}],
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+        m = _find_cards_in_config(config, card_type="gauge")[0]
+        result = safe_execute(f"config{m['python_path']}['name'] = 'S'", config)
+        assert result["views"][0]["sections"][0]["cards"][0]["cards"][0]["name"] == "S"
+
+    def test_python_path_round_trips_header_prefix(self):
+        """python_path for a header-nested match executes in safe_execute."""
+        from ha_mcp.utils.python_sandbox import safe_execute
+
+        config = {
+            "views": [
+                {
+                    "type": "sections",
+                    "header": {
+                        "card": {
+                            "type": "vertical-stack",
+                            "cards": [{"type": "tile", "entity": "light.h"}],
+                        }
+                    },
+                    "sections": [],
+                }
+            ]
+        }
+        m = _find_cards_in_config(config, entity_id="light.h")[0]
+        result = safe_execute(f"config{m['python_path']}['name'] = 'H'", config)
+        assert result["views"][0]["header"]["card"]["cards"][0]["name"] == "H"
+
+    def test_multiple_siblings_in_one_stack(self):
+        """Two matching cards in one stack → two matches with distinct paths."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "vertical-stack",
+                            "cards": [
+                                {"type": "tile", "entity": "light.a"},
+                                {"type": "tile", "entity": "light.b"},
+                            ],
+                        }
+                    ]
+                }
+            ]
+        }
+        matches = _find_cards_in_config(config, card_type="tile")
+        assert len(matches) == 2
+        assert {m["python_path"] for m in matches} == {
+            "['views'][0]['cards'][0]['cards'][0]",
+            "['views'][0]['cards'][0]['cards'][1]",
+        }
+
+    def test_container_and_nested_container_both_match(self):
+        """A container that matches AND has a matching descendant → both returned
+        (pins the match-self-then-recurse order)."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "vertical-stack",
+                            "cards": [
+                                {
+                                    "type": "vertical-stack",
+                                    "cards": [{"type": "tile", "entity": "light.x"}],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ]
+        }
+        matches = _find_cards_in_config(config, card_type="vertical-stack")
+        paths = {m["python_path"] for m in matches}
+        assert paths == {
+            "['views'][0]['cards'][0]",
+            "['views'][0]['cards'][0]['cards'][0]",
+        }
+
+    def test_node_with_both_cards_and_card_keys(self):
+        """A single node carrying both `cards` (list) and `card` (dict) descends
+        into each."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "custom:weird-wrapper",
+                            "cards": [{"type": "tile", "entity": "light.in_cards"}],
+                            "card": {"type": "tile", "entity": "light.in_card"},
+                        }
+                    ]
+                }
+            ]
+        }
+        matches = _find_cards_in_config(config, card_type="tile")
+        assert {m["card_config"]["entity"] for m in matches} == {
+            "light.in_cards",
+            "light.in_card",
+        }
+        assert {m["python_path"] for m in matches} == {
+            "['views'][0]['cards'][0]['cards'][0]",
+            "['views'][0]['cards'][0]['card']",
+        }
+
+    def test_finds_card_nested_in_button_card_custom_fields(self):
+        """custom:button-card embeds sub-cards under custom_fields.<name>.card."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "custom:button-card",
+                            "custom_fields": {
+                                "content": {
+                                    "card": {
+                                        "type": "vertical-stack",
+                                        "cards": [
+                                            {
+                                                "type": "tile",
+                                                "entity": "light.bc_nested",
+                                            }
+                                        ],
+                                    }
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+        matches = _find_cards_in_config(config, entity_id="light.bc_nested")
+        assert len(matches) == 1
+        assert matches[0]["python_path"] == (
+            "['views'][0]['cards'][0]['custom_fields']['content']['card']['cards'][0]"
+        )
+
+    def test_typeless_dict_under_cards_not_matched(self):
+        """A non-card dict reached under `cards` (no `type`) must not match —
+        precision guard against editing a non-card via a structurally valid path."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "vertical-stack",
+                            "cards": [{"entity": "light.no_type"}],  # no `type`
+                        }
+                    ]
+                }
+            ]
+        }
+        assert _find_cards_in_config(config, entity_id="light.no_type") == []
+
+    def test_characterization_state_switch_states_not_traversed(self):
+        """Gap (M3): custom:state-switch nests cards under `states` (name->card),
+        which is not a traversed key. Pins the boundary; flip when supported."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "custom:state-switch",
+                            "entity": "input_select.x",
+                            "states": {
+                                "on": {"type": "tile", "entity": "light.ss"},
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+        assert _find_cards_in_config(config, entity_id="light.ss") == []
+
+    def test_characterization_picture_elements_not_traversed(self):
+        """Gap (M2): picture-elements nests *elements*, not cards — not traversed.
+        Pins the boundary; flip if element traversal is ever added."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "picture-elements",
+                            "image": "/local/x.png",
+                            "elements": [
+                                {"type": "state-badge", "entity": "light.pe"},
+                            ],
+                        }
+                    ]
+                }
+            ]
+        }
+        assert _find_cards_in_config(config, entity_id="light.pe") == []
