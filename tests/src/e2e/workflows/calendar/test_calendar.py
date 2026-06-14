@@ -19,6 +19,7 @@ import pytest
 
 from ...utilities.assertions import (
     assert_mcp_success,
+    extract_error_message,
     parse_mcp_result,
     safe_call_tool,
 )
@@ -162,7 +163,7 @@ class TestCalendarEvents:
 
         # Should fail with validation error
         assert data.get("success") is False, "Should fail for invalid format"
-        assert "calendar." in str(data.get("error", "")), (
+        assert "calendar." in extract_error_message(data), (
             "Error should mention correct format"
         )
 
@@ -260,7 +261,7 @@ class TestCalendarEventLifecycle:
 
             else:
                 # Calendar might not support event creation
-                error_msg = data.get("error", "Unknown error")
+                error_msg = extract_error_message(data) or "Unknown error"
                 if "not supported" in error_msg.lower() or "read" in error_msg.lower():
                     pytest.skip(
                         f"Calendar {calendar_entity} does not support event creation"
@@ -301,12 +302,156 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in str(data.get("error", "")), (
+        assert "calendar." in extract_error_message(data), (
             "Error should mention correct format"
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid entity create test completed")
+
+    async def test_create_recurring_calendar_event(self, mcp_client):
+        """
+        Test: Create a recurring calendar event (rrule)
+
+        Creates a daily 3-occurrence series via rrule, verifies all
+        occurrences materialize sharing one series uid, deletes a single
+        occurrence via recurrence_id, then removes the remaining series.
+        """
+        calendar_entity = await self._find_writable_calendar(mcp_client)
+        if not calendar_entity:
+            pytest.skip("No calendar entities available for testing")
+
+        summary = f"E2E Recurring Test Event {uuid.uuid4().hex[:8]}"
+        now = datetime.now(UTC)
+        start = (now + timedelta(days=1)).replace(
+            hour=9, minute=0, second=0, microsecond=0
+        )
+        end = start + timedelta(minutes=30)
+        rrule = "FREQ=DAILY;COUNT=3"
+        list_args = {
+            "entity_id": calendar_entity,
+            "start": start.isoformat(),
+            # Window covers all 3 daily occurrences with an hour of slack.
+            "end": (start + timedelta(days=2, hours=1)).isoformat(),
+        }
+
+        def _occurrences(data: dict) -> list[dict]:
+            return [e for e in data.get("events", []) if e.get("summary") == summary]
+
+        create_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": calendar_entity,
+                "summary": summary,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "rrule": rrule,
+            },
+        )
+        if not create_data.get("success"):
+            pytest.skip(
+                f"Calendar {calendar_entity} does not support recurring "
+                f"event creation: {extract_error_message(create_data) or 'Unknown'}"
+            )
+        assert create_data.get("event", {}).get("rrule") == rrule
+
+        series_uid: str | None = None
+        try:
+            # Poll until all 3 occurrences materialize (per AGENTS.md
+            # "poll after creating entities").
+            events_data = await wait_for_tool_result(
+                mcp_client,
+                "ha_config_get_calendar_events",
+                list_args,
+                predicate=lambda d: len(_occurrences(d)) >= 3,
+                timeout=15,
+                description=f"3 occurrences of recurring event '{summary}'",
+            )
+            occurrences = _occurrences(events_data)
+            assert len(occurrences) == 3, (
+                f"expected exactly 3 occurrences, got {len(occurrences)}"
+            )
+
+            uids = {e.get("uid") for e in occurrences}
+            assert len(uids) == 1, (
+                f"occurrences of one series should share a uid, got {uids}"
+            )
+            series_uid = uids.pop()
+            assert series_uid, "series occurrences should carry a uid"
+
+            distinct_starts = {str(e.get("start")) for e in occurrences}
+            assert len(distinct_starts) == 3, (
+                f"occurrences should have distinct starts, got {distinct_starts}"
+            )
+
+            # Recurrence-aware delete: remove ONLY the first occurrence,
+            # exercising the recurrence_id parameter on the remove tool.
+            first = min(occurrences, key=lambda e: str(e.get("start")))
+            recurrence_id = first.get("recurrence_id")
+            if recurrence_id:
+                delete_one = await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_calendar_event",
+                    {
+                        "entity_id": calendar_entity,
+                        "uid": series_uid,
+                        "recurrence_id": recurrence_id,
+                    },
+                )
+                assert delete_one.get("success") is True, (
+                    f"single-occurrence delete failed: {delete_one}"
+                )
+                await wait_for_tool_result(
+                    mcp_client,
+                    "ha_config_get_calendar_events",
+                    list_args,
+                    predicate=lambda d: len(_occurrences(d)) == 2,
+                    timeout=15,
+                    description=(
+                        "series shrinks to 2 occurrences after single-occurrence delete"
+                    ),
+                )
+            else:
+                logger.info(
+                    f"Calendar {calendar_entity} did not report a "
+                    f"recurrence_id; skipping single-occurrence delete step"
+                )
+        finally:
+            if series_uid is None:
+                # Create succeeded but no uid was ever observed — final
+                # scan-by-summary so a timeout above doesn't leak the
+                # series across CI runs (mirrors deletable_event_uid).
+                try:
+                    final_events = await safe_call_tool(
+                        mcp_client, "ha_config_get_calendar_events", list_args
+                    )
+                    series_uid = next(
+                        (
+                            e.get("uid")
+                            for e in _occurrences(final_events)
+                            if e.get("uid")
+                        ),
+                        None,
+                    )
+                except Exception as scan_error:
+                    logger.warning(
+                        f"Could not scan for leaked recurring event "
+                        f"'{summary}' on {calendar_entity}: {scan_error}"
+                    )
+            if series_uid:
+                try:
+                    await mcp_client.call_tool(
+                        "ha_config_remove_calendar_event",
+                        {"entity_id": calendar_entity, "uid": series_uid},
+                    )
+                except Exception as cleanup_error:
+                    logger.warning(
+                        f"Cleanup of recurring test event {series_uid} on "
+                        f"{calendar_entity}: {cleanup_error}"
+                    )
+
+        logger.info("Recurring calendar event test completed")
 
     @pytest.fixture
     async def deletable_event_uid(self, mcp_client):
@@ -498,7 +643,7 @@ class TestCalendarEventLifecycle:
         )
 
         assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in str(data.get("error", "")), (
+        assert "calendar." in extract_error_message(data), (
             "Error should mention correct format"
         )
 
