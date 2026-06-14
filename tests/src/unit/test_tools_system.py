@@ -1153,6 +1153,33 @@ class TestFetchDeadEntities:
         assert result["config_entry_orphans"]["items"] == []
 
     @pytest.mark.asyncio
+    async def test_non_dict_attributes_does_not_crash(self):
+        """A malformed state whose `attributes` is not a dict must be skipped,
+        not raise AttributeError on `.get()` — guards the isinstance check."""
+        client = _make_dead_entities_client(
+            states=[
+                {
+                    "entity_id": "sensor.weird",
+                    "state": "unavailable",
+                    "attributes": "not-a-dict",
+                }
+            ],
+            registry=[
+                {
+                    "entity_id": "sensor.weird",
+                    "platform": "hue",
+                    "config_entry_id": "live_entry",
+                    "disabled_by": None,
+                }
+            ],
+            entries=[{"entry_id": "live_entry", "domain": "hue"}],
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+
+        assert "error" not in result
+        assert result["stale_restored"]["items"] == []
+
+    @pytest.mark.asyncio
     async def test_disabled_entity_with_live_entry_not_flagged(self):
         """An intentionally-disabled entry whose config entry still exists is a
         user choice, not dead — excluded from both tiers."""

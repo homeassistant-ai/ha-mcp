@@ -1080,8 +1080,12 @@ class SystemTools:
                 state_obj = state_by_id.get(eid)
                 if state_obj is None:
                     continue
-                attrs = state_obj.get("attributes") or {}
-                if state_obj.get("state") == "unavailable" and attrs.get("restored"):
+                attrs = state_obj.get("attributes")
+                if (
+                    state_obj.get("state") == "unavailable"
+                    and isinstance(attrs, dict)
+                    and attrs.get("restored")
+                ):
                     stale.append(
                         {
                             "entity_id": eid,
