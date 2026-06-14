@@ -126,6 +126,58 @@ class TestConfigEntryFlow:
             {"target": entry_id, "confirm": True},
         )
 
+    async def test_create_template_sensor_with_icon(self, mcp_client):
+        """A template (flow) helper accepts `icon` and HA applies it to the
+        resulting entity via the entity-registry icon override.
+
+        This is the end-to-end proof for flow-helper icon support: the unit
+        test only checks the WS wire format against a mock; here a real
+        template sensor is created with an icon and HA's own state for the
+        entity must report that icon.
+        """
+        result = await mcp_client.call_tool(
+            "ha_config_set_helper",
+            {
+                "helper_type": "template",
+                "name": "e2e icon template",
+                "config": {
+                    "next_step_id": "sensor",
+                    "name": "e2e icon template",
+                    "state": "{{ states('sun.sun') }}",
+                },
+                "icon": "mdi:flash",
+                "wait": True,
+            },
+        )
+        data = assert_mcp_success(result, "Create template sensor with icon")
+        assert data.get("success") is True
+        # icon is echoed back in the flow response (applied registry override).
+        assert data.get("icon") == "mdi:flash", f"icon not echoed: {data}"
+        entry_id = data.get("entry_id")
+        assert entry_id is not None
+        entity_ids = data.get("entity_ids") or []
+        assert entity_ids, f"No entity_ids in response: {data}"
+        entity_id = entity_ids[0]
+
+        try:
+            # HA surfaces the entity-registry icon override in the entity's
+            # state attributes — poll until it propagates.
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_state",
+                arguments={"entity_id": entity_id},
+                predicate=lambda d: (
+                    d.get("data", {}).get("attributes", {}).get("icon") == "mdi:flash"
+                ),
+                description="template sensor icon override applied by HA",
+            )
+        finally:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_helpers_integrations",
+                {"target": entry_id, "confirm": True},
+            )
+
     async def test_get_entity_config_entry_id_and_options_optimal_path(
         self, mcp_client
     ):

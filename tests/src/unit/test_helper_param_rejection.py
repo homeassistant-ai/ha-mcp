@@ -826,3 +826,26 @@ class TestAllowedParamsControl:
             wait=False,
         )
         assert result["success"] is True
+
+    async def test_flow_type_accepts_icon(self, register_tools, mock_client):
+        """Flow types accept `icon` (applied to the entity via the registry)
+        rather than rejecting it like other simple-helper-typed params."""
+        mock_client.start_config_flow = AsyncMock(
+            return_value={
+                "type": "create_entry",
+                "flow_id": "flow-ic",
+                "result": {"entry_id": "entry-ic", "title": "x", "domain": "min_max"},
+            }
+        )
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+
+        result = await register_tools["ha_config_set_helper"](
+            helper_type="min_max",
+            name="x",
+            config={"entity_ids": ["sensor.a", "sensor.b"], "type": "mean"},
+            icon="mdi:flash",
+            wait=False,
+        )
+        assert result["success"] is True
