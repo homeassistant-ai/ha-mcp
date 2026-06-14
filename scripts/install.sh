@@ -88,7 +88,11 @@ printf "\n"
 
 # Step 1: Check/install uv
 printf "${YELLOW}Step 1: Checking for uv...${NC}\n"
-if command -v uv > /dev/null 2>&1 || command -v uvx > /dev/null 2>&1; then
+# Gate on uvx, not uv. uvx (the `uv tool run` shortcut) ships only with newer
+# uv releases, so an old uv can be present without it. Since the rest of this
+# script invokes uvx, a uvx-less uv must fall through to the install/upgrade
+# path rather than being treated as already installed (issue #1593).
+if command -v uvx > /dev/null 2>&1; then
     printf "${GREEN}  uv is already installed${NC}\n"
 else
     printf "  Installing uv...\n"
