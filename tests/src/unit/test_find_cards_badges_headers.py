@@ -193,3 +193,131 @@ class TestStrategyDashboard:
         config = {"strategy": {"type": "home"}, "views": []}
         matches = _find_cards_in_config(config, entity_id="light.test")
         assert matches == []
+
+
+class TestNestedCardSearch:
+    """Cards nested in stacks/grids/conditional cards must be found (issue #1599)."""
+
+    # A sections view whose section holds a vertical-stack; the stack holds a
+    # gauge (only nested, never top-level) and a horizontal-stack with a tile.
+    DASHBOARD_NESTED: ClassVar[dict[str, Any]] = {
+        "views": [
+            {
+                "type": "sections",
+                "sections": [
+                    {
+                        "cards": [
+                            {"type": "heading", "heading": "Top"},
+                            {
+                                "type": "vertical-stack",
+                                "cards": [
+                                    {"type": "gauge", "entity": "sensor.cpu"},
+                                    {
+                                        "type": "horizontal-stack",
+                                        "cards": [
+                                            {"type": "tile", "entity": "light.deep"},
+                                        ],
+                                    },
+                                ],
+                            },
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
+
+    def test_finds_nested_card_by_type(self):
+        """A gauge nested in a vertical-stack is found (the reported bug)."""
+        matches = _find_cards_in_config(self.DASHBOARD_NESTED, card_type="gauge")
+        assert len(matches) == 1
+        assert matches[0]["card_type"] == "gauge"
+        assert matches[0]["jq_path"] == ".views[0].sections[0].cards[1].cards[0]"
+        assert (
+            matches[0]["python_path"]
+            == "['views'][0]['sections'][0]['cards'][1]['cards'][0]"
+        )
+
+    def test_finds_doubly_nested_card_by_entity(self):
+        """A tile two levels deep (stack in stack) is found by entity_id."""
+        matches = _find_cards_in_config(self.DASHBOARD_NESTED, entity_id="light.deep")
+        assert len(matches) == 1
+        assert (
+            matches[0]["python_path"]
+            == "['views'][0]['sections'][0]['cards'][1]['cards'][1]['cards'][0]"
+        )
+
+    def test_nested_flat_indices_point_at_top_level_container(self):
+        """Flat *_index fields locate the top-level container, not the depth."""
+        matches = _find_cards_in_config(self.DASHBOARD_NESTED, card_type="gauge")
+        m = matches[0]
+        assert m["view_index"] == 0
+        assert m["section_index"] == 0
+        assert m["card_index"] == 1  # the vertical-stack's index in the section
+
+    def test_finds_card_nested_in_conditional(self):
+        """Conditional cards nest via `card` (dict), not `cards`."""
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "conditional",
+                            "conditions": [],
+                            "card": {"type": "tile", "entity": "light.cond"},
+                        }
+                    ]
+                }
+            ]
+        }
+        matches = _find_cards_in_config(config, entity_id="light.cond")
+        assert len(matches) == 1
+        assert matches[0]["jq_path"] == ".views[0].cards[0].card"
+        assert matches[0]["python_path"] == "['views'][0]['cards'][0]['card']"
+
+    def test_top_level_card_still_found_and_has_python_path(self):
+        """Top-level matches are unchanged and gain a python_path."""
+        config = {"views": [{"cards": [{"type": "tile", "entity": "light.top"}]}]}
+        matches = _find_cards_in_config(config, card_type="tile")
+        assert len(matches) == 1
+        assert matches[0]["jq_path"] == ".views[0].cards[0]"
+        assert matches[0]["python_path"] == "['views'][0]['cards'][0]"
+
+    def test_python_path_is_usable_in_safe_execute(self):
+        """python_path must splice into a working python_transform expression.
+
+        This is the end-to-end guarantee: the returned locator, concatenated
+        after `config`, mutates exactly the matched (nested) card.
+        """
+        from ha_mcp.utils.python_sandbox import safe_execute
+
+        config = {
+            "views": [
+                {
+                    "cards": [
+                        {
+                            "type": "vertical-stack",
+                            "cards": [{"type": "gauge", "entity": "sensor.cpu"}],
+                        }
+                    ]
+                }
+            ]
+        }
+        match = _find_cards_in_config(config, card_type="gauge")[0]
+        expr = f"config{match['python_path']}['name'] = 'Renamed'"
+        result = safe_execute(expr, config)
+        assert result["views"][0]["cards"][0]["cards"][0]["name"] == "Renamed"
+
+    def test_deep_nesting_bounded(self):
+        """Pathologically deep nesting is bounded, not a crash."""
+        # Build nesting deeper than _MAX_CARD_DEPTH; the target leaf sits below
+        # the bound, so it is intentionally not returned (and nothing raises).
+        from ha_mcp.tools.tools_config_dashboards import _MAX_CARD_DEPTH
+
+        leaf: dict[str, Any] = {"type": "tile", "entity": "light.too_deep"}
+        node = leaf
+        for _ in range(_MAX_CARD_DEPTH + 5):
+            node = {"type": "vertical-stack", "cards": [node]}
+        config = {"views": [{"cards": [node]}]}
+        matches = _find_cards_in_config(config, entity_id="light.too_deep")
+        assert matches == []  # below the depth bound, not found, no exception

@@ -183,6 +183,99 @@ def _badge_matches(badge: Any, entity_id: str) -> bool:
     return entity_id == badge_entity
 
 
+# Keys under which a card nests other cards. Verified against the HA frontend
+# docs (issue #1599): stack/grid cards use ``cards`` (a list); the conditional
+# card and wrapper cards such as ``custom:auto-entities`` use ``card`` (a single
+# dict). picture-elements' ``elements`` is a different shape (elements, not
+# cards) and is intentionally out of scope. The descent is type-agnostic, so any
+# custom wrapper that follows the same ``cards`` / ``card`` convention is covered.
+_NESTED_CARDS_KEY = "cards"
+_NESTED_CARD_KEY = "card"
+# Defensive bound against pathological/malformed configs. Real dashboards nest
+# only a handful of levels; this guards recursion depth far above any real use.
+_MAX_CARD_DEPTH = 50
+
+
+def _walk_card(
+    card: Any,
+    entity_id: str | None,
+    card_type: str | None,
+    heading: str | None,
+    *,
+    jq_prefix: str,
+    python_prefix: str,
+    view_index: int,
+    section_index: int | None,
+    card_index: int | None,
+    depth: int = 0,
+) -> list[dict[str, Any]]:
+    """Return matches for ``card`` and every card nested beneath it.
+
+    ``jq_prefix`` / ``python_prefix`` locate ``card`` itself — the former in jq
+    dot-notation, the latter as a Python subscript chain usable directly in
+    ``ha_config_set_dashboard(python_transform=...)``. Nested descendants extend
+    both prefixes per level, so the path strings are the authoritative locator
+    at any depth.
+
+    The flat ``view_index`` / ``section_index`` / ``card_index`` identify the
+    top-level container card and are carried unchanged into nested matches for
+    back-compat; they do not express nesting depth (use the path strings).
+    """
+    matches: list[dict[str, Any]] = []
+    if not isinstance(card, dict) or depth > _MAX_CARD_DEPTH:
+        return matches
+
+    if _card_matches(card, entity_id, card_type, heading):
+        matches.append(
+            {
+                "view_index": view_index,
+                "section_index": section_index,
+                "card_index": card_index,
+                "jq_path": jq_prefix,
+                "python_path": python_prefix,
+                "card_type": card.get("type"),
+                "card_config": card,
+            }
+        )
+
+    nested_list = card.get(_NESTED_CARDS_KEY)
+    if isinstance(nested_list, list):
+        for i, child in enumerate(nested_list):
+            matches.extend(
+                _walk_card(
+                    child,
+                    entity_id,
+                    card_type,
+                    heading,
+                    jq_prefix=f"{jq_prefix}.{_NESTED_CARDS_KEY}[{i}]",
+                    python_prefix=f"{python_prefix}['{_NESTED_CARDS_KEY}'][{i}]",
+                    view_index=view_index,
+                    section_index=section_index,
+                    card_index=card_index,
+                    depth=depth + 1,
+                )
+            )
+
+    nested_card = card.get(_NESTED_CARD_KEY)
+    if isinstance(nested_card, dict):
+        matches.extend(
+            _walk_card(
+                nested_card,
+                entity_id,
+                card_type,
+                heading,
+                jq_prefix=f"{jq_prefix}.{_NESTED_CARD_KEY}",
+                python_prefix=f"{python_prefix}['{_NESTED_CARD_KEY}']",
+                view_index=view_index,
+                section_index=section_index,
+                card_index=card_index,
+                depth=depth + 1,
+            )
+        )
+
+    return matches
+
+
 def _find_cards_in_config(
     config: dict[str, Any],
     entity_id: str | None = None,
@@ -194,7 +287,15 @@ def _find_cards_in_config(
 
     Returns a list of matches with location info and card/badge/header config.
     Searches cards (in sections and flat views), view-level badges, and
-    sections-view header cards (views[n].header.card).
+    sections-view header cards (views[n].header.card). Card search recurses into
+    nested containers (``cards`` lists in stacks/grids, ``card`` dicts in
+    conditional/wrapper cards), so a card nested inside a stack is found just
+    like a top-level one (issue #1599).
+
+    Each match carries both ``jq_path`` (jq dot-notation) and ``python_path``
+    (a Python subscript chain for ``ha_config_set_dashboard(python_transform)``);
+    these locate the card at any nesting depth. The flat ``*_index`` fields
+    identify the top-level container only.
     """
     matches: list[dict[str, Any]] = []
 
@@ -225,6 +326,7 @@ def _find_cards_in_config(
                             "card_index": None,
                             "badge_index": badge_idx,
                             "jq_path": f".views[{view_idx}].badges[{badge_idx}]",
+                            "python_path": f"['views'][{view_idx}]['badges'][{badge_idx}]",
                             "card_type": "badge",
                             "card_config": badge_config,
                         }
@@ -235,18 +337,19 @@ def _find_cards_in_config(
         header = view.get("header", {})
         if isinstance(header, dict):
             header_card = header.get("card")
-            if isinstance(header_card, dict) and _card_matches(
-                header_card, entity_id, card_type, heading
-            ):
-                matches.append(
-                    {
-                        "view_index": view_idx,
-                        "section_index": None,
-                        "card_index": None,
-                        "jq_path": f".views[{view_idx}].header.card",
-                        "card_type": header_card.get("type"),
-                        "card_config": header_card,
-                    }
+            if isinstance(header_card, dict):
+                matches.extend(
+                    _walk_card(
+                        header_card,
+                        entity_id,
+                        card_type,
+                        heading,
+                        jq_prefix=f".views[{view_idx}].header.card",
+                        python_prefix=f"['views'][{view_idx}]['header']['card']",
+                        view_index=view_idx,
+                        section_index=None,
+                        card_index=None,
+                    )
                 )
 
         view_type = view.get("type", "masonry")
@@ -259,36 +362,36 @@ def _find_cards_in_config(
                     continue
                 cards = section.get("cards", [])
                 for card_idx, card in enumerate(cards):
-                    if not isinstance(card, dict):
-                        continue
-                    if _card_matches(card, entity_id, card_type, heading):
-                        matches.append(
-                            {
-                                "view_index": view_idx,
-                                "section_index": section_idx,
-                                "card_index": card_idx,
-                                "jq_path": f".views[{view_idx}].sections[{section_idx}].cards[{card_idx}]",
-                                "card_type": card.get("type"),
-                                "card_config": card,
-                            }
+                    matches.extend(
+                        _walk_card(
+                            card,
+                            entity_id,
+                            card_type,
+                            heading,
+                            jq_prefix=f".views[{view_idx}].sections[{section_idx}].cards[{card_idx}]",
+                            python_prefix=f"['views'][{view_idx}]['sections'][{section_idx}]['cards'][{card_idx}]",
+                            view_index=view_idx,
+                            section_index=section_idx,
+                            card_index=card_idx,
                         )
+                    )
         else:
             # Flat view (masonry, panel, sidebar)
             cards = view.get("cards", [])
             for card_idx, card in enumerate(cards):
-                if not isinstance(card, dict):
-                    continue
-                if _card_matches(card, entity_id, card_type, heading):
-                    matches.append(
-                        {
-                            "view_index": view_idx,
-                            "section_index": None,
-                            "card_index": card_idx,
-                            "jq_path": f".views[{view_idx}].cards[{card_idx}]",
-                            "card_type": card.get("type"),
-                            "card_config": card,
-                        }
+                matches.extend(
+                    _walk_card(
+                        card,
+                        entity_id,
+                        card_type,
+                        heading,
+                        jq_prefix=f".views[{view_idx}].cards[{card_idx}]",
+                        python_prefix=f"['views'][{view_idx}]['cards'][{card_idx}]",
+                        view_index=view_idx,
+                        section_index=None,
+                        card_index=card_idx,
                     )
+                )
 
     return matches
 
@@ -716,8 +819,11 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
           Lists all storage-mode dashboards with metadata (url_path, title, icon).
 
         MODE 2 — Search: any of entity_id / card_type / heading provided
-          Finds cards, badges, and header cards matching the criteria.
-          Returns matches with jq_path for use with ha_config_set_dashboard(python_transform=...).
+          Finds cards, badges, and header cards matching the criteria, including
+          cards nested inside stacks, grids, and conditional cards. Each match
+          carries a python_path (a Python subscript chain for
+          ha_config_set_dashboard(python_transform=...)) and a jq_path (jq
+          dot-notation); both locate the card at any nesting depth.
           Multiple criteria are AND-ed. Always fetches fresh config (force=True).
           Strategy dashboards are not searchable (no explicit cards).
 
@@ -742,7 +848,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
         2. ha_config_set_dashboard(
                url_path="my-dash",
                config_hash=find["config_hash"],
-               python_transform=f'config{find["matches"][0]["jq_path"]}["icon"] = "mdi:lamp"'
+               python_transform=f'config{find["matches"][0]["python_path"]}["icon"] = "mdi:lamp"'
            )
 
         Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
@@ -880,7 +986,7 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     "matches": matches,
                     "match_count": len(matches),
                     "hint": (
-                        "Use jq_path with ha_config_set_dashboard(python_transform=...) "
+                        "Use python_path with ha_config_set_dashboard(python_transform=...) "
                         "for targeted updates"
                         if matches
                         else "No matches found. Try broader search criteria."
@@ -1371,14 +1477,14 @@ def register_config_dashboard_tools(mcp: Any, client: Any, **kwargs: Any) -> Non
                     message, suggestions = format_sandbox_error(e, python_transform)
                     # A path-shape mismatch (IndexError/KeyError) is almost always
                     # a hallucinated path; steer the retry toward search mode so
-                    # the next transform is built from a verified jq_path.
+                    # the next transform is built from a verified python_path.
                     if isinstance(e, PythonSandboxExecutionError) and isinstance(
                         e.__cause__, (IndexError, KeyError)
                     ):
                         suggestions = [
                             "Call ha_config_get_dashboard with card_type=..., "
                             "entity_id=..., or heading=... to get the verified "
-                            "jq_path for the target card, then build "
+                            "python_path for the target card, then build "
                             "python_transform from that path",
                             *suggestions,
                         ]
