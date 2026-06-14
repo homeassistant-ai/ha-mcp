@@ -88,15 +88,13 @@ async def test_run_with_shutdown_cleans_up_when_server_fails(monkeypatch):
     The failure surfaces (covered above), but the finally block must still run
     _cleanup_resources so a crash on startup doesn't leak resources.
     """
-    import ha_mcp.__main__ as main_mod
-
     cleaned = False
 
     async def fake_cleanup():
         nonlocal cleaned
         cleaned = True
 
-    monkeypatch.setattr(main_mod, "_cleanup_resources", fake_cleanup)
+    monkeypatch.setattr("ha_mcp.__main__._cleanup_resources", fake_cleanup)
 
     async def failing_server():
         raise ValueError("boom")
