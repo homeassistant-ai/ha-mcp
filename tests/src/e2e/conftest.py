@@ -1054,11 +1054,7 @@ def _detect_docker_host() -> dict:
 
 @pytest.fixture(scope="session")
 def _blueprint_http_server():
-    """Start a local HTTP server for blueprint files before the HA container launches.
-
-    Must start before the container so the port is known when ``extra_hosts``
-    is configured in ``ha_container_with_fresh_config``.
-    """
+    """Start a local HTTP server for blueprint files used by HAOS tests."""
     env = _detect_docker_host()
 
     assets_dir = Path(__file__).parent.parent.parent / "assets" / "blueprints"
@@ -1078,6 +1074,25 @@ def _blueprint_http_server():
         yield {"base_url": base_url, "port": port, "extra_hosts": env["extra_hosts"]}
     finally:
         srv.shutdown()
+
+
+def _copy_local_blueprint_to_www(config_path: Path) -> dict[str, str]:
+    """Copy the E2E blueprint fixture into HA's /local static file directory."""
+    blueprint_name = "e2e_test_blueprint.yaml"
+    source = (
+        Path(__file__).parent.parent.parent / "assets" / "blueprints" / blueprint_name
+    )
+    if not source.exists():
+        pytest.fail(f"Blueprint test asset not found at {source}")
+
+    www_dir = config_path / "www"
+    www_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, www_dir / blueprint_name)
+
+    return {
+        "base_url": "http://localhost:8123/local",
+        "filename": blueprint_name,
+    }
 
 
 def _haos_worker_setup(base_image_path: Path) -> Path:
@@ -1146,7 +1161,7 @@ def _haos_worker_setup(base_image_path: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
-def ha_container_with_fresh_config(_blueprint_http_server):
+def ha_container_with_fresh_config(request):
     """Create Home Assistant test environment with fresh config.
 
     Default backend: testcontainer (HA Core Docker image). When the
@@ -1298,14 +1313,15 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             # defence against race conditions on slow CI runners.
             # Idempotent — safe across the inaddon dev-addon update.
             set_default_backup_password(base_url, token)
+            blueprint_http_server = request.getfixturevalue("_blueprint_http_server")
             # The session-scope _blueprint_http_server fixture computes its
             # base_url using host.docker.internal — meaningless from inside
             # the HAOS QEMU guest. Slirp user networking always reaches the
             # host at 10.0.2.2, so rewrite the URL here for tests that fetch
             # blueprints through HA's import_blueprint flow.
             blueprint_for_haos = {
-                **_blueprint_http_server,
-                "base_url": f"http://10.0.2.2:{_blueprint_http_server['port']}",
+                **blueprint_http_server,
+                "base_url": f"http://10.0.2.2:{blueprint_http_server['port']}",
             }
             # Inaddon mode: refresh_dev_addon_source_in_qcow2 ran above
             # with a bumped version, so Supervisor now sees an update
@@ -1496,6 +1512,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
     # this shift, the pagination tests in test_history.py/test_logbook.py would
     # silently skip again the moment the seed gets more than 24h old.
     _refresh_recorder_timestamps(config_path / "home-assistant_v2.db")
+    local_blueprint = _copy_local_blueprint_to_www(config_path)
 
     # Ensure proper permissions for Home Assistant
     _setup_config_permissions(config_path)
@@ -1526,13 +1543,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
     )  # Ensure read-write mount
     container = container.with_env("TZ", "UTC")
     # Add privileged mode for Home Assistant hardware access.
-    # On plain Linux Docker (CI) also inject the host.docker.internal mapping so
-    # the blueprint HTTP server is reachable from within the container.
-    # On Docker Desktop the mapping is provided by Docker's embedded DNS and must
-    # NOT be overridden here.
     container_kwargs: dict = {"privileged": True}
-    if _blueprint_http_server.get("extra_hosts"):
-        container_kwargs["extra_hosts"] = _blueprint_http_server["extra_hosts"]
 
     # Pre-install custom-component manifest requirements into the HA
     # container's Python env before HA boots. HA's own runtime manifest-
@@ -1730,7 +1741,7 @@ def ha_container_with_fresh_config(_blueprint_http_server):
             "port": host_port,
             "base_url": base_url,
             "config_path": str(config_path),
-            "blueprint_server": _blueprint_http_server,
+            "blueprint_server": local_blueprint,
             "token": TEST_TOKEN,
             "backend": "container",
         }
@@ -2154,12 +2165,7 @@ async def wait_for_state_change():
 
 @pytest.fixture(scope="session")
 def local_blueprint_server(ha_container_with_fresh_config):
-    """Return blueprint HTTP server info for tests that need to import blueprints.
-
-    The server is started by ``_blueprint_http_server`` before the HA container
-    and stored in ``ha_container_with_fresh_config``; this fixture simply exposes
-    it so tests don't need to depend on ``ha_container_with_fresh_config`` directly.
-    """
+    """Return blueprint URL info for tests that need to import blueprints."""
     server = ha_container_with_fresh_config["blueprint_server"]
     logger.info(f"🌐 Blueprint server at {server['base_url']}")
     yield server

@@ -270,12 +270,14 @@ class TestBlueprintManagement:
 
         Validates that ha_import_blueprint calls both blueprint/import (validate)
         AND blueprint/save (persist), so the blueprint appears in the list.
-        Uses a locally-served blueprint file to avoid external network dependencies.
+        Uses a blueprint file served by the test Home Assistant instance to
+        avoid external network dependencies.
         """
         logger.info("Testing ha_import_blueprint saves blueprint to disk...")
 
-        # Serve the blueprint from a local HTTP server accessible by the HA container.
-        # This avoids flaky failures caused by transient GitHub network issues on CI.
+        # Serve the blueprint through Home Assistant's own /local static path.
+        # This avoids external network dependencies and host-to-container
+        # routing differences across Docker environments.
         test_url = f"{local_blueprint_server['base_url']}/e2e_test_blueprint.yaml"
         logger.info(f"Using local blueprint URL: {test_url}")
 
