@@ -954,7 +954,7 @@ class SystemTools:
         config-entries set, classifying findings into confidence tiers:
 
         - ``config_entry_orphans`` (definitive): registry entries whose
-          ``config_entry_id`` is no longer present in ``config/entries/get`` —
+          ``config_entry_id`` is no longer present in ``config_entries/get`` —
           the owning integration instance was removed, leaving the registry
           entry behind.
         - ``stale_restored`` (likely): entries HA recreated from the registry on
@@ -1026,7 +1026,7 @@ class SystemTools:
             if entries is None:
                 dead["config_entries_checked"] = False
                 dead.setdefault("warnings", []).append(
-                    "config/entries/get unavailable; config_entry_orphans tier "
+                    "config_entries/get unavailable; config_entry_orphans tier "
                     "skipped (stale_restored still computed)."
                 )
             else:
