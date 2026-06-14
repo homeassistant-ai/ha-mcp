@@ -218,6 +218,51 @@ class TestFetchRepairs:
         assert "ws disconnect" in result["error"]
 
 
+class TestFetchZwaveNetwork:
+    """``_fetch_zwave_network`` resolves the zwave_js config entry then fetches
+    network status. Regression guard for the config_entries/get command name —
+    the helper was previously only mocked whole, so a slash-vs-underscore typo
+    in the command went undetected (it errored as 'integration not available'
+    for every install)."""
+
+    def _zwave_ws_client(self):
+        """ws_client whose send_command dispatches on the canonical commands."""
+        ws = MagicMock()
+
+        async def _send(command, **kwargs):
+            if command == "config_entries/get":
+                return {
+                    "success": True,
+                    "result": [{"domain": "zwave_js", "entry_id": "zw_entry"}],
+                }
+            if command == "zwave_js/network_status":
+                return {
+                    "success": True,
+                    "result": {"controller": {"nodes": [{"node_id": 1}]}},
+                }
+            return {"success": False, "error": {"message": "Unknown command."}}
+
+        ws.send_command = AsyncMock(side_effect=_send)
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_uses_canonical_config_entries_command(self):
+        """The entry lookup must use 'config_entries/get' (underscore). With the
+        wrong slash name the mock returns Unknown-command and the section would
+        report 'integration not found' despite zwave_js being present."""
+        ws = self._zwave_ws_client()
+        result = await SystemTools._fetch_zwave_network(ws)
+
+        sent_commands = [call.args[0] for call in ws.send_command.call_args_list]
+        assert "config_entries/get" in sent_commands
+        assert "config/entries/get" not in sent_commands
+        # Proves the entry was actually resolved (only possible with the right
+        # command name) — not the "integration not found" error path.
+        assert "error" not in result
+        assert result["count"] == 1
+        assert result["nodes"][0]["node_id"] == 1
+
+
 class TestGetSystemHealthGather:
     """``ha_get_system_health`` runs optional sections concurrently via ``asyncio.gather``.
 

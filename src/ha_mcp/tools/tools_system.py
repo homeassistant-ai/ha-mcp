@@ -842,8 +842,11 @@ class SystemTools:
             "total_count": 0,
         }
         try:
-            # Get all zwave_js config entries to find entry_id
-            entries_result = await ws_client.send_command("config/entries/get")
+            # Get all zwave_js config entries to find entry_id. The HA command
+            # is ``config_entries/get`` (underscore); the slash form is rejected
+            # as "Unknown command", which the outer except would mask as
+            # "Z-Wave JS integration not available".
+            entries_result = await ws_client.send_command("config_entries/get")
             zwave_entry_id = None
             if entries_result.get("success"):
                 for entry in entries_result.get("result", []):
