@@ -1014,8 +1014,8 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
       : '.storage, secrets.yaml';
   info.innerHTML =
     `<div class="feature-name">Custom filesystem directories (advanced)</div>` +
-    `<div class="feature-help">Extra directories (one per line, relative to your config dir) that the file tools may READ and WRITE — e.g. <code>pyscript</code>, <code>python_scripts</code>. Each entry grants both read and write. Applies immediately; no restart needed.</div>` +
-    `<div class="feature-help">Always blocked (cannot be added): <code>${escapeHtml(denyList)}</code>, path traversal (<code>..</code>), and absolute paths.</div>`;
+    `<div class="feature-help">Extra directories (one per line) that the file tools may READ and WRITE — either relative to your config dir (e.g. <code>pyscript</code>, <code>python_scripts</code>) or an absolute HAOS sibling volume <code>/share</code>, <code>/media</code>, <code>/ssl</code>, <code>/backup</code> (or a subdirectory of one). Each entry grants both read and write. Applies immediately; no restart needed.</div>` +
+    `<div class="feature-help">Always blocked (cannot be added): <code>${escapeHtml(denyList)}</code>, path traversal (<code>..</code>), and any absolute path outside the HAOS sibling volumes.</div>`;
 
   const control = document.createElement('div');
   control.className = 'feature-control';

@@ -37,11 +37,14 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _migrate_legacy_backup_dir,
     _normalize_extra_dir,
     _read_file_sync,
+    _resolves_within,
     _violates_deny_floor,
+    _volume_root_for,
     _write_file_sync,
 )
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     ALLOWED_READ_DIRS,
+    ALLOWED_VOLUME_ROOTS,
     ALLOWED_WRITE_DIRS,
 )
 
@@ -549,6 +552,23 @@ class TestWriteFileSync:
         assert result["_error"] == "no_parent"
         assert result["parent"] == "missing_dir"
 
+    def test_no_parent_reports_absolute_for_out_of_config_dir(self, tmp_path):
+        # #1586: a missing parent on a HAOS sibling volume is NOT under the
+        # config dir, so relative_to would raise — the parent is reported
+        # absolute instead (mirrors _list_files_sync's volume handling).
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        volume = tmp_path / "share"
+        volume.mkdir()
+        target = volume / "missing" / "x.txt"
+
+        result = _write_file_sync(
+            target, "data", overwrite=False, create_dirs=False, config_dir=config_dir
+        )
+
+        assert result["_error"] == "no_parent"
+        assert result["parent"] == str(volume / "missing")
+
 
 class TestDeleteFileSync:
     """Test _delete_file_sync helper."""
@@ -785,6 +805,22 @@ class TestDenyFloor:
         )
         # A real .storage UNDER this config is still denied (relative-input scan).
         assert _violates_deny_floor(config_dir, ".storage/auth") is True
+
+    def test_symlink_dotdot_lexical_erase_escape_blocked(self, tmp_path):
+        # #1586 review (HIGH): a symlink under an allowed dir + ``..`` escapes
+        # the config dir even though os.path.normpath lexically collapses
+        # ``link/..`` to a safe-looking in-config path. open(2) resolves the
+        # symlink THEN applies ``..``, landing outside — _resolves_within
+        # resolves the RAW path so enforcement matches the real open target.
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "www").mkdir()
+        # www/link -> config_dir; "www/link/../escaped" -> config_dir/../escaped
+        # = tmp_path/escaped, OUTSIDE the config dir.
+        (config_dir / "www" / "link").symlink_to(config_dir)
+        escape = os.path.join("www", "link", "..", "escaped.txt")
+        assert _is_path_allowed_for_read(config_dir, escape) is False
+        assert _is_path_allowed_for_dir(config_dir, escape, ALLOWED_WRITE_DIRS) is False
         assert _is_path_allowed_for_read(config_dir, ".storage/auth") is False
 
 
@@ -989,3 +1025,240 @@ class TestIsWithinConfigDir:
 
     def test_plain_subpath_is_inside(self, tmp_path):
         assert _is_within_config_dir(tmp_path, "www/x.css") is True
+
+
+class TestVolumeRootFor:
+    """_volume_root_for: which HAOS sibling volume an absolute path falls in (#1586)."""
+
+    def test_matches_each_volume_root_exactly(self):
+        for root in ALLOWED_VOLUME_ROOTS:
+            assert _volume_root_for(root) == root
+
+    def test_matches_path_under_root(self):
+        assert _volume_root_for("/share/llm/notes.md") == "/share"
+        assert _volume_root_for("/media/tts/out.mp3") == "/media"
+        assert _volume_root_for("/ssl/fullchain.pem") == "/ssl"
+        assert _volume_root_for("/backup/abc.tar") == "/backup"
+
+    def test_rejects_non_volume_absolute(self):
+        assert _volume_root_for("/etc/passwd") is None
+        assert _volume_root_for("/config/configuration.yaml") is None
+        assert _volume_root_for("/") is None
+
+    def test_respects_separator_boundary(self):
+        # A sibling sharing a name prefix must NOT match (would be a string-
+        # prefix bug): '/shared' is not '/share', '/backups' is not '/backup'.
+        assert _volume_root_for("/shared") is None
+        assert _volume_root_for("/shared/x") is None
+        assert _volume_root_for("/backups") is None
+        assert _volume_root_for("/ssl_extra/x") is None
+
+
+class TestNormalizeVolumeDir:
+    """_normalize_extra_dir accepts the fixed HAOS sibling-volume roots (#1586)."""
+
+    def test_accepts_each_volume_root(self, tmp_path):
+        for root in ("/share", "/media", "/ssl", "/backup"):
+            assert _normalize_extra_dir(root, tmp_path) == root
+
+    def test_accepts_subdir_of_volume(self, tmp_path):
+        assert _normalize_extra_dir("/share/llm", tmp_path) == "/share/llm"
+
+    def test_strips_whitespace_and_trailing_slash(self, tmp_path):
+        assert _normalize_extra_dir("  /media/tts/  ", tmp_path) == "/media/tts"
+
+    def test_still_rejects_non_volume_absolute(self, tmp_path):
+        assert _normalize_extra_dir("/etc/passwd", tmp_path) is None
+        assert _normalize_extra_dir("/pyscript", tmp_path) is None
+        assert _normalize_extra_dir("/config/secrets.yaml", tmp_path) is None
+
+    def test_respects_volume_boundary(self, tmp_path):
+        assert _normalize_extra_dir("/shared", tmp_path) is None
+
+    def test_rejects_deny_floor_under_volume(self, tmp_path):
+        assert _normalize_extra_dir("/share/.storage", tmp_path) is None
+        assert _normalize_extra_dir("/share/.storage/auth", tmp_path) is None
+        # secrets.yaml is always denied on a volume (volume reads are unmasked).
+        assert _normalize_extra_dir("/backup/secrets.yaml", tmp_path) is None
+
+    def test_traversal_collapsing_outside_volume_rejected(self, tmp_path):
+        # normpath collapses '/share/../etc' -> '/etc', no longer a volume root.
+        assert _normalize_extra_dir("/share/../etc", tmp_path) is None
+
+
+class TestVolumePathEnforcement:
+    """Read/write/list enforcement for configured HAOS volume paths (#1586).
+
+    A configured volume grants BOTH read and write, matching the config-relative
+    extra-dir model — and the deny floor + path boundaries still hold.
+    """
+
+    def test_configured_volume_grants_read(self, tmp_path):
+        extra = ["/share"]
+        assert _is_path_allowed_for_read(tmp_path, "/share/llm/n.md", extra) is True
+        assert _is_path_allowed_for_read(tmp_path, "/share", extra) is True
+
+    def test_configured_volume_grants_write_and_list(self, tmp_path):
+        extra = ["/share"]
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "/share/x.txt", ALLOWED_WRITE_DIRS, extra
+            )
+            is True
+        )
+        assert (
+            _is_path_allowed_for_dir(tmp_path, "/share", ALLOWED_READ_DIRS, extra)
+            is True
+        )
+
+    def test_unconfigured_volume_blocked(self, tmp_path):
+        # /media is a known root but was never added to the allowlist.
+        assert _is_path_allowed_for_read(tmp_path, "/media/x", ["/share"]) is False
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "/media/x", ALLOWED_WRITE_DIRS, ["/share"]
+            )
+            is False
+        )
+
+    def test_no_extra_dirs_blocks_all_volumes(self, tmp_path):
+        assert _is_path_allowed_for_read(tmp_path, "/share/x", None) is False
+        assert _is_path_allowed_for_read(tmp_path, "/backup/x", []) is False
+
+    def test_subdir_entry_respects_boundary(self, tmp_path):
+        extra = ["/share/llm"]
+        assert _is_path_allowed_for_read(tmp_path, "/share/llm/a", extra) is True
+        assert _is_path_allowed_for_read(tmp_path, "/share/other/a", extra) is False
+        # '/share/llmx' is not under '/share/llm' (separator boundary).
+        assert _is_path_allowed_for_read(tmp_path, "/share/llmx/a", extra) is False
+
+    def test_deny_floor_enforced_on_volume(self, tmp_path):
+        extra = ["/share"]
+        assert (
+            _is_path_allowed_for_read(tmp_path, "/share/.storage/auth", extra) is False
+        )
+        assert (
+            _is_path_allowed_for_read(tmp_path, "/share/secrets.yaml", extra) is False
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, "/share/.storage/x", ALLOWED_WRITE_DIRS, extra
+            )
+            is False
+        )
+
+    def test_non_volume_absolute_blocked_even_if_listed(self, tmp_path):
+        # Defense in depth: even if a non-volume absolute path reached the live
+        # list (the normalizer drops it), enforcement still refuses it.
+        assert _is_path_allowed_for_read(tmp_path, "/etc/passwd", ["/etc"]) is False
+
+    def test_config_relative_unaffected_by_volume_entries(self, tmp_path):
+        # A mixed allowlist (config-relative + volume) keeps both behaviors.
+        extra = ["pyscript", "/share"]
+        assert _is_path_allowed_for_read(tmp_path, "pyscript/foo.py", extra) is True
+        assert _is_path_allowed_for_read(tmp_path, "/share/foo", extra) is True
+        assert _is_path_allowed_for_read(tmp_path, "esphome/x", extra) is False
+
+
+class TestListFilesSyncVolumePaths:
+    """_list_files_sync reports absolute paths for dirs outside the config dir (#1586)."""
+
+    def test_reports_absolute_path_for_out_of_config_dir(self, tmp_path):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        volume = tmp_path / "share"
+        volume.mkdir()
+        (volume / "note.txt").write_text("hi")
+        result = _list_files_sync(volume, config_dir, None)
+        assert "_error" not in result
+        paths = {f["name"]: f["path"] for f in result["files"]}
+        # Not relative_to(config_dir) (would raise) — reported absolute instead.
+        assert paths["note.txt"] == str(volume / "note.txt")
+
+    def test_config_relative_listing_still_relative(self, tmp_path):
+        (tmp_path / "www").mkdir()
+        (tmp_path / "www" / "a.css").write_text("x")
+        result = _list_files_sync(tmp_path / "www", tmp_path, None)
+        paths = {f["name"]: f["path"] for f in result["files"]}
+        assert paths["a.css"] == os.path.join("www", "a.css")
+
+
+class TestResolvesWithin:
+    """The symlink-safe containment primitive that backs both the config and
+    volume gates (#1586 review). Resolves the RAW path (symlinks + ``..`` as
+    open(2) does), not the lexically-normalized form."""
+
+    def test_plain_subpath_within(self, tmp_path):
+        (tmp_path / "sub").mkdir()
+        assert _resolves_within(tmp_path, "sub/file.txt") is True
+
+    def test_nonexistent_subpath_within(self, tmp_path):
+        # resolve() tolerates non-existent leaves; a path that lexically stays
+        # under base is allowed (creation paths must work).
+        assert _resolves_within(tmp_path, "does/not/exist.txt") is True
+
+    def test_absolute_raw_path_handled(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        assert _resolves_within(tmp_path, str(sub / "f")) is True
+        assert _resolves_within(sub, str(tmp_path / "other")) is False
+
+    def test_symlink_escaping_out_rejected(self, tmp_path):
+        base = tmp_path / "base"
+        base.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (base / "link").symlink_to(outside)
+        # base/link/x resolves to outside/x — escapes base.
+        assert _resolves_within(base, "link/x") is False
+
+    def test_symlink_dotdot_lexical_erase_escape_rejected(self, tmp_path):
+        # The HIGH finding's core: `<base>/<symlink>/..`. normpath lexically
+        # collapses `link/..` back to base, but open(2) resolves link first,
+        # then `..`, landing in link's REAL parent — outside base.
+        base = tmp_path / "base"
+        base.mkdir()
+        target = tmp_path / "target"
+        target.mkdir()
+        (base / "link").symlink_to(target)
+        # base/link/../escape -> target/../escape -> tmp_path/escape (outside base)
+        assert _resolves_within(base, "link/../escape") is False
+
+
+class TestVolumeSymlinkEscape:
+    """End-to-end #1586 review HIGH regression: a symlink under a configured
+    volume that escapes the volume root is denied for read AND write/delete."""
+
+    def test_volume_symlink_dotdot_escape_blocked(self, tmp_path, monkeypatch):
+        import custom_components.ha_mcp_tools as comp
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        volume = tmp_path / "vol"
+        volume.mkdir()
+        # Treat the tmp volume as a recognized HAOS sibling-volume root.
+        monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
+        # vol/link -> volume's parent; vol/link/../escaped escapes the volume.
+        (volume / "link").symlink_to(tmp_path)
+        extra = [str(volume)]
+        escape = str(volume / "link" / ".." / "escaped.txt")
+        assert _is_path_allowed_for_read(config_dir, escape, extra) is False
+        assert (
+            _is_path_allowed_for_dir(config_dir, escape, ALLOWED_WRITE_DIRS, extra)
+            is False
+        )
+
+    def test_volume_symlink_within_root_allowed(self, tmp_path, monkeypatch):
+        import custom_components.ha_mcp_tools as comp
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        volume = tmp_path / "vol"
+        volume.mkdir()
+        (volume / "real").mkdir()
+        monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
+        # A symlink that stays inside the volume is fine.
+        (volume / "link").symlink_to(volume / "real")
+        extra = [str(volume)]
+        ok = str(volume / "link" / "f.txt")
+        assert _is_path_allowed_for_read(config_dir, ok, extra) is True
