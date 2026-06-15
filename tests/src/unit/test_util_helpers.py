@@ -1302,7 +1302,7 @@ class TestAddTimezoneMetadata:
         result = await add_timezone_metadata(mock_client, data)
         assert "data" in result
         assert "metadata" in result
-        assert result["data"] is data
+        assert result["data"] == data  # converted copy, not same object
 
     @pytest.mark.asyncio
     async def test_include_metadata_false_returns_data_unchanged(self, mock_client):
@@ -1329,7 +1329,131 @@ class TestAddTimezoneMetadata:
         result = await add_timezone_metadata(client, {"success": True})
         # Wrapper is still present; timezone is the fallback sentinel
         assert "data" in result
-        assert result["metadata"]["home_assistant_timezone"] == "Unknown"
+        assert result["metadata"]["home_assistant_timezone"] == "UTC"
+
+    @pytest.mark.asyncio
+    async def test_last_changed_converted_from_utc_to_local(self, mock_client):
+        """last_changed UTC timestamp is converted to America/New_York local time."""
+        data = {"last_changed": "2026-06-12T00:06:00+00:00"}
+        result = await add_timezone_metadata(mock_client, data)
+        converted = result["data"]["last_changed"]
+        # 00:06 UTC on June 12 = 20:06 EDT on June 11 (date rolls back crossing midnight)
+        assert converted == "2026-06-11T20:06:00-04:00"
+
+    @pytest.mark.asyncio
+    async def test_last_updated_and_last_reported_converted(self, mock_client):
+        """last_updated and last_reported are both converted."""
+        data = {
+            "last_updated": "2026-06-12T02:00:00+00:00",
+            "last_reported": "2026-06-12T03:00:00+00:00",
+        }
+        result = await add_timezone_metadata(mock_client, data)
+        assert result["data"]["last_updated"] == "2026-06-11T22:00:00-04:00"
+        assert result["data"]["last_reported"] == "2026-06-11T23:00:00-04:00"
+
+    @pytest.mark.asyncio
+    async def test_logbook_when_field_converted(self, mock_client):
+        """Logbook 'when' field is converted."""
+        data = {"when": "2026-06-12T01:00:00+00:00"}
+        result = await add_timezone_metadata(mock_client, data)
+        assert result["data"]["when"] == "2026-06-11T21:00:00-04:00"
+
+    @pytest.mark.asyncio
+    async def test_last_triggered_field_converted(self, mock_client):
+        """Automation last_triggered field is converted."""
+        data = {"last_triggered": "2026-06-12T04:00:00+00:00"}
+        result = await add_timezone_metadata(mock_client, data)
+        assert result["data"]["last_triggered"] == "2026-06-12T00:00:00-04:00"
+
+    @pytest.mark.asyncio
+    async def test_naive_string_assumed_utc(self, mock_client):
+        """Naive timestamps (no offset) are treated as UTC, not system local."""
+        data = {"last_changed": "2026-06-12T06:00:00"}
+        result = await add_timezone_metadata(mock_client, data)
+        # 06:00 UTC naive -> 02:00 EDT same day
+        assert result["data"]["last_changed"] == "2026-06-12T02:00:00-04:00"
+
+    @pytest.mark.asyncio
+    async def test_nested_dict_converted(self, mock_client):
+        """Timestamps nested inside dicts are converted recursively."""
+        data = {"entity": {"last_changed": "2026-06-12T00:00:00+00:00"}}
+        result = await add_timezone_metadata(mock_client, data)
+        assert "+00:00" not in result["data"]["entity"]["last_changed"]
+
+    @pytest.mark.asyncio
+    async def test_list_of_state_objects_converted(self, mock_client):
+        """Lists of state objects have all timestamps converted."""
+        data = [
+            {"last_changed": "2026-06-12T00:06:00+00:00", "state": "heat"},
+            {"last_changed": "2026-06-12T04:01:00+00:00", "state": "off"},
+        ]
+        result = await add_timezone_metadata(mock_client, data)
+        states = result["data"]
+        assert states[0]["last_changed"] == "2026-06-11T20:06:00-04:00"
+        assert states[1]["last_changed"] == "2026-06-12T00:01:00-04:00"
+
+    @pytest.mark.asyncio
+    async def test_non_timestamp_fields_untouched(self, mock_client):
+        """Non-timestamp fields are not modified."""
+        data = {"state": "on", "entity_id": "light.kitchen"}
+        result = await add_timezone_metadata(mock_client, data)
+        assert result["data"]["state"] == "on"
+        assert result["data"]["entity_id"] == "light.kitchen"
+
+    @pytest.mark.asyncio
+    async def test_malformed_timestamp_passed_through(self, mock_client):
+        """Malformed timestamp strings are passed through unchanged."""
+        data = {"last_changed": "not-a-date"}
+        result = await add_timezone_metadata(mock_client, data)
+        assert result["data"]["last_changed"] == "not-a-date"
+
+    @pytest.mark.asyncio
+    async def test_dst_summer_offset(self, mock_client):
+        """Summer DST offset (EDT = UTC-4) is applied correctly."""
+        data = {"last_changed": "2026-06-12T12:00:00+00:00"}
+        result = await add_timezone_metadata(mock_client, data)
+        assert result["data"]["last_changed"] == "2026-06-12T08:00:00-04:00"
+
+    @pytest.mark.asyncio
+    async def test_dst_winter_offset(self, mock_client):
+        """Winter standard offset (EST = UTC-5) is applied correctly."""
+        data = {"last_changed": "2026-01-15T12:00:00+00:00"}
+        result = await add_timezone_metadata(mock_client, data)
+        assert result["data"]["last_changed"] == "2026-01-15T07:00:00-05:00"
+
+    @pytest.mark.asyncio
+    async def test_zone_info_not_found_falls_back_to_utc(self):
+        """ZoneInfoNotFoundError (missing tzdata) falls back to UTC gracefully."""
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "Invalid/Timezone"})
+        data = {"last_changed": "2026-06-12T12:00:00+00:00"}
+        result = await add_timezone_metadata(client, data)
+        assert result["metadata"]["home_assistant_timezone"] == "UTC"
+        # Timestamp should be unchanged (already UTC)
+        assert "2026-06-12T12:00:00+00:00" in result["data"]["last_changed"]
+
+    @pytest.mark.asyncio
+    async def test_config_failure_note_indicates_no_conversion(self):
+        """On config fetch failure, metadata note says timestamps are in UTC (not converted)."""
+        client = MagicMock()
+        client.get_config = AsyncMock(side_effect=OSError("connection refused"))
+        result = await add_timezone_metadata(
+            client, {"last_changed": "2026-06-12T12:00:00+00:00"}
+        )
+        assert "UTC" in result["metadata"]["note"]
+        assert "converted" not in result["metadata"]["note"].lower()
+
+    @pytest.mark.asyncio
+    async def test_metadata_note_scoped_to_per_record_fields(self, mock_client):
+        """Metadata note accurately states only per-record fields are converted, not window boundaries."""
+        result = await add_timezone_metadata(
+            mock_client, {"last_changed": "2026-06-12T12:00:00+00:00"}
+        )
+        note = result["metadata"]["note"]
+        # Note must mention per-record fields
+        assert "last_changed" in note
+        # Note must acknowledge window/boundary fields stay UTC
+        assert "UTC" in note
 
 
 class TestProjectFieldsTypoGuard:
