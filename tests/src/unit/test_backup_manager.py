@@ -951,6 +951,29 @@ class TestDiffSnapshot:
         # as a failure instead of silently yielding None.
         assert result["captured_at"] is not None
 
+    async def test_diff_raises_on_degraded_fetch_envelope(self, tmp_path: Path) -> None:
+        # Item #1 end-to-end: a degraded fetch (non-list envelope from an
+        # auth-scope change / API drift) must propagate out of
+        # ``diff_snapshot`` as a raise, NOT be misread as
+        # ``entity_missing``. The capture fetch succeeds; the diff fetch
+        # routes a dict envelope through ``_require_list`` and raises.
+        results: list[Any] = [{"alias": "x"}]
+
+        async def fetch(_client: Any, _entity_id: str) -> Any:
+            if results:
+                return results.pop(0)
+            return _require_list({"error": "permission denied"}, "automation/list")
+
+        async def restore(_client: Any, _entity_id: str, _config: Any) -> Any:
+            return None
+
+        mgr = _mk_manager(tmp_path)
+        mgr.register(DomainHandler(domain="automation", fetch=fetch, restore=restore))
+        path = await mgr.maybe_snapshot("automation", "x")
+        assert path is not None
+        with pytest.raises(HomeAssistantError, match="Expected a list"):
+            await mgr.diff_snapshot(path.name)
+
     async def test_diff_raises_lookup_error_on_unknown_domain(
         self, tmp_path: Path
     ) -> None:

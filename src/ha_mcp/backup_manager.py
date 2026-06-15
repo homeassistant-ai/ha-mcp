@@ -293,6 +293,14 @@ class BackupManager:
             try:
                 config = await handler.fetch(self._client, entity_id)
             except _CAPTURE_TRANSIENT_ERRORS as err:
+                # Degraded fetches (a non-list WS envelope from an
+                # auth-scope change or API drift) raise rather than return
+                # None — see ``_require_list``. During auto-backup we skip
+                # the snapshot with a WARNING (operator-visible) instead of
+                # crashing the pipeline; the same error during a diff/
+                # restore propagates to the tool layer as a structured
+                # error. The warning level (vs the debug log below) is what
+                # distinguishes "fetch broke" from "entity didn't exist".
                 logger.warning(
                     "Auto-backup: fetch failed for %s — %s: %s",
                     key,
@@ -749,7 +757,10 @@ def _diff_node(
     # ``True == 1`` / ``False == 0`` in Python, so equality alone would
     # let a bool/int type swap pass silently even though it represents
     # a different state for HA toggles. The different-type branch
-    # forces a replace unconditionally.
+    # forces a replace unconditionally. No post-append length guard here
+    # (unlike the loop sites above): this append is terminal, and
+    # ``_compute_json_patch`` budgets ``max_ops + 1`` precisely to absorb
+    # one final overflow op before trimming.
     out.append({"op": "replace", "path": path or "", "value": stored})
 
 
