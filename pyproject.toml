@@ -185,6 +185,7 @@ asyncio_mode = "auto"
 dev = [
     "build>=1.2.2",
     "docker>=7.1.0",
+    "httpx2>=2.4.0",
     "mypy>=1.17.0",
     "openai>=1.0.0",
     "psutil>=7.0.0",
