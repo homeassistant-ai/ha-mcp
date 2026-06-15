@@ -10,11 +10,13 @@ import errno
 import fnmatch
 import logging
 import os
+import posixpath
 import secrets
 import shutil
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from io import StringIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import voluptuous as vol
@@ -33,6 +35,7 @@ from ruamel.yaml import YAMLError
 
 from .const import (
     ALLOWED_READ_DIRS,
+    ALLOWED_VOLUME_ROOTS,
     ALLOWED_WRITE_DIRS,
     ALLOWED_YAML_CONFIG_FILES,
     ALLOWED_YAML_KEYS,
@@ -142,10 +145,11 @@ SERVICE_GET_CALLER_TOKEN_SCHEMA = vol.Schema(
 )
 
 # get_allowed_paths / set_allowed_paths back the ha-mcp settings UI's custom
-# filesystem-directory editor (issue #1567). Both are caller-token + admin
-# gated. set_allowed_paths receives the FULL replacement list (mirrors how
+# filesystem-directory editor (issues #1567, #1586). Both are caller-token +
+# admin gated. set_allowed_paths receives the FULL replacement list (mirrors how
 # disabled_packages_keys sends the whole set each call); the handler validates
-# and drops any entry that hits the deny floor or escapes the config dir.
+# and drops any entry that hits the deny floor, or that escapes the config dir
+# without being one of the fixed HAOS sibling-volume roots (#1586).
 SERVICE_GET_ALLOWED_PATHS_SCHEMA = vol.Schema(
     {
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
@@ -390,18 +394,146 @@ def _violates_deny_floor(config_dir: Path, normalized: str) -> bool:
     ) and normalized != "secrets.yaml"
 
 
-def _normalize_extra_dir(entry: str, config_dir: Path) -> str | None:
-    """Validate and normalize one user-supplied extra directory (issue #1567).
+def _volume_root_for(abs_path: str) -> str | None:
+    """Return the HAOS sibling-volume root (``const.ALLOWED_VOLUME_ROOTS``) that
+    ``abs_path`` falls within, or ``None`` (issue #1586).
 
-    Returns the cleaned, config-relative directory, or ``None`` if the entry
-    must be rejected: not a string, empty, the config root, absolute, uses
-    ``..`` traversal, resolves outside the config dir, or hits the deny floor.
+    Boundary-aware on a path-separator: ``/share`` and ``/share/x`` match
+    ``/share``; ``/shared`` and ``/backups`` do NOT (a string-prefix match would
+    wrongly admit them). ``abs_path`` must already be ``posixpath.normpath``'d —
+    the volume roots are inherently POSIX and the component only runs on HA Core
+    (Linux), so we never use the host ``os.sep`` here.
+    """
+    for root in ALLOWED_VOLUME_ROOTS:
+        if abs_path == root or abs_path.startswith(root + "/"):
+            return root
+    return None
+
+
+def _resolves_within(base: Path, raw_path: str) -> bool:
+    """Resolve ``raw_path`` exactly as ``open(2)`` will — following symlinks,
+    THEN applying ``..`` against the real target — and confirm it stays within
+    ``base`` (symlink-safe containment; issue #1586 review).
+
+    The lexical allow checks run on ``os.path.normpath(raw_path)``, which
+    collapses ``..`` *textually* and so erases an intermediate symlink component
+    (``<allowed>/<symlink>/..``) that the kernel would actually traverse at open
+    time — the divergence that let a configured volume reach arbitrary files.
+    Resolving the RAW input (not the normpath-collapsed form) closes it, because
+    the handlers open ``config_dir / raw_path`` and the OS resolves it the same
+    way ``Path.resolve()`` does. Fails closed on any resolution error.
+    """
+    try:
+        candidate = Path(raw_path) if raw_path.startswith("/") else base / raw_path
+        real = candidate.resolve()
+        base_real = base.resolve()
+    except (OSError, ValueError):
+        return False
+    return real == base_real or real.is_relative_to(base_real)
+
+
+def _violates_volume_deny_floor(abs_path: str) -> bool:
+    """True if an absolute HAOS volume path hits the non-overridable deny floor
+    (issue #1586).
+
+    The same floor as the config dir — a ``.storage`` segment anywhere, or a
+    ``secrets.yaml`` basename — applied to both the requested path and its
+    symlink-resolved target, case-insensitively. Unlike the config dir there is
+    NO canonical ``secrets.yaml`` exception: volume reads are never masked, so a
+    ``secrets.yaml`` on any volume is always denied. Fails closed on any
+    resolution error.
+    """
+    req = PurePosixPath(abs_path)
+    if any(seg.lower() in DENY_PATH_SEGMENTS for seg in req.parts):
+        return True
+    if req.name.lower() in DENY_READ_BASENAMES:
+        return True
+    try:
+        resolved = Path(abs_path).resolve()
+    except (OSError, ValueError):
+        return True
+    if any(seg.lower() in DENY_PATH_SEGMENTS for seg in resolved.parts):
+        return True
+    return resolved.name.lower() in DENY_READ_BASENAMES
+
+
+def _normalize_volume_dir(entry: str) -> str | None:
+    """Validate one absolute HAOS sibling-volume directory (issue #1586).
+
+    Returns the cleaned absolute path, or ``None`` if it is not at/under a known
+    volume root or hits the deny floor. POSIX-normalized regardless of host OS
+    (the roots are inherently POSIX and the component only runs on HA Core).
+    Existence is NOT required (mirrors config-relative extra dirs); an unmounted
+    volume just yields ``not found`` at use time.
+    """
+    normalized = posixpath.normpath(entry)
+    root = _volume_root_for(normalized)
+    if root is None:
+        return None
+    if _violates_volume_deny_floor(normalized):
+        return None
+    return normalized
+
+
+def _is_volume_path_allowed(abs_path: str, extra_dirs: list[str] | None) -> bool:
+    """Enforce a read/write/list/delete against an absolute HAOS volume path
+    (issue #1586).
+
+    Allowed iff the path is at/under a configured extra dir that is itself a
+    volume path, clears the deny floor, and — after FULL symlink + ``..``
+    resolution of the RAW path (matching ``open(2)``) — stays within its volume
+    root. Resolving the raw path rather than the lexically ``normpath``'d form
+    closes the ``<volume>/<symlink>/..`` escape (issue #1586 review). Read and
+    write share this gate — a configured volume grants read+write (#1567).
+    """
+    normalized = posixpath.normpath(abs_path)
+    root = _volume_root_for(normalized)
+    if root is None:
+        return False
+    if _violates_volume_deny_floor(normalized):
+        return False
+    # POSIX-explicit allowlist match (not _matches_extra_dir, which joins on
+    # os.sep): a volume path is inherently "/"-separated, so match on a "/"
+    # boundary so a configured "/share" grants "/share" and "/share/..." but
+    # never "/shared". Config-relative entries in the mixed list never match an
+    # absolute path here.
+    if not extra_dirs or not any(
+        normalized == d or normalized.startswith(d + "/") for d in extra_dirs
+    ):
+        return False
+    return _resolves_within(Path(root), abs_path)
+
+
+def _normalize_extra_dir(entry: str, config_dir: Path) -> str | None:
+    """Validate and normalize one user-supplied extra directory (issues #1567,
+    #1586).
+
+    Returns the cleaned directory, or ``None`` if the entry must be rejected.
+    Two accepted shapes:
+
+    * A config-relative directory (issue #1567) — rejected if empty, the config
+      root, uses ``..`` traversal, resolves outside the config dir, or hits the
+      deny floor.
+    * An absolute HAOS sibling-volume path (issue #1586) — kept absolute and
+      validated against its volume root (``const.ALLOWED_VOLUME_ROOTS``) instead
+      of the config dir. Any other absolute path is still rejected.
+
     Rejected entries are dropped (mirrors the filter-to-known-good discipline
     used for ``disabled_packages_keys``).
     """
-    if not isinstance(entry, str) or os.path.isabs(entry):
+    if not isinstance(entry, str):
         return None
-    cleaned = entry.strip().strip("/")
+    stripped = entry.strip()
+    if not stripped:
+        return None
+    # Absolute HAOS sibling-volume path (issue #1586) — validated against its
+    # volume root, not the config dir. Detected by a POSIX-absolute leading "/"
+    # (not os.path.isabs, which is False for "/share" on a non-POSIX host) so the
+    # logic is identical on every OS the tests run on. Any non-volume absolute
+    # path is rejected inside _normalize_volume_dir.
+    if stripped.startswith("/"):
+        return _normalize_volume_dir(stripped)
+    cleaned = stripped.strip("/")
     if not cleaned:
         return None
     normalized = os.path.normpath(cleaned)
@@ -445,6 +577,14 @@ def _is_path_allowed_for_dir(
     checked first, so a custom directory can never grant access to ``.storage``
     or other floored paths.
     """
+    # Absolute HAOS sibling-volume path (issue #1586) — enforced against its
+    # volume root rather than the config dir. Detected by a POSIX-absolute
+    # leading "/" and passed RAW (not normpath'd) so symlink resolution matches
+    # what the handler's open() does. Any non-volume absolute path is rejected
+    # inside the helper.
+    if rel_path.startswith("/"):
+        return _is_volume_path_allowed(rel_path, extra_dirs)
+
     # Normalize the path
     normalized = os.path.normpath(rel_path)
 
@@ -461,6 +601,14 @@ def _is_path_allowed_for_dir(
     parts = normalized.split(os.sep)
     builtin_ok = bool(parts) and parts[0] in allowed_dirs
     if not builtin_ok and not _matches_extra_dir(normalized, extra_dirs):
+        return False
+
+    # Symlink-safe containment on the REAL path the handler will open (issue
+    # #1586 review): resolve the RAW rel_path — open(2) follows symlinks then
+    # applies "..", which the lexical normpath above cannot model — and confirm
+    # it stays under the config dir. Closes the `<allowed>/<symlink>/../escape`
+    # traversal the lexical checks miss.
+    if not _resolves_within(config_dir, rel_path):
         return False
 
     # Resolve full path and verify it's still under config_dir
@@ -482,6 +630,14 @@ def _is_path_allowed_for_read(
     The non-overridable deny floor is checked first, so a custom directory can
     never reach ``.storage`` or an unmasked ``secrets.yaml``.
     """
+    # Absolute HAOS sibling-volume path (issue #1586) — enforced against its
+    # volume root rather than the config dir. Detected by a POSIX-absolute
+    # leading "/" and passed RAW so symlink resolution matches the handler's
+    # open(). A configured volume grants read too, so reads route through the
+    # same gate as dir/write.
+    if rel_path.startswith("/"):
+        return _is_volume_path_allowed(rel_path, extra_dirs)
+
     normalized = os.path.normpath(rel_path)
 
     # Check for path traversal attempts
@@ -494,6 +650,12 @@ def _is_path_allowed_for_read(
 
     # NON-OVERRIDABLE deny floor — before any allow decision (issue #1567).
     if _violates_deny_floor(config_dir, normalized):
+        return False
+
+    # Symlink-safe containment on the REAL path the handler will open (issue
+    # #1586 review): resolve the RAW rel_path so a `<allowed>/<symlink>/..` that
+    # lexically stays inside but physically escapes is rejected.
+    if not _resolves_within(config_dir, rel_path):
         return False
 
     # Check if it's one of the explicitly allowed files in config root
@@ -601,10 +763,17 @@ def _list_files_sync(
         if pattern and not fnmatch.fnmatch(item.name, pattern):
             continue
         stat = item.stat()
+        # Config-relative paths report relative to the config dir; absolute
+        # HAOS sibling-volume paths (issue #1586) are not under it, so report
+        # them absolute (the caller passes absolute paths for volumes too).
+        try:
+            reported_path = str(item.relative_to(config_dir))
+        except ValueError:
+            reported_path = str(item)
         files.append(
             {
                 "name": item.name,
-                "path": str(item.relative_to(config_dir)),
+                "path": reported_path,
                 "is_dir": item.is_dir(),
                 "size": stat.st_size if item.is_file() else 0,
                 "modified": stat.st_mtime,
@@ -639,9 +808,16 @@ def _write_file_sync(
     if create_dirs:
         target_file.parent.mkdir(parents=True, exist_ok=True)
     elif not target_file.parent.exists():
+        # Config-relative parents report relative to the config dir; an absolute
+        # HAOS sibling-volume parent (issue #1586) is not under it, so report it
+        # absolute rather than raising ValueError on relative_to.
+        try:
+            parent = str(target_file.parent.relative_to(config_dir))
+        except ValueError:
+            parent = str(target_file.parent)
         return {
             "_error": "no_parent",
-            "parent": str(target_file.parent.relative_to(config_dir)),
+            "parent": parent,
         }
     target_file.write_text(content)
     stat = target_file.stat()
@@ -659,7 +835,9 @@ def _delete_file_sync(target_file: Path) -> dict[str, Any]:
     return {"size": stat.st_size}
 
 
-def _build_edit_yaml_config_handler(hass):
+def _build_edit_yaml_config_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Awaitable[dict[str, Any]]]:
     """Build and return the async handle_edit_yaml_config handler.
 
     Extracted to module level so it can be tested without registering
@@ -1712,13 +1890,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
 
     async def handle_set_allowed_paths(call: ServiceCall) -> ServiceResponse:
-        """Replace the user-configurable extra directories (issue #1567).
+        """Replace the user-configurable extra directories (issues #1567, #1586).
 
         Receives the FULL replacement list. Each entry is validated and
-        normalized; entries that use traversal, are absolute, escape the config
-        directory, or hit the non-overridable deny floor are dropped and
-        reported in ``rejected``. Persists to .storage AND updates hass.data so
-        enforcement applies live with no HA restart. Caller-token + admin gated.
+        normalized; entries that use traversal, escape the config directory, or
+        hit the non-overridable deny floor are dropped and reported in
+        ``rejected``. Config-relative dirs (#1567) and the fixed HAOS
+        sibling-volume roots (#1586 — see ``const.ALLOWED_VOLUME_ROOTS``) are
+        accepted; any other absolute path is dropped. Persists to .storage AND
+        updates hass.data so enforcement applies live with no HA restart.
+        Caller-token + admin gated.
         """
         if not _caller_token_ok(hass, call):
             return _unauthorized_response(SERVICE_SET_ALLOWED_PATHS, paths=[])

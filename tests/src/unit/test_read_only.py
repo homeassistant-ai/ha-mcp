@@ -106,6 +106,7 @@ class TestExemptionRules:
             ({"scope": "edits", "action": "restore"}, False),
             ({"scope": "edits", "action": "delete"}, False),
             ({"scope": "snapshot", "action": "create"}, False),
+            ({"scope": "snapshot", "action": "list"}, True),
             ({"scope": "snapshot", "action": "restore"}, False),
             ({}, False),
         ],

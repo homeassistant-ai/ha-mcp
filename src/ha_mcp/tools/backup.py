@@ -731,10 +731,126 @@ async def restore_backup(
     return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
+def _summarize_backup(entry: dict[str, Any]) -> dict[str, Any]:
+    """Project one HA ``backup/info`` entry to the fields a caller needs to
+    identify and choose a snapshot (issue #1586).
+
+    Size is reported per backup agent; we surface the largest reported size
+    across agents. Every field is ``.get`` so a schema the running HA version
+    doesn't populate yields ``None`` rather than raising.
+    """
+    agents = entry.get("agents") or {}
+    size_bytes: int | None = None
+    if isinstance(agents, dict):
+        sizes: list[int] = []
+        for a in agents.values():
+            if isinstance(a, dict):
+                size = a.get("size")
+                # Accept int or float (some agents report byte counts as float);
+                # bool is an int subclass but never a real size, so exclude it.
+                if isinstance(size, (int, float)) and not isinstance(size, bool):
+                    sizes.append(int(size))
+        if sizes:
+            size_bytes = max(sizes)
+    return {
+        "backup_id": entry.get("backup_id"),
+        "name": entry.get("name"),
+        "date": entry.get("date"),
+        "size_bytes": size_bytes,
+        "protected": entry.get("protected"),
+        "database_included": entry.get("database_included"),
+        "homeassistant_included": entry.get("homeassistant_included"),
+        "homeassistant_version": entry.get("homeassistant_version"),
+        "with_automatic_settings": entry.get("with_automatic_settings"),
+        "agent_ids": list(agents.keys()) if isinstance(agents, dict) else [],
+    }
+
+
+async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[str, Any]:
+    """List the full HA snapshot tarballs known to Home Assistant (issue #1586).
+
+    Surfaces the inventory HA already returns from its WebSocket ``backup/info``
+    command — the same data ``restore_backup`` uses internally to verify a
+    ``backup_id`` exists. Before this, the snapshot scope exposed only
+    ``create`` and ``restore``, so a caller had no way to discover backup IDs or
+    confirm a specific backup landed; they had to already know the ID. Newest
+    first. Read-only: no safety backup, no restart.
+    """
+    ws_client = None
+    try:
+        ws_client, error = await get_connected_ws_client(
+            client.base_url, client.token, verify_ssl=client.verify_ssl
+        )
+        if error:
+            raise_tool_error(
+                error
+                or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket to list backups",
+                )
+            )
+        ws_client = cast(HomeAssistantWebSocketClient, ws_client)
+
+        info = await ws_client.send_command("backup/info")
+        if not info.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    info.get("error", "Failed to retrieve backup information"),
+                )
+            )
+
+        result_block = info.get("result") or {}
+        raw_backups = result_block.get("backups") or []
+        summarized = [_summarize_backup(b) for b in raw_backups]
+        # Newest first so "did my backup land?" is answered by the top entry.
+        # Parse via _parse_backup_date (handles `Z`/naive) rather than sorting
+        # the raw strings lexicographically — `'Z'` > `'+'` would misorder a mix
+        # of `...Z` and `...+00:00`. Undated entries sink to the bottom.
+        _date_floor = datetime.min.replace(tzinfo=UTC)
+        summarized.sort(
+            key=lambda b: _parse_backup_date(b.get("date")) or _date_floor,
+            reverse=True,
+        )
+        total = len(summarized)
+        if limit and total > limit:
+            summarized = summarized[:limit]
+        return {
+            "success": True,
+            "count": len(summarized),
+            "total": total,
+            "backups": summarized,
+        }
+
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing backups: {e}")
+        exception_to_structured_error(
+            e,
+            context={"tool": "list_backups"},
+            suggestions=["Check Home Assistant connection and the backup integration"],
+        )
+        return None  # unreachable: exception_to_structured_error always raises
+    finally:
+        # Always disconnect WebSocket — narrow to transport errors; a
+        # programming error during cleanup should still surface.
+        if ws_client:
+            try:
+                await ws_client.disconnect()
+            except (TimeoutError, OSError, ConnectionError) as err:
+                logger.debug(
+                    "ws disconnect (cleanup) transport error: %s: %s",
+                    type(err).__name__,
+                    err,
+                )
+
+
 # Valid (scope, action) combinations. Anything outside this set is
 # rejected with a structured VALIDATION_INVALID_PARAMETER error.
 _VALID_COMBOS: set[tuple[str, str]] = {
     ("snapshot", "create"),
+    ("snapshot", "list"),
     ("snapshot", "restore"),
     ("edits", "create"),
     ("edits", "list"),
@@ -799,6 +915,7 @@ def register_backup_tools(
 | scope | action | What it does |
 |---|---|---|
 | `snapshot` | `create` | Create a full HA tarball (config + addons, no DB by default). Heavy, seconds-long. |
+| `snapshot` | `list` | List full HA tarball snapshots (id, name, date, size). Read-only — use to discover a `backup_id` or confirm a backup landed. |
 | `snapshot` | `restore` | Restore a full HA tarball. **Restarts HA.** Last-resort recovery. |
 | `edits` | `create` | On-demand snapshot of one entity (`domain` + `entity_id` required). Use before the user manually edits in the HA UI. Same handler path the decorator takes on writes; bypasses the `enable_auto_backup` toggle. |
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
@@ -817,6 +934,7 @@ def register_backup_tools(
 
 **Examples:**
 - Snapshot before risky op: `ha_manage_backup(scope="snapshot", action="create", name="Before_Big_Change")`
+- List snapshots (to discover a backup_id or confirm one landed): `ha_manage_backup(scope="snapshot", action="list")`
 - Restore full snapshot: `ha_manage_backup(scope="snapshot", action="restore", backup_id="dd7550ed")`
 - On-demand entity snapshot before a manual UI edit: `ha_manage_backup(scope="edits", action="create", domain="helper_input_boolean", entity_id="kitchen_lights_active")`
 - List recent auto-backups for one automation: `ha_manage_backup(scope="edits", action="list", domain="automation", entity_id="kitchen_lights")`
@@ -906,7 +1024,7 @@ def register_backup_tools(
                 default=200,
                 ge=1,
                 le=10_000,
-                description="(edits.list) Maximum number of entries to return.",
+                description="(edits.list / snapshot.list) Maximum number of entries to return.",
             ),
         ] = 200,
     ) -> dict[str, Any]:
@@ -916,6 +1034,8 @@ def register_backup_tools(
         if scope == "snapshot":
             if action == "create":
                 return await create_backup(client, name)
+            if action == "list":
+                return await list_backups(client, limit)
             # action == "restore"
             bid = _require("backup_id", backup_id, scope, action)
             return await restore_backup(client, bid, restore_database)

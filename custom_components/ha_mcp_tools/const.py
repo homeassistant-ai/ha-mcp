@@ -28,6 +28,21 @@ DENY_PATH_SEGMENTS = frozenset({".storage"})
 # the floor blocks the basename everywhere except that one canonical location.
 DENY_READ_BASENAMES = frozenset({"secrets.yaml"})
 
+# HAOS sibling-volume mounts (issue #1586). These live OUTSIDE the config dir,
+# so the config-relative custom-directory allowlist (issue #1567) cannot reach
+# them — its normalizer rejects every absolute path. A user may instead add one
+# of these fixed absolute roots — or a subdirectory of one — to the custom
+# directory list; access is then enforced against the volume root exactly as a
+# config-relative entry is enforced against the config dir (issue #1586).
+#
+# The component runs inside HA Core, so a volume is reachable only if the HA
+# Core container actually mounts it (the standard HAOS/Supervised mounts are
+# config/share/media/ssl/backup). An unmounted or non-existent root simply
+# yields a "not found" at use time — adding it is harmless. As with the
+# config-relative list, a configured volume grants BOTH read and write, and the
+# non-overridable deny floor (.storage / secrets.yaml) still applies.
+ALLOWED_VOLUME_ROOTS = ("/share", "/media", "/ssl", "/backup")
+
 # Files allowed for managed YAML editing
 ALLOWED_YAML_CONFIG_FILES = ["configuration.yaml"]
 # Also allows packages/*.yaml via pattern matching
