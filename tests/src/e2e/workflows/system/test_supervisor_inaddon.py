@@ -145,6 +145,14 @@ class TestGetLogsSupervisorReal:
             # line if it were not suppressed.
             for _ in range(3):
                 await mcp.call_tool_success("ha_get_overview", {})
+            # Positive control: confirm the dev addon IS emitting Supervisor
+            # logs, so an empty filtered result below means "suppressed" -- not
+            # "log pipeline broken / SDK wording drifted", which would make the
+            # regression check pass vacuously.
+            unfiltered = await mcp.call_tool_success(
+                "ha_get_logs",
+                {"source": "supervisor", "slug": HA_MCP_DEV_ADDON_SLUG, "limit": 20},
+            )
             result = await mcp.call_tool_success(
                 "ha_get_logs",
                 {
@@ -154,6 +162,10 @@ class TestGetLogsSupervisorReal:
                 },
             )
 
+        assert (unfiltered.get("log") or "").strip(), (
+            "No Supervisor logs retrieved for the dev addon -- the teardown-noise "
+            "absence assertion below would be vacuous."
+        )
         assert result.get("success") is True
         # ``search`` returns only matching lines, so a suppressed filter yields
         # an empty log; any hit here is the regression.

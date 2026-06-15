@@ -372,21 +372,26 @@ class StatelessSessionLogFilter(logging.Filter):
     confused users into thinking the connection is broken.
 
     Returning ``False`` drops the record at this logger before it reaches any
-    handler. (Merely downgrading the level to DEBUG did not work: the record
-    was still emitted -- just relabelled -- because the root handler has no
-    level threshold of its own.) Real session terminations carry an actual id
-    and are not matched, so they still log.
+    handler. (Merely downgrading the level to DEBUG did not work: the level
+    gate is applied before the filter runs, so the record was already admitted
+    and still emitted -- just relabelled.) Real session terminations carry an
+    actual id and are not matched, so they still log.
 
     # TODO: remove when modelcontextprotocol/python-sdk#2329 is resolved
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        is_stateless_teardown = (
-            record.name == "mcp.server.streamable_http"
-            and "Terminating session: None" in record.getMessage()
-        )
+        if record.name != "mcp.server.streamable_http":
+            return True
+        try:
+            message = record.getMessage()
+        except (ValueError, TypeError):
+            # A malformed %-format record on this logger is not our target, and
+            # a filter must not raise: filters run in Logger.handle() with no
+            # exception handling, so a raise would crash the logging call.
+            return True
         # Drop the stateless teardown noise; keep everything else.
-        return not is_stateless_teardown
+        return "Terminating session: None" not in message
 
 
 class ToolValidationLogFilter(logging.Filter):

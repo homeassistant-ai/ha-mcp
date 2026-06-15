@@ -124,6 +124,11 @@ def is_transient_hacs_install_error(error: object) -> bool:
     no "rate"/"token" substring and so slipped past the old ad-hoc check). This
     is for the install path ONLY; negative tests that *expect* a download error
     assert on it directly and must not use this.
+
+    Matches the anchored "failed to download repository" phrase rather than a
+    bare "command failed": the latter is too broad and would silently skip a
+    genuine, non-transient install regression that happened to surface that
+    common subprocess phrasing.
     """
     s = str(error).lower()
     return (
@@ -131,7 +136,6 @@ def is_transient_hacs_install_error(error: object) -> bool:
         or "token" in s
         or "rate limit" in s
         or "failed to download repository" in s
-        or "command failed" in s
     )
 
 
@@ -865,8 +869,13 @@ def test_unit_is_transient_hacs_install_error_catches_download_failure() -> None
     )
     assert is_transient_hacs_install_error("401 Unauthorized")
     assert is_transient_hacs_install_error("GitHub rate limit exceeded")
-    # A genuine, non-transient install error must NOT be skipped.
+    # Genuine, non-transient install errors must NOT be skipped — including one
+    # that merely contains the bare phrase "command failed" (the over-broad
+    # clause that was removed so real regressions still fail loudly).
     assert not is_transient_hacs_install_error("Repository 'x/y' not found in HACS")
+    assert not is_transient_hacs_install_error(
+        "Install aborted: post-install command failed (manifest invalid)"
+    )
 
 
 def test_unit_is_hacs_unavailable_catches_hacs_not_available_code() -> None:

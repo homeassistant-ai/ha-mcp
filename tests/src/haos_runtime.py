@@ -1286,10 +1286,17 @@ def trigger_dev_addon_update(
         ``/update`` and ``/start`` are rejected outright when a still-settling
         job (the ``/store/reload`` above, a watchdog restart, or a prior update)
         holds the ``addon_<slug>`` group. The conflicting job clears within
-        seconds — re-issue until it does, bounded to a handful of attempts.
-        Each attempt uses a fresh ``_next_id()`` so HA Core's ERR_ID_REUSE
-        guard never trips.
+        seconds, so retry within a single bounded ~60s wall-clock window (not a
+        per-attempt budget, so a genuinely silent Supervisor can't stretch this
+        to N*op_timeout). Each attempt uses a fresh ``_next_id()`` so HA Core's
+        ERR_ID_REUSE guard never trips.
+
+        The collision is matched as a case-insensitive substring on the error
+        text Supervisor returns (surfaced by ``_await_supervisor_result`` as the
+        ``RuntimeError`` message); any other failure is re-raised immediately,
+        so this never masks a real error.
         """
+        retry_deadline = time.monotonic() + 60
         attempt = 0
         while True:
             attempt += 1
@@ -1308,7 +1315,10 @@ def trigger_dev_addon_update(
                 _await_supervisor_result(mid, endpoint, time.monotonic() + op_timeout)
                 return
             except RuntimeError as err:
-                if "another job is running" in str(err).lower() and attempt < 12:
+                if (
+                    "another job is running" in str(err).lower()
+                    and time.monotonic() < retry_deadline
+                ):
                     LOG.warning(
                         "Supervisor %s collided with an in-flight job-group job "
                         "(attempt %d): %s; waiting 5s and retrying",
