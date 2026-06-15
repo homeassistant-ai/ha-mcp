@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from io import StringIO
 from typing import Any
 
@@ -43,16 +44,16 @@ _HA_TAGS = (
 )
 
 
-def _make_tag_constructor(tag: str):
+def _make_tag_constructor(tag: str) -> Callable[[Any, Any], _TaggedScalar]:
     """Return a ruamel.yaml constructor function for *tag*."""
 
-    def _construct(loader, node):
+    def _construct(loader: Any, node: Any) -> _TaggedScalar:
         return _TaggedScalar(tag, loader.construct_scalar(node))
 
     return _construct
 
 
-def _represent_tagged_scalar(dumper, data: _TaggedScalar):
+def _represent_tagged_scalar(dumper: Any, data: _TaggedScalar) -> Any:
     """Representer that emits the original tag + scalar value."""
     return dumper.represent_scalar(data.tag, data.value)
 
