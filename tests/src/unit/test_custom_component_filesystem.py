@@ -1262,3 +1262,63 @@ class TestVolumeSymlinkEscape:
         extra = [str(volume)]
         ok = str(volume / "link" / "f.txt")
         assert _is_path_allowed_for_read(config_dir, ok, extra) is True
+
+    def test_volume_renamed_symlink_to_secrets_within_root_blocked(
+        self, tmp_path, monkeypatch
+    ):
+        # The dangerous case the volume deny-floor's RESOLVED-target branch
+        # exists for: an innocuously-named symlink that stays INSIDE the volume
+        # root (so _resolves_within allows it) but points at secrets.yaml. Only
+        # the resolved-basename floor check catches it (volume reads are never
+        # masked, so this must be denied).
+        import custom_components.ha_mcp_tools as comp
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        volume = tmp_path / "vol"
+        volume.mkdir()
+        monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
+        (volume / "secrets.yaml").write_text("api_key: SECRET\n")
+        (volume / "notes.txt").symlink_to(volume / "secrets.yaml")
+        extra = [str(volume)]
+        assert (
+            _is_path_allowed_for_read(config_dir, str(volume / "notes.txt"), extra)
+            is False
+        )
+
+    def test_volume_symlink_into_storage_within_root_blocked(
+        self, tmp_path, monkeypatch
+    ):
+        # A symlink that resolves to a .storage dir WITHIN the volume root stays
+        # inside the root (passes _resolves_within) — only the resolved-segment
+        # deny floor blocks it. Read AND write/delete must be denied.
+        import custom_components.ha_mcp_tools as comp
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        volume = tmp_path / "vol"
+        volume.mkdir()
+        monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
+        (volume / ".storage").mkdir()
+        (volume / "link").symlink_to(volume / ".storage")
+        extra = [str(volume)]
+        target = str(volume / "link" / "auth")
+        assert _is_path_allowed_for_read(config_dir, target, extra) is False
+        assert (
+            _is_path_allowed_for_dir(config_dir, target, ALLOWED_WRITE_DIRS, extra)
+            is False
+        )
+
+    def test_normalize_volume_dir_rejects_symlink_to_secrets(
+        self, tmp_path, monkeypatch
+    ):
+        # Validation-time (store) deny floor: adding an innocuously-named entry
+        # that resolves to secrets.yaml must be rejected before persisting.
+        import custom_components.ha_mcp_tools as comp
+
+        volume = tmp_path / "vol"
+        volume.mkdir()
+        monkeypatch.setattr(comp, "ALLOWED_VOLUME_ROOTS", (str(volume),))
+        (volume / "secrets.yaml").write_text("x: y\n")
+        (volume / "innocent").symlink_to(volume / "secrets.yaml")
+        assert _normalize_extra_dir(str(volume / "innocent"), tmp_path) is None

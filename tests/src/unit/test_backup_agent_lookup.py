@@ -230,6 +230,17 @@ class TestSummarizeBackup:
         out = _summarize_backup({"agents": {"a": {"size": None}, "b": {}}})
         assert out["size_bytes"] is None
 
+    def test_float_size_coerced_to_int(self):
+        out = _summarize_backup({"agents": {"a": {"size": 123.0}}})
+        assert out["size_bytes"] == 123
+
+    def test_non_dict_agents_handled(self):
+        # HA WS payloads aren't schema-guaranteed; a non-dict ``agents`` must
+        # not raise — size unknown, no agent ids.
+        out = _summarize_backup({"agents": ["unexpected"]})
+        assert out["size_bytes"] is None
+        assert out["agent_ids"] == []
+
 
 class TestListBackups:
     """list_backups surfaces HA's backup/info inventory, newest first (#1586)."""
@@ -312,3 +323,26 @@ class TestListBackups:
             pytest.raises(ToolError),
         ):
             await list_backups(self._client())
+
+    @pytest.mark.asyncio
+    async def test_undated_entry_sinks_last(self):
+        # An entry with a missing/unparseable date must not crash the sort
+        # (datetime vs None) — it sinks below dated entries via the floor.
+        ws = AsyncMock()
+        ws.send_command.return_value = {
+            "success": True,
+            "result": {
+                "backups": [
+                    {"backup_id": "undated"},
+                    {"backup_id": "dated", "date": "2026-06-10T00:00:00+00:00"},
+                ]
+            },
+        }
+        with patch(
+            "ha_mcp.tools.backup.get_connected_ws_client",
+            new=AsyncMock(return_value=(ws, None)),
+        ):
+            result = await list_backups(self._client())
+
+        assert result["success"] is True
+        assert [b["backup_id"] for b in result["backups"]] == ["dated", "undated"]

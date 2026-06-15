@@ -746,8 +746,10 @@ def _summarize_backup(entry: dict[str, Any]) -> dict[str, Any]:
         for a in agents.values():
             if isinstance(a, dict):
                 size = a.get("size")
-                if isinstance(size, int):
-                    sizes.append(size)
+                # Accept int or float (some agents report byte counts as float);
+                # bool is an int subclass but never a real size, so exclude it.
+                if isinstance(size, (int, float)) and not isinstance(size, bool):
+                    sizes.append(int(size))
         if sizes:
             size_bytes = max(sizes)
     return {
