@@ -1276,6 +1276,50 @@ def trigger_dev_addon_update(
             f"supervisor/api {op_endpoint} did not complete before its deadline"
         )
 
+    def _supervisor_post_with_job_retry(
+        endpoint: str, op_timeout: int, *, data: dict | None = None
+    ) -> None:
+        """POST a Supervisor endpoint, retrying the transient per-addon
+        ``Another job is running for job group ...`` collision.
+
+        Supervisor serialises jobs per job-group, so the dev-addon refresh's
+        ``/update`` and ``/start`` are rejected outright when a still-settling
+        job (the ``/store/reload`` above, a watchdog restart, or a prior update)
+        holds the ``addon_<slug>`` group. The conflicting job clears within
+        seconds — re-issue until it does, bounded to a handful of attempts.
+        Each attempt uses a fresh ``_next_id()`` so HA Core's ERR_ID_REUSE
+        guard never trips.
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            mid = _next_id()
+            payload: dict[str, Any] = {
+                "id": mid,
+                "type": "supervisor/api",
+                "endpoint": endpoint,
+                "method": "post",
+                "timeout": op_timeout,
+            }
+            if data is not None:
+                payload["data"] = data
+            ws.send(json.dumps(payload))
+            try:
+                _await_supervisor_result(mid, endpoint, time.monotonic() + op_timeout)
+                return
+            except RuntimeError as err:
+                if "another job is running" in str(err).lower() and attempt < 12:
+                    LOG.warning(
+                        "Supervisor %s collided with an in-flight job-group job "
+                        "(attempt %d): %s; waiting 5s and retrying",
+                        endpoint,
+                        attempt,
+                        err,
+                    )
+                    time.sleep(5)
+                    continue
+                raise
+
     with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
         first_frame = json.loads(ws.recv())
         if first_frame.get("type") != "auth_required":
@@ -1332,38 +1376,15 @@ def trigger_dev_addon_update(
 
         # Trigger the update. ``backup=false`` skips Supervisor's pre-update
         # snapshot (saves ~30s, irrelevant for CI).
-        msg_id = _next_id()
         update_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/update"
-        ws.send(
-            json.dumps(
-                {
-                    "id": msg_id,
-                    "type": "supervisor/api",
-                    "endpoint": update_endpoint,
-                    "method": "post",
-                    "timeout": timeout,
-                    "data": {"backup": False},
-                }
-            )
+        _supervisor_post_with_job_retry(
+            update_endpoint, timeout, data={"backup": False}
         )
-        _await_supervisor_result(msg_id, update_endpoint, time.monotonic() + timeout)
         LOG.info("Dev addon update completed via Supervisor WS; starting addon")
 
         # Explicit start after update — Supervisor leaves the addon in
         # boot_fail state otherwise, with the new image built but no
         # running container. See docstring for the CI log evidence.
-        msg_id = _next_id()
         start_endpoint = f"/addons/{HA_MCP_DEV_ADDON_SLUG}/start"
-        ws.send(
-            json.dumps(
-                {
-                    "id": msg_id,
-                    "type": "supervisor/api",
-                    "endpoint": start_endpoint,
-                    "method": "post",
-                    "timeout": 120,
-                }
-            )
-        )
-        _await_supervisor_result(msg_id, start_endpoint, time.monotonic() + 120)
+        _supervisor_post_with_job_retry(start_endpoint, 120)
         LOG.info("Dev addon started via Supervisor WS")

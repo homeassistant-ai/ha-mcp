@@ -267,6 +267,15 @@ class TestSettingsUiRestartReal:
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(restart_url, json={"slug": SSH_ADDON_SLUG})
+            # The restart routes through Supervisor + Ingress; while the target
+            # addon bounces, the proxy can transiently answer 5xx (observed:
+            # 502 Bad Gateway). The restart is idempotent, so retry a few times
+            # on a 5xx before asserting.
+            for _ in range(5):
+                if resp.status_code < 500:
+                    break
+                await asyncio.sleep(3)
+                resp = await client.post(restart_url, json={"slug": SSH_ADDON_SLUG})
 
         assert resp.status_code == 200, (
             f"Expected 200 from settings restart with slug={SSH_ADDON_SLUG!r}, "

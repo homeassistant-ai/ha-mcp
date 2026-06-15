@@ -114,6 +114,27 @@ def is_hacs_unavailable(data: dict) -> tuple[bool, str]:
     return False, ""
 
 
+def is_transient_hacs_install_error(error: object) -> bool:
+    """True for transient HACS *install* failures that warrant a skip, not a fail.
+
+    The install tests target a known-good repo (``ha_mcp_tools``), so an install
+    failure there is environmental — a GitHub rate-limit/token issue or a flaky
+    repository download (HACS surfaces the latter as e.g. "Failed to download
+    repository after 3 attempts: Command failed: Unknown error", which carries
+    no "rate"/"token" substring and so slipped past the old ad-hoc check). This
+    is for the install path ONLY; negative tests that *expect* a download error
+    assert on it directly and must not use this.
+    """
+    s = str(error).lower()
+    return (
+        "401" in s
+        or "token" in s
+        or "rate limit" in s
+        or "failed to download repository" in s
+        or "command failed" in s
+    )
+
+
 @pytest.mark.hacs
 class TestHacsSearchInstalled:
     """Test HACS search with installed_only filter functionality."""
@@ -654,12 +675,8 @@ class TestMcpToolsInstallation:
 
             # Check for GitHub token issues
             error = str(data.get("error", ""))
-            if (
-                "401" in error
-                or "token" in error.lower()
-                or "rate limit" in error.lower()
-            ):
-                pytest.skip(f"GitHub access issue: {error}")
+            if is_transient_hacs_install_error(error):
+                pytest.skip(f"Transient HACS install issue: {error}")
 
             pytest.fail(f"Installation failed: {data.get('error')}")
 
@@ -711,8 +728,8 @@ class TestMcpToolsInstallation:
             if unavailable:
                 pytest.skip(f"HACS not available: {reason}")
             error = str(data1.get("error", ""))
-            if "401" in error or "token" in error.lower():
-                pytest.skip(f"GitHub access issue: {error}")
+            if is_transient_hacs_install_error(error):
+                pytest.skip(f"Transient HACS install issue: {error}")
             pytest.fail(f"First install failed: {data1.get('error')}")
 
         # Second install should also succeed
@@ -757,8 +774,8 @@ class TestMcpToolsInstallation:
             if unavailable:
                 pytest.skip(f"HACS not available: {reason}")
             error = str(install_data.get("error", ""))
-            if "401" in error or "token" in error.lower():
-                pytest.skip(f"GitHub access issue: {error}")
+            if is_transient_hacs_install_error(error):
+                pytest.skip(f"Transient HACS install issue: {error}")
             pytest.fail(f"Install failed: {install_data.get('error')}")
 
         # Now check HACS search for installed integrations
@@ -834,6 +851,22 @@ def test_unit_is_hacs_unavailable_catches_unknown_command() -> None:
     unavailable, reason = is_hacs_unavailable(data)
     assert unavailable is True
     assert reason == "Unknown command"
+
+
+def test_unit_is_transient_hacs_install_error_catches_download_failure() -> None:
+    """The real flaky-download shape must trip the install-path skip guard.
+
+    "Failed to download repository after N attempts: Command failed: Unknown
+    error" carries no "rate"/"token" substring, so the old ad-hoc check let it
+    hard-fail TestMcpToolsInstallation instead of skipping.
+    """
+    assert is_transient_hacs_install_error(
+        "Failed to download repository after 3 attempts: Command failed: Unknown error"
+    )
+    assert is_transient_hacs_install_error("401 Unauthorized")
+    assert is_transient_hacs_install_error("GitHub rate limit exceeded")
+    # A genuine, non-transient install error must NOT be skipped.
+    assert not is_transient_hacs_install_error("Repository 'x/y' not found in HACS")
 
 
 def test_unit_is_hacs_unavailable_catches_hacs_not_available_code() -> None:
