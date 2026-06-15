@@ -1245,12 +1245,15 @@ class TestDebugLogging:
 
     @pytest.fixture(autouse=True)
     def _reset_logger_level(self, mod):
-        # _LOGGER is the process-global logging.getLogger(...) singleton, so a
-        # level set by one test leaks into the next across re-imports. Reset
-        # around every test so the level assertions below stay deterministic.
+        # _LOGGER (and the level we may set on it) is a process-global singleton,
+        # so state set by one test can leak into the next. Reset the level and
+        # the "we raised it" flag around every test so the level assertions stay
+        # deterministic.
         mod._LOGGER.setLevel(logging.NOTSET)
+        mod._LOGGER_LEVEL_RAISED = False
         yield
         mod._LOGGER.setLevel(logging.NOTSET)
+        mod._LOGGER_LEVEL_RAISED = False
 
     async def _run_setup(self, mod, hass, debug):
         proxy_config = {
@@ -1431,9 +1434,11 @@ class TestDebugLogging:
         assert mod._LOGGER.level == logging.DEBUG
 
     async def test_logger_reset_when_off_after_we_raised(self, mod, hass):
-        """debug off undoes an INFO level we previously raised."""
-        mod._LOGGER.setLevel(logging.INFO)
-        await self._run_setup(mod, hass, False)
+        """A debug on→off cycle undoes the INFO we raised (and only that)."""
+        mod._LOGGER.setLevel(logging.WARNING)
+        await self._run_setup(mod, hass, True)  # we raise to INFO + flag it
+        assert mod._LOGGER.level == logging.INFO
+        await self._run_setup(mod, hass, False)  # we undo our own raise
         assert mod._LOGGER.level == logging.NOTSET
 
     async def test_logger_preserves_explicit_debug_when_off(self, mod, hass):
@@ -1442,6 +1447,14 @@ class TestDebugLogging:
         mod._LOGGER.setLevel(logging.DEBUG)
         await self._run_setup(mod, hass, False)
         assert mod._LOGGER.level == logging.DEBUG
+
+    async def test_logger_preserves_explicit_info_when_off(self, mod, hass):
+        """debug off must NOT clobber a user's explicit `logger:` INFO either —
+        we only undo an INFO WE raised, never one the user set. No toggle is
+        even involved here (the default-config case Patch76 flagged)."""
+        mod._LOGGER.setLevel(logging.INFO)
+        await self._run_setup(mod, hass, False)
+        assert mod._LOGGER.level == logging.INFO
 
     async def test_debug_logs_auth_presence_never_token(self, mod, caplog):
         """With an Authorization header present, the log records only
@@ -1496,6 +1509,35 @@ class TestDebugLogging:
 
         assert "[inbound]" in caplog.text
         assert "DO-NOT-LOG-THIS-BODY" not in caplog.text
+
+    async def test_debug_never_logs_full_webhook_id(self, mod, caplog):
+        """The masked path logs only wh[:6]; the full webhook_id (the shared
+        secret in unauthenticated mode) must never appear in the logs."""
+        webhook_id = "mcp_super_secret_webhook_id_abcdef123456"
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": webhook_id,
+                "session": MagicMock(),
+                "oauth": None,
+                "debug_logging": True,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.remote = "203.0.113.4"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("stop")
+        )
+        with caplog.at_level(logging.INFO, logger=mod._LOGGER.name):
+            await mod._handle_webhook(hass, webhook_id, request)
+
+        assert "[inbound]" in caplog.text
+        assert webhook_id not in caplog.text
+        assert webhook_id[:6] in caplog.text
 
 
 class TestOAuthProvider:

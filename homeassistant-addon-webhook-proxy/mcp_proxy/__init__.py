@@ -36,6 +36,12 @@ from homeassistant.helpers.typing import ConfigType
 
 _LOGGER = logging.getLogger(__name__)
 
+# Tracks whether *this process* raised the logger to INFO for the debug toggle,
+# so the off path undoes only our own raise — never a level the user set via
+# Home Assistant's `logger:` config. Module-global (not hass.data) because it
+# must survive a config-entry reload, during which hass.data[DOMAIN] is gone.
+_LOGGER_LEVEL_RAISED = False
+
 DOMAIN = "mcp_proxy"
 CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
 
@@ -159,21 +165,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("MCP Proxy: webhook endpoint = /api/webhook/%s", masked_wh)
 
     # Inbound-request debug logging (addon "Log inbound requests" toggle).
-    # Custom-component loggers default to WARNING, so raise our own logger to
-    # INFO when it's on so the per-request lines are actually emitted — but only
-    # when the effective level is *less* verbose, so we never clobber an explicit
-    # DEBUG a user set via Home Assistant's `logger:` config. Symmetrically, when
-    # the toggle is off we only undo an INFO level WE previously raised, so the
-    # default-config majority's explicit `logger:` level survives every reload.
+    # Custom-component loggers default to WARNING, so when the toggle is on we
+    # raise our own logger to INFO so the per-request lines are emitted — but
+    # only when the effective level is less verbose, so we never override an
+    # explicit DEBUG/INFO the user set via Home Assistant's `logger:` config. We
+    # track whether WE raised it and, when the toggle is off, undo only our own
+    # raise — never a level the user set themselves.
+    global _LOGGER_LEVEL_RAISED
     debug_logging = bool(proxy_config.get("debug_logging", False))
     if debug_logging and _LOGGER.getEffectiveLevel() > logging.INFO:
         _LOGGER.setLevel(logging.INFO)
-    elif not debug_logging and _LOGGER.level == logging.INFO:
-        # Edge case: a user who set an explicit level quieter than INFO
-        # (ERROR/CRITICAL) and toggles debug on then off lands at NOTSET rather
-        # than their original level — restoring it would need durable state
-        # across reloads, not worth the cost for a debug aid.
+        _LOGGER_LEVEL_RAISED = True
+    elif not debug_logging and _LOGGER_LEVEL_RAISED:
+        # Undo only the INFO we raised. (If a user had set an explicit level
+        # quieter than INFO — ERROR/CRITICAL — then toggled debug on then off,
+        # this resets to NOTSET rather than their original level; restoring that
+        # would need durable per-level state, not worth it for a debug aid.)
         _LOGGER.setLevel(logging.NOTSET)
+        _LOGGER_LEVEL_RAISED = False
     if debug_logging:
         _LOGGER.info(
             "MCP Proxy: inbound request debug logging is ON — each request to "
