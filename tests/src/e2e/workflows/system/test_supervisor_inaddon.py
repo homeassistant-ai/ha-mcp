@@ -127,6 +127,42 @@ class TestGetLogsSupervisorReal:
             f"{log_text[:200]!r}"
         )
 
+    async def test_dev_addon_log_omits_stateless_teardown_noise(
+        self, mcp_client
+    ) -> None:
+        """The stateless ``Terminating session: None`` teardown line must NOT
+        appear in the dev addon's own Supervisor log.
+
+        The MCP SDK logs ``Terminating session: None`` at INFO on every
+        stateless-HTTP request teardown; ``StatelessSessionLogFilter`` must drop
+        it (regression guard: it previously only downgraded it to DEBUG and
+        still emitted it). The inaddon tier is the only lane where ha-mcp
+        actually serves stateless HTTP, so it is the only lane where this line
+        can appear — and every ``mcp_client`` call below is such a request.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            # Each call is a stateless HTTP request whose teardown would log the
+            # line if it were not suppressed.
+            for _ in range(3):
+                await mcp.call_tool_success("ha_get_overview", {})
+            result = await mcp.call_tool_success(
+                "ha_get_logs",
+                {
+                    "source": "supervisor",
+                    "slug": HA_MCP_DEV_ADDON_SLUG,
+                    "search": "Terminating session",
+                },
+            )
+
+        assert result.get("success") is True
+        # ``search`` returns only matching lines, so a suppressed filter yields
+        # an empty log; any hit here is the regression.
+        log_text = result.get("log", "") or ""
+        assert "Terminating session" not in log_text, (
+            "Stateless teardown noise leaked into the dev addon's Supervisor "
+            f"log:\n{log_text[:1000]}"
+        )
+
 
 # NOTE on inaddon coverage scope:
 #
