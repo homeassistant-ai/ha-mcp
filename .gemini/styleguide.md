@@ -178,6 +178,21 @@ A change is BREAKING only if it removes functionality that users depend on.
 
 **Rationale:** Tool consolidation reduces token usage and cognitive load for AI agents. Refactoring improves maintainability. Only flag CRITICAL when functionality is genuinely lost forever.
 
+## Accessibility (web UI)
+
+Both rendered surfaces — the Astro docs site (`site/`) and the add-on settings UI (`src/ha_mcp/settings_ui.py` + `settings.css` / `settings.js`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
+
+**Flag MEDIUM severity when a change:**
+
+- Adds a blanket `aria-label` to an element that already has visible text. Accessible names come from native semantics first — real `<button>` / `<a>` / `<label>` / `<h*>` with visible text, or `<fieldset>` + `<legend class="visually-hidden">` for grouped controls. Reach for `aria-label` only when there is no visible text (e.g. an icon-only button).
+- Drops or omits a landmark: each page needs one `<main>` (the skip-link target) and `<nav>` for navigation (a second nav on the same page needs a distinguishing `aria-label`); page content should sit inside a landmark.
+- Removes the skip-to-content link or its `#main-content` target.
+- Builds a tab UI out of bare `<button>`s. A real tab strip uses `role="tablist"` / `role="tab"` / `role="tabpanel"` with `aria-selected`, `aria-controls`, `aria-labelledby`, roving `tabindex`, and Arrow/Home/End keyboard support (see the settings UI tablist).
+- Updates a status/feedback region without announcing it: status spans carry `role="status"` + `aria-live="polite"`, switching to `role="alert"` / `aria-live="assertive"` on the failure path.
+- Skips a heading level (e.g. `<h2>` straight to `<h4>`). Keep levels ordered; use Tailwind size classes for visual size, not the tag level.
+
+**Theme / contrast tier model (#1574):** theme (`data-theme` auto/light/dark), contrast (`data-contrast` normal/high) and shade (`data-shade`) are set on `<html>` pre-paint and mirrored between the docs site and settings UI (parity enforced by `tests/src/unit/test_anti_fouc_parity.py`). Keep new preferences in this tier model, apply them on both surfaces, and preserve the 4.5:1 custom-color contrast warning.
+
 ## Non-Blocking Suggestions and Scope
 
 Scope is defined by the user (the maintainer / author of the PR), not by the reviewer (bot or human). **Never unilaterally file a follow-up issue or PR** — raise scope concerns in the PR review and let the user decide whether to address inline, defer, or dismiss. Do not skip legitimate findings — surface them.

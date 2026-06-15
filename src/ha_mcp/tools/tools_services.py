@@ -20,6 +20,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     build_pagination_metadata,
     parse_string_list_param,
     project_fields,
@@ -78,6 +79,7 @@ class ServiceDiscoveryTools:
         ] = "summary",
         service_fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -91,6 +93,7 @@ class ServiceDiscoveryTools:
         ] = None,
         fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(

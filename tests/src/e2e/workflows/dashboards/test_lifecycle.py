@@ -643,3 +643,88 @@ class TestFindCard:
                 "ha_config_delete_dashboard",
                 {"url_path": "test-find-type"},
             )
+
+    async def test_find_nested_card_python_path_round_trip(self, mcp_client):
+        """find_card → python_transform → re-fetch round trip for a card nested
+        under a button-card custom_fields key that contains an apostrophe.
+
+        Pins issue #1599 round-2 items 2/3/5 at the websocket layer: the
+        returned ``python_path`` must splice into ``ha_config_set_dashboard``
+        and mutate exactly the nested card, even when a key like ``o'brien``
+        would break a raw-interpolated locator.
+        """
+        logger.info("Starting nested-card python_path round-trip test")
+        mcp = MCPAssertions(mcp_client)
+
+        await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": "test-find-roundtrip",
+                "title": "Round Trip Test",
+                "config": {
+                    "views": [
+                        {
+                            "cards": [
+                                {
+                                    "type": "custom:button-card",
+                                    "custom_fields": {
+                                        # apostrophe key — the #3 regression case
+                                        "o'brien": {
+                                            "card": {
+                                                "type": "tile",
+                                                "entity": "sensor.temperature",
+                                            }
+                                        }
+                                    },
+                                }
+                            ]
+                        }
+                    ]
+                },
+            },
+        )
+
+        try:
+            # 1. Locate the nested tile and capture its python_path + hash.
+            found = await mcp.call_tool_success(
+                "ha_config_get_dashboard",
+                {"url_path": "test-find-roundtrip", "card_type": "tile"},
+            )
+            assert found["match_count"] == 1
+            python_path = found["matches"][0]["python_path"]
+            config_hash = found["config_hash"]
+
+            # 2. Splice python_path into a python_transform write.
+            update = await mcp.call_tool_success(
+                "ha_config_set_dashboard",
+                {
+                    "url_path": "test-find-roundtrip",
+                    "config_hash": config_hash,
+                    "python_transform": (
+                        f"config{python_path}['name'] = 'Renamed Tile'"
+                    ),
+                },
+            )
+            assert update["success"] is True
+            assert update["action"] == "python_transform"
+
+            # 3. Re-fetch and confirm exactly the nested card mutated.
+            verify = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"url_path": "test-find-roundtrip"}
+            )
+            view_cards = verify["config"]["views"][0]["cards"]
+            nested = view_cards[0]["custom_fields"]["o'brien"]["card"]
+            assert nested["name"] == "Renamed Tile"
+            # Precision: only the nested card mutated. A python_path that resolved
+            # to the parent button-card instead would also land a `name`, so pin
+            # that the parent is untouched and no card was added/removed.
+            assert "name" not in view_cards[0]
+            assert len(view_cards) == 1
+
+            logger.info("nested-card python_path round-trip test passed")
+
+        finally:
+            await mcp.call_tool_success(
+                "ha_config_delete_dashboard",
+                {"url_path": "test-find-roundtrip"},
+            )

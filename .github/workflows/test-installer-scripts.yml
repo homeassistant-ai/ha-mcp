@@ -201,3 +201,32 @@ jobs:
             echo "guard wrongly fired for --claude-code under WSL"; exit 1
           fi
           echo "OK: --claude-code not blocked under WSL"
+
+  test-stale-uv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Stale uv without uvx falls through to the upgrade path (issue #1593)
+        run: |
+          set -e
+          # Reproduce a pre-uvx uv: a `uv` binary on PATH with no `uvx` beside
+          # it. The old `uv || uvx` gate accepted this stale uv and then
+          # hard-exited at the uvx lookup; the gate now keys on uvx, so this
+          # must instead reach the install/upgrade path and end with a uvx.
+          STALE="$(mktemp -d)"
+          printf '#!/bin/sh\necho "uv 0.1.39"\n' > "$STALE/uv"
+          chmod +x "$STALE/uv"
+          # Curated PATH: the stale uv stub plus the system dirs the installer
+          # needs (sh, curl, python3), and crucially no real uvx. A real uvx
+          # leaking onto PATH would mask the bug, so fail loudly if present.
+          export PATH="$STALE:/usr/bin:/bin"
+          command -v uv >/dev/null || { echo "precondition: uv stub not on PATH"; exit 1; }
+          if command -v uvx >/dev/null; then
+            echo "precondition failed: uvx unexpectedly on PATH"; exit 1
+          fi
+          sh scripts/install.sh
+          # The upgrade path must have produced a working uvx.
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v uvx >/dev/null || { echo "uvx missing after upgrade path"; exit 1; }
+          echo "OK: stale uv triggered the upgrade path, uvx now available"

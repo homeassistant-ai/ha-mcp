@@ -290,17 +290,28 @@ def _setup_standard_mode() -> None:
     _log_startup_version()
 
 
-def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict:
-    """Build common run_async kwargs for HTTP-based transports."""
-    return {
+def _http_run_kwargs(transport: str, host: str, port: int, path: str) -> dict[str, Any]:
+    """Build common run_async kwargs for HTTP-based transports.
+
+    ``stateless_http`` is a Streamable-HTTP concept and is only valid for the
+    ``http``/``streamable-http`` transports. Passing it alongside
+    ``transport="sse"`` makes fastmcp's ``run_async`` raise
+    ``ValueError("SSE transport does not support stateless mode")``. Gating it to
+    non-SSE transports keeps SSE startup working. (Before this fix that raise was
+    also swallowed into a silent exit 0; ``_run_with_shutdown`` now surfaces a
+    self-terminating server task's exception instead.) See #1544.
+    """
+    kwargs: dict[str, Any] = {
         "transport": transport,
         "host": host,
         "port": port,
         "path": path,
         "show_banner": _get_show_banner(),
-        "stateless_http": True,
         "uvicorn_config": {"log_config": _get_timestamped_uvicorn_log_config()},
     }
+    if transport != "sse":
+        kwargs["stateless_http"] = True
+    return kwargs
 
 
 def _create_server() -> "HomeAssistantSmartMCPServer":
@@ -352,24 +363,35 @@ _LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class StatelessSessionLogFilter(logging.Filter):
-    """Downgrade 'Terminating session: None' to DEBUG to reduce user confusion.
+    """Suppress the routine 'Terminating session: None' log from the MCP SDK.
 
     In stateless HTTP mode every request creates and tears down a temporary
-    session, producing an INFO log that looks alarming but is routine.
-    This filter lowers the level to DEBUG so the message only appears with
-    verbose logging enabled.
+    session whose id is ``None``, so the SDK emits an INFO
+    ``Terminating session: None`` (mcp/server/streamable_http.py) on *every*
+    request. The line is routine but looks alarming and has repeatedly
+    confused users into thinking the connection is broken.
+
+    Returning ``False`` drops the record at this logger before it reaches any
+    handler. (Merely downgrading the level to DEBUG did not work: the level
+    gate is applied before the filter runs, so the record was already admitted
+    and still emitted -- just relabelled.) Real session terminations carry an
+    actual id and are not matched, so they still log.
 
     # TODO: remove when modelcontextprotocol/python-sdk#2329 is resolved
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if (
-            record.name == "mcp.server.streamable_http"
-            and "Terminating session: None" in record.getMessage()
-        ):
-            record.levelno = logging.DEBUG
-            record.levelname = "DEBUG"
-        return True
+        if record.name != "mcp.server.streamable_http":
+            return True
+        try:
+            message = record.getMessage()
+        except (ValueError, TypeError):
+            # A malformed %-format record on this logger is not our target, and
+            # a filter must not raise: filters run in Logger.handle() with no
+            # exception handling, so a raise would crash the logging call.
+            return True
+        # Drop the stateless teardown noise; keep everything else.
+        return "Terminating session: None" not in message
 
 
 class ToolValidationLogFilter(logging.Filter):
@@ -400,6 +422,46 @@ class ToolValidationLogFilter(logging.Filter):
         record.exc_info = None
         record.exc_text = None
         return True
+
+
+class ProbeAccessLogFilter(logging.Filter):
+    """Drop benign, non-MCP HTTP probe noise from the uvicorn access log.
+
+    * ``GET``/``HEAD`` ``/favicon.ico`` -> ``404``: browsers auto-request a
+      favicon that doesn't exist. Pure noise, always dropped.
+    * ``GET``/``HEAD`` on the MCP path -> ``405``: a non-MCP caller (browser,
+      health check, reverse proxy, or a connector's SSE-style pre-flight) hit a
+      POST-only Streamable HTTP endpoint. The raw access line is dropped and the
+      landing handler logs one annotated "(NORMAL for most non-SSE connections)"
+      line in its place. Dropped only when ``drop_mcp_405`` is set — SSE callers
+      pass False, since there a GET answers 200 and a GET-405 is a genuine fault.
+    """
+
+    def __init__(self, mcp_path: str, *, drop_mcp_405: bool = True) -> None:
+        super().__init__()
+        self._mcp_path = mcp_path.rstrip("/") or "/"
+        self._drop_mcp_405 = drop_mcp_405
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn.access records carry structured args: (client, method, path,
+        # http_version, status_int). Match on those, not the formatted string.
+        args = record.args
+        if not isinstance(args, tuple) or len(args) != 5:
+            return True
+        method, raw_path, status = args[1], args[2], args[4]
+        if method not in ("GET", "HEAD"):
+            return True
+        path = str(raw_path).split("?", 1)[0].rstrip("/") or "/"
+        if status == 404 and path == "/favicon.ico":
+            return False  # browser favicon auto-request — pure noise
+        # By-design probe 405 on the MCP path; the handler logs an annotated line
+        # instead. This trusts that the landing route is the only GET/HEAD responder
+        # on the MCP path (true today). Kept in SSE mode (drop_mcp_405=False), where
+        # a GET answers 200 and a 405 is a real fault.
+        is_dropped_probe = (
+            status == 405 and path == self._mcp_path and self._drop_mcp_405
+        )
+        return not is_dropped_probe
 
 
 def _setup_logging(log_level_str: str, force: bool = False) -> None:
@@ -532,9 +594,23 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
                 # Expected: we just cancelled server_task above; swallow its
                 # CancelledError so shutdown can proceed to cleanup.
                 pass
+        elif server_task in done:
+            # Server task finished on its own (no shutdown signal). Re-raise any
+            # exception it captured so a hard startup failure surfaces as a
+            # logged sys.exit(1) instead of a silent exit 0 — without this the
+            # exception on the already-done task is never retrieved. See #1544.
+            server_task.result()
 
     except asyncio.CancelledError:
-        logger.info("Server task cancelled")
+        # A shutdown-initiated cancel is a graceful stop. A cancel without a
+        # shutdown signal — including one re-raised by server_task.result()
+        # above — is a hard stop masquerading as success; re-raise it so it
+        # becomes a logged sys.exit(1) rather than a silent exit 0. See #1544.
+        if _shutdown_event is not None and _shutdown_event.is_set():
+            logger.info("Server task cancelled")
+        else:
+            logger.error("Server task cancelled without a shutdown signal")
+            raise
     finally:
         try:
             await asyncio.wait_for(
@@ -543,7 +619,12 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
         except TimeoutError:
             logger.warning("Resource cleanup timed out")
 
-        await _cancel_tasks(server_task, shutdown_task)
+        try:
+            await _cancel_tasks(server_task, shutdown_task)
+        except Exception as e:
+            # Teardown must never mask the exception being propagated from the
+            # try block (Python drops the original if finally raises).
+            logger.warning(f"Task cancellation during shutdown failed: {e}")
 
 
 def _run_entrypoint(coro: Coroutine[Any, Any, Any], label: str) -> None:
@@ -557,7 +638,7 @@ def _run_entrypoint(coro: Coroutine[Any, Any, Any], label: str) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        logger.error(f"{label} error: {e}")
+        logger.error(f"{label} error: {e}", exc_info=True)
         sys.exit(1)
 
     sys.exit(0)
@@ -858,7 +939,12 @@ async def _run_http_with_graceful_shutdown(
 _registered_landing_paths: set[str] = set()
 
 
-def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) -> None:
+def register_browser_landing(
+    mcp_instance: "FastMCP | _DeferredMCP",
+    path: str,
+    *,
+    quiet_probe_log: bool = True,
+) -> None:
     """Register a GET handler that returns 405 with a helpful message.
 
     Browsers and misconfigured clients that send GET instead of POST will see
@@ -869,6 +955,10 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
     Args:
         mcp_instance: The FastMCP server to register the route on.
         path: The MCP endpoint path (e.g. "/mcp" or a secret path).
+        quiet_probe_log: When True (default, for Streamable HTTP), drop the
+            by-design GET/HEAD-405 probe line on the MCP path from the uvicorn
+            access log (the handler logs an annotated replacement). Pass False
+            for SSE, where a GET answers 200 and a 405 is a genuine fault.
     """
     if path in _registered_landing_paths:
         logger.warning(
@@ -905,6 +995,12 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
     # Custom routes are registered at lowest precedence (after the MCP route).
     @mcp_instance.custom_route(path, methods=["GET"])
     async def _browser_landing(_: Request) -> PlainTextResponse:
+        # Any GET here is a non-MCP caller (browser, health check, proxy, or a
+        # connector's SSE-style pre-flight) hitting this POST-only Streamable HTTP
+        # endpoint, which answers 405 by design. Log one annotated line so the 405
+        # reads as expected; ProbeAccessLogFilter drops the raw uvicorn access line
+        # so there's no cryptic duplicate.
+        logger.info("GET %s -> 405 (NORMAL for most non-SSE connections)", path)
         return PlainTextResponse(
             _landing_message,
             status_code=405,
@@ -912,6 +1008,16 @@ def register_browser_landing(mcp_instance: "FastMCP | _DeferredMCP", path: str) 
             # session termination), even though this deployment uses stateless mode.
             headers={"Allow": "POST, DELETE"},
         )
+
+    # Tidy uvicorn's access log: always drop browser favicon 404s, and drop the
+    # raw by-design GET/HEAD-405 probe line on the MCP path (the handler above logs
+    # an annotated replacement). The 405 drop is skipped for SSE
+    # (quiet_probe_log=False), where a GET answers 200 and a 405 is a real fault.
+    # Attach to uvicorn.access directly — it has propagate=False, so a root-logger
+    # filter would miss it.
+    logging.getLogger("uvicorn.access").addFilter(
+        ProbeAccessLogFilter(path, drop_mcp_405=quiet_probe_log)
+    )
 
 
 def _log_settings_url(host: str, port: int, path: str) -> None:
@@ -946,7 +1052,9 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
 
     host, port, path = _get_http_runtime(default_port)
     _warn_if_default_path_exposed(host, port, path)
-    register_browser_landing(_get_mcp(), path)
+    # SSE transport answers GET with 200 (the event stream), so a GET->405 there
+    # would be a real fault, not a benign probe — keep its access log intact.
+    register_browser_landing(_get_mcp(), path, quiet_probe_log=transport != "sse")
     register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
     _log_settings_url(host, port, path)
 

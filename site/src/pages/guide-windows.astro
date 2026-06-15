@@ -14,6 +14,8 @@ const withBase = (path: string) => {
 <Layout title="Windows Setup Guide - Home Assistant MCP">
   <Nav active="setup" />
 
+  <main id="main-content" tabindex="-1" class="focus:outline-none">
+
   <div class="container mx-auto px-4 py-8 max-w-3xl">
     <!-- Header -->
     <header class="mb-10">
@@ -59,11 +61,11 @@ const withBase = (path: string) => {
           <details class="mt-4">
             <summary class="text-slate-400 hover:text-white cursor-pointer font-medium">Manual Installation (if the installer doesn't work)</summary>
             <div class="mt-4 pl-4 border-l-2 border-slate-700">
-              <h4 class="font-medium text-white mb-2">Install uv</h4>
+              <h3 class="font-medium text-white mb-2">Install uv</h3>
               <p class="text-slate-300 mb-2">Open <strong>PowerShell</strong> or <strong>cmd</strong>:</p>
               <pre class="code-block mb-4"><code>winget install astral-sh.uv -e</code></pre>
 
-              <h4 class="font-medium text-white mb-2">Configure Claude Desktop</h4>
+              <h3 class="font-medium text-white mb-2">Configure Claude Desktop</h3>
               <ol class="text-slate-300 space-y-2 mb-4">
                 <li>1. Open Claude Desktop</li>
                 <li>2. <strong>Settings</strong> &rarr; <strong>Developer</strong> &rarr; <strong>Edit Config</strong></li>
@@ -166,7 +168,7 @@ const withBase = (path: string) => {
 }`}</code></pre>
 
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mt-4">
-            <h4 class="font-medium text-amber-300 mb-2">To get your token:</h4>
+            <h3 class="font-medium text-amber-300 mb-2">To get your token:</h3>
             <ol class="text-amber-200/80 space-y-1 text-sm">
               <li>1. Open Home Assistant in your browser</li>
               <li>2. Click your username (bottom left)</li>
@@ -215,6 +217,7 @@ const withBase = (path: string) => {
       </p>
     </div>
   </div>
+  </main>
 </Layout>
 
 <style>

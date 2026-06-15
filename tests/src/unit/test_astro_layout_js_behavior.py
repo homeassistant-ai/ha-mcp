@@ -57,6 +57,9 @@ def test_init_wraps_every_pre_with_copy_button(
         # may have already fired that event by the time we get here, so
         # call the exposed function directly to be deterministic.
         invoke="window.initCopyButtons();",
+        # Bare Astro <script> is TypeScript — copyText() carries a typed
+        # param (#1597), so transpile before eval. (#1596/#1597)
+        language="ts",
     )
     assert not result.errors, f"errors: {result.errors}"
     # Two <pre>s → two wrappers → two copy buttons.
@@ -82,9 +85,46 @@ def test_reinit_does_not_double_wrap(layout_script: str, page_with_pres: str) ->
         layout_script,
         initial_html=page_with_pres,
         invoke="window.initCopyButtons(); window.initCopyButtons(); window.initCopyButtons();",
+        language="ts",
     )
     assert not result.errors, f"errors: {result.errors}"
     assert result.dom.count('class="copy-btn"') == 2, (
         f"three init calls must still produce exactly 2 buttons; "
         f"got count={result.dom.count('class="copy-btn"')}"
     )
+
+
+def test_layout_exposes_skip_link() -> None:
+    """#1596: the docs layout renders a skip-to-content link as the first
+    focusable element so keyboard users can bypass the sticky nav."""
+    layout = (
+        Path(__file__).resolve().parents[3]
+        / "site"
+        / "src"
+        / "layouts"
+        / "Layout.astro"
+    )
+    text = layout.read_text(encoding="utf-8")
+    assert '<a href="#main-content" class="skip-link">' in text
+
+
+def test_every_page_wraps_content_in_main_landmark() -> None:
+    """#1596: every Astro page wraps its post-nav content in exactly one
+    ``<main id="main-content">`` landmark — the skip-link target.
+
+    Matched with a quote- and attribute-order-agnostic regex so adding
+    attributes (e.g. ``tabindex``/``class``) or a formatter swapping quote
+    style doesn't silently break the guard.
+    """
+    import re
+
+    main_re = re.compile(r"""<main\s+[^>]*id=["']main-content["'][^>]*>""")
+    pages_dir = Path(__file__).resolve().parents[3] / "site" / "src" / "pages"
+    pages = sorted(pages_dir.glob("*.astro"))
+    assert pages, "no .astro pages discovered"
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        assert len(main_re.findall(text)) == 1, (
+            f"{page.name} missing single <main id=main-content>"
+        )
+        assert text.count("</main>") == 1, f"{page.name} unbalanced </main>"

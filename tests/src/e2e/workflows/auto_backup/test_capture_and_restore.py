@@ -117,11 +117,12 @@ class TestManageBackupGating:
     """Strong gating against wrong-mode usage on the merged tool."""
 
     async def test_rejects_invalid_combo(self, mcp_client) -> None:
-        # (snapshot, list) is not a valid combo — snapshot only supports create/restore.
+        # (snapshot, view) is not a valid combo — snapshot supports only
+        # create/list/restore ((snapshot, list) became valid in #1586).
         result = await safe_call_tool(
             mcp_client,
             "ha_manage_backup",
-            {"scope": "snapshot", "action": "list"},
+            {"scope": "snapshot", "action": "view"},
         )
         assert result.get("success") is False
         error = result.get("error", {})

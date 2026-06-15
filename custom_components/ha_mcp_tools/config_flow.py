@@ -20,7 +20,7 @@ _ENTRY_TITLE = "Home Assistant MCP Server Custom Component"
 _CONF_INSTALL_ADDON = "install_addon"
 
 
-class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):
+class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     """Handle a config flow for HA MCP Tools."""
 
     VERSION = 1

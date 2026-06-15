@@ -99,11 +99,11 @@
           "default": null
         },
         "options": {
-          "type": "Annotated[dict[str, Any] | None, Field(description=\"Config mode: Add-on configuration values (the 'Configuration' tab in the UI).\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Config mode: Add-on configuration values (the 'Configuration' tab in the UI).\", default=None)]",
           "default": null
         },
         "network": {
-          "type": "Annotated[dict[str, Any] | None, Field(description=\"Config mode: Host port mappings (e.g., {'5800/tcp': 8081}).\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Config mode: Host port mappings (e.g., {'5800/tcp': 8081}).\", default=None)]",
           "default": null
         },
         "boot": {
@@ -119,11 +119,11 @@
           "default": null
         },
         "array_patch": {
-          "type": "Annotated[dict[str, Any] | None, Field(description=\"Array-patch mode: atomically GET a JSON array endpoint, apply ordered ops, then POST the mutated array back. Requires 'path'; mutually exclusive with body / websocket / offset / limit and config params. See the docstring Examples and ha_get_skill_guide for op shapes.\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Array-patch mode: atomically GET a JSON array endpoint, apply ordered ops, then POST the mutated array back. Requires 'path'; mutually exclusive with body / websocket / offset / limit and config params. See the docstring Examples and ha_get_skill_guide for op shapes.\", default=None)]",
           "default": null
         },
         "request_headers": {
-          "type": "Annotated[dict[str, str] | None, Field(description=\"Proxy/array-patch mode: extra HTTP headers to send to the addon API. Useful for addon-specific requirements such as Node-RED's `Node-RED-Deployment-Type: full`. The proxy's internal framing (`X-Ingress-Path`, `X-Hass-Source`, `Cookie`, `Content-Type`) is layered on top, so caller-supplied values for those keys are overridden. Not valid in config or websocket mode.\", default=None)]",
+          "type": "Annotated[dict[str, str] | None, JSON_STRING_COERCION, Field(description=\"Proxy/array-patch mode: extra HTTP headers to send to the addon API. Useful for addon-specific requirements such as Node-RED's `Node-RED-Deployment-Type: full`. The proxy's internal framing (`X-Ingress-Path`, `X-Hass-Source`, `Cookie`, `Content-Type`) is layered on top, so caller-supplied values for those keys are overridden. Not valid in config or websocket mode.\", default=None)]",
           "default": null
         },
         "action": {
@@ -153,11 +153,11 @@
     "inputSchema": {
       "properties": {
         "fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"floors\"]). None = full response (default). Available keys: success, floor_count, area_count, unassigned_count, orphaned_count, floors, unassigned_areas, orphaned_areas, message.')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"floors\"]). None = full response (default). Available keys: success, floor_count, area_count, unassigned_count, orphaned_count, floors, unassigned_areas, orphaned_areas, message.')]",
           "default": null
         },
         "area_fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Project each area record (in floors[].areas, unassigned_areas, and orphaned_areas) to only the specified keys. E.g. [\"area_id\", \"name\"] returns slim area records. None = full records (default). Unknown keys yield empty records. Available keys: area_id, name, icon, floor_id, aliases, picture, labels.')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Project each area record (in floors[].areas, unassigned_areas, and orphaned_areas) to only the specified keys. E.g. [\"area_id\", \"name\"] returns slim area records. None = full records (default). Unknown keys yield empty records. Available keys: area_id, name, icon, floor_id, aliases, picture, labels.')]",
           "default": null
         }
       }
@@ -228,7 +228,7 @@
           "default": null
         },
         "aliases": {
-          "type": "Annotated[str | list[str] | None, Field(description=\"Alternative names for voice assistant recognition (e.g., ['lounge'], empty list to clear)\", default=None)]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(description=\"Alternative names for voice assistant recognition (e.g., ['lounge'], empty list to clear)\", default=None)]",
           "default": null
         },
         "picture": {
@@ -546,7 +546,7 @@
   {
     "name": "ha_config_set_calendar_event",
     "title": "Create or Update Calendar Event",
-    "description": "Create a new event in a calendar.\n\nCreates a calendar event using the calendar.create_event service.\n\n**Parameters:**\n- entity_id: Calendar entity ID (e.g., 'calendar.family')\n- summary: Event title/summary\n- start: Event start datetime in ISO format\n- end: Event end datetime in ISO format\n- description: Optional event description\n- location: Optional event location\n\n**Example Usage:**\n```python\n# Create a simple event\nresult = ha_config_set_calendar_event(\n    \"calendar.family\",\n    summary=\"Doctor appointment\",\n    start=\"2024-01-15T14:00:00\",\n    end=\"2024-01-15T15:00:00\"\n)\n\n# Create an event with details\nresult = ha_config_set_calendar_event(\n    \"calendar.work\",\n    summary=\"Team meeting\",\n    start=\"2024-01-16T10:00:00\",\n    end=\"2024-01-16T11:00:00\",\n    description=\"Weekly sync meeting\",\n    location=\"Conference Room A\"\n)\n```\n\n**Returns:**\n- Success status and event details",
+    "description": "Create a new event in a calendar.\n\nCreates a one-off event via the calendar.create_event service, or a\nrecurring series via the WebSocket ``calendar/event/create`` command\nwhen ``rrule`` is provided (the REST service schema does not accept\nrecurrence rules).\n\n**Parameters:**\n- entity_id: Calendar entity ID (e.g., 'calendar.family')\n- summary: Event title/summary\n- start: Event start datetime in ISO format\n- end: Event end datetime in ISO format\n- description: Optional event description\n- location: Optional event location\n- rrule: Optional RFC 5545 recurrence rule (creates a recurring series)\n\n**Example Usage:**\n```python\n# Create a simple event\nresult = ha_config_set_calendar_event(\n    \"calendar.family\",\n    summary=\"Doctor appointment\",\n    start=\"2024-01-15T14:00:00\",\n    end=\"2024-01-15T15:00:00\"\n)\n\n# Create a recurring event (every Monday, 10 occurrences)\nresult = ha_config_set_calendar_event(\n    \"calendar.work\",\n    summary=\"Team meeting\",\n    start=\"2024-01-15T10:00:00\",\n    end=\"2024-01-15T11:00:00\",\n    rrule=\"FREQ=WEEKLY;BYDAY=MO;COUNT=10\"\n)\n```\n\n**Note:**\nNot every calendar integration supports event creation; recurring\nevents additionally require the integration to support recurrence\n(the built-in Local Calendar does).\n\n**Returns:**\n- Success status and event details",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -567,6 +567,10 @@
         },
         "location": {
           "type": "Annotated[str | None, Field(description='Optional event location', default=None)]",
+          "default": null
+        },
+        "rrule": {
+          "type": "Annotated[str | None, Field(description=\"Optional RFC 5545 recurrence rule, without 'RRULE:' prefix (e.g., 'FREQ=WEEKLY;BYDAY=MO' or 'FREQ=MONTHLY;BYDAY=3SA'). Creates a recurring event series.\", default=None)]",
           "default": null
         }
       },
@@ -704,7 +708,7 @@
   {
     "name": "ha_config_get_dashboard",
     "title": "Get Dashboard",
-    "description": "Get dashboard info - list all dashboards, get config, or search for cards.\n\nMODE 1 — List: list_only=True\n  Lists all storage-mode dashboards with metadata (url_path, title, icon).\n\nMODE 2 — Search: any of entity_id / card_type / heading provided\n  Finds cards, badges, and header cards matching the criteria.\n  Returns matches with jq_path for use with ha_config_set_dashboard(python_transform=...).\n  Multiple criteria are AND-ed. Always fetches fresh config (force=True).\n  Strategy dashboards are not searchable (no explicit cards).\n\nMODE 3 — Get: Active when list_only=False and no search parameters are provided.\n  Returns the full Lovelace dashboard config, defaulting to the\n  main dashboard if url_path is omitted.\n\nReturn a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get default dashboard: ha_config_get_dashboard(url_path=\"default\")\n- Get custom dashboard: ha_config_get_dashboard(url_path=\"lovelace-mobile\")\n- Force reload: ha_config_get_dashboard(url_path=\"lovelace-home\", force_reload=True)\n- Find cards by entity: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.living_room\")\n- Find by wildcard: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find by type: ha_config_get_dashboard(url_path=\"my-dash\", card_type=\"tile\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n\nSEARCH WORKFLOW EXAMPLE:\n1. find = ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.bedroom\")\n2. ha_config_set_dashboard(\n       url_path=\"my-dash\",\n       config_hash=find[\"config_hash\"],\n       python_transform=f'config{find[\"matches\"][0][\"jq_path\"]}[\"icon\"] = \"mdi:lamp\"'\n   )\n\nNote: YAML-mode dashboards (defined in configuration.yaml) are not included in list.",
+    "description": "Get dashboard info - list all dashboards, get config, or search for cards.\n\nMODE 1 — List: list_only=True\n  Lists all storage-mode dashboards with metadata (url_path, title, icon).\n\nMODE 2 — Search: any of entity_id / card_type / heading provided\n  Finds cards, badges, and header cards matching the criteria, including\n  cards nested inside stacks, grids, conditional cards, button-card\n  custom_fields, and state-switch states. Each match carries a\n  python_path and a jq_path that locate the card for nested as well as\n  top-level cards. The python_path is a Python subscript chain to be\n  appended after `config` — e.g.\n  python_transform=f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"' (it is\n  NOT valid on its own without the `config` prefix). jq_path is the same\n  location in jq dot-notation.\n  Multiple criteria are AND-ed. Always fetches fresh config (force=True).\n  Search covers cards/card/custom_fields/states containers up to a depth\n  bound; if the dashboard carries a non-traversed child-bearing shape\n  (e.g. picture-elements `elements`), the result carries a `warnings`\n  entry naming where, so its hidden content is not mistaken for absent.\n  Strategy dashboards are not searchable (no explicit cards).\n\nMODE 3 — Get: Active when list_only=False and no search parameters are provided.\n  Returns the full Lovelace dashboard config, defaulting to the\n  main dashboard if url_path is omitted.\n\nReturn a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get default dashboard: ha_config_get_dashboard(url_path=\"default\")\n- Get custom dashboard: ha_config_get_dashboard(url_path=\"lovelace-mobile\")\n- Force reload: ha_config_get_dashboard(url_path=\"lovelace-home\", force_reload=True)\n- Find cards by entity: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.living_room\")\n- Find by wildcard: ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find by type: ha_config_get_dashboard(url_path=\"my-dash\", card_type=\"tile\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n\nSEARCH WORKFLOW EXAMPLE:\n1. find = ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.bedroom\")\n2. ha_config_set_dashboard(\n       url_path=\"my-dash\",\n       config_hash=find[\"config_hash\"],\n       python_transform=f'config{find[\"matches\"][0][\"python_path\"]}[\"icon\"] = \"mdi:lamp\"'\n   )\n\nNote: YAML-mode dashboards (defined in configuration.yaml) are not included in list.",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -732,7 +736,7 @@
           "default": null
         },
         "include_config": {
-          "type": "Annotated[bool, Field(description=\"In search mode: include each matched card's own configuration object in results (increases output size). Does not affect whether the full dashboard config is returned — search mode always returns matches only, not the full dashboard. Ignored outside search mode.\")]",
+          "type": "Annotated[bool, Field(description=\"In search mode: include each matched card's own configuration object in results (increases output size). Note that a matched container card's config contains its descendants, which are themselves separate matches with their own config, so deeply-nested stacks multiply the payload — keep the default (False) unless you need the bodies. Does not affect whether the full dashboard config is returned — search mode always returns matches only, not the full dashboard. Ignored outside search mode.\")]",
           "default": false
         },
         "include_screenshot": {
@@ -965,7 +969,7 @@
           "default": null
         },
         "labels": {
-          "type": "Annotated[str | list[str] | None, Field(description='Labels to assign to the device (replaces existing labels)', default=None)]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(description='Labels to assign to the device (replaces existing labels)', default=None)]",
           "default": null
         }
       },
@@ -991,11 +995,11 @@
           "type": "Annotated[Literal['get', 'set', 'add_device', 'remove_device', 'add_source'], Field(description=\"Operation mode. Primitives: 'get' reads the current prefs; 'set' writes a full prefs payload (per-top-level-key full-replace). Convenience modes: 'add_device' / 'remove_device' / 'add_source' perform a single read-modify-write atomically — no config_hash from the caller, the tool fetches it fresh internally.\")]"
         },
         "config": {
-          "type": "Annotated[dict[str, Any] | None, Field(description=\"Full prefs payload for mode='set'. Must contain the top-level keys you intend to replace: 'energy_sources', 'device_consumption', 'device_consumption_water'. Any top-level key present in this payload REPLACES the existing list entirely; any omitted key is preserved. Call with mode='get' first, mutate the returned config, then pass the whole object back. Ignored by convenience modes.\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Full prefs payload for mode='set'. Must contain the top-level keys you intend to replace: 'energy_sources', 'device_consumption', 'device_consumption_water'. Any top-level key present in this payload REPLACES the existing list entirely; any omitted key is preserved. Call with mode='get' first, mutate the returned config, then pass the whole object back. Ignored by convenience modes.\", default=None)]",
           "default": null
         },
         "config_hash": {
-          "type": "Annotated[str | dict[_PrefsKey, str] | None, Field(description=\"Hash from a previous mode='get' call. REQUIRED for mode='set' unless dry_run=True. Two forms: str (full-blob lock) or dict (per-key lock, taken from the config_hash_per_key field of mode='get'). See the tool docstring for fail-closed semantics. Ignored by convenience modes.\", default=None)]",
+          "type": "Annotated[str | dict[_PrefsKey, str] | None, Field(description=\"Hash from a previous mode='get' call. REQUIRED for mode='set' unless dry_run=True. Two forms: str (full-blob lock) or dict (per-key lock, taken from the config_hash_per_key field of mode='get'). Pass the dict form as a native object, NOT a JSON-encoded string — a stringified dict is treated as a full-blob token and will report RESOURCE_LOCKED; clients that can only send strings should use the str full-blob form. See the tool docstring for fail-closed semantics. Ignored by convenience modes.\", default=None)]",
           "default": null
         },
         "dry_run": {
@@ -1019,7 +1023,7 @@
           "default": false
         },
         "source": {
-          "type": "Annotated[dict[str, Any] | None, Field(description=\"Single energy_sources entry for mode='add_source'. Must contain 'type' (one of grid|solar|battery|gas|water) and the type-specific required fields (e.g. solar/battery/gas/water require 'stat_energy_from'). Every source type also accepts an optional 'name' (display label in the energy graphs); battery additionally accepts 'stat_soc' (state-of-charge statistic). Note: HA Core's voluptuous schema for grid sources requires the full field set (cost_adjustment_day, stat_energy_to, stat_cost, entity_energy_price, number_energy_price, entity_energy_price_export, number_energy_price_export, stat_compensation) — the local shape check is narrower, so a minimal {'type': 'grid'} passes locally but surfaces in post_save_validation_errors after writing. Pass the unused fields as None to satisfy the server. Required for mode='add_source'; ignored otherwise.\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Single energy_sources entry for mode='add_source'. Must contain 'type' (one of grid|solar|battery|gas|water) and the type-specific required fields (e.g. solar/battery/gas/water require 'stat_energy_from'). Every source type also accepts an optional 'name' (display label in the energy graphs); battery additionally accepts 'stat_soc' (state-of-charge statistic). Note: HA Core's voluptuous schema for grid sources requires the full field set (cost_adjustment_day, stat_energy_to, stat_cost, entity_energy_price, number_energy_price, entity_energy_price_export, number_energy_price_export, stat_compensation) — the local shape check is narrower, so a minimal {'type': 'grid'} passes locally but surfaces in post_save_validation_errors after writing. Pass the unused fields as None to satisfy the server. Required for mode='add_source'; ignored otherwise.\", default=None)]",
           "default": null
         }
       },
@@ -1043,7 +1047,7 @@
     "inputSchema": {
       "properties": {
         "entity_id": {
-          "type": "Annotated[str | list[str], Field(description=\"Entity ID or list of entity IDs to retrieve (e.g., 'sensor.temperature' or ['light.living_room', 'switch.porch'])\")]"
+          "type": "Annotated[str | list[str], JSON_STRING_COERCION, Field(description=\"Entity ID or list of entity IDs to retrieve (e.g., 'sensor.temperature' or ['light.living_room', 'switch.porch'])\")]"
         }
       },
       "required": [
@@ -1114,7 +1118,7 @@
     "inputSchema": {
       "properties": {
         "entity_id": {
-          "type": "Annotated[str | list[str], Field(description='Entity ID or list of entity IDs to update. Bulk operations (list) only support labels, expose_to, and categories parameters.')]"
+          "type": "Annotated[str | list[str], JSON_STRING_COERCION, Field(description='Entity ID or list of entity IDs to update. Bulk operations (list) only support labels, expose_to, and categories parameters.')]"
         },
         "area_id": {
           "type": "Annotated[str | None, Field(description=\"Area/room ID to assign the entity to. Use empty string '' to unassign from current area. Single entity only.\", default=None)]",
@@ -1145,7 +1149,7 @@
           "default": null
         },
         "aliases": {
-          "type": "Annotated[str | list[str] | None, Field(description='List of voice assistant aliases for the entity (replaces existing aliases). Single entity only.', default=None)]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(description='List of voice assistant aliases for the entity (replaces existing aliases). Single entity only.', default=None)]",
           "default": null
         },
         "categories": {
@@ -1153,7 +1157,7 @@
           "default": null
         },
         "labels": {
-          "type": "Annotated[str | list[str] | None, Field(description='List of label IDs for the entity. Behavior depends on label_operation parameter. Supports bulk operations.', default=None)]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(description='List of label IDs for the entity. Behavior depends on label_operation parameter. Supports bulk operations.', default=None)]",
           "default": null
         },
         "label_operation": {
@@ -1189,11 +1193,11 @@
   {
     "name": "ha_delete_file",
     "title": "Delete File",
-    "description": "Delete a file from allowed directories in the Home Assistant config.\n\nPermanently removes a file from the allowed directories. This action\ncannot be undone.\n\n**Allowed Delete Directories:**\n- `www/` - Web assets\n- `themes/` - Theme files\n- `custom_templates/` - Template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus any custom directories configured in the ha-mcp settings UI\n\n**Security:**\n- Only the directories above allow deletions\n- Configuration files cannot be deleted\n- Path traversal (../) is blocked\n- Requires confirm=True to prevent accidents\n\n**Returns:**\n- success: Whether the operation succeeded\n- path: The file path that was deleted\n- message: Confirmation message\n\n**Example:**\n```python\n# Delete an old CSS file\nresult = ha_delete_file(\n    path=\"www/deprecated-style.css\",\n    confirm=True\n)\n```",
+    "description": "Delete a file from allowed directories in the Home Assistant config.\n\nPermanently removes a file from the allowed directories. This action\ncannot be undone.\n\n**Allowed Delete Directories:**\n- `www/` - Web assets\n- `themes/` - Theme files\n- `custom_templates/` - Template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\n  (pass the absolute path for volumes)\n\n**Security:**\n- Only the directories above allow deletions\n- Configuration files cannot be deleted\n- Path traversal (../) is blocked\n- Requires confirm=True to prevent accidents\n\n**Returns:**\n- success: Whether the operation succeeded\n- path: The file path that was deleted\n- message: Confirmation message\n\n**Example:**\n```python\n# Delete an old CSS file\nresult = ha_delete_file(\n    path=\"www/deprecated-style.css\",\n    confirm=True\n)\n```",
     "inputSchema": {
       "properties": {
         "path": {
-          "type": "Annotated[str, Field(description=\"Relative path from config directory. Must be in www/, themes/, custom_templates/, or dashboards/. Example: 'www/old-file.css'\")]"
+          "type": "Annotated[str, Field(description=\"File path. Must be in a writable built-in dir (www/, themes/, custom_templates/, dashboards/), a configured custom directory, or a configured HAOS sibling volume (/share, /media, /ssl, /backup — pass the absolute path). Example: 'www/old-file.css'\")]"
         },
         "confirm": {
           "type": "Annotated[bool, Field(default=False, description='Must be True to confirm deletion. This is a safety measure to prevent accidental deletions.')]",
@@ -1216,11 +1220,11 @@
   {
     "name": "ha_list_files",
     "title": "List Files",
-    "description": "List files in a directory within the Home Assistant config directory.\n\nLists files in allowed directories (www/, themes/, custom_templates/, dashboards/) with\noptional glob pattern filtering. Returns file names, sizes, and modification times.\n\n**Allowed Directories:**\n- `www/` - Web assets (CSS, JS, images for dashboards)\n- `themes/` - Theme files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus any custom directories configured in the ha-mcp settings UI\n\n**Security:** Only directories in the allowed list can be accessed.\nPath traversal attempts (../) are blocked.\n\n**Returns:**\n- success: Whether the operation succeeded\n- path: The directory path that was listed\n- files: List of file info objects with name, size, is_dir, modified\n- count: Number of files found\n\n**Example:**\n```python\n# List all CSS files in www/\nresult = ha_list_files(path=\"www/\", pattern=\"*.css\")\n```",
+    "description": "List files in a directory within the Home Assistant config directory.\n\nLists files in allowed directories (www/, themes/, custom_templates/, dashboards/) with\noptional glob pattern filtering. Returns file names, sizes, and modification times.\n\n**Allowed Directories:**\n- `www/` - Web assets (CSS, JS, images for dashboards)\n- `themes/` - Theme files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\n  (pass the absolute path for volumes)\n\n**Security:** Only directories in the allowed list can be accessed.\nPath traversal attempts (../) are blocked.\n\n**Returns:**\n- success: Whether the operation succeeded\n- path: The directory path that was listed\n- files: List of file info objects with name, size, is_dir, modified\n- count: Number of files found\n\n**Example:**\n```python\n# List all CSS files in www/\nresult = ha_list_files(path=\"www/\", pattern=\"*.css\")\n```",
     "inputSchema": {
       "properties": {
         "path": {
-          "type": "Annotated[str, Field(description=\"Relative directory path from config directory. Allowed paths: www/, themes/, custom_templates/, dashboards/. Example: 'www/' or 'themes/my_theme'\")]"
+          "type": "Annotated[str, Field(description=\"Directory path. Relative to the config dir for the built-in allowlist (www/, themes/, custom_templates/, dashboards/). Custom directories and HAOS sibling volumes (/share, /media, /ssl, /backup) configured in the ha-mcp settings UI are also allowed (pass the absolute path). Example: 'www/' or '/share/llm'\")]"
         },
         "pattern": {
           "type": "Annotated[str | None, Field(default=None, description=\"Optional glob pattern to filter files. Example: '*.css', '*.yaml', '*.js'\")]",
@@ -1243,11 +1247,11 @@
   {
     "name": "ha_read_file",
     "title": "Read File",
-    "description": "Read a file from the Home Assistant config directory.\n\nReads files from allowed paths within the config directory. Some files\nhave special handling:\n- `secrets.yaml`: Values are masked for security\n- `home-assistant.log`: Limited to tail (last N lines) by default\n\n**Allowed Read Paths:**\n- `configuration.yaml`, `automations.yaml`, `scripts.yaml`, `scenes.yaml`\n- `secrets.yaml` (values masked)\n- `packages/*.yaml`\n- `home-assistant.log` (tail only)\n- `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`\n- `custom_components/**/*.py` (read-only)\n- Plus any custom directories configured in the ha-mcp settings UI\n\n**Security:**\n- Path traversal (../) is blocked\n- Only allowed paths can be read\n- Sensitive data in secrets.yaml is masked\n\n**Returns:**\n- success: Whether the operation succeeded\n- content: The file content (may be truncated for logs)\n- size: File size in bytes\n- modified: Last modification timestamp\n- path: The file path that was read\n\n**Example:**\n```python\n# Read configuration\nresult = ha_read_file(path=\"configuration.yaml\")\n\n# Read last 100 lines of log\nresult = ha_read_file(path=\"home-assistant.log\", tail_lines=100)\n```",
+    "description": "Read a file from the Home Assistant config directory.\n\nReads files from allowed paths within the config directory. Some files\nhave special handling:\n- `secrets.yaml`: Values are masked for security\n- `home-assistant.log`: Limited to tail (last N lines) by default\n\n**Allowed Read Paths:**\n- `configuration.yaml`, `automations.yaml`, `scripts.yaml`, `scenes.yaml`\n- `secrets.yaml` (values masked)\n- `packages/*.yaml`\n- `home-assistant.log` (tail only)\n- `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`\n- `custom_components/**/*.py` (read-only)\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\n  (pass the absolute path for volumes)\n\n**Security:**\n- Path traversal (../) is blocked\n- Only allowed paths can be read\n- Sensitive data in secrets.yaml is masked\n\n**Returns:**\n- success: Whether the operation succeeded\n- content: The file content (may be truncated for logs)\n- size: File size in bytes\n- modified: Last modification timestamp\n- path: The file path that was read\n\n**Example:**\n```python\n# Read configuration\nresult = ha_read_file(path=\"configuration.yaml\")\n\n# Read last 100 lines of log\nresult = ha_read_file(path=\"home-assistant.log\", tail_lines=100)\n```",
     "inputSchema": {
       "properties": {
         "path": {
-          "type": "Annotated[str, Field(description=\"Relative path from config directory. Examples: 'configuration.yaml', 'www/custom.css', 'home-assistant.log'\")]"
+          "type": "Annotated[str, Field(description=\"File path. Relative to the config dir for the built-in allowlist; absolute for a configured HAOS sibling volume (/share, /media, /ssl, /backup). Examples: 'configuration.yaml', 'www/custom.css', '/share/llm/notes.md'\")]"
         },
         "tail_lines": {
           "type": "Annotated[int | None, Field(default=None, ge=1, le=10000, description='For log files, return only the last N lines. Recommended for home-assistant.log to avoid large responses. Default: None (return full file, or last 1000 lines for logs)')]",
@@ -1270,11 +1274,11 @@
   {
     "name": "ha_write_file",
     "title": "Write File",
-    "description": "Write a file to allowed directories in the Home Assistant config.\n\nCreates or updates files in restricted directories only. This is useful for:\n- Creating custom CSS/JS for dashboards\n- Creating Jinja2 templates\n\n**Allowed Write Directories:**\n- `www/` - Web assets for dashboards\n- `themes/` - Theme YAML files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus any custom directories configured in the ha-mcp settings UI\n\n**Security:**\n- Only the directories above allow writes\n- Configuration files (configuration.yaml, etc.) cannot be written\n- Path traversal (../) is blocked\n\n**Returns:**\n- success: Whether the operation succeeded\n- path: The file path that was written\n- size: Size of the written file in bytes\n- created: Whether this was a new file (vs overwrite)\n\n**Example:**\n```python\n# Create a custom CSS file\nresult = ha_write_file(\n    path=\"www/custom-dashboard.css\",\n    content=\".card { background: #333; }\",\n    overwrite=True\n)\n\n# Create a custom Jinja template file\nresult = ha_write_file(\n    path=\"custom_templates/formatters.jinja\",\n    content=\"{% macro shout(text) %}{{ text | upper }}{% endmacro %}\",\n    overwrite=False\n)\n```",
+    "description": "Write a file to allowed directories in the Home Assistant config.\n\nCreates or updates files in restricted directories only. This is useful for:\n- Creating custom CSS/JS for dashboards\n- Creating Jinja2 templates\n\n**Allowed Write Directories:**\n- `www/` - Web assets for dashboards\n- `themes/` - Theme YAML files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\n  (pass the absolute path for volumes)\n\n**Security:**\n- Only the directories above allow writes\n- Configuration files (configuration.yaml, etc.) cannot be written\n- Path traversal (../) is blocked\n\n**Returns:**\n- success: Whether the operation succeeded\n- path: The file path that was written\n- size: Size of the written file in bytes\n- created: Whether this was a new file (vs overwrite)\n\n**Example:**\n```python\n# Create a custom CSS file\nresult = ha_write_file(\n    path=\"www/custom-dashboard.css\",\n    content=\".card { background: #333; }\",\n    overwrite=True\n)\n\n# Create a custom Jinja template file\nresult = ha_write_file(\n    path=\"custom_templates/formatters.jinja\",\n    content=\"{% macro shout(text) %}{{ text | upper }}{% endmacro %}\",\n    overwrite=False\n)\n```",
     "inputSchema": {
       "properties": {
         "path": {
-          "type": "Annotated[str, Field(description=\"Relative path from config directory. Must be in www/, themes/, custom_templates/, or dashboards/. Example: 'www/custom.css', 'themes/my_theme.yaml'\")]"
+          "type": "Annotated[str, Field(description=\"File path. Must be in a writable built-in dir (www/, themes/, custom_templates/, dashboards/), a configured custom directory, or a configured HAOS sibling volume (/share, /media, /ssl, /backup — pass the absolute path). Example: 'www/custom.css', '/share/llm/out.txt'\")]"
         },
         "content": {
           "type": "Annotated[str, Field(description='The content to write to the file.')]"
@@ -1353,7 +1357,7 @@
           "type": "Annotated[str, Field(description=\"Group identifier without 'group.' prefix (e.g., 'living_room_lights')\")]"
         },
         "entities": {
-          "type": "Annotated[list[str] | None, Field(description='List of entity IDs for the group. Required when creating new group. When updating, replaces all entities (mutually exclusive with add_entities/remove_entities).', default=None)]",
+          "type": "Annotated[list[str] | None, JSON_STRING_COERCION, Field(description='List of entity IDs for the group. Required when creating new group. When updating, replaces all entities (mutually exclusive with add_entities/remove_entities).', default=None)]",
           "default": null
         },
         "name": {
@@ -1369,11 +1373,11 @@
           "default": null
         },
         "add_entities": {
-          "type": "Annotated[list[str] | None, Field(description='Add these entities to an existing group (mutually exclusive with entities)', default=None)]",
+          "type": "Annotated[list[str] | None, JSON_STRING_COERCION, Field(description='Add these entities to an existing group (mutually exclusive with entities)', default=None)]",
           "default": null
         },
         "remove_entities": {
-          "type": "Annotated[list[str] | None, Field(description='Remove these entities from an existing group (mutually exclusive with entities)', default=None)]",
+          "type": "Annotated[list[str] | None, JSON_STRING_COERCION, Field(description='Remove these entities from an existing group (mutually exclusive with entities)', default=None)]",
           "default": null
         },
         "wait": {
@@ -1543,7 +1547,7 @@
           "default": null
         },
         "labels": {
-          "type": "Annotated[str | list[str] | None, Field(description='Labels to categorize the helper', default=None)]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(description='Labels to categorize the helper', default=None)]",
           "default": null
         },
         "min_value": {
@@ -1563,7 +1567,7 @@
           "default": null
         },
         "options": {
-          "type": "Annotated[str | list[str] | None, Field(description='List of options for input_select (required for input_select)', default=None)]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(description='List of options for input_select (required for input_select)', default=None)]",
           "default": null
         },
         "initial": {
@@ -1591,31 +1595,31 @@
           "default": null
         },
         "monday": {
-          "type": "Annotated[list[dict[str, Any]] | None, Field(description=\"Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes (e.g. {'from': '07:00', 'to': '22:00', 'data': {'mode': 'comfort'}})\", default=None)]",
+          "type": "Annotated[list[dict[str, Any]] | None, JSON_STRING_COERCION, Field(description=\"Schedule time ranges for Monday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes (e.g. {'from': '07:00', 'to': '22:00', 'data': {'mode': 'comfort'}})\", default=None)]",
           "default": null
         },
         "tuesday": {
-          "type": "Annotated[list[dict[str, Any]] | None, Field(description=\"Schedule time ranges for Tuesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
+          "type": "Annotated[list[dict[str, Any]] | None, JSON_STRING_COERCION, Field(description=\"Schedule time ranges for Tuesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
           "default": null
         },
         "wednesday": {
-          "type": "Annotated[list[dict[str, Any]] | None, Field(description=\"Schedule time ranges for Wednesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
+          "type": "Annotated[list[dict[str, Any]] | None, JSON_STRING_COERCION, Field(description=\"Schedule time ranges for Wednesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
           "default": null
         },
         "thursday": {
-          "type": "Annotated[list[dict[str, Any]] | None, Field(description=\"Schedule time ranges for Thursday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
+          "type": "Annotated[list[dict[str, Any]] | None, JSON_STRING_COERCION, Field(description=\"Schedule time ranges for Thursday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
           "default": null
         },
         "friday": {
-          "type": "Annotated[list[dict[str, Any]] | None, Field(description=\"Schedule time ranges for Friday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
+          "type": "Annotated[list[dict[str, Any]] | None, JSON_STRING_COERCION, Field(description=\"Schedule time ranges for Friday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
           "default": null
         },
         "saturday": {
-          "type": "Annotated[list[dict[str, Any]] | None, Field(description=\"Schedule time ranges for Saturday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
+          "type": "Annotated[list[dict[str, Any]] | None, JSON_STRING_COERCION, Field(description=\"Schedule time ranges for Saturday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
           "default": null
         },
         "sunday": {
-          "type": "Annotated[list[dict[str, Any]] | None, Field(description=\"Schedule time ranges for Sunday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
+          "type": "Annotated[list[dict[str, Any]] | None, JSON_STRING_COERCION, Field(description=\"Schedule time ranges for Sunday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.\", default=None)]",
           "default": null
         },
         "latitude": {
@@ -1639,7 +1643,7 @@
           "default": null
         },
         "device_trackers": {
-          "type": "Annotated[list[str] | None, Field(description='List of device_tracker entity IDs for person', default=None)]",
+          "type": "Annotated[list[str] | None, JSON_STRING_COERCION, Field(description='List of device_tracker entity IDs for person', default=None)]",
           "default": null
         },
         "picture": {
@@ -1785,7 +1789,7 @@
     "inputSchema": {
       "properties": {
         "entity_ids": {
-          "type": "Annotated[str | list[str], Field(description='Entity ID(s) to query. Can be a single ID, comma-separated string, or JSON array.')]"
+          "type": "Annotated[str | list[str], JSON_STRING_COERCION, Field(description='Entity ID(s) to query. Can be a single ID, comma-separated string, or JSON array.')]"
         },
         "source": {
           "type": "Annotated[Literal['history', 'statistics'], Field(description='Data source: \"history\" (default) for raw state changes (~10 day retention), or \"statistics\" for pre-aggregated long-term data (permanent, requires state_class).', default='history')]",
@@ -1820,7 +1824,7 @@
           "default": "day"
         },
         "statistic_types": {
-          "type": "Annotated[str | list[str] | None, Field(description='Statistics types: \"mean\", \"min\", \"max\", \"sum\", \"state\", \"change\". Default: all. Ignored when source=\"history\"', default=None)]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(description='Statistics types: \"mean\", \"min\", \"max\", \"sum\", \"state\", \"change\". Default: all. Ignored when source=\"history\"', default=None)]",
           "default": null
         },
         "order": {
@@ -1828,7 +1832,7 @@
           "default": "desc"
         },
         "fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size. None = full response (default). History keys: success, source, entities, period, query_params. Statistics keys: success, source, entities, period_type, time_range, statistic_types, query_params, warnings.')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Return only the specified top-level response keys to reduce response size. None = full response (default). History keys: success, source, entities, period, query_params. Statistics keys: success, source, entities, period_type, time_range, statistic_types, query_params, warnings.')]",
           "default": null
         }
       },
@@ -1969,7 +1973,7 @@
           "default": null
         },
         "diagnostics_fields": {
-          "type": "Annotated[list[str] | str | None, Field(description=\"Optional list of top-level keys to keep from the diagnostics data payload (e.g. ['home_assistant', 'issues']). Trims the payload before it hits the LLM context budget. Accepts a JSON list or comma-separated string. Only applies when include_diagnostics=True and the data payload is a dict. Unknown keys are silently dropped and surfaced via the omitted_fields sub-key.\", default=None)]",
+          "type": "Annotated[list[str] | str | None, JSON_STRING_COERCION, Field(description=\"Optional list of top-level keys to keep from the diagnostics data payload (e.g. ['home_assistant', 'issues']). Trims the payload before it hits the LLM context budget. Accepts a JSON list or comma-separated string. Only applies when include_diagnostics=True and the data payload is a dict. Unknown keys are silently dropped and surfaced via the omitted_fields sub-key.\", default=None)]",
           "default": null
         },
         "diagnostics_truncate_at_bytes": {
@@ -2002,7 +2006,7 @@
   {
     "name": "ha_get_system_health",
     "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
-    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.\n\n**Parameters:**\n- include: Optional comma-separated list of additional data to include.\n  - \"repairs\": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all)\n  - \"zha_network\": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)\n  - \"zha_network_full\": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer \"zha_network\" for summary)\n  - \"zwave_network\": Z-Wave JS network status and node summary (status, security, routing)\n  - \"themes\": Installed theme names and defaults (sorted list of theme names, count, default_theme, default_dark_theme)\n  - \"diagnostics\": Per-integration diagnostics dump — integration-defined JSON\n    (commonly includes redacted config, device list, state snapshots; exact\n    top-level keys vary by integration). REQUIRES ``config_entry_id``. The\n    canonical artifact users grab via Settings → Devices & Services →\n    [integration] → ⋯ → Download diagnostics. Use this when triaging integration\n    bugs or filing ``ha_report_issue`` for a specific integration. Payloads can\n    be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with\n    ``diagnostics_fields`` or ``diagnostics_truncate_at_bytes`` to fit the LLM\n    context budget.\n  - \"config_check\": Validate HA configuration via POST /config/core/check_config\n    (the pre-restart safety check; ha_restart runs it automatically). Returns\n    {result: valid|invalid, is_valid, errors}; read-only/idempotent, takes no args.\n  - Example: include=\"repairs,zha_network,zwave_network,config_check\"\n  - Example: include=\"diagnostics\", config_entry_id=\"abc123...\"\n- include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when \"repairs\" is in `include`.\n- config_entry_id: Required when ``include`` contains ``diagnostics``. The config\n  entry ID of the integration (find via ``ha_get_integration``).\n- device_id: Optional. When set with ``include=diagnostics``, returns the\n  device-scoped diagnostics dump for that specific device under the integration\n  (rather than the full integration dump). Some integrations only expose\n  config-entry-level dumps; others expose both.\n- diagnostics_fields: Optional list of top-level keys to keep from the\n  diagnostics ``data`` payload (e.g. ``[\"home_assistant\", \"issues\"]``). Accepts\n  a JSON list or comma-separated string. Only applies with ``include=diagnostics``.\n- diagnostics_truncate_at_bytes: Optional byte cap on the serialized\n  diagnostics payload (post-projection / post-data_path). On hit,\n  drops ``data`` and emits ``truncated=true``, ``bytes_total``,\n  ``byte_cap``, plus ``available_fields`` (when the capped value\n  is a dict). Only applies when ``include`` contains ``diagnostics``.\n  Recommended starting point: 20000 bytes.\n- diagnostics_data_path: Optional dotted path into the diagnostics\n  ``data`` sub-tree (e.g. ``\"data.devices\"`` for ZHA per-device records).\n  Walks into the post-fields payload. Resolution failures replace\n  ``data`` with ``null`` and surface ``data_path_error``. Only applies\n  when ``include`` contains ``diagnostics``.\n- diagnostics_data_offset / diagnostics_data_limit: Pagination on\n  list-valued ``diagnostics_data_path`` results. When ``data_limit``\n  is set and the resolved path is a list, ``data`` becomes\n  ``{\"path\", \"items\", \"offset\", \"limit\", \"total\", \"has_more\"}``. Only\n  applies when ``include`` contains ``diagnostics``.\n\n  Example workflow (walk a list-valued sub-tree one page at a time;\n  the exact ``data_path`` varies by integration version):\n  ``ha_get_system_health(include=\"diagnostics\", config_entry_id=\"abc\",\n  diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10)``\n  → inspect the page envelope's ``total`` / ``has_more`` → repeat\n  with ``diagnostics_data_offset=10`` for the next slice.",
+    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.\n\n**Parameters:**\n- include: Optional comma-separated list of additional data to include.\n  - \"repairs\": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all)\n  - \"zha_network\": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)\n  - \"zha_network_full\": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer \"zha_network\" for summary)\n  - \"zwave_network\": Z-Wave JS network status and node summary (status, security, routing)\n  - \"themes\": Installed theme names and defaults (sorted list of theme names, count, default_theme, default_dark_theme)\n  - \"diagnostics\": Per-integration diagnostics dump — integration-defined JSON\n    (commonly includes redacted config, device list, state snapshots; exact\n    top-level keys vary by integration). REQUIRES ``config_entry_id``. The\n    canonical artifact users grab via Settings → Devices & Services →\n    [integration] → ⋯ → Download diagnostics. Use this when triaging integration\n    bugs or filing ``ha_report_issue`` for a specific integration. Payloads can\n    be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with\n    ``diagnostics_fields`` or ``diagnostics_truncate_at_bytes`` to fit the LLM\n    context budget.\n  - \"config_check\": Validate HA configuration via POST /config/core/check_config\n    (the pre-restart safety check; ha_restart runs it automatically). Returns\n    {result: valid|invalid, is_valid, errors}; read-only/idempotent, takes no args.\n  - \"dead_entities\": Surface orphaned/stale entity-registry entries by diffing\n    the registry against the state machine and the live config-entries set.\n    Returns confidence-tiered buckets — ``config_entry_orphans`` (owning\n    integration instance gone; definitively dead) and ``stale_restored`` (HA\n    restored the entity from the registry on startup but the loaded integration\n    no longer provides it). Each item carries entity_id + platform so a client\n    can propose cleanup with ha_remove_entity. Deliberately excludes\n    ``unknown``-state entities and merely-offline devices to keep false positives\n    low. Read-only; takes no args.\n  - Example: include=\"repairs,zha_network,zwave_network,config_check\"\n  - Example: include=\"diagnostics\", config_entry_id=\"abc123...\"\n- include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when \"repairs\" is in `include`.\n- config_entry_id: Required when ``include`` contains ``diagnostics``. The config\n  entry ID of the integration (find via ``ha_get_integration``).\n- device_id: Optional. When set with ``include=diagnostics``, returns the\n  device-scoped diagnostics dump for that specific device under the integration\n  (rather than the full integration dump). Some integrations only expose\n  config-entry-level dumps; others expose both.\n- diagnostics_fields: Optional list of top-level keys to keep from the\n  diagnostics ``data`` payload (e.g. ``[\"home_assistant\", \"issues\"]``). Accepts\n  a JSON list or comma-separated string. Only applies with ``include=diagnostics``.\n- diagnostics_truncate_at_bytes: Optional byte cap on the serialized\n  diagnostics payload (post-projection / post-data_path). On hit,\n  drops ``data`` and emits ``truncated=true``, ``bytes_total``,\n  ``byte_cap``, plus ``available_fields`` (when the capped value\n  is a dict). Only applies when ``include`` contains ``diagnostics``.\n  Recommended starting point: 20000 bytes.\n- diagnostics_data_path: Optional dotted path into the diagnostics\n  ``data`` sub-tree (e.g. ``\"data.devices\"`` for ZHA per-device records).\n  Walks into the post-fields payload. Resolution failures replace\n  ``data`` with ``null`` and surface ``data_path_error``. Only applies\n  when ``include`` contains ``diagnostics``.\n- diagnostics_data_offset / diagnostics_data_limit: Pagination on\n  list-valued ``diagnostics_data_path`` results. When ``data_limit``\n  is set and the resolved path is a list, ``data`` becomes\n  ``{\"path\", \"items\", \"offset\", \"limit\", \"total\", \"has_more\"}``. Only\n  applies when ``include`` contains ``diagnostics``.\n\n  Example workflow (walk a list-valued sub-tree one page at a time;\n  the exact ``data_path`` varies by integration version):\n  ``ha_get_system_health(include=\"diagnostics\", config_entry_id=\"abc\",\n  diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10)``\n  → inspect the page envelope's ``total`` / ``has_more`` → repeat\n  with ``diagnostics_data_offset=10`` for the next slice.",
     "inputSchema": {
       "properties": {
         "include": {
@@ -2022,7 +2026,7 @@
           "default": null
         },
         "diagnostics_fields": {
-          "type": "list[str] | str | None",
+          "type": "Annotated[list[str] | str | None, JSON_STRING_COERCION]",
           "default": null
         },
         "diagnostics_truncate_at_bytes": {
@@ -2454,7 +2458,7 @@
           "default": "minimal"
         },
         "domains": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description=\"Filter to specific domains (e.g. 'light,sensor' or ['light','sensor']). None = all domains. Useful to avoid context window overload.\")]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description=\"Filter to specific domains (e.g. 'light,sensor' or ['light','sensor']). None = all domains. Useful to avoid context window overload.\")]",
           "default": null
         },
         "limit": {
@@ -2486,7 +2490,7 @@
           "default": false
         },
         "fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"system_info\", \"domains\"]). None = full response (default). Available keys: success, system_summary, domain_stats, area_analysis, ai_insights, pagination, partial, warnings, device_types, service_availability, system_info, notification_count, notifications, repair_count, dismissed_repair_count, repairs, repairs_error, tool_discovery, settings_url, settings_url_hint, read_only_mode, read_only_mode_hint. Note: ``settings_url`` (stdio mode), ``settings_url_hint`` (HTTP/Docker/OAuth mode), and the ``read_only_mode`` / ``read_only_mode_hint`` pair (only while Read Only Mode is on) are emitted regardless of ``fields=`` projection so the settings page and the active mode stay discoverable; see the tool description.')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"system_info\", \"domains\"]). None = full response (default). Available keys: success, system_summary, domain_stats, area_analysis, ai_insights, pagination, partial, warnings, device_types, service_availability, system_info, notification_count, notifications, repair_count, dismissed_repair_count, repairs, repairs_error, tool_discovery, settings_url, settings_url_hint, read_only_mode, read_only_mode_hint. Note: ``settings_url`` (stdio mode), ``settings_url_hint`` (HTTP/Docker/OAuth mode), and the ``read_only_mode`` / ``read_only_mode_hint`` pair (only while Read Only Mode is on) are emitted regardless of ``fields=`` projection so the settings page and the active mode stay discoverable; see the tool description.')]",
           "default": null
         }
       }
@@ -2507,14 +2511,14 @@
     "inputSchema": {
       "properties": {
         "entity_id": {
-          "type": "Annotated[str | list[str], Field(description=\"Entity ID or list of entity IDs to retrieve state for (e.g., 'light.kitchen' or ['light.kitchen', 'sensor.temperature'])\")]"
+          "type": "Annotated[str | list[str], JSON_STRING_COERCION, Field(description=\"Entity ID or list of entity IDs to retrieve state for (e.g., 'light.kitchen' or ['light.kitchen', 'sensor.temperature'])\")]"
         },
         "fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level entity record keys to reduce response size (e.g. [\"state\", \"attributes\"]). None = full entity record (default). Available keys: entity_id, state, attributes, last_changed, last_reported, last_updated, context.')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Return only the specified top-level entity record keys to reduce response size (e.g. [\"state\", \"attributes\"]). None = full entity record (default). Available keys: entity_id, state, attributes, last_changed, last_reported, last_updated, context.')]",
           "default": null
         },
         "attribute_keys": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified keys from each entity\\'s attributes dict (e.g. [\"brightness\", \"color_temp_kelvin\"] for lights). None = full attributes (default). Unknown keys are silently dropped. Requires \"attributes\" to be present in fields= (or fields=None).')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Return only the specified keys from each entity\\'s attributes dict (e.g. [\"brightness\", \"color_temp_kelvin\"] for lights). None = full attributes (default). Unknown keys are silently dropped. Requires \"attributes\" to be present in fields= (or fields=None).')]",
           "default": null
         }
       },
@@ -2550,7 +2554,7 @@
           "default": null
         },
         "search_types": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description=\"Configuration types to include in body search: 'automation', 'script', 'scene', 'helper', 'dashboard'. Default = automation+script+scene+helper. Pass as list or JSON-array string.\")]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description=\"Configuration types to include in body search: 'automation', 'script', 'scene', 'helper', 'dashboard'. Default = automation+script+scene+helper. Pass as list or JSON-array string.\")]",
           "default": null
         },
         "limit": {
@@ -2586,11 +2590,11 @@
           "default": null
         },
         "result_fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Project each entity-registry record to only the specified keys (e.g. [\"entity_id\", \"state\"]). None = full records.')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Project each entity-registry record to only the specified keys (e.g. [\"entity_id\", \"state\"]). None = full records.')]",
           "default": null
         },
         "fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Project the response to only the specified top-level keys (e.g. [\"entities\", \"automations\"]). Diagnostic / pagination keys are always retained regardless of projection, so narrowing the response shape cannot hide partial / error state. None = full response. Distinct from `result_fields` (which projects each entity record\\'s fields). Available keys: success, query, entities, automations, scripts, scenes, helpers, dashboards, search_types, search_type, entity_total_matches, config_total_matches, count, offset, limit, has_more, next_offset, entity_has_more, entity_next_offset, config_has_more, config_next_offset, by_domain, state_filter_note, area_names, domain_filter, area_filter, message, warnings, errors, partial, partial_reason.')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Project the response to only the specified top-level keys (e.g. [\"entities\", \"automations\"]). Diagnostic / pagination keys are always retained regardless of projection, so narrowing the response shape cannot hide partial / error state. None = full response. Distinct from `result_fields` (which projects each entity record\\'s fields). Available keys: success, query, entities, automations, scripts, scenes, helpers, dashboards, search_types, search_type, entity_total_matches, config_total_matches, count, offset, limit, has_more, next_offset, entity_has_more, entity_next_offset, config_has_more, config_next_offset, by_domain, state_filter_note, area_names, domain_filter, area_filter, message, warnings, errors, partial, partial_reason.')]",
           "default": null
         },
         "config_time_budget": {
@@ -2694,11 +2698,11 @@
           "default": false
         },
         "result_fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description=\"Project each record in 'result' to only these top-level keys (e.g. ['entity_id', 'state']). Mirrors ha_get_state's fields=. Setting this DISABLES default compaction — no entity-id filter, no metadata strip — and applies the explicit projection instead.\")]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description=\"Project each record in 'result' to only these top-level keys (e.g. ['entity_id', 'state']). Mirrors ha_get_state's fields=. Setting this DISABLES default compaction — no entity-id filter, no metadata strip — and applies the explicit projection instead.\")]",
           "default": null
         },
         "result_attribute_keys": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description=\"Project each record's 'attributes' dict to only these keys (e.g. ['brightness', 'rgb_color']). Mirrors ha_get_state's attribute_keys=. Setting this DISABLES default compaction. Requires 'attributes' to be present in result_fields (or result_fields=None).\")]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description=\"Project each record's 'attributes' dict to only these keys (e.g. ['brightness', 'rgb_color']). Mirrors ha_get_state's attribute_keys=. Setting this DISABLES default compaction. Requires 'attributes' to be present in result_fields (or result_fields=None).\")]",
           "default": null
         }
       },
@@ -2722,7 +2726,7 @@
     "inputSchema": {
       "properties": {
         "operation_id": {
-          "type": "Annotated[str | list[str], Field(description='Single operation ID or list of operation IDs to check. Use a single string for one operation, or a list for bulk status checks.')]"
+          "type": "Annotated[str | list[str], JSON_STRING_COERCION, Field(description='Single operation ID or list of operation IDs to check. Use a single string for one operation, or a list for bulk status checks.')]"
         },
         "timeout_seconds": {
           "type": "int",
@@ -2768,11 +2772,11 @@
           "default": "summary"
         },
         "service_fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Project each service record to only the specified keys. E.g. [\"name\", \"description\"] returns slim service records. None = full records (default). Unknown keys yield empty records. Available keys: name, description, domain, service, fields (full mode only), target (full mode only).')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Project each service record to only the specified keys. E.g. [\"name\", \"description\"] returns slim service records. None = full records (default). Unknown keys yield empty records. Available keys: name, description, domain, service, fields (full mode only), target (full mode only).')]",
           "default": null
         },
         "fields": {
-          "type": "Annotated[str | list[str] | None, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"services\"]). None = full response (default). Available keys: success, domains, services, total_count, count, offset, limit, has_more, next_offset, detail_level, filters_applied.')]",
+          "type": "Annotated[str | list[str] | None, JSON_STRING_COERCION, Field(default=None, description='Return only the specified top-level response keys to reduce response size (e.g. [\"services\"]). None = full response (default). Available keys: success, domains, services, total_count, count, offset, limit, has_more, next_offset, detail_level, filters_applied.')]",
           "default": null
         }
       }
@@ -2901,7 +2905,7 @@
           "default": null
         },
         "limit": {
-          "type": "Annotated[int, Field(default=200, ge=1, le=10000, description='(edits.list) Maximum number of entries to return.')]",
+          "type": "Annotated[int, Field(default=200, ge=1, le=10000, description='(edits.list / snapshot.list) Maximum number of entries to return.')]",
           "default": 200
         }
       },

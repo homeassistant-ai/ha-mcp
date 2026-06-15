@@ -21,6 +21,86 @@ env:
   TESTCONTAINERS_RYUK_DISABLED: "true"
 
 jobs:
+  # Decide whether the heavy E2E Validation lanes need to run. Default is RUN;
+  # we skip ONLY when every changed file is pure docs/website (top-level *.md,
+  # docs/**, site/**). Add-on + bake-input dirs are baked/shipped, so their docs
+  # DO matter and always count as code. On non-PR events (manual dispatch)
+  # always run. Consumed by e2e-validation's `if:` below — a job-level skip
+  # reports Success to a required check (a workflow path-skip would not).
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Classify changed files
+        id: filter
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Fail-closed gate: default to RUNNING the suite; skip ONLY when we can
+          # prove the PR changed nothing but docs/website. Any classifier failure
+          # (non-PR event, base fetch / rev-parse / diff error, empty diff) leaves
+          # run=true — branch protection treats a skipped REQUIRED job as passing,
+          # so a fail-open classifier could let code merge untested.
+          run=true
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+            && git fetch --depth=1 origin "$BASE_REF" \
+            && base_sha=$(git rev-parse "origin/$BASE_REF") \
+            && changed=$(git diff --name-only --diff-filter=ACMRD "$base_sha" HEAD) \
+            && [ -n "$changed" ]; then
+            echo "Changed files:"; printf '%s\n' "$changed" | sed 's/^/  /'
+            run=false
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              case "$f" in
+                # Bake inputs / addon dirs are baked into the qcow2 / shipped —
+                # their docs change what the suite tests, so they count as code.
+                homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
+                  run=true; break ;;
+                # Pure docs / website do not, on their own, warrant the suite.
+                *.md|*.mdx|docs/*|site/*)
+                  continue ;;
+                # Anything else (code, tests, config, workflows, lockfile, ...) runs.
+                *)
+                  run=true; break ;;
+              esac
+            done <<< "$changed"
+          else
+            echo "Non-PR event or unresolved diff — running suite (fail-closed)."
+          fi
+          echo "run=$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  e2e-validation-gate:
+    # Single, ALWAYS-reported required context for branch protection. The
+    # e2e-validation job above is a MATRIX job, and a job-level `if:`-skip on a
+    # matrix does NOT emit the per-variant contexts ("E2E Validation (os)") —
+    # they report nothing and would wedge a required check on a docs-only PR
+    # (actions/runner#952). So the REQUIRED check is THIS gate, not the matrix
+    # variants: it always runs, passes when the suite was skipped (docs/website)
+    # or every variant succeeded, and fails if any variant failed.
+    name: E2E Validation Gate
+    needs: [changes, e2e-validation]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require E2E success unless skipped
+        run: |
+          if [ "${{ needs.changes.outputs.run }}" != "true" ]; then
+            echo "Docs/website-only PR — E2E Validation skipped; gate passes."
+            exit 0
+          fi
+          result="${{ needs.e2e-validation.result }}"
+          echo "e2e-validation result: $result"
+          if [ "$result" != "success" ]; then
+            echo "::error::E2E Validation did not succeed (result=$result)."
+            exit 1
+          fi
+
   lockfile:
     name: Check uv.lock
     runs-on: ubuntu-latest
@@ -50,6 +130,44 @@ jobs:
           echo "::warning file=AGENTS.md::AGENTS.md is ${size} chars (>40k). Claude Code will show a startup performance warning."
         fi
 
+  # Anchors the docs-site accessibility work (#1574/#1595): astro check (types
+  # + a11y diagnostics), eslint-plugin-astro + jsx-a11y, and an axe-core audit
+  # over the built pages — all blocking. The baseline is clean, so any
+  # regression fails the PR.
+  site-checks:
+    name: Site (astro check + eslint a11y)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: site
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup Node
+      uses: actions/setup-node@v6
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: site/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Astro type & diagnostics check
+      run: npm run check
+
+    - name: ESLint (eslint-plugin-astro + jsx-a11y)
+      run: npm run lint
+
+    - name: Build site
+      run: npm run build
+
+    - name: Accessibility audit (axe-core)
+      # Blocking: the baseline is clean (0 violations across all pages), so a
+      # new axe-core violation fails the PR rather than slipping through.
+      run: npm run audit:a11y
+
   lint:
     name: Ruff Lint
     runs-on: ubuntu-latest
@@ -68,7 +186,7 @@ jobs:
       run: uv sync --dev
 
     - name: Run ruff check
-      run: uv run ruff check src/ tests/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ scripts/
+      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ scripts/
 
     - name: Run ruff format check on changed Python files
       run: |
@@ -130,7 +248,7 @@ jobs:
 
     - name: Run mypy
       run: |
-        uv run mypy src/ homeassistant-addon/ scripts/
+        uv run mypy src/ custom_components/ homeassistant-addon/ scripts/
         uv run mypy homeassistant-addon-webhook-proxy/start.py
 
   # Fast unit tests (no Docker, no HA instance needed)
@@ -196,6 +314,10 @@ jobs:
   # Comprehensive E2E validation for all PRs
   e2e-validation:
     name: E2E Validation (${{ matrix.os }})
+    needs: changes
+    # A skipped job reports Success to the required status check, so a
+    # docs/website-only PR doesn't wedge the merge waiting on these lanes.
+    if: needs.changes.outputs.run == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:

@@ -1,11 +1,11 @@
-name: Build HAOS Test Image (Publish to GHCR)
+name: Build HAOS Test Image (Prime Shared Cache)
 
-# Publishes the pre-baked HAOS qcow2 used by haos-e2e-tests.yml — see #1281.
-# Outputs an OCI artifact at ghcr.io/<owner>/haos-test-image:<HAOS-VERSION>-<short-sha>
-# plus a moving :<HAOS-VERSION>-latest tag the e2e workflow pulls from.
-#
-# PR-time builds happen inside haos-e2e-tests.yml itself (with caching);
-# this workflow only runs to publish stable tags after merge to master.
+# Bakes the pre-baked HAOS qcow2 used by haos-e2e-tests.yml — see #1281.
+# The workflow's job on master is to local-build the qcow2 and warm the shared
+# Actions cache; the lanes restore from that cache and local-build on a miss.
+# The PR-time job uploads the qcow2 as a workflow artifact so reviewers can
+# sanity-check (e.g. on a Renovate HAOS-version bump PR) without re-running
+# the bake locally.
 #
 # Triggered on: manual dispatch, weekly cron (refreshes addon Docker layers),
 # and push to master that touches any input baked into the qcow2.
@@ -13,31 +13,15 @@ name: Build HAOS Test Image (Publish to GHCR)
 # INVARIANT — the path triggers below MUST mirror the ``git ls-tree`` paths
 # that haos-e2e-tests.yml hashes into its image cache key (see the
 # "Compute image cache key" step). When master commits change a baked
-# input that isn't listed here, GHCR stays at the previous SHA and every
-# subsequent PR that doesn't itself touch a bake input pulls the stale
-# image — which is exactly how the #1374 (knx allowlist) merge broke
-# every open PR's HAOS E2E run until a manual dispatch. Keep both lists
-# in sync.
+# input that isn't listed here, the master cache-prime stays at the
+# previous state and every subsequent PR on a cache miss builds locally
+# (rather than restoring the master-primed cache), which adds ~25 min
+# to the PR run. This was how the #1374 (knx allowlist) merge forced
+# every open PR to rebuild until a manual dispatch refreshed master.
+# Keep both lists in sync.
 
 on:
   workflow_dispatch:
-    inputs:
-      tag_suffix:
-        description: >-
-          Moving-tag suffix (default: ``latest``). Override to publish
-          to ``:HAOS_VERSION-<suffix>`` instead of ``:HAOS_VERSION-latest``
-          — used by perf-iteration branches that need a non-latest tag
-          they can point the e2e test workflows at without touching the
-          master-served image. Pointing the e2e lanes at the override is
-          a SEPARATE manual edit on the branch: change the ``tag=`` line
-          in the ``Try pulling from GHCR`` step of both
-          ``haos-e2e-tests.yml`` and ``haos-e2e-inaddon-tests.yml``.
-          Allowed character set is ``[A-Za-z0-9._-]+`` (OCI tag rules);
-          the ``Push image to GHCR`` step validates and fails fast on
-          anything else.
-        type: string
-        required: false
-        default: 'latest'
   push:
     branches: [master]
     paths:
@@ -47,7 +31,7 @@ on:
       - 'custom_components/ha_mcp_tools/**'
       - 'homeassistant-addon-webhook-proxy/**'
       - 'homeassistant-addon-dev/**'
-      # The workflow itself — bumping the build script or env triggers a republish.
+      # The workflow itself — bumping the build script or env triggers a cache refresh.
       - '.github/workflows/build-haos-test-image.yml'
   schedule:
     # Weekly Monday 06:00 UTC — keeps the image current with addon updates
@@ -56,10 +40,8 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 env:
-  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
   # libguestfs defaults to libvirt which isn't running on GitHub-hosted
   # runners (per-user libvirtd socket missing for the unprivileged
   # runner UID). Direct backend bypasses libvirt and uses QEMU directly.
@@ -77,12 +59,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # Required for the bake's submodules: the skills bundle at
-          # src/ha_mcp/resources/skills-vendor (test_skills_resources.py) AND
-          # the vendored Puppet add-on at
-          # tests/haos_image_build/vendor/home-assistant-addons, which
-          # stage_puppet_addon_source bakes into the qcow2 (it hard-fails
-          # without the submodule checked out).
+          # Required for the skills bundle submodule at
+          # src/ha_mcp/resources/skills-vendor (test_skills_resources.py).
           submodules: true
 
       - name: Install build dependencies
@@ -118,10 +96,25 @@ jobs:
       - name: Install build-script Python deps
         run: pip install -r tests/haos_image_build/requirements.txt
 
+      - name: Free disk space for the bake
+        # The cache-prime always local-builds the qcow2, so it hits the same
+        # disk peak the e2e local-build path guards against: the ~7 GB qcow2
+        # plus the in-qcow2 add-on image builds (dev addon, webhook proxy,
+        # screenshot-engine mock) grow it toward the runner's ~14 GB SSD. The
+        # df -h bookends make the reclaimed headroom visible. Keep
+        # /opt/hostedtoolcache: Python from there is on PATH for build_image.py.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
+            /usr/local/lib/android /usr/local/.ghcup
+          sudo apt-get clean
+          docker system prune -af --volumes || true
+          df -h /
+
       - name: Build image
         run: python3 tests/haos_image_build/build_image.py --verbose --output haos-test-image.qcow2
 
-      - name: Extract publish-build diagnostics (always)
+      - name: Extract bake diagnostics (always)
         # On build failure (boot timeout, onboarding rejection, addon
         # install error, bake step crash) Python's stdout via --verbose
         # is the only signal otherwise. Grab the serial log + a
@@ -132,70 +125,74 @@ jobs:
         if: always()
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
-          mkdir -p /tmp/haos-publish-diagnostics
+          mkdir -p /tmp/haos-bake-diagnostics
           intermediate=/tmp/haos-build/haos-test-image.qcow2
           if [ -f "$intermediate" ]; then
             guestfish --ro -a "$intermediate" run \
               : mount /dev/sda8 / \
               : ll /supervisor/homeassistant \
-              > /tmp/haos-publish-diagnostics/config-dir-listing.txt 2>&1 \
+              > /tmp/haos-bake-diagnostics/config-dir-listing.txt 2>&1 \
               || echo "directory listing failed (qcow2 may not be baked yet)"
             guestfish --ro -a "$intermediate" run \
               : mount /dev/sda8 / \
               : tar-out /supervisor/homeassistant/.storage \
-                /tmp/haos-publish-diagnostics/storage.tar \
+                /tmp/haos-bake-diagnostics/storage.tar \
               || echo ".storage tar-out failed"
           else
             echo "intermediate qcow2 not present — build failed before bake" \
-              > /tmp/haos-publish-diagnostics/no-qcow2.txt
+              > /tmp/haos-bake-diagnostics/no-qcow2.txt
           fi
           # build_image.start_qemu writes the serial log to <work_dir>/
           # haos-serial.log (default work_dir = /tmp/haos-build); copy
           # it out for upload.
-          cp /tmp/haos-build/haos-serial.log /tmp/haos-publish-diagnostics/ \
+          cp /tmp/haos-build/haos-serial.log /tmp/haos-bake-diagnostics/ \
             2>/dev/null || true
-          ls -la /tmp/haos-publish-diagnostics/ || true
+          ls -la /tmp/haos-bake-diagnostics/ || true
 
-      - name: Upload publish-build diagnostics
+      - name: Upload bake diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: haos-publish-diagnostics-${{ github.sha }}
-          path: /tmp/haos-publish-diagnostics/
+          name: haos-bake-diagnostics-${{ github.sha }}
+          path: /tmp/haos-bake-diagnostics/
           if-no-files-found: warn
           retention-days: 14
 
       - name: Compress qcow2 in-format (qemu-img convert -c)
         # Re-pack the qcow2 with qcow2-native zlib *cluster* compression
-        # before upload. The post-bake file is ~12 GB *apparent* size on
-        # disk — sparse, with ~5 GB actually allocated; the rest is
-        # un-allocated holes from ``qemu-img resize 32G`` in
-        # ``fetch_haos_qcow2``. ORAS pushes/pulls
-        # ``application/octet-stream`` as a raw byte stream, so the
-        # sparse holes get serialised over the wire as actual zero bytes
-        # — the *apparent* size, not the allocated size, is what GHCR
-        # pull pays for.
+        # before downstream consumers (the artifact upload always; the
+        # shared-cache save on master only). The post-bake file is ~12 GB
+        # *apparent* size on disk — sparse, with
+        # ~5 GB actually allocated; the rest is un-allocated holes from
+        # ``qemu-img resize 32G`` in ``fetch_haos_qcow2``. Both the
+        # Actions artifact upload and the Actions cache save serialise
+        # the file as a raw byte stream, so the sparse holes go over the
+        # wire as actual zero bytes — the *apparent* size, not the
+        # allocated size, is what storage + network pay for. The cache
+        # cap (10 GiB per repo) is the binding constraint: an
+        # uncompressed qcow2 LRU-evicts the cache much faster than the
+        # compressed one.
         #
         # ``qemu-img convert -c -O qcow2`` re-encodes the data densely
         # at the cluster level (default 64 KiB). The output stays a
-        # standard qcow2 (same OCI media-type, same consumer code path);
-        # QEMU decompresses clusters on-demand during VM I/O when the
-        # e2e workflow boots, so no upfront decompress step on the pull
-        # side. Trade-off worth knowing about: qcow2 cluster compression
-        # is read-only — the first write to any compressed cluster makes
+        # standard qcow2 (same consumer code path); QEMU decompresses
+        # clusters on-demand during VM I/O when the e2e workflow boots,
+        # so no upfront decompress step on the consumer side.
+        # Trade-off worth knowing about: qcow2 cluster compression is
+        # read-only — the first write to any compressed cluster makes
         # QEMU re-allocate it uncompressed in place. The e2e workflow's
         # boot is read-heavy (HA starts, recorder DB rebuilds, addon
         # containers come up), so write-side re-allocation cost is small
-        # relative to the pull-time saved, but it's why this convert
-        # pass lives at publish time and not at every consumer.
+        # relative to the cache-restore time saved, but it's why this
+        # convert pass lives at bake time and not at every consumer.
         #
-        # Measured at publish run 26361263298 step 11:
+        # Measured at run 26361263298 step 11:
         #   12 GB → 5.1 GB (2.3x ratio), convert pass took 6m 15s.
-        # First e2e run that consumed the result (runs 26361656780 +
-        # 26361656754) saw GHCR pull drop from ~6 min (uncompressed
-        # baseline) to 47–58 s.
+        # First e2e run that consumed the compressed result (runs
+        # 26361656780 + 26361656754) saw the image-acquisition step drop
+        # from ~6 min (uncompressed baseline) to 47–58 s.
         #
-        # Cost: the convert pass adds ~6 min to the publish runner —
+        # Cost: the convert pass adds ~6 min to the bake runner —
         # paid only on master push / weekly cron / manual dispatch,
         # not on PR runs.
         run: |
@@ -213,7 +210,7 @@ jobs:
           new_bytes=$(stat -c%s haos-test-image.qcow2)
           # Sanity floor: the baked HAOS image is gigabytes; anything
           # under 1 GiB after compress is corruption ``qemu-img check``
-          # didn't catch. Fail before the moving tag points at bad bytes.
+          # didn't catch. Fail before the shared cache stores bad bytes.
           if [ "$new_bytes" -lt 1073741824 ]; then
             echo "::error::compressed qcow2 suspiciously small: ${new_bytes} bytes"
             exit 1
@@ -224,9 +221,6 @@ jobs:
           echo "compression ratio: ${ratio}x"
 
       - name: Upload built image as workflow artifact
-        # Always upload — even on PRs that don't push to GHCR — so reviewers
-        # can pull the artifact and verify locally. (Now also smaller thanks
-        # to the in-format compression step above.)
         uses: actions/upload-artifact@v7
         with:
           name: haos-test-image-${{ steps.haos_version.outputs.version }}-${{ github.sha }}
@@ -234,57 +228,16 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-      - name: Set up oras
-        uses: oras-project/setup-oras@v2
-
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Push image to GHCR
-        env:
-          HAOS_VERSION: ${{ steps.haos_version.outputs.version }}
-          SHORT_SHA: ${{ github.sha }}
-          # See the ``tag_suffix`` workflow_dispatch input at the top of
-          # this file for the override semantics and required edits on
-          # the consumer side. The ``|| 'latest'`` fallback covers the
-          # ``push:`` / ``schedule:`` triggers where
-          # ``github.event.inputs`` is null.
-          TAG_SUFFIX: ${{ github.event.inputs.tag_suffix || 'latest' }}
-        run: |
-          # Validate the suffix against the OCI tag character set before
-          # building any tag strings — a typo like ``foo/bar``,
-          # ``:evil``, or a trailing space would otherwise surface as a
-          # confusing ``oras push`` error ten lines later.
-          if [[ ! "$TAG_SUFFIX" =~ ^[A-Za-z0-9._-]+$ ]]; then
-            echo "::error::TAG_SUFFIX must match [A-Za-z0-9._-]+ (OCI tag chars), got: '$TAG_SUFFIX'"
-            exit 1
-          fi
-          short_sha="${SHORT_SHA:0:7}"
-          versioned="${IMAGE_REPO}:${HAOS_VERSION}-${short_sha}"
-          moving="${IMAGE_REPO}:${HAOS_VERSION}-${TAG_SUFFIX}"
-          oras push "$versioned" \
-            --artifact-type application/vnd.homeassistant-ai.haos-test-image.v1 \
-            haos-test-image.qcow2:application/octet-stream
-          oras tag "$versioned" "${HAOS_VERSION}-${TAG_SUFFIX}"
-          echo "Pushed $versioned"
-          echo "Pushed $moving"
-
       # --- Warm the shared Actions cache (master only) -----------------------
       # The E2E lanes (haos-e2e-tests.yml / haos-e2e-inaddon-tests.yml) restore
-      # the qcow2 from the Actions cache and fall back to this GHCR image on a
-      # miss. Today nothing primes that cache except a PR run's lazy save, which
-      # is branch-scoped — so every new PR branch starts cold and pays the GHCR
-      # pull (and the multi-GB image is a large fraction of the 10 GB repo cache
-      # cap, so it LRU-evicts fast). Saving the same blob under the same key
-      # here, on the default branch, lets PR runs restore it via GitHub's
-      # default-branch cache scope and skip the GHCR pull. Purely additive: on a
-      # miss/eviction the lanes fall back to GHCR exactly as before (#1515).
+      # the qcow2 from the Actions cache and fall back to a local build on a
+      # miss. Saving the image here, on the default branch, lets PR runs restore
+      # it via GitHub's default-branch cache scope and skip the local build.
+      # Purely additive: on a miss/eviction the lanes fall back to a local build
+      # exactly as before (#1515).
       - name: Compute E2E image cache key (master only)
         id: e2e_cache_key
         if: github.ref == 'refs/heads/master'
-        # Best-effort: the GHCR push above already published the image, so a
-        # prime hiccup must not fail the publish job — PRs just fall back to
-        # GHCR as before.
         continue-on-error: true
         # INVARIANT: this git ls-tree must stay byte-IDENTICAL to the
         # "Compute image cache key" step in BOTH haos-e2e-tests.yml and
@@ -300,8 +253,8 @@ jobs:
           # (the save step guards on a non-empty cache-key, so a failed move
           # leaves the key empty and skips the save). On GitHub-hosted runners
           # /tmp and the workspace share the root filesystem, so this is a
-          # rename, not a copy. The artifact upload + GHCR push above already
-          # consumed the workspace copy, so nothing later needs it.
+          # rename, not a copy. The artifact upload above already consumed
+          # the workspace copy, so nothing later needs it.
           mv haos-test-image.qcow2 /tmp/haos-test-image.qcow2
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \

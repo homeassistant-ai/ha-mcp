@@ -559,6 +559,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     async def ha_set_entity(
         entity_id: Annotated[
             str | list[str],
+            JSON_STRING_COERCION,
             Field(
                 description="Entity ID or list of entity IDs to update. Bulk operations (list) only support labels, expose_to, and categories parameters."
             ),
@@ -639,6 +640,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         aliases: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="List of voice assistant aliases for the entity (replaces existing aliases). Single entity only.",
                 default=None,
@@ -659,6 +661,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         labels: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="List of label IDs for the entity. Behavior depends on label_operation parameter. Supports bulk operations.",
                 default=None,
@@ -1117,6 +1120,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     async def ha_get_entity(
         entity_id: Annotated[
             str | list[str],
+            JSON_STRING_COERCION,
             Field(
                 description="Entity ID or list of entity IDs to retrieve (e.g., 'sensor.temperature' or ['light.living_room', 'switch.porch'])"
             ),

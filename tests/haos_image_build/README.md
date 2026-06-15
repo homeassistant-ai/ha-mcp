@@ -24,13 +24,12 @@ partition, then runs onboarding and addon installs. Total wall time on a
 
 ## CI build
 
-`build-haos-test-image.yml` runs the same script on `ubuntu-22.04` and
-pushes the result as an OCI artifact:
-
-- `ghcr.io/homeassistant-ai/haos-test-image:<HAOS-VERSION>-<short-sha>` — pinned
-- `ghcr.io/homeassistant-ai/haos-test-image:<HAOS-VERSION>-latest` — moving
-
-`haos-e2e-tests.yml` pulls the moving tag at PR time.
+`build-haos-test-image.yml` runs the same script on `ubuntu-22.04`. On every
+run it uploads the qcow2 as a workflow artifact (reviewer sanity-check). On
+`master` (push / weekly cron / manual dispatch) it additionally primes the
+shared Actions cache used by the E2E lanes — `haos-e2e-tests.yml` and
+`haos-e2e-inaddon-tests.yml` restore the qcow2 from that cache and fall back
+to a local build on a miss.
 
 ## Version pinning
 
@@ -38,5 +37,6 @@ pushes the result as an OCI artifact:
 watches the `home-assistant/operating-system` releases via the annotation
 comment above the constant and opens a bump PR when HAOS releases. The
 image-build workflow runs on that PR (uploading the new qcow2 as a workflow
-artifact so reviewers can sanity-check). Merging the PR triggers the push to
-GHCR; the e2e workflow then automatically uses the new image.
+artifact so reviewers can sanity-check). Merging the PR triggers the
+master-only cache-prime; the E2E lanes then restore the new image from the
+shared cache automatically.

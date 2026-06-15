@@ -33,6 +33,7 @@ from .tools_config_helpers import (
     _get_entities_for_config_entry,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     build_pagination_metadata,
     fetch_integration_diagnostics,
     get_logger_levels,
@@ -459,6 +460,7 @@ class IntegrationTools:
         ] = None,
         diagnostics_fields: Annotated[
             list[str] | str | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Optional list of top-level keys to keep from the diagnostics "

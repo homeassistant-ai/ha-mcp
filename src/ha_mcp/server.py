@@ -236,6 +236,13 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
 
         self.mcp.add_middleware(ValidationErrorMiddleware())
 
+        # Replace the opaque "Unknown tool" FastMCP raises when a client calls
+        # ha_search_tools / the ha_call_* proxies while Tool Search is off
+        # (stale client tool-list cache) with an actionable refresh hint.
+        from .tools.tool_search_hint_middleware import ToolSearchHintMiddleware
+
+        self.mcp.add_middleware(ToolSearchHintMiddleware())
+
         # Read Only Mode write blocker (discussion #1569) — always
         # installed, consults the live flag per call. Before
         # PolicyMiddleware so a write blocked by Read Only Mode never
@@ -662,7 +669,8 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
             "Three modes: (1) list — `list_only=True` returns all "
             "storage-mode dashboards with metadata. (2) search — pass "
             "any of `entity_id`, `card_type`, `heading` to find cards "
-            "(and their `jq_path`) inside a specific dashboard; the "
+            "(including nested ones, with a `python_path`) inside a "
+            "specific dashboard; the "
             "result includes a `config_hash` you can pair with "
             "ha_config_set_dashboard(python_transform=...) to edit "
             "matched cards surgically. (3) get — no search params "

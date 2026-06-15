@@ -7,11 +7,12 @@ name: HAOS E2E Tests (inaddon)
 # when they install the addon + cloudflared on a real HAOS install.
 #
 # The HAOS_TEST_MODE=inaddon env flips conftest.py's HAOS dispatch:
-# refresh_dev_addon_source_in_qcow2 overwrites /supervisor/addons/local/ha_mcp_dev/
-# with PR source + bumps config.yaml ``version:`` → Supervisor detects an
-# update on next boot → trigger_dev_addon_update calls supervisor/api
-# addons/{slug}/update via WS → Docker rebuilds with layer cache → addon
-# restarts with PR source → mcp_client connects via HTTP transport.
+# refresh_dev_addon_source_in_qcow2 overwrites the addon source (apps/local
+# on Supervisor 2026.06.0+, else legacy addons/local) with PR source + bumps
+# config.yaml ``version:`` → Supervisor detects an update on next boot →
+# trigger_dev_addon_update calls supervisor/api addons/{slug}/update via WS →
+# Docker rebuilds with layer cache → addon restarts with PR source →
+# mcp_client connects via HTTP transport.
 #
 # v1 scope: run ONLY tests/src/e2e/haos_only/ (the canary suite) so the
 # initial green CI gives us a fast feedback loop. Once the full inaddon
@@ -19,18 +20,15 @@ name: HAOS E2E Tests (inaddon)
 # external_only / inaddon_only markers).
 
 on:
+  # No workflow-level `paths:` filter on purpose. This check is a REQUIRED
+  # status check, and a path-filtered workflow that doesn't trigger leaves the
+  # required check Pending forever, wedging the merge of any PR that doesn't
+  # touch the listed paths. Instead we trigger on every PR and let the
+  # `changes` job below decide whether the heavy suite runs: a job skipped via
+  # `if:` reports Success to a required check (unlike a workflow-level
+  # path-skip, which reports nothing). See the `changes` job for the run/skip
+  # rule (skip only pure docs/website; addon + bake inputs always run).
   pull_request:
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'pyproject.toml'
-      - 'homeassistant-addon/**'
-      - 'homeassistant-addon-dev/**'
-      - '.github/workflows/haos-e2e-inaddon-tests.yml'
-      # Trigger on external workflow changes too — both lanes share the
-      # qcow2 cache key, so a change to either workflow's cache logic
-      # needs the other lane to re-run for parity verification.
-      - '.github/workflows/haos-e2e-tests.yml'
   workflow_dispatch:
     inputs:
       pytest_args:
@@ -43,20 +41,80 @@ on:
         type: string
         required: false
         default: 'src/e2e/'
+      force_local_build:
+        description: 'Build the qcow2 locally even on a cache hit (ignore the cached image)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
-  packages: read
 
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
-  IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/haos-test-image
   LIBGUESTFS_BACKEND: direct
 
 jobs:
+  # Gate the heavy suite: run on any code/test/config/addon change, skip ONLY
+  # when every changed file is pure docs/website. Skipping happens at the JOB
+  # level (via `if:` below) so a skipped run reports Success to the required
+  # check; a workflow-level `paths:` skip would instead report nothing and
+  # wedge the merge. Add-on + bake-input dirs are baked into the qcow2, so
+  # their docs DO affect the suite and always count as code.
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Classify changed files
+        id: filter
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Fail-closed gate: default to RUNNING the suite; skip ONLY when we can
+          # prove the PR changed nothing but docs/website. Any classifier failure
+          # (non-PR event, base fetch / rev-parse / diff error, empty diff) leaves
+          # run=true — branch protection treats a skipped REQUIRED job as passing,
+          # so a fail-open classifier could let code merge untested.
+          run=true
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+            && git fetch --depth=1 origin "$BASE_REF" \
+            && base_sha=$(git rev-parse "origin/$BASE_REF") \
+            && changed=$(git diff --name-only --diff-filter=ACMRD "$base_sha" HEAD) \
+            && [ -n "$changed" ]; then
+            echo "Changed files:"; printf '%s\n' "$changed" | sed 's/^/  /'
+            run=false
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              case "$f" in
+                # Bake inputs / addon dirs are baked into the qcow2 / shipped —
+                # their docs change what the suite tests, so they count as code.
+                homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
+                  run=true; break ;;
+                # Pure docs / website do not, on their own, warrant the suite.
+                *.md|*.mdx|docs/*|site/*)
+                  continue ;;
+                # Anything else (code, tests, config, workflows, lockfile, ...) runs.
+                *)
+                  run=true; break ;;
+              esac
+            done <<< "$changed"
+          else
+            echo "Non-PR event or unresolved diff — running suite (fail-closed)."
+          fi
+          echo "run=$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   haos-e2e-inaddon:
     name: HAOS E2E Tests (inaddon)
+    needs: changes
+    # A skipped job reports Success to the required status check (unlike a
+    # workflow-level path-skip, which never reports). See the `changes` job.
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 45
 
@@ -64,20 +122,18 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: true
-          # Full history needed for the bake-changes detection step below
-          # (``git diff origin/<base>...HEAD``). Default depth=1 doesn't
-          # have the base ref locally.
+          # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
       - name: Compute image cache key
         id: key
-        # Shared with haos-e2e-tests.yml — both lanes consume the same
+        # Shared with haos-e2e-tests.yml: both lanes consume the same
         # qcow2. The bake (build_image.py::build) unconditionally calls
-        # stage_dev_addon_source + install_ha_mcp_dev_addon, so the
-        # GHCR-published image is already addon-baked and works for both
-        # tiers. Inaddon's refresh_dev_addon_source_in_qcow2 overwrites
-        # the addon source at test time, so PR-level addon changes
-        # don't need to invalidate the cache here.
+        # stage_dev_addon_source + install_ha_mcp_dev_addon, so the baked
+        # image is already addon-baked and works for both tiers. Inaddon's
+        # refresh_dev_addon_source_in_qcow2 overwrites the addon source at
+        # test time, so PR-level addon changes don't need to invalidate the
+        # cache here.
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
@@ -95,9 +151,9 @@ jobs:
           key: ${{ steps.key.outputs.cache-key }}
 
       - name: Report image-acquisition path
-        # Surfaces whether this run hit the (master-primed) Actions cache or
-        # falls through to the GHCR pull — so the cache-prime's effect is
-        # observable in the run summary. See build-haos-test-image.yml.
+        # Surfaces whether this run restored the (master-primed) Actions
+        # cache or falls through to a local build, so the cache-prime's
+        # effect is observable in the run summary.
         run: |
           echo "::notice title=HAOS image cache::cache-hit=${{ steps.restore-cache.outputs.cache-hit }} key=${{ steps.key.outputs.cache-key }}"
 
@@ -115,82 +171,14 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Detect PR-modified bake inputs
-        # Same logic as haos-e2e-tests.yml: PR branches that modify any
-        # bake input would otherwise see GHCR's stale master-baked image.
-        # The cache key already invalidates on these paths (see ``Compute
-        # image cache key`` above), but the GHCR fallback below would
-        # still hand back master's image. Detect the condition here and
-        # skip GHCR — fall straight through to the local-build step
-        # instead. Keep this list in sync with the cache key's
-        # ``git ls-tree`` paths.
-        id: bake-changes
-        if: github.event_name == 'pull_request'
-        run: |
-          if git diff --name-only \
-              "origin/${{ github.base_ref }}...HEAD" \
-              | grep -qE '^(tests/haos_image_build/|tests/initial_test_state/|custom_components/ha_mcp_tools/|homeassistant-addon-webhook-proxy/)'; then
-            echo "bake_inputs_changed=true" >> "$GITHUB_OUTPUT"
-            echo "PR modifies bake inputs; skipping GHCR fallback (would return stale master image)."
-          fi
-
-      - name: Try pulling from GHCR
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.bake-changes.outputs.bake_inputs_changed != 'true'
-        id: ghcr-pull
-        continue-on-error: true
-        run: |
-          version=$(python3 -c "from tests.haos_image_build.build_image import HAOS_VERSION; print(HAOS_VERSION)")
-          tag="${IMAGE_REPO}:${version}-latest"
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
-            -u ${{ github.actor }} --password-stdin
-          curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
-            | tar -xz -C /tmp oras
-          dest=/tmp/haos-pull
-          # Bail to the local build on a genuine hang — zero download progress
-          # for 4 minutes. A slow-but-moving pull (legit pulls have taken
-          # ~10 min) is never interrupted; only a dead-connection stall (the
-          # ~17 min zero-progress hang in #1515) is killed. We do NOT re-pull:
-          # the local-build fallback is only ~10 min (build_image.py), so on a
-          # stall deferring to it is cheaper and more reliable than gambling on
-          # a same-runner re-pull that may just stall again. The 45-min job cap
-          # stays the hard backstop.
-          stall_secs=240
-
-          pull_once() {
-            rm -rf "$dest"; mkdir -p "$dest"
-            # exec => $! is the oras PID, so the kill below reaches oras itself.
-            ( cd "$dest" && exec /tmp/oras pull "$tag" ) &
-            local pid=$! last=0 last_progress=$SECONDS size
-            while kill -0 "$pid" 2>/dev/null; do
-              sleep 30
-              size=$(du -sb "$dest" 2>/dev/null | cut -f1) || size=0
-              size=${size:-0}
-              if [ "$size" -gt "$last" ]; then
-                last=$size; last_progress=$SECONDS          # any growth resets the clock
-              elif [ $(( SECONDS - last_progress )) -ge "$stall_secs" ]; then
-                echo "::warning::oras pull made zero progress for ${stall_secs}s (stuck at ${size} bytes) — using local build"
-                kill "$pid" 2>/dev/null || true
-                wait "$pid" 2>/dev/null || true
-                return 1
-              fi
-            done
-            wait "$pid"                                       # propagate oras's own exit code
-          }
-
-          if ! pull_once; then
-            echo "::warning::GHCR pull stalled/failed — falling through to the local build"
-            exit 1
-          fi
-          # Explicit source path so a future oras layout change that drops
-          # files into a subdirectory of pwd doesn't silently no-op the mv.
-          mv "$dest"/haos-test-image.qcow2 /tmp/haos-test-image.qcow2
-
-      - name: Free disk space for local build (cache miss + GHCR miss only)
-        # See ``haos-e2e-tests.yml`` for the full rationale — same prune
-        # set, same condition. PRs touching ``tests/haos_image_build/``
-        # force the local-build path on both lanes and would otherwise
-        # trip "No space left on device" mid-bake on the 14 GB SSD.
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+      - name: Free disk space for the local build
+        # On a cache miss (or a forced rebuild) the qcow2 is built locally;
+        # its download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot +
+        # addon-install peaks at the edge of the runner's ~14 GB SSD, so
+        # prune the ~30 GB of preinstalled tooling the bake does not use.
+        # Keep /opt/hostedtoolcache: Python from there is on PATH for
+        # build_image.py. See haos-e2e-tests.yml for the full rationale.
+        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
@@ -199,12 +187,12 @@ jobs:
           docker system prune -af --volumes || true
           df -h /
 
-      - name: Install build-script Python deps (cache miss + GHCR miss)
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+      - name: Install build-script Python deps (cache miss or forced rebuild)
+        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: pip install -r tests/haos_image_build/requirements.txt
 
-      - name: Build image locally (cache miss + GHCR miss)
-        if: steps.restore-cache.outputs.cache-hit != 'true' && steps.ghcr-pull.outcome != 'success'
+      - name: Build image locally (cache miss or forced rebuild)
+        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
@@ -221,9 +209,9 @@ jobs:
       # shared key on the next run.
       #
       # The shared-key bet is safe because both lanes consume the SAME
-      # byte-identical qcow2: the cache key hashes the bake-input
-      # paths only, the qcow2 is built once at publish time and
-      # pulled identically by both lanes, and PR-level addon/source
+      # byte-identical qcow2: the cache key hashes the bake-input paths
+      # only, so a cache miss builds one qcow2 that the saving lane writes
+      # to the shared key for both to restore, and PR-level addon/source
       # overrides happen *in-VM at test time* (see
       # ``refresh_dev_addon_source_in_qcow2`` /
       # ``refresh_recorder_in_qcow2`` in conftest.py) on each
@@ -272,39 +260,66 @@ jobs:
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
           mkdir -p /tmp/haos-inaddon-diagnostics
-          # /supervisor/homeassistant/.storage state + log files (HA Core).
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : ll /supervisor/homeassistant \
-            > /tmp/haos-inaddon-diagnostics/config-dir-listing.txt 2>&1 \
-            || echo "directory listing failed"
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : tar-out /supervisor/homeassistant/.storage /tmp/haos-inaddon-diagnostics/storage.tar \
-            || echo ".storage tar-out failed"
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : glob copy-out '/supervisor/homeassistant/*.log*' /tmp/haos-inaddon-diagnostics/ \
-            || echo "log glob copy failed"
-          # Addon-specific: capture the dev addon's source dir AND its
-          # config.yaml version after refresh, so we can verify the PR
-          # source actually landed.
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : ll /supervisor/addons/local/ha_mcp_dev \
-            > /tmp/haos-inaddon-diagnostics/addon-dir-listing.txt 2>&1 \
-            || echo "addon dir listing failed"
-          guestfish --ro -a /tmp/haos-test-image.qcow2 run \
-            : mount /dev/sda8 / \
-            : copy-out /supervisor/addons/local/ha_mcp_dev/config.yaml /tmp/haos-inaddon-diagnostics/ \
-            || echo "addon config.yaml copy-out failed"
-          ls -la /tmp/haos-inaddon-diagnostics/ || true
-          echo '--- config dir listing ---'
-          cat /tmp/haos-inaddon-diagnostics/config-dir-listing.txt || true
-          echo '--- addon dir listing ---'
-          cat /tmp/haos-inaddon-diagnostics/addon-dir-listing.txt || true
-          echo '--- addon config.yaml ---'
-          cat /tmp/haos-inaddon-diagnostics/config.yaml || true
+          # In pytest-xdist (parallel) mode each worker boots its OWN
+          # backing-file overlay (haos-test-image-<worker>.qcow2); the base
+          # /tmp/haos-test-image.qcow2 is never booted, so the per-PR source
+          # refresh and the HA Core runtime state live on the OVERLAYS, not
+          # the base. The overlays persist after the session (the worker
+          # fixture registers no teardown unlink), and guestfish reads them
+          # through their absolute backing path. Probe every overlay; fall
+          # back to the base image only for a single-worker (master) run that
+          # mutates it directly. #1594 secondary defect: the old step probed
+          # only the un-refreshed base, so the addon-dir / config.yaml checks
+          # could never observe the refresh result they claimed to verify.
+          shopt -s nullglob
+          targets=(/tmp/haos-test-image-gw*.qcow2)
+          if [ ${#targets[@]} -eq 0 ]; then
+            targets=(/tmp/haos-test-image.qcow2)
+          fi
+          for img in "${targets[@]}"; do
+            label=$(basename "$img" .qcow2)
+            outdir=/tmp/haos-inaddon-diagnostics/$label
+            mkdir -p "$outdir"
+            echo "=== extracting diagnostics from $img ==="
+            # /supervisor/homeassistant/.storage state + log files (HA Core).
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : ll /supervisor/homeassistant \
+              > "$outdir/config-dir-listing.txt" 2>&1 \
+              || echo "directory listing failed for $img"
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : tar-out /supervisor/homeassistant/.storage "$outdir/storage.tar" \
+              || echo ".storage tar-out failed for $img"
+            guestfish --ro -a "$img" run \
+              : mount /dev/sda8 / \
+              : glob copy-out '/supervisor/homeassistant/*.log*' "$outdir/" \
+              || echo "log glob copy failed for $img"
+            # Addon-specific: capture the dev addon's source dir AND its
+            # config.yaml version after refresh, so we can verify the PR source
+            # actually landed on the booted overlay. Supervisor 2026.06.0
+            # (home-assistant/supervisor#6865) renamed the on-disk local store
+            # (addons/local -> apps/local, migrated on boot), so probe BOTH roots;
+            # the live one lands, the other no-ops under the || echo guard.
+            for store in apps addons; do
+              guestfish --ro -a "$img" run \
+                : mount /dev/sda8 / \
+                : ll "/supervisor/$store/local/ha_mcp_dev" \
+                >> "$outdir/addon-dir-listing.txt" 2>&1 \
+                || echo "addon dir listing failed for $img ($store/local)"
+              guestfish --ro -a "$img" run \
+                : mount /dev/sda8 / \
+                : copy-out "/supervisor/$store/local/ha_mcp_dev/config.yaml" "$outdir/" \
+                || echo "addon config.yaml copy-out failed for $img ($store/local)"
+            done
+            echo "--- [$label] config dir listing ---"
+            cat "$outdir/config-dir-listing.txt" || true
+            echo "--- [$label] addon dir listing ---"
+            cat "$outdir/addon-dir-listing.txt" || true
+            echo "--- [$label] addon config.yaml ---"
+            cat "$outdir/config.yaml" || true
+          done
+          ls -laR /tmp/haos-inaddon-diagnostics/ || true
 
       - name: Upload HAOS inaddon diagnostics
         if: always()

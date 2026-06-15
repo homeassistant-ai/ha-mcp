@@ -10,7 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.backup import _get_local_backup_agent_id, restore_backup
+from ha_mcp.tools.backup import (
+    _get_local_backup_agent_id,
+    _summarize_backup,
+    list_backups,
+    restore_backup,
+)
 
 
 def _ws_client(agents_payload: dict) -> AsyncMock:
@@ -185,3 +190,159 @@ class TestRestoreBackupWarnings:
         assert any("Connection will be temporarily lost" in w for w in warnings), (
             f"Expected connection-lost warning content; got: {warnings!r}"
         )
+
+
+class TestSummarizeBackup:
+    """_summarize_backup projects a backup/info entry to caller-facing fields (#1586)."""
+
+    def test_projects_core_fields_and_largest_agent_size(self):
+        entry = {
+            "backup_id": "abc",
+            "name": "Nightly",
+            "date": "2026-06-14T02:00:00+00:00",
+            "protected": True,
+            "database_included": False,
+            "homeassistant_included": True,
+            "homeassistant_version": "2026.6.0",
+            "with_automatic_settings": True,
+            "agents": {
+                "backup.local": {"size": 100},
+                "google_drive.cloud": {"size": 250},
+            },
+        }
+        out = _summarize_backup(entry)
+        assert out["backup_id"] == "abc"
+        assert out["name"] == "Nightly"
+        assert out["date"] == "2026-06-14T02:00:00+00:00"
+        # Size is per-agent; surface the largest reported size across agents
+        # (here the cloud agent's 250, not the local 100).
+        assert out["size_bytes"] == 250
+        assert out["protected"] is True
+        assert set(out["agent_ids"]) == {"backup.local", "google_drive.cloud"}
+
+    def test_missing_fields_become_none(self):
+        out = _summarize_backup({})
+        assert out["backup_id"] is None
+        assert out["size_bytes"] is None
+        assert out["agent_ids"] == []
+
+    def test_non_int_sizes_ignored(self):
+        out = _summarize_backup({"agents": {"a": {"size": None}, "b": {}}})
+        assert out["size_bytes"] is None
+
+    def test_float_size_coerced_to_int(self):
+        out = _summarize_backup({"agents": {"a": {"size": 123.0}}})
+        assert out["size_bytes"] == 123
+
+    def test_non_dict_agents_handled(self):
+        # HA WS payloads aren't schema-guaranteed; a non-dict ``agents`` must
+        # not raise — size unknown, no agent ids.
+        out = _summarize_backup({"agents": ["unexpected"]})
+        assert out["size_bytes"] is None
+        assert out["agent_ids"] == []
+
+
+class TestListBackups:
+    """list_backups surfaces HA's backup/info inventory, newest first (#1586)."""
+
+    @staticmethod
+    def _client() -> MagicMock:
+        client = MagicMock()
+        client.base_url = "http://test"
+        client.token = "token"
+        client.verify_ssl = False
+        return client
+
+    @pytest.mark.asyncio
+    async def test_lists_backups_newest_first(self):
+        ws = AsyncMock()
+        ws.send_command.return_value = {
+            "success": True,
+            "result": {
+                "backups": [
+                    {
+                        "backup_id": "old",
+                        "name": "Old",
+                        "date": "2026-06-01T00:00:00+00:00",
+                        "agents": {"backup.local": {"size": 10}},
+                    },
+                    {
+                        "backup_id": "new",
+                        "name": "New",
+                        "date": "2026-06-10T00:00:00+00:00",
+                        "agents": {"backup.local": {"size": 20}},
+                    },
+                ]
+            },
+        }
+        with patch(
+            "ha_mcp.tools.backup.get_connected_ws_client",
+            new=AsyncMock(return_value=(ws, None)),
+        ):
+            result = await list_backups(self._client())
+
+        assert result["success"] is True
+        assert result["count"] == 2
+        assert result["total"] == 2
+        assert [b["backup_id"] for b in result["backups"]] == ["new", "old"]
+        ws.send_command.assert_awaited_with("backup/info")
+
+    @pytest.mark.asyncio
+    async def test_limit_truncates_but_reports_total(self):
+        ws = AsyncMock()
+        ws.send_command.return_value = {
+            "success": True,
+            "result": {
+                "backups": [
+                    {
+                        "backup_id": f"b{i}",
+                        "date": f"2026-06-{i + 1:02d}T00:00:00+00:00",
+                    }
+                    for i in range(5)
+                ]
+            },
+        }
+        with patch(
+            "ha_mcp.tools.backup.get_connected_ws_client",
+            new=AsyncMock(return_value=(ws, None)),
+        ):
+            result = await list_backups(self._client(), limit=2)
+
+        assert result["count"] == 2
+        assert result["total"] == 5
+
+    @pytest.mark.asyncio
+    async def test_backup_info_failure_raises(self):
+        ws = AsyncMock()
+        ws.send_command.return_value = {"success": False, "error": "nope"}
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            pytest.raises(ToolError),
+        ):
+            await list_backups(self._client())
+
+    @pytest.mark.asyncio
+    async def test_undated_entry_sinks_last(self):
+        # An entry with a missing/unparseable date must not crash the sort
+        # (datetime vs None) — it sinks below dated entries via the floor.
+        ws = AsyncMock()
+        ws.send_command.return_value = {
+            "success": True,
+            "result": {
+                "backups": [
+                    {"backup_id": "undated"},
+                    {"backup_id": "dated", "date": "2026-06-10T00:00:00+00:00"},
+                ]
+            },
+        }
+        with patch(
+            "ha_mcp.tools.backup.get_connected_ws_client",
+            new=AsyncMock(return_value=(ws, None)),
+        ):
+            result = await list_backups(self._client())
+
+        assert result["success"] is True
+        assert [b["backup_id"] for b in result["backups"]] == ["dated", "undated"]

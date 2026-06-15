@@ -445,6 +445,66 @@ class TestFaviconSuppression:
         assert '<link rel="icon" href="data:,">' in _SETTINGS_HTML
 
 
+class TestAccessibilityMarkup:
+    """#1596: the settings page exposes a skip link, a <main> landmark, an
+    ARIA tablist, and live status regions. These lock the static markup so a
+    later edit can't silently drop the accessibility affordances.
+    """
+
+    _PANELS = ("tools", "server", "backups", "tool-security-policies", "accessibility")
+
+    def test_skip_link_and_main_landmark(self) -> None:
+        import re
+
+        # Quote- and attribute-order-agnostic so adding tabindex/style or a
+        # formatter swapping quotes doesn't silently break the guard.
+        assert re.search(r"""<a\s+[^>]*href=["']#main-content["']""", _SETTINGS_HTML)
+        assert (
+            len(
+                re.findall(
+                    r"""<main\s+[^>]*id=["']main-content["'][^>]*>""", _SETTINGS_HTML
+                )
+            )
+            == 1
+        )
+        assert _SETTINGS_HTML.count("</main>") == 1
+
+    def test_tablist_and_tabpanel_roles(self) -> None:
+        assert 'role="tablist"' in _SETTINGS_HTML
+        assert _SETTINGS_HTML.count('role="tab"') == len(self._PANELS)
+        assert _SETTINGS_HTML.count('role="tabpanel"') == len(self._PANELS)
+        # Exactly one tab is selected on initial render.
+        assert _SETTINGS_HTML.count('aria-selected="true"') == 1
+        for name in self._PANELS:
+            assert f'id="tab-{name}"' in _SETTINGS_HTML
+            assert f'aria-controls="panel-{name}"' in _SETTINGS_HTML
+            assert f'aria-labelledby="tab-{name}"' in _SETTINGS_HTML
+
+    def test_status_regions_are_live(self) -> None:
+        for span_id in (
+            "status",
+            "advSaveStatusTop",
+            "advSaveStatus",
+            "backupConfigStatus",
+            "policy-global-save-status",
+        ):
+            idx = _SETTINGS_HTML.find(f'id="{span_id}"')
+            assert idx != -1, f"status span {span_id} missing"
+            tag = _SETTINGS_HTML[idx : idx + 140]
+            assert 'role="status"' in tag, f"{span_id} not role=status"
+            assert 'aria-live="polite"' in tag, f"{span_id} not aria-live"
+
+    def test_tab_js_keeps_aria_state_in_sync(self) -> None:
+        # activateTab() mirrors selection to aria-selected + roving tabindex,
+        # and the tablist supports arrow-key navigation (WAI-ARIA APG).
+        assert "aria-selected" in _SETTINGS_JS
+        assert "tabIndex" in _SETTINGS_JS
+        assert "ArrowRight" in _SETTINGS_JS
+        assert "ArrowLeft" in _SETTINGS_JS
+        # failure status flips to role=alert for assertive announcement
+        assert "setStatusAlert" in _SETTINGS_JS
+
+
 class TestSettingsJsExtraction:
     """The client JS lives in settings.js (extracted from the Python string)
     but is injected inline into the served HTML. These guards lock the file

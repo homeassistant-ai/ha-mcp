@@ -18,6 +18,7 @@ from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.fuzzy_search import apply_hidden_penalty
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error
 from .util_helpers import (
+    JSON_STRING_COERCION,
     add_timezone_metadata,
     build_pagination_metadata,
     filter_active_repairs,
@@ -581,6 +582,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         search_types: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -672,6 +674,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         result_fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -682,6 +685,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -1810,6 +1814,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = "minimal",
         domains: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -1878,6 +1883,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = False,
         fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -2326,6 +2332,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     async def ha_get_state(
         entity_id: Annotated[
             str | list[str],
+            JSON_STRING_COERCION,
             Field(
                 description="Entity ID or list of entity IDs to retrieve state for "
                 "(e.g., 'light.kitchen' or ['light.kitchen', 'sensor.temperature'])"
@@ -2333,6 +2340,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ],
         fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -2346,6 +2354,7 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         attribute_keys: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(

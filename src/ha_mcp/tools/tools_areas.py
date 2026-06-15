@@ -23,6 +23,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     parse_string_list_param,
     project_fields,
     project_records,
@@ -148,6 +149,7 @@ class AreaTools:
         self,
         fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -162,6 +164,7 @@ class AreaTools:
         ] = None,
         area_fields: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 default=None,
                 description=(
@@ -446,6 +449,7 @@ class AreaTools:
         ] = None,
         aliases: Annotated[
             str | list[str] | None,
+            JSON_STRING_COERCION,
             Field(
                 description="Alternative names for voice assistant recognition (e.g., ['lounge'], empty list to clear)",
                 default=None,

@@ -33,10 +33,9 @@ from ..tools.helpers import raise_tool_error
 logger = logging.getLogger(__name__)
 
 ENGINE_PORT = 10000
-# The Supervisor slug is ``<repo-hash>_puppet`` for balloob's Puppet add-on;
-# ``_ha_mcp_screenshot`` is the legacy vendored engine, still accepted so a
-# mid-migration install keeps working. ``str.endswith`` takes this tuple.
-ENGINE_SLUG_SUFFIXES = ("_puppet", "_ha_mcp_screenshot")
+# The Supervisor slug is ``<repo-hash>_puppet`` for balloob's Puppet add-on.
+# ``str.endswith`` accepts a tuple, kept as one for easy future extension.
+ENGINE_SLUG_SUFFIXES = ("_puppet",)
 
 _REPO_URL = "https://github.com/balloob/home-assistant-addons"
 

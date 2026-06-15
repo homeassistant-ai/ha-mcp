@@ -204,11 +204,25 @@ class CalendarTools:
         location: Annotated[
             str | None, Field(description="Optional event location", default=None)
         ] = None,
+        rrule: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional RFC 5545 recurrence rule, without 'RRULE:' prefix "
+                    "(e.g., 'FREQ=WEEKLY;BYDAY=MO' or 'FREQ=MONTHLY;BYDAY=3SA'). "
+                    "Creates a recurring event series."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Create a new event in a calendar.
 
-        Creates a calendar event using the calendar.create_event service.
+        Creates a one-off event via the calendar.create_event service, or a
+        recurring series via the WebSocket ``calendar/event/create`` command
+        when ``rrule`` is provided (the REST service schema does not accept
+        recurrence rules).
 
         **Parameters:**
         - entity_id: Calendar entity ID (e.g., 'calendar.family')
@@ -217,6 +231,7 @@ class CalendarTools:
         - end: Event end datetime in ISO format
         - description: Optional event description
         - location: Optional event location
+        - rrule: Optional RFC 5545 recurrence rule (creates a recurring series)
 
         **Example Usage:**
         ```python
@@ -228,16 +243,20 @@ class CalendarTools:
             end="2024-01-15T15:00:00"
         )
 
-        # Create an event with details
+        # Create a recurring event (every Monday, 10 occurrences)
         result = ha_config_set_calendar_event(
             "calendar.work",
             summary="Team meeting",
-            start="2024-01-16T10:00:00",
-            end="2024-01-16T11:00:00",
-            description="Weekly sync meeting",
-            location="Conference Room A"
+            start="2024-01-15T10:00:00",
+            end="2024-01-15T11:00:00",
+            rrule="FREQ=WEEKLY;BYDAY=MO;COUNT=10"
         )
         ```
+
+        **Note:**
+        Not every calendar integration supports event creation; recurring
+        events additionally require the integration to support recurrence
+        (the built-in Local Calendar does).
 
         **Returns:**
         - Success status and event details
@@ -257,23 +276,71 @@ class CalendarTools:
                     )
                 )
 
-            # Build service data
-            service_data: dict[str, Any] = {
-                "entity_id": entity_id,
-                "summary": summary,
-                "start_date_time": start,
-                "end_date_time": end,
-            }
+            if rrule:
+                # The ``calendar.create_event`` service schema has no rrule
+                # field — recurrence is only accepted by the WebSocket
+                # command ``calendar/event/create`` (see HA Core
+                # ``homeassistant/components/calendar/__init__.py``), the
+                # same split that forces the delete tool below onto the
+                # WebSocket API.
+                event: dict[str, Any] = {
+                    "summary": summary,
+                    "dtstart": start,
+                    "dtend": end,
+                    "rrule": rrule,
+                }
+                if description:
+                    event["description"] = description
+                if location:
+                    event["location"] = location
 
-            if description:
-                service_data["description"] = description
-            if location:
-                service_data["location"] = location
+                ws_client, conn_error = await get_connected_ws_client(
+                    self._client.base_url,
+                    self._client.token,
+                    verify_ssl=self._client.verify_ssl,
+                )
+                if conn_error or ws_client is None:
+                    raise_tool_error(
+                        conn_error
+                        or create_error_response(
+                            ErrorCode.CONNECTION_FAILED,
+                            "Failed to connect to Home Assistant WebSocket",
+                            context={"entity_id": entity_id},
+                        )
+                    )
 
-            # Call the calendar.create_event service
-            result = await self._client.call_service(
-                "calendar", "create_event", service_data
-            )
+                try:
+                    result = await ws_client.send_command(
+                        "calendar/event/create", entity_id=entity_id, event=event
+                    )
+                finally:
+                    # Guard disconnect: a transport-teardown error here would
+                    # otherwise replace the original send_command exception.
+                    try:
+                        await ws_client.disconnect()
+                    except Exception as disconnect_error:
+                        logger.debug(
+                            f"WebSocket disconnect after create_event for "
+                            f"{entity_id}: {disconnect_error}"
+                        )
+            else:
+                # Build service data
+                service_data: dict[str, Any] = {
+                    "entity_id": entity_id,
+                    "summary": summary,
+                    "start_date_time": start,
+                    "end_date_time": end,
+                }
+
+                if description:
+                    service_data["description"] = description
+                if location:
+                    service_data["location"] = location
+
+                # Call the calendar.create_event service
+                result = await self._client.call_service(
+                    "calendar", "create_event", service_data
+                )
 
             return {
                 "success": True,
@@ -284,6 +351,7 @@ class CalendarTools:
                     "end": end,
                     "description": description,
                     "location": location,
+                    "rrule": rrule,
                 },
                 "result": result,
                 "message": f"Successfully created event '{summary}' in {entity_id}",
@@ -300,6 +368,13 @@ class CalendarTools:
                 "Ensure end time is after start time",
                 "Some calendar integrations may be read-only",
             ]
+            if rrule:
+                suggestions.insert(
+                    0,
+                    "Check RRULE syntax (RFC 5545, without the 'RRULE:' prefix, "
+                    "e.g. 'FREQ=WEEKLY;BYDAY=MO') and that this calendar "
+                    "integration supports recurring events",
+                )
 
             error_str = str(error)
             if "404" in error_str or "not found" in error_str.lower():

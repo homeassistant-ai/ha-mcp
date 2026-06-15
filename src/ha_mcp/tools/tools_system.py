@@ -25,6 +25,7 @@ from .helpers import (
     register_tool_methods,
 )
 from .util_helpers import (
+    JSON_STRING_COERCION,
     fetch_integration_diagnostics,
     filter_active_repairs,
     parse_diagnostics_fields,
@@ -32,6 +33,43 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _reraise_if_fatal(exc: BaseException) -> None:
+    """Re-raise exceptions that must unwind rather than be demoted to an
+    embedded section error:
+
+    - ``CancelledError`` / ``KeyboardInterrupt`` / ``SystemExit`` (all
+      ``BaseException`` but not ``Exception``) — task cancellation and
+      interpreter exit.
+    - ``ToolError`` — carries the MCP ``isError`` contract.
+    - ``HomeAssistantConnectionError`` — once the HA transport is dead the
+      remaining section fetches will fail anyway, so propagate the root
+      cause as ``isError=true`` rather than embed N per-section connection
+      errors. The codebase's ``rest_client._request`` already wraps
+      ``OSError`` / timeout / transport failures into this class, so it is
+      the single fatal class to gate on.
+
+    This implements the cross-section policy proposed in #1624: a dead
+    connection fails loud rather than degrade per-section. Every section
+    helper in ``ha_get_system_health`` routes its ``except Exception`` block
+    through this gate as its first line, so the policy is consistent across
+    the ws ``sections`` gather pre-pass and every inline section. Recoverable
+    ``Exception``-level failures still fall through to the caller's
+    embed-as-error handling.
+    """
+    # Local import: ``rest_client`` imports from tool helpers transitively,
+    # so a module-level import here would risk a circular import in the
+    # tools package.
+    from ..client.rest_client import HomeAssistantConnectionError
+
+    if (
+        isinstance(exc, ToolError)
+        or not isinstance(exc, Exception)
+        or isinstance(exc, HomeAssistantConnectionError)
+    ):
+        raise exc
+
 
 # Mapping of reload targets to their service domains and services
 RELOAD_TARGETS = {
@@ -323,7 +361,9 @@ class SystemTools:
         include_dismissed_repairs: bool | None = False,
         config_entry_id: str | None = None,
         device_id: str | None = None,
-        diagnostics_fields: list[str] | str | None = None,
+        diagnostics_fields: Annotated[
+            list[str] | str | None, JSON_STRING_COERCION
+        ] = None,
         diagnostics_truncate_at_bytes: Annotated[int, Field(ge=1)] | None = None,
         diagnostics_data_path: str | None = None,
         diagnostics_data_offset: Annotated[int, Field(ge=0)] | None = 0,
@@ -354,6 +394,15 @@ class SystemTools:
           - "config_check": Validate HA configuration via POST /config/core/check_config
             (the pre-restart safety check; ha_restart runs it automatically). Returns
             {result: valid|invalid, is_valid, errors}; read-only/idempotent, takes no args.
+          - "dead_entities": Surface orphaned/stale entity-registry entries by diffing
+            the registry against the state machine and the live config-entries set.
+            Returns confidence-tiered buckets — ``config_entry_orphans`` (owning
+            integration instance gone; definitively dead) and ``stale_restored`` (HA
+            restored the entity from the registry on startup but the loaded integration
+            no longer provides it). Each item carries entity_id + platform so a client
+            can propose cleanup with ha_remove_entity. Deliberately excludes
+            ``unknown``-state entities and merely-offline devices to keep false positives
+            low. Read-only; takes no args.
           - Example: include="repairs,zha_network,zwave_network,config_check"
           - Example: include="diagnostics", config_entry_id="abc123..."
         - include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when "repairs" is in `include`.
@@ -416,16 +465,19 @@ class SystemTools:
                 # catch cannot swallow an unrelated ToolError.
                 #
                 # Degrade gracefully ONLY when the caller asked for a REST-based
-                # section (config_check / diagnostics) that can still be served
-                # without the WebSocket. config_check is the pure-REST
-                # replacement for the removed ha_check_config tool, so it must
-                # not depend on the health WebSocket (the system_health/info
-                # command carries its own 10s timeout and can hang/be absent on
-                # some installs). If the caller asked for nothing (the health
-                # baseline itself) or only WS-backed sections, the baseline WAS
-                # the deliverable: re-raise so the failure surfaces as
-                # isError=true, exactly as before this change.
-                if not (includes & {"config_check", "diagnostics"}):
+                # section (config_check / diagnostics / dead_entities) that can
+                # still be served without the WebSocket. config_check is the
+                # pure-REST replacement for the removed ha_check_config tool, so
+                # it must not depend on the health WebSocket (the
+                # system_health/info command carries its own 10s timeout and can
+                # hang/be absent on some installs). dead_entities uses the REST
+                # client's own per-client WebSocket bridge for the registry +
+                # config-entries (not this health ws_client), so it is likewise
+                # independent of the baseline. If the caller asked for nothing
+                # (the health baseline itself) or only WS-backed sections, the
+                # baseline WAS the deliverable: re-raise so the failure surfaces
+                # as isError=true, exactly as before this change.
+                if not (includes & {"config_check", "diagnostics", "dead_entities"}):
                     raise
                 logger.warning("system_health baseline unavailable: %s", health_err)
                 ws_client = None
@@ -450,6 +502,7 @@ class SystemTools:
                 "diagnostics",
                 "config_check",
                 "themes",
+                "dead_entities",
             }
             unknown = includes - VALID_INCLUDES
             if unknown:
@@ -528,17 +581,13 @@ class SystemTools:
                 # inside a helper would otherwise be silently demoted to
                 # ``{"error": "ToolError: …"}`` and break the MCP
                 # ``isError=true`` contract for the whole tool.
+                # ``_reraise_if_fatal`` encapsulates the policy (cancellation,
+                # interpreter-exit, ``ToolError``, and the codebase's transport
+                # ``HomeAssistantConnectionError``) — the single source of
+                # truth shared with each section helper's ``except`` chain.
                 for section_result in gathered:
-                    if isinstance(section_result, asyncio.CancelledError):
-                        raise section_result
-                    if isinstance(section_result, ToolError):
-                        raise section_result
-                    if isinstance(section_result, BaseException) and not isinstance(
-                        section_result, Exception
-                    ):
-                        # ``KeyboardInterrupt`` / ``SystemExit`` — never demote
-                        # these to a section-level error string.
-                        raise section_result
+                    if isinstance(section_result, BaseException):
+                        _reraise_if_fatal(section_result)
                 for (section_name, _), section_result in zip(
                     sections, gathered, strict=True
                 ):
@@ -634,6 +683,22 @@ class SystemTools:
                 # ``if`` (not chained to diagnostics) so both can be requested
                 # in one call.
                 result["config_check"] = await self._fetch_config_check()
+
+            if "dead_entities" in includes:
+                # REST + the REST client's own per-client WebSocket bridge
+                # (states via /api/states, registry + config-entries via the
+                # bridge), not the health ws_client — so it runs inline like
+                # config_check and survives a baseline-WS-down install.
+                dead_section = await self._fetch_dead_entities()
+                # Pop the ``_warnings`` sentinel and bubble it to the top-level
+                # ``result["warnings"]`` (the documented contract location).
+                # The section helper uses this sentinel so its return signature
+                # stays uniform with every other section (a plain dict) while
+                # avoiding a collision with the reserved ``warnings`` term.
+                section_warnings = dead_section.pop("_warnings", None)
+                if section_warnings:
+                    result.setdefault("warnings", []).extend(section_warnings)
+                result["dead_entities"] = dead_section
 
             return result
 
@@ -762,6 +827,7 @@ class SystemTools:
                 )
                 repairs["error"] = f"Repairs data not available: {err_msg}"
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to fetch repairs: %s", e)
             repairs["error"] = f"Repairs data not available: {e}"
         return repairs
@@ -807,6 +873,7 @@ class SystemTools:
                         "Use ha_get_device(integration='zha') for full device list."
                     )
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to fetch ZHA network data: %s", e)
             zha_network["error"] = f"ZHA integration not available or error: {e}"
         return zha_network
@@ -822,8 +889,11 @@ class SystemTools:
             "total_count": 0,
         }
         try:
-            # Get all zwave_js config entries to find entry_id
-            entries_result = await ws_client.send_command("config/entries/get")
+            # Get all zwave_js config entries to find entry_id. The HA command
+            # is ``config_entries/get`` (underscore); the slash form is rejected
+            # as "Unknown command", which the outer except would mask as
+            # "Z-Wave JS integration not available".
+            entries_result = await ws_client.send_command("config_entries/get")
             zwave_entry_id = None
             if entries_result.get("success"):
                 for entry in entries_result.get("result", []):
@@ -867,6 +937,7 @@ class SystemTools:
                         "Use ha_get_device(integration='zwave_js') for full device list."
                     )
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to fetch Z-Wave network data: %s", e)
             zwave_network["error"] = (
                 f"Z-Wave JS integration not available or error: {e}"
@@ -901,9 +972,282 @@ class SystemTools:
                 )
                 themes_data["error"] = f"Themes data not available: {err_msg}"
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to fetch themes: %s", e)
             themes_data["error"] = f"Themes data not available: {e}"
         return themes_data
+
+    @staticmethod
+    def _ws_result_list(
+        resp: Any,
+    ) -> tuple[list[dict[str, Any]] | None, str | None]:
+        """Unwrap a ``send_websocket_message`` response into ``(list, None)``
+        on success or ``(None, error_str)`` on failure.
+
+        ``send_websocket_message`` returns the HA WebSocket envelope
+        (``{"success": bool, "result": [...]}``) on success and
+        ``{"success": False, "error": ...}`` on failure; ``return_exceptions``
+        in the caller's ``gather`` can also hand back a raw exception.
+        Preserves the underlying cause string (envelope error message,
+        exception type, or wrong-shape description) so the caller can
+        attribute the failure rather than substitute a fixed "unavailable"
+        message that hides the root cause (auth vs command error vs
+        malformed envelope). Fatal exceptions (per ``_reraise_if_fatal``)
+        unwind instead of being returned as an error string.
+        """
+        if isinstance(resp, BaseException):
+            # gather(return_exceptions=True) hands back the raw exception; let
+            # truly-fatal ones unwind instead of masking them as "unavailable".
+            _reraise_if_fatal(resp)
+            return None, f"{type(resp).__name__}: {resp}"
+        if not isinstance(resp, dict):
+            return None, f"unexpected response type: {type(resp).__name__}"
+        # Require success truthy before trusting ``result`` — matches the
+        # ``if result.get("success")`` convention used by the other WS handlers
+        # in this file (and treats a malformed envelope missing the key as a
+        # failure rather than reading a half-built result).
+        if not resp.get("success"):
+            err = resp.get("error")
+            if isinstance(err, dict):
+                err_msg = err.get("message") or err.get("code") or str(err)
+            elif err:
+                err_msg = str(err)
+            else:
+                err_msg = "unknown error"
+            return None, str(err_msg)
+        result = resp.get("result")
+        if isinstance(result, list):
+            return result, None
+        return None, f"unexpected result shape: {type(result).__name__}"
+
+    async def _fetch_dead_entities(self) -> dict[str, Any]:
+        """Surface orphaned/stale entity-registry entries.
+
+        Diffs the entity registry against the state machine and the live
+        config-entries set, classifying findings into confidence tiers:
+
+        - ``config_entry_orphans`` (definitive): registry entries whose
+          ``config_entry_id`` is no longer present in ``config_entries/get`` —
+          the owning integration instance was removed, leaving the registry
+          entry behind.
+        - ``stale_restored`` (likely): entries HA recreated from the registry on
+          startup — state ``unavailable`` with ``restored: true`` — whose owning
+          config entry still exists. The integration is loaded but no longer
+          provides the entity (renamed/removed device, re-paired Zigbee).
+
+        Deliberately NEVER flagged, to keep false positives low: ``unknown``
+        state (alive, just no current value — e.g. weather/disaster-alert
+        sensors), bare ``unavailable`` without ``restored`` (a loaded
+        integration reporting a device merely offline right now), and entries
+        disabled via ``disabled_by`` (intentional, unless their config entry is
+        also gone — those still surface as orphans). The ``restored`` flag is
+        what HA sets when it rebuilds a state object from the registry's cached
+        last state because no live platform currently provides the entity; it is
+        the discriminator between "dead" and "temporarily offline". (This tracks
+        HA Core's state-restoration behaviour; re-verify if classification drifts
+        after an HA upgrade.)
+
+        Entities can appear under ``stale_restored`` transiently right after a
+        restart, before integrations finish loading; ``note`` flags this.
+
+        Instance method (not @staticmethod): uses the REST client
+        (``self._client``) for states plus its per-client WebSocket bridge for
+        the registry + config entries, so it needs no system_health ws_client
+        and runs even when the health baseline is unavailable.
+        """
+        DEAD_ENTITIES_LIMIT = 50
+        dead: dict[str, Any] = {
+            "config_entry_orphans": {"items": [], "count": 0, "total_count": 0},
+            "stale_restored": {"items": [], "count": 0, "total_count": 0},
+            "summary": {"candidate_total": 0, "registry_total": 0},
+        }
+        # Warnings collected here are bubbled to the top-level
+        # ``result["warnings"]`` by the aggregator. The section returns a
+        # plain dict (like every other section helper, keeping the return
+        # signature uniform) with a ``_warnings`` sentinel that
+        # ``ha_get_system_health`` pops and extends onto ``result["warnings"]``
+        # — the documented contract location, which a section-local
+        # ``warnings`` key would collide with.
+        bubble_warnings: list[str] = []
+        try:
+            # Index the gather result (rather than tuple-unpack) so mypy can
+            # type each element through the return_exceptions=True overload;
+            # mirrors smart_search/_entities.py::_fetch_search_entities.
+            results = await asyncio.gather(
+                self._client.get_states(),
+                self._client.send_websocket_message(
+                    {"type": "config/entity_registry/list"}
+                ),
+                self._client.send_websocket_message({"type": "config_entries/get"}),
+                return_exceptions=True,
+            )
+            states = results[0]
+
+            if isinstance(states, BaseException):
+                # Truly-fatal errors must propagate, not demote to a section
+                # error string (mirrors the ws sections gather pre-pass).
+                _reraise_if_fatal(states)
+                dead["error"] = f"Could not fetch entity states: {states}"
+                return dead
+            if not isinstance(states, list):
+                dead["error"] = (
+                    "Could not fetch entity states: expected list, got "
+                    f"{type(states).__name__}"
+                )
+                return dead
+            registry, registry_err = self._ws_result_list(results[1])
+            if registry is None:
+                # Preserve the underlying cause (envelope error message,
+                # exception type, or wrong-shape description) so the client
+                # can distinguish auth vs command vs malformed envelope
+                # rather than see a fixed "unavailable" substitute.
+                dead["error"] = (
+                    f"Could not fetch entity registry "
+                    f"(config/entity_registry/list: {registry_err})"
+                )
+                return dead
+
+            # config-entries is the only optional source: without it the
+            # definitive orphan tier can't be computed, but stale_restored still
+            # can — so degrade rather than fail the whole section.
+            entries, entries_err = self._ws_result_list(results[2])
+            live_entry_ids: set[str] | None = None
+            if entries is None:
+                # Genuine fetch failure — preserve the cause so a backend
+                # failure isn't reported as "no entries".
+                dead["config_entries_checked"] = False
+                bubble_warnings.append(
+                    f"config_entries/get failed ({entries_err}); "
+                    "config_entry_orphans tier skipped (cannot distinguish a "
+                    "removed integration from a failed fetch). stale_restored "
+                    "still computed."
+                )
+            elif not entries:
+                # Real empty list — HA reports no config entries configured.
+                # Distinct from a fetch failure: the message names the actual
+                # state. The orphan tier still skips since there is no live
+                # set to diff against; stale_restored still computed.
+                dead["config_entries_checked"] = False
+                bubble_warnings.append(
+                    "config_entries/get returned an empty list (no "
+                    "integrations configured); config_entry_orphans tier "
+                    "skipped. stale_restored still computed."
+                )
+            else:
+                live_entry_ids = {
+                    e["entry_id"]
+                    for e in entries
+                    if isinstance(e, dict) and e.get("entry_id")
+                }
+                dead["config_entries_checked"] = True
+
+            state_by_id = {
+                s["entity_id"]: s
+                for s in states
+                if isinstance(s, dict) and s.get("entity_id")
+            }
+
+            orphans: list[dict[str, Any]] = []
+            stale: list[dict[str, Any]] = []
+            for entry in registry:
+                if not isinstance(entry, dict):
+                    continue
+                eid = entry.get("entity_id")
+                if not eid:
+                    continue
+                cfg = entry.get("config_entry_id")
+                disabled_by = entry.get("disabled_by")
+
+                # Tier 1 — config-entry orphan (only when the live set loaded).
+                # Covers disabled leftovers too: a disabled entity whose config
+                # entry is gone is still dead cruft (disabled_by is surfaced on
+                # the item so the client sees why it lingered).
+                if live_entry_ids is not None and cfg and cfg not in live_entry_ids:
+                    orphans.append(
+                        {
+                            "entity_id": eid,
+                            "platform": entry.get("platform"),
+                            "config_entry_id": cfg,
+                            "disabled_by": disabled_by,
+                            "has_state": eid in state_by_id,
+                        }
+                    )
+                    continue
+
+                # Tier 2 — stale restored. Skip intentionally-disabled entries
+                # (they normally have no state object anyway).
+                if disabled_by is not None:
+                    continue
+                state_obj = state_by_id.get(eid)
+                if state_obj is None:
+                    continue
+                attrs = state_obj.get("attributes")
+                if (
+                    state_obj.get("state") == "unavailable"
+                    and isinstance(attrs, dict)
+                    and attrs.get("restored")
+                ):
+                    stale.append(
+                        {
+                            "entity_id": eid,
+                            "platform": entry.get("platform"),
+                            "config_entry_id": cfg,
+                        }
+                    )
+
+            def _bucket(items: list[dict[str, Any]]) -> dict[str, Any]:
+                total = len(items)
+                capped = items[:DEAD_ENTITIES_LIMIT]
+                bucket: dict[str, Any] = {
+                    "items": capped,
+                    "count": len(capped),
+                    "total_count": total,
+                }
+                if total > DEAD_ENTITIES_LIMIT:
+                    bucket["truncated"] = True
+                    bucket["hint"] = (
+                        f"Showing {DEAD_ENTITIES_LIMIT} of {total}; "
+                        "remove cleanup candidates in batches and re-run."
+                    )
+                return bucket
+
+            candidate_total = len(orphans) + len(stale)
+            dead["config_entry_orphans"] = _bucket(orphans)
+            dead["stale_restored"] = _bucket(stale)
+            dead["summary"] = {
+                "candidate_total": candidate_total,
+                "registry_total": len(registry),
+            }
+            # Only attach the guidance note when there is something to act on —
+            # no point spending tokens on cleanup advice for an empty result.
+            if candidate_total:
+                dead["note"] = (
+                    "Excludes 'unknown'-state entities and merely-offline "
+                    "devices (bare 'unavailable' without 'restored'). Entries "
+                    "can appear under stale_restored transiently right after a "
+                    "restart; re-run if HA restarted recently. Remove a "
+                    "confirmed-dead entity with ha_remove_entity(entity_id)."
+                )
+        except ToolError:
+            # A ToolError (incl. one re-raised by _reraise_if_fatal) carries the
+            # MCP isError contract — let it reach ha_get_system_health's own
+            # ``except ToolError: raise`` instead of being demoted to a section
+            # error string here (AGENTS.md error-handling guard pattern).
+            raise
+        except Exception as e:
+            _reraise_if_fatal(e)
+            # ``logger.exception`` so an unexpected diff bug gets a full
+            # traceback rather than a one-line warning that hides the
+            # site of the regression.
+            logger.exception("Failed to compute dead entities")
+            dead["error"] = f"Dead-entities diff not available: {e}"
+        # ``_warnings`` is a sentinel that ``ha_get_system_health`` pops to
+        # ``result["warnings"]``; it never reaches the client. Attaching it
+        # outside the try/except keeps it correct on both happy and
+        # embed-as-error paths.
+        if bubble_warnings:
+            dead["_warnings"] = bubble_warnings
+        return dead
 
     async def _fetch_config_check(self) -> dict[str, Any]:
         """Validate HA configuration via POST /config/core/check_config.
@@ -933,6 +1277,7 @@ class SystemTools:
                 "errors": errors,
             }
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to check config: %s", e)
             config_check["error"] = f"Config check not available: {e}"
         return config_check

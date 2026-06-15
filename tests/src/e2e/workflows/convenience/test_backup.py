@@ -220,6 +220,36 @@ class TestBackupTools:
             logger.error(f"❌ Backup restore validation test failed: {e}")
             raise
 
+    async def test_snapshot_list(self, mcp_client):
+        """
+        Test: List full HA snapshot tarballs (scope='snapshot', action='list').
+
+        Read-only inventory via HA's WebSocket ``backup/info`` (issue #1586) —
+        lets a caller discover backup IDs / confirm a backup landed without
+        already knowing an ID. No restart, no mutation.
+        """
+
+        logger.info("📋 Testing snapshot list...")
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "snapshot", "action": "list"},
+        )
+
+        logger.info(f"📋 Snapshot list result: {data}")
+
+        assert data.get("success") is True, f"Snapshot list failed: {data}"
+        assert "backups" in data, "No 'backups' key in list result"
+        assert isinstance(data["backups"], list), "'backups' should be a list"
+        assert "count" in data and "total" in data, "Missing count/total keys"
+        # Each entry exposes the discovery fields a caller needs.
+        for entry in data["backups"]:
+            assert "backup_id" in entry
+            assert "date" in entry
+
+        logger.info(f"✅ Snapshot list returned {data['count']} backup(s)")
+
     async def test_backup_config_password_retrieval(self, mcp_client):
         """
         Test: Verify backup configuration and password retrieval

@@ -451,7 +451,7 @@ async def test_python_transform_index_error_hints_at_search_mode(mcp_client, ha_
 
     suggestions = _hint_suggestions(result)
     assert suggestions, "expected suggestions in error response"
-    assert "card_type" in suggestions[0] and "jq_path" in suggestions[0], (
+    assert "card_type" in suggestions[0] and "python_path" in suggestions[0], (
         f"Expected search-mode hint as first suggestion, got: {suggestions}"
     )
 
@@ -485,7 +485,7 @@ async def test_python_transform_key_error_hints_at_search_mode(mcp_client, ha_cl
 
     suggestions = _hint_suggestions(result)
     assert suggestions, "expected suggestions in error response"
-    assert "card_type" in suggestions[0] and "jq_path" in suggestions[0], (
+    assert "card_type" in suggestions[0] and "python_path" in suggestions[0], (
         f"Expected search-mode hint as first suggestion, got: {suggestions}"
     )
 

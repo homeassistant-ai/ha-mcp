@@ -674,12 +674,14 @@ def _filter_and_score_repos(
 HACS_REPOSITORY_SIGNAL = "hacs_dispatch_repository"
 
 # Wall-clock budget for ``wait_for_repo_registration``. Generous
-# because the constraint is "HACS finishes registration"; the prior
-# 10 s budget (10 attempts × 1.0 s) was exhausted on the HAOS E2E
-# channel under load, so a 3× headroom backstop avoids re-tripping
-# the same flake. The subscription nudges us, so this is a wall-
-# clock cap rather than the dominant cost.
-HACS_REPO_REGISTRATION_TIMEOUT = 30.0
+# because the constraint is "HACS finishes registration": adding a
+# fresh repo makes HACS clone/index it over the network, which on a
+# slow link (or a loaded HAOS E2E runner) can exceed 30 s — the prior
+# value, which flaked ``test_install_mcp_tools_*`` with "Could not
+# find repository ID after adding". The subscription nudges us the
+# instant registration lands, so the happy path returns in seconds and
+# this larger cap only ever costs wall-clock on a genuinely slow add.
+HACS_REPO_REGISTRATION_TIMEOUT = 60.0
 
 # Budget for the initial ``hacs/subscribe`` ack. Smaller than the
 # overall registration timeout so a slow subscribe doesn't consume

@@ -4,12 +4,13 @@
 The script boots a vanilla HAOS qcow2 inside QEMU/KVM, runs first-user
 onboarding to obtain a long-lived access token, registers the ha-mcp addon
 repository, installs the addons listed in ``ADDONS``, performs the HACS
-bootstrap, then powers HAOS off and emits a compressed qcow2 ready for upload
-to GHCR via oras.
+bootstrap, then powers HAOS off and emits an uncompressed qcow2 image.
 
 Invoke from a Linux host with /dev/kvm available — both the local developer
 flow and the build-haos-test-image.yml workflow follow the same path. The
-output file is ``<work-dir>/haos-test-image.qcow2.xz``.
+build's own output is the uncompressed ``<work-dir>/haos-test-image.qcow2``;
+the workflow then compresses it, uploads it as an artifact, and (on master)
+primes the shared Actions cache that the e2e lanes restore.
 """
 
 from __future__ import annotations
@@ -201,18 +202,17 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # ``_ha_mcp`` / ``_ha_mcp_dev``, so the dev addon installed just before this
 # one (slug=``local_ha_mcp_dev``) is the discovery target.
 HA_MCP_WEBHOOK_PROXY_ADDON_SLUG = "local_ha_mcp_webhook_proxy"
-# Screenshot engine = balloob's Puppet add-on, VENDORED as a pinned git
-# submodule (tests/haos_image_build/vendor/home-assistant-addons) rather than
-# registering balloob's live add-on repo in Supervisor. Pinning decouples the
-# bake from balloob's repo HEAD / availability and makes a transient repo-side
-# issue a Renovate-PR failure instead of a random master-build failure;
-# Renovate's git-submodules manager bumps the pin via reviewed, CI-gated PRs.
-# Staged into the qcow2 as a LOCAL add-on (stage_puppet_addon_source), so
-# Supervisor assigns slug ``local_<config-slug>`` -> ``local_puppet``.
-PUPPET_VENDOR_DIR = (
-    Path(__file__).resolve().parent / "vendor" / "home-assistant-addons" / "puppet"
-)
-PUPPET_ADDON_SLUG = "local_puppet"
+# Screenshot engine for the bake: a tiny in-repo MOCK (screenshot_engine_mock/)
+# that serves balloob Puppet's HTTP contract WITHOUT Chromium. The real Puppet
+# add-on's heavy ``debian:bullseye-slim`` + Chromium + ``npm ci`` build is what
+# repeatedly broke the bake under floating Supervisor versions, and real
+# Chromium rendering exercises balloob's add-on, not ha-mcp -- so the bake
+# stages the mock and the screenshot tool's discovery + request + auth-token
+# plumbing is exercised against it. Real users still install balloob's add-on;
+# the mock never ships. Slug ``puppet`` -> ``local_puppet`` (matches the
+# ``_puppet`` discovery suffix), staged as a LOCAL add-on.
+SCREENSHOT_ENGINE_MOCK_DIR = Path(__file__).resolve().parent / "screenshot_engine_mock"
+SCREENSHOT_ENGINE_SLUG = "local_puppet"
 # Advanced SSH addon user/password set at install time so the runtime
 # helper (``haos_runtime.ssh_exec``) can authenticate non-interactively.
 # CI-test-only credential — overridable via env so the value never has
@@ -640,17 +640,33 @@ def _reload_store(ws: HAWebSocket) -> None:
 # flaky apt mirror / npm registry / base-image pull a moment to recover.
 _ADDON_INSTALL_RETRY_DELAY = 20.0
 
+# Transient errors while the Supervisor restarts to apply its self-update (see
+# _wait_supervisor_ready). Supervisor self-update restarts Supervisor, and Core
+# may return a structured WSCommandError OR drop the WS transport during that
+# restart window. websockets lives only in the build venv, so fold its drop
+# exception in lazily.
+try:
+    from websockets.exceptions import WebSocketException as _WebSocketException
+
+    _SUPERVISOR_WAIT_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
+        WSCommandError,
+        OSError,
+        TimeoutError,
+        _WebSocketException,
+    )
+except ImportError:
+    _SUPERVISOR_WAIT_TRANSIENT_ERRORS = (WSCommandError, OSError, TimeoutError)
+
 
 def _install_addon_with_retry(
     ws: HAWebSocket, slug: str, *, timeout: float, attempts: int = 2
 ) -> None:
     """POST an add-on install, retrying once on a transient build/connection failure.
 
-    Heavy add-on images build inside Supervisor and occasionally fail when a
-    base-image pull, an apt mirror, or the npm registry hiccups mid-build.
-    balloob's Puppet add-on (apt-installs Chromium + ``npm ci`` from
-    ``debian:bullseye-slim``) is the usual victim — it has failed ~13 s into the
-    build, while the very same version builds cleanly on a re-run. The failure
+    The bake's local add-ons (the ha-mcp dev addon, the webhook proxy, and the
+    mock screenshot engine) build their images inside Supervisor, which can fail
+    transiently when a base-image pull or apt mirror hiccups mid-build — the same
+    version then builds cleanly on a re-run. The failure
     surfaces two ways and we retry both: Supervisor returns a ``WSCommandError``,
     OR — because the build can outlast a flaky link (the motivating failure also
     logged a Bad-file-descriptor WS drop mid-bake) — the WS connection drops and
@@ -1143,34 +1159,33 @@ def stage_webhook_proxy_addon_source(qcow2: Path) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def stage_puppet_addon_source(qcow2: Path) -> None:
-    """Bake the vendored Puppet screenshot add-on into the qcow2 as a local add-on.
+def stage_screenshot_engine_source(qcow2: Path) -> None:
+    """Bake the mock screenshot engine into the qcow2 as a local add-on.
 
     Runs BEFORE first start_qemu so HAOS boots with the local add-on visible to
-    Supervisor's local store (slug ``local_puppet``). The source is the pinned
-    ``home-assistant-addons`` submodule's ``puppet/`` directory, copied verbatim:
-    its config.yaml has no ``image:`` field (so Supervisor builds from the local
-    Dockerfile) and the Dockerfile's ``COPY ha-puppet/ ...`` paths are already
-    addon-dir-relative, so unlike the ha-mcp dev add-on no Dockerfile patch or
-    ``image:`` strip is needed. ``install_puppet_addon`` builds it during the
-    running phase, so the heavy Chromium build is cached into the qcow2 once.
+    Supervisor's local store (slug ``local_puppet``). The source is the in-repo
+    ``screenshot_engine_mock/`` directory, copied verbatim: its config.yaml has
+    no ``image:`` field (so Supervisor builds from the local Dockerfile) and the
+    Dockerfile (``python:3.13-slim`` + a stdlib server) needs no patch or
+    ``image:`` strip. ``install_screenshot_engine`` builds it during the running
+    phase — a fast, reliable build (unlike balloob's Chromium image, which broke
+    the bake under floating Supervisor versions).
     """
-    src = PUPPET_VENDOR_DIR
+    src = SCREENSHOT_ENGINE_MOCK_DIR
     if not (src / "config.yaml").exists() or not (src / "Dockerfile").exists():
         raise RuntimeError(
-            f"Vendored Puppet add-on source not found at {src} — the "
-            f"home-assistant-addons submodule is not checked out. Run "
-            f"`git submodule update --init`."
+            f"Mock screenshot engine source not found at {src}; the checkout "
+            f"is incomplete."
         )
 
     LOG.info(
-        "Staging vendored Puppet add-on source into qcow2 "
+        "Staging mock screenshot engine source into qcow2 "
         "/supervisor/addons/local/puppet/"
     )
-    workdir = Path(tempfile.mkdtemp(prefix="haos-puppet-addon-"))
+    workdir = Path(tempfile.mkdtemp(prefix="haos-screenshot-engine-"))
     try:
         staging = workdir / "puppet"
-        shutil.copytree(src, staging)
+        shutil.copytree(src, staging, ignore=shutil.ignore_patterns("__pycache__"))
 
         seed_tar = workdir / "puppet.tar"
         _run(
@@ -1206,7 +1221,7 @@ def stage_puppet_addon_source(qcow2: Path) -> None:
                 "/supervisor/addons/local",
             ]
         )
-        LOG.info("Puppet add-on source staged at /supervisor/addons/local/puppet/")
+        LOG.info("Mock screenshot engine staged at /supervisor/addons/local/puppet/")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -1436,15 +1451,15 @@ def install_webhook_proxy_addon(ws: HAWebSocket) -> str:
     return slug
 
 
-def install_puppet_addon(ws: HAWebSocket) -> str:
-    """Install the vendored Puppet screenshot engine as a LOCAL add-on.
+def install_screenshot_engine(ws: HAWebSocket) -> str:
+    """Install the mock screenshot engine as a LOCAL add-on.
 
     The add-on source is staged into /supervisor/addons/local/puppet/ before
-    first boot (``stage_puppet_addon_source``), so Supervisor's local-store
+    first boot (``stage_screenshot_engine_source``), so Supervisor's local-store
     scanner picks it up as ``local_puppet``. We reload the store to be explicit,
-    then install — which builds the Chromium image into the cached qcow2 (the
-    heavy build is paid once per cache-key change). No balloob repo is
-    registered; the pinned submodule is the only source.
+    then install — which builds the mock's small python:3.13-slim image into the
+    cached qcow2. No balloob repo or submodule is involved; the in-repo
+    ``screenshot_engine_mock/`` dir is the only source.
 
     Install-only — ``boot`` is set to ``manual`` so the cached qcow2 doesn't
     auto-start it on resume (the haos_only test starts it via a module
@@ -1457,23 +1472,21 @@ def install_puppet_addon(ws: HAWebSocket) -> str:
     Returns the installed slug (``local_puppet``).
     """
     _reload_store(ws)
-    slug = PUPPET_ADDON_SLUG
+    slug = SCREENSHOT_ENGINE_SLUG
     LOG.info(
-        "Installing vendored Puppet screenshot engine (slug=%s) — building the "
-        "Chromium Docker image; this is the slowest addon build, cached in the qcow2...",
+        "Installing mock screenshot engine (slug=%s) — building its small "
+        "python:3.13-slim image into the qcow2...",
         slug,
     )
-    # Generous timeout: Debian + Chromium + Node + npm-ci is the heaviest
-    # addon build in the bake.
-    _install_addon_with_retry(ws, slug, timeout=1800.0)
+    _install_addon_with_retry(ws, slug, timeout=300.0)
 
-    LOG.info("Setting Puppet addon options (boot=manual, empty token)")
+    LOG.info("Setting screenshot engine options (boot=manual, empty token)")
     ws.supervisor_api(
         f"/addons/{slug}/options",
         method="post",
         data={
-            # Seed all of Puppet's required options; the runtime fixture only
-            # overwrites access_token with a real token before starting.
+            # Seed all required options; the runtime fixture only overwrites
+            # access_token with a real token before starting.
             "options": {
                 "access_token": "",
                 "keep_browser_open": False,
@@ -1483,20 +1496,89 @@ def install_puppet_addon(ws: HAWebSocket) -> str:
         },
         timeout=60.0,
     )
-    LOG.info("Puppet screenshot engine installed (not started); slug=%s", slug)
+    LOG.info("Mock screenshot engine installed (not started); slug=%s", slug)
     return slug
 
 
-def _wait_supervisor_ready(ws: HAWebSocket) -> None:
-    """Confirm the Supervisor responds via the WebSocket supervisor/api path.
+def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) -> None:
+    """Wait for the Supervisor to respond AND finish self-updating.
 
-    A single ping is enough — by the time HA Core has accepted the WS
-    handshake and our auth_ok arrived, the hassio integration has loaded
-    and supervisor/api commands route correctly.
+    HAOS pins only the OS version (HAOS_VERSION); the Supervisor it bundles
+    self-updates asynchronously after boot to the latest version on its
+    channel. Until that finishes, ``need_update`` is True and every store
+    operation guarded by ``JobCondition.SUPERVISOR_UPDATED`` (the first one
+    here is ``_add_repository`` -> POST /store/repositories, right after this
+    call) is rejected with "supervisor needs to be updated first". That race
+    is what broke the publish bake intermittently: a run that hit the store
+    before the self-update landed failed at add_repository; a run that caught
+    a later channel version sailed past it and failed elsewhere.
+
+    Poll /supervisor/info until ``update_available`` clears (the running
+    version reaches ``version_latest``) so the caller's store calls run
+    against an up-to-date Supervisor. The Supervisor version still floats to
+    the channel head per build: there is no clean way to pin the bundled
+    Supervisor offline (it ships as a container layer in the HAOS image, and
+    ``need_update`` is evaluated against the live channel), so this makes the
+    bake deterministic in outcome, not in the Supervisor version it lands on.
     """
     info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
     LOG.info(
-        "Supervisor ready: version=%s arch=%s", info.get("version"), info.get("arch")
+        "Supervisor ready: version=%s version_latest=%s arch=%s",
+        info.get("version"),
+        info.get("version_latest"),
+        info.get("arch"),
+    )
+    if not info.get("update_available") and info.get("version_latest"):
+        return
+
+    LOG.info(
+        "Supervisor self-update pending (%s -> %s); waiting before store ops...",
+        info.get("version"),
+        info.get("version_latest"),
+    )
+    deadline = time.monotonic() + update_timeout
+    last_version = info.get("version")
+    last_error: BaseException | None = None
+    while time.monotonic() < deadline:
+        time.sleep(10.0)
+        try:
+            info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as e:
+            # A Supervisor self-update restarts Supervisor; Core may return a
+            # structured WSCommandError OR drop the WS transport during that
+            # restart window. Record the error so a persistent failure is
+            # reported in the timeout message, then best-effort reconnect and
+            # keep polling.
+            last_error = e
+            LOG.debug("Transient error polling /supervisor/info: %r", e)
+            try:
+                ws.reconnect()
+            except _SUPERVISOR_WAIT_TRANSIENT_ERRORS + (RuntimeError,) as reconnect_err:
+                # Handshake-stage WS errors (InvalidStatus / InvalidHandshake /
+                # ConnectionClosed) raise WebSocketException, which is NOT a
+                # subclass of OSError / RuntimeError / TimeoutError — covered
+                # here via _SUPERVISOR_WAIT_TRANSIENT_ERRORS. RuntimeError stays
+                # for symmetry with the poll-catch above (generic Supervisor
+                # restart-window RuntimeError that isn't a WSCommandError).
+                # WARNING level: surface the reconnect failure in CI logs. A
+                # one-off failure is harmless (the loop keeps polling until the
+                # deadline); a persistent one would otherwise only show up as
+                # the *poll* error in the final TimeoutError, so WARNING makes
+                # the reconnect pattern visible.
+                LOG.warning("reconnect during update wait failed: %r", reconnect_err)
+            continue
+        version = info.get("version")
+        if version != last_version:
+            LOG.info("Supervisor version changed: %s -> %s", last_version, version)
+            last_version = version
+        if not info.get("update_available") and info.get("version_latest"):
+            LOG.info("Supervisor self-update complete: version=%s", version)
+            return
+    last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
+    raise TimeoutError(
+        f"Supervisor did not finish self-updating within {update_timeout:.0f}s "
+        f"(last version={last_version}, "
+        f"latest={info.get('version_latest')}{last_err_suffix})"
     )
 
 
@@ -1773,11 +1855,12 @@ def build(work_dir: Path, output: Path) -> None:
     # independent), but the install order below DOES — the webhook-proxy's
     # auto-discovery needs the dev addon present at first start.
     stage_webhook_proxy_addon_source(qcow2)
-    # The screenshot engine (balloob's Puppet) is staged from the pinned
-    # home-assistant-addons submodule as a local add-on; install_puppet_addon
-    # builds its Chromium image into the cached qcow2 during the running phase
-    # below.
-    stage_puppet_addon_source(qcow2)
+    # The screenshot engine is a tiny in-repo MOCK (screenshot_engine_mock/)
+    # staged as a local add-on; install_screenshot_engine builds it (a fast
+    # python:3.13-slim image) into the cached qcow2 during the running phase
+    # below. See SCREENSHOT_ENGINE_MOCK_DIR for why the mock replaced balloob's
+    # heavy Chromium Puppet add-on.
+    stage_screenshot_engine_source(qcow2)
     qemu = start_qemu(qcow2, work_dir)
     base_url = f"http://127.0.0.1:{HA_HOST_PORT}"
     try:
@@ -1793,10 +1876,10 @@ def build(work_dir: Path, output: Path) -> None:
             # Supervisor auto-discovery (slug-suffix match on _ha_mcp_dev)
             # finds a target on first start.
             install_webhook_proxy_addon(ws)
-            # Screenshot engine = balloob's Puppet, staged as a local add-on
-            # from the pinned submodule (boot=manual, empty token; the runtime
-            # fixture injects a real HA access token and starts it).
-            install_puppet_addon(ws)
+            # Screenshot engine = the in-repo mock, staged as a local add-on
+            # (boot=manual, empty token; the runtime fixture injects a real HA
+            # access token and starts it).
+            install_screenshot_engine(ws)
             install_advanced_ssh(ws)
             # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
             # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
@@ -1821,9 +1904,9 @@ def build(work_dir: Path, output: Path) -> None:
     bake_test_state(qcow2)
     # Output uncompressed: nothing downstream of this script on the
     # developer iteration path benefits from a smaller file, and the
-    # convert pass adds ~6 min. GHCR-served image is compressed at
-    # publish time by build-haos-test-image.yml's ``Compress qcow2
-    # in-format`` step (#1428, measured 12 GB → 5.1 GB / 2.3x).
+    # convert pass adds ~6 min. The cached image is compressed by
+    # build-haos-test-image.yml's ``Compress qcow2 in-format`` step
+    # (#1428, measured 12 GB → 5.1 GB / 2.3x).
     LOG.info("Copying qcow2 to %s (uncompressed)", output)
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(["cp", "--reflink=auto", str(qcow2), str(output)])

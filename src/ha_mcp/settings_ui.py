@@ -787,6 +787,7 @@ _SETTINGS_HTML = (
     + """</style>
 </head>
 <body>
+<a href="#main-content" class="skip-link">Skip to content</a>
 <div class="header">
   <h1>HA-MCP Settings</h1>
   <div style="display:flex;align-items:center;gap:8px">
@@ -798,24 +799,29 @@ _SETTINGS_HTML = (
         <option value="dark">Dark</option>
       </select>
     </label>
-    <span id="status" class="status">Loading...</span>
+    <span id="status" class="status" role="status" aria-live="polite">Loading...</span>
   </div>
 </div>
-<div class="tabs">
-  <button class="tab active" data-panel="tools">Tools</button>
-  <button class="tab" data-panel="server">Server Settings</button>
-  <button class="tab" data-panel="backups">Backups</button>
-  <button class="tab" data-panel="tool-security-policies">Tool Security Policies</button>
-  <button class="tab" data-panel="accessibility">Accessibility</button>
+<main id="main-content" tabindex="-1" style="outline:none">
+<div class="tabs" role="tablist" aria-label="Settings sections">
+  <button class="tab active" data-panel="tools" role="tab" id="tab-tools" aria-controls="panel-tools" aria-selected="true">Tools</button>
+  <button class="tab" data-panel="server" role="tab" id="tab-server" aria-controls="panel-server" aria-selected="false" tabindex="-1">Server Settings</button>
+  <button class="tab" data-panel="backups" role="tab" id="tab-backups" aria-controls="panel-backups" aria-selected="false" tabindex="-1">Backups</button>
+  <button class="tab" data-panel="tool-security-policies" role="tab" id="tab-tool-security-policies" aria-controls="panel-tool-security-policies" aria-selected="false" tabindex="-1">Tool Security Policies</button>
+  <button class="tab" data-panel="accessibility" role="tab" id="tab-accessibility" aria-controls="panel-accessibility" aria-selected="false" tabindex="-1">Accessibility</button>
 </div>
 <div class="restart-notice" id="restartNotice">
   <span class="restart-notice-text" id="restartNoticeText">
     ⚠ Changes saved. Restart ha-mcp for them to take effect — disabled
     tools will be fully removed from the MCP tool list on next startup.
+    Then reconnect or refresh the MCP server in your AI client (e.g.
+    re-add/refresh the connector in ChatGPT, or close and reopen Claude
+    Desktop) so it reloads the tool list — restarting the add-on or Home
+    Assistant does NOT refresh your client's cached tool list.
   </span>
   <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
 </div>
-<div class="panel active" id="panel-tools">
+<div class="panel active" id="panel-tools" role="tabpanel" aria-labelledby="tab-tools" tabindex="0">
   <div class="readonly-notice">
     Server-wide features (Tool Search, YAML config editing, filesystem
     tools, etc.) appear in both the <strong>Server Settings</strong>
@@ -855,10 +861,12 @@ _SETTINGS_HTML = (
   <input type="text" class="search" id="search" placeholder="Search tools...">
   <div id="groups"></div>
 </div>
-<div class="panel" id="panel-server">
+<div class="panel" id="panel-server" role="tabpanel" aria-labelledby="tab-server" tabindex="0">
   <div class="features-sub">
-    Tool Search, advanced settings. Changes require an MCP-host restart
-    to take effect (close + reopen Claude Desktop, restart the add-on, etc.).
+    Tool Search, advanced settings. Changes take effect only after you
+    restart the add-on (applies the change server-side) AND reconnect or
+    refresh the MCP server in your AI client (reloads the tool list) — e.g.
+    re-add/refresh the connector in ChatGPT, or close + reopen Claude Desktop.
   </div>
 
   <!-- Two-step note + top Save button. The Save +
@@ -874,7 +882,7 @@ _SETTINGS_HTML = (
   </div>
   <div id="advSaveRowTop" class="adv-save-row" style="display:none;">
     <button id="advSaveBtnTop" class="adv-save-btn">💾 Save advanced settings</button>
-    <span id="advSaveStatusTop" class="status"></span>
+    <span id="advSaveStatusTop" class="status" role="status" aria-live="polite"></span>
   </div>
   <div id="featuresBody"></div>
 
@@ -911,7 +919,7 @@ _SETTINGS_HTML = (
   </div>
   <div id="advSaveRow" class="adv-save-row" style="display:none;">
     <button id="advSaveBtn" class="adv-save-btn">💾 Save advanced settings</button>
-    <span id="advSaveStatus" class="status"></span>
+    <span id="advSaveStatus" class="status" role="status" aria-live="polite"></span>
   </div>
 
   <div id="sidecarStopRow" style="display:none; margin: 16px 0; text-align: right;">
@@ -920,13 +928,13 @@ _SETTINGS_HTML = (
     >Permanently disable settings server</button>
   </div>
 </div>
-<div class="panel" id="panel-backups">
+<div class="panel" id="panel-backups" role="tabpanel" aria-labelledby="tab-backups" tabindex="0">
   <div class="backup-state" id="backupState">Loading backup state…</div>
   <div class="backup-config" id="backupConfig">
     <div class="backup-config-form" id="backupConfigForm"></div>
     <div class="backup-config-actions" id="backupConfigActions" style="display:none">
       <button id="backupConfigSave">Save settings</button>
-      <span id="backupConfigStatus" class="status"></span>
+      <span id="backupConfigStatus" class="status" role="status" aria-live="polite"></span>
     </div>
   </div>
   <div class="backup-filters">
@@ -937,7 +945,7 @@ _SETTINGS_HTML = (
   </div>
   <div id="backupList"></div>
 </div>
-<div class="panel" id="panel-tool-security-policies">
+<div class="panel" id="panel-tool-security-policies" role="tabpanel" aria-labelledby="tab-tool-security-policies" tabindex="0">
   <h2>Tool Security Policies</h2>
   <p class="features-sub">
     Per-tool approval gating for high-stakes calls. Use the
@@ -985,7 +993,7 @@ _SETTINGS_HTML = (
     </div>
     <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
       <button id="policy-save-global-btn" class="restart-btn">Save global settings</button>
-      <span id="policy-global-save-status" class="status"></span>
+      <span id="policy-global-save-status" class="status" role="status" aria-live="polite"></span>
     </div>
   </section>
 
@@ -1004,7 +1012,7 @@ _SETTINGS_HTML = (
     <div id="policy-rules-list"></div>
   </section>
 </div>
-<div class="panel" id="panel-accessibility">
+<div class="panel" id="panel-accessibility" role="tabpanel" aria-labelledby="tab-accessibility" tabindex="0">
   <p class="tool-desc" style="margin-bottom:16px">
     These settings apply immediately and are saved in this browser and on the
     server, so they survive restarts in every mode (including stdio, where the
@@ -1058,6 +1066,7 @@ _SETTINGS_HTML = (
     <button id="a11y-reset" class="restart-btn" type="button">Reset to defaults</button>
   </section>
 </div>
+</main>
 <div class="modal-backdrop" id="modalBackdrop">
   <div class="modal">
     <div class="modal-header">

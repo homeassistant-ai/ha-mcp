@@ -245,8 +245,8 @@ Some tools require a companion custom component installed in Home Assistant. Sta
 | Tool | Description |
 |------|-------------|
 | `ha_config_set_yaml` *(beta)* | Safely add, replace, or remove top-level YAML keys in `configuration.yaml` and package files (automatic backup, validation, and config check) |
-| `ha_list_files` *(beta)* | List files in allowed directories (www/, themes/, custom_templates/) |
-| `ha_read_file` *(beta)* | Read files from allowed paths (config YAML, logs, www/, themes/, custom_templates/, custom_components/) |
+| `ha_list_files` *(beta)* | List files in allowed directories |
+| `ha_read_file` *(beta)* | Read files from allowed paths (config YAML, logs, and allowed directories) |
 | `ha_write_file` *(beta)* | Write files to allowed directories |
 | `ha_delete_file` *(beta)* | Delete files from allowed directories |
 
@@ -318,6 +318,8 @@ The proxy split lets MCP clients apply different permission policies per categor
 - **Cost-sensitive deployments** — fewer idle tokens per turn.
 
 Leave it off when using Claude Sonnet/Opus or any client with deferred tool loading; the full catalog has no idle cost there and direct calls skip the search step. If you choose to use our toolsearch then you should disable the native Claude Opus/Sonnet toolsearch, which is called deferred tools in the settings.
+
+> 🔄 **Refresh your client's tool list after changing this (or any) setting.** Toggling `ENABLE_TOOL_SEARCH` (or changing pinned/disabled tools, Read Only Mode, etc.) changes the tools the server exposes, but your AI client keeps serving its **cached** tool list until it re-fetches. Restarting the add-on or Home Assistant does **not** refresh the client — reconnect or refresh the MCP server in your client (e.g. re-add/refresh the connector in ChatGPT, or close and reopen Claude Desktop). If you skip this, tools shown as available will return `Unknown tool` when called.
 
 For the HA add-on, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-add-on settings UI for fine-grained tool enable/disable/pin.
 
