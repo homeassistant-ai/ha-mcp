@@ -23,6 +23,14 @@ This addon enables remote access to your HA MCP Server through any reverse proxy
    ```
 5. **Paste the URL** into your MCP client (Claude Desktop, Claude.ai, Open WebUI, etc.)
 
+### Connecting from Claude.ai (web)
+
+1. In Claude.ai, go to **Settings → Connectors → Add custom connector**, give it a name, paste the remote URL, and click **Add**.
+2. **Click _Connect_ on the new connector.** This step is required — adding the connector does not connect it. With OAuth enabled this opens the consent page; click **Allow** to finish. (With OAuth off there is no consent page and it connects directly.)
+3. Claude.ai may briefly show *"Couldn't reach the MCP server"* — this is often a harmless artifact of the initial handshake. Check whether the connector actually shows as connected before assuming it failed.
+
+> **Reachability check:** Claude.ai connects from Anthropic's servers, not from your computer — so the URL must be reachable from the public internet, not just your LAN. If a connection won't establish, open the remote URL on your **phone with Wi-Fi turned off** (cellular only). If it doesn't load there, the URL isn't publicly reachable (a DNS, port-forward, TLS, or reverse-proxy problem) and Claude.ai can't reach it either — fix that first.
+
 > **Note:** If something doesn't seem to work after restarting HA, try restarting the addon as well.
 
 ## Configuration
@@ -36,8 +44,9 @@ This addon enables remote access to your HA MCP Server through any reverse proxy
 | `oauth_client_id` | OAuth Client ID (auto-generated if blank) | `""` |
 | `oauth_client_secret` | OAuth Client Secret (auto-generated if blank) | `""` |
 | `regenerate_oauth_creds` | One-shot: wipe stored OAuth creds and generate fresh ones on next start | `false` |
+| `debug_logging` | **Beta.** Log every inbound request to the Home Assistant log to confirm a client is reaching the server | `false` |
 
-> The OAuth options are hidden by default. Toggle **Show unused optional configuration options** at the bottom of the addon's Configuration tab to reveal them.
+> The OAuth options are hidden by default. Toggle **Show unused optional configuration options** at the bottom of the addon's Configuration tab to reveal them. `debug_logging` is shown on the main Configuration page (it is not one of the hidden options).
 
 ### Auto-detection
 
@@ -132,7 +141,7 @@ The generated values are persisted at `/data/oauth_creds.json` inside the addon,
 
 ### End-to-end flow (what happens when Claude.ai connects)
 
-When OAuth is enabled and you paste the webhook URL + Client ID + Client Secret into Claude.ai's connector setup, here's what happens:
+When OAuth is enabled and you paste the webhook URL + Client ID + Client Secret into Claude.ai's connector setup, here's what happens after you click **Connect** on the connector:
 
 1. **Claude.ai's browser session** is redirected to `https://<your-host>/authorize?response_type=code&client_id=...&redirect_uri=...&code_challenge=...&code_challenge_method=S256&state=...&resource=https://<your-host>/api/webhook/<id>`.
 2. The addon serves a **consent page** (Allow / Deny) showing the redirect destination so you can verify it's Claude.ai's callback URL before proceeding.
@@ -168,6 +177,24 @@ What stops an attacker who can reach the consent page from gaining access:
 - If you suspect it has leaked, **rotate it immediately** using one of the three rotation methods above. After rotation, the old Client Secret stops working — any tokens previously issued will fail at refresh, forcing the client to re-do the OAuth flow with the new credentials.
 - If you can't tell whether it leaked but want a clean slate (e.g., after sharing logs for debugging, after a migration), rotating proactively is cheap: flip **Regenerate OAuth Credentials on Next Start**, restart, paste the new credentials into Claude.ai. Takes ~30 seconds.
 
+### Debugging connections (log inbound requests)
+
+If a client (e.g. Claude.ai) can't connect and you can't tell whether its requests are even reaching Home Assistant, turn on **Log inbound requests** (the `debug_logging` option on the main Configuration page) and **restart the addon**.
+
+When it's on, every request that hits the webhook is logged to the **Home Assistant log** — *not* this addon's log, because requests reach Home Assistant directly rather than passing through the addon process. View them at **Settings → System → Logs** (or filter for `mcp_proxy`). Each line shows the method, a masked webhook path, the source address, whether an `Authorization` header was present, and the upstream response status:
+
+```
+MCP Proxy [inbound]: POST /api/webhook/mcp_3e... from 203.0.113.4 (Authorization header: present)
+MCP Proxy [inbound]: -> upstream responded 200 (text/event-stream)
+```
+
+How to read it:
+
+- **You see inbound lines** → the client is reaching the server; the problem is downstream (auth, the client's config, or the MCP server itself).
+- **You see nothing** → the request never arrived. The problem is network reachability — the public URL, DNS, TLS, or your reverse proxy — not this addon. See the reachability check under [Setup](#connecting-from-claudeai-web).
+
+Turn it back off for normal operation (restart the addon after changing it).
+
 ## How it works
 
 1. The addon installs a lightweight `mcp_proxy` custom integration into Home Assistant
@@ -202,6 +229,15 @@ The health check cannot reach the MCP server. Check:
 If the `mcp_proxy` integration doesn't appear in Settings > Devices & Services:
 1. Restart Home Assistant (Settings > System > Restart)
 2. The addon will start automatically and retry setup
+
+### Claude.ai says "Couldn't reach the MCP server"
+
+Two cases:
+
+1. **It actually connected.** Claude.ai sometimes shows this during the initial handshake even though the connector ends up working. Check whether the connector shows as connected before assuming failure.
+2. **It genuinely can't reach the URL.** Claude.ai connects from Anthropic's servers, so the URL must be reachable from the public internet — not just your LAN. Open the remote URL on your **phone with Wi-Fi off** (cellular): if it doesn't load, the URL isn't publicly reachable (DNS / port-forward / TLS / reverse-proxy) and Claude.ai can't reach it either. To confirm whether requests are arriving at all, enable **Log inbound requests** (see [Debugging connections](#debugging-connections-log-inbound-requests)).
+
+> **Note:** A connection working in Claude Code or a local browser but **not** in Claude.ai web is the classic signature of this — those reach your box over the LAN, while Claude.ai reaches it from the public internet.
 
 ## Disabling / Uninstalling
 

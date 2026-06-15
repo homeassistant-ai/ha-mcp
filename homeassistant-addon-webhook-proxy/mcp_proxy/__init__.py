@@ -36,6 +36,12 @@ from homeassistant.helpers.typing import ConfigType
 
 _LOGGER = logging.getLogger(__name__)
 
+# Tracks whether *this process* raised the logger to INFO for the debug toggle,
+# so the off path undoes only our own raise — never a level the user set via
+# Home Assistant's `logger:` config. Module-global (not hass.data) because it
+# must survive a config-entry reload, during which hass.data[DOMAIN] is gone.
+_LOGGER_LEVEL_RAISED = False
+
 DOMAIN = "mcp_proxy"
 CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
 
@@ -87,12 +93,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             "You can safely remove 'mcp_proxy:' from configuration.yaml."
         )
         hass.async_create_task(
-            hass.config_entries.flow.async_init(
-                DOMAIN, context={"source": "import"}
-            )
+            hass.config_entries.flow.async_init(DOMAIN, context={"source": "import"})
         )
     if await hass.async_add_executor_job(_marker_present):
         from .repairs import maybe_create_issue
+
         maybe_create_issue(hass, DOMAIN)
     return True
 
@@ -101,6 +106,7 @@ def _marker_present() -> bool:
     # Imported lazily so async_setup doesn't pull in repairs.py module-load
     # cost on the no-marker happy path.
     from .repairs import marker_present
+
     return marker_present()
 
 
@@ -158,6 +164,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("MCP Proxy: target = %s", masked_target)
     _LOGGER.info("MCP Proxy: webhook endpoint = /api/webhook/%s", masked_wh)
 
+    # Inbound-request debug logging (addon "Log inbound requests" toggle).
+    # Custom-component loggers default to WARNING, so when the toggle is on we
+    # raise our own logger to INFO so the per-request lines are emitted — but
+    # only when the effective level is less verbose, so we never override an
+    # explicit DEBUG/INFO the user set via Home Assistant's `logger:` config. We
+    # track whether WE raised it and, when the toggle is off, undo only our own
+    # raise — never a level the user set themselves.
+    global _LOGGER_LEVEL_RAISED
+    debug_logging = bool(proxy_config.get("debug_logging", False))
+    if debug_logging and _LOGGER.getEffectiveLevel() > logging.INFO:
+        _LOGGER.setLevel(logging.INFO)
+        _LOGGER_LEVEL_RAISED = True
+    elif not debug_logging and _LOGGER_LEVEL_RAISED:
+        # Undo only the INFO we raised. (If a user had set an explicit level
+        # quieter than INFO — ERROR/CRITICAL — then toggled debug on then off,
+        # this resets to NOTSET rather than their original level; restoring that
+        # would need durable per-level state, not worth it for a debug aid.)
+        _LOGGER.setLevel(logging.NOTSET)
+        _LOGGER_LEVEL_RAISED = False
+    if debug_logging:
+        _LOGGER.info(
+            "MCP Proxy: inbound request debug logging is ON — each request to "
+            "this webhook will be logged here."
+        )
+
     session = aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=300, sock_connect=10, sock_read=300),
     )
@@ -177,15 +208,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             masked_wh,
         )
         await session.close()
-        raise ConfigEntryError(
-            f"Failed to register webhook endpoint: {err}"
-        ) from err
+        raise ConfigEntryError(f"Failed to register webhook endpoint: {err}") from err
 
     hass_data: dict = {
         "target_url": target_url,
         "webhook_id": webhook_id,
         "session": session,
     }
+    # Mirror the oauth pattern: only add the key when the feature is on, so the
+    # default/OFF path's hass.data shape stays identical to the baseline
+    # (target_url, webhook_id, session) — guarded by TestOAuthOffPreservesBehavior.
+    if debug_logging:
+        hass_data["debug_logging"] = True
 
     # OAuth is opt-in. When the addon writes an `oauth` section into the
     # config file (only when enable_oauth is on AND both creds are non-empty,
@@ -215,11 +249,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not isinstance(public_base_url, str) or not public_base_url:
             public_base_url = None
         from .oauth import OAuthProvider, load_or_create_secret
+
         try:
             # Filesystem I/O — must run off the event loop.
-            signing_key = await hass.async_add_executor_job(
-                load_or_create_secret
-            )
+            signing_key = await hass.async_add_executor_job(load_or_create_secret)
             oauth_provider = OAuthProvider(
                 hass=hass,
                 client_id=client_id,
@@ -256,6 +289,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # in the executor; the issue-registry call is synchronous and safe on
     # the event loop.
     from .repairs import _clear_marker, _delete_issue_only
+
     await hass.async_add_executor_job(_clear_marker)
     _delete_issue_only(hass, DOMAIN)
 
@@ -271,7 +305,8 @@ def _read_config() -> dict | None:
     """
     if not CONFIG_FILE.exists():
         return None
-    return json.loads(CONFIG_FILE.read_text())
+    data: dict | None = json.loads(CONFIG_FILE.read_text())
+    return data
 
 
 async def _handle_webhook(
@@ -281,12 +316,39 @@ async def _handle_webhook(
     data = hass.data[DOMAIN]
     target_url = data["target_url"]
 
+    # Inbound-request debug logging (opt-in). Logged BEFORE the OAuth gate so
+    # the unauthenticated discovery probe (which gets a 401) is captured too —
+    # that probe arriving is the proof a client actually reached the server.
+    debug = data.get("debug_logging")
+    if debug:
+        wh = data["webhook_id"]
+        masked_path = f"/api/webhook/{wh[:6]}..." if len(wh) > 6 else "/api/webhook/***"
+        # request.remote is the client IP validated by HA's trusted-proxy layer
+        # (it resolves X-Forwarded-For when the proxy is trusted). Reading the
+        # raw X-Forwarded-For header here would let an untrusted client spoof
+        # the logged source.
+        source = request.remote or "unknown"
+        has_auth = "present" if request.headers.get("Authorization") else "absent"
+        _LOGGER.info(
+            "MCP Proxy [inbound]: %s %s from %s (Authorization header: %s)",
+            request.method,
+            masked_path,
+            source,
+            has_auth,
+        )
+
     # OAuth gate. When OAuth isn't configured, `oauth_provider` is None and
     # this branch is a single attribute lookup with zero behavior change vs
     # the original handler.
     oauth_provider = data.get("oauth")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
+        if debug:
+            _LOGGER.info(
+                "MCP Proxy [inbound]: -> 401 Unauthorized (no/invalid OAuth "
+                "bearer; expected for the initial discovery probe)"
+            )
         from .oauth import build_unauthorized_response
+
         return build_unauthorized_response(request, oauth_provider)
 
     body = await request.read()
@@ -295,8 +357,12 @@ async def _handle_webhook(
     forward_headers = {}
     for key, value in request.headers.items():
         if key.lower() in (
-            "host", "content-length", "transfer-encoding", "connection",
-            "cookie", "authorization",
+            "host",
+            "content-length",
+            "transfer-encoding",
+            "connection",
+            "cookie",
+            "authorization",
         ):
             continue
         forward_headers[key] = value
@@ -313,6 +379,13 @@ async def _handle_webhook(
             data=body if body else None,
         ) as upstream_resp:
             content_type = upstream_resp.headers.get("Content-Type", "")
+
+            if debug:
+                _LOGGER.info(
+                    "MCP Proxy [inbound]: -> upstream responded %s (%s)",
+                    upstream_resp.status,
+                    content_type or "no content-type",
+                )
 
             # Common headers for both streaming and non-streaming
             resp_headers = {

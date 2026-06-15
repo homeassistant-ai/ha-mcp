@@ -2188,7 +2188,9 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
                 <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
               </ul>
             </li>
+            <li><strong>Click the connector's <em>Connect</em> button.</strong> Adding it does not connect it — this step starts the connection. If you enabled OAuth on the webhook proxy you'll be sent to a consent page; click <strong>Allow</strong> to finish.</li>
             <li>You may see <em>"Couldn't reach the MCP server"</em> — <strong>this is normal</strong> and can be safely ignored</li>
+            <li>If it won't connect at all: Claude.ai connects from Anthropic's servers, so the URL must be reachable from the public internet. Open it on your <strong>phone with Wi-Fi off</strong> — if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / proxy) and Claude.ai can't reach it either.</li>
             <li>If you see a <strong>"Configure"</strong> button on the connector, click it — if tools are listed, you're connected</li>
             <li>You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection to confirm</li>
           </ol>
