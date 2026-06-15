@@ -363,24 +363,35 @@ _LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class StatelessSessionLogFilter(logging.Filter):
-    """Downgrade 'Terminating session: None' to DEBUG to reduce user confusion.
+    """Suppress the routine 'Terminating session: None' log from the MCP SDK.
 
     In stateless HTTP mode every request creates and tears down a temporary
-    session, producing an INFO log that looks alarming but is routine.
-    This filter lowers the level to DEBUG so the message only appears with
-    verbose logging enabled.
+    session whose id is ``None``, so the SDK emits an INFO
+    ``Terminating session: None`` (mcp/server/streamable_http.py) on *every*
+    request. The line is routine but looks alarming and has repeatedly
+    confused users into thinking the connection is broken.
+
+    Returning ``False`` drops the record at this logger before it reaches any
+    handler. (Merely downgrading the level to DEBUG did not work: the level
+    gate is applied before the filter runs, so the record was already admitted
+    and still emitted -- just relabelled.) Real session terminations carry an
+    actual id and are not matched, so they still log.
 
     # TODO: remove when modelcontextprotocol/python-sdk#2329 is resolved
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if (
-            record.name == "mcp.server.streamable_http"
-            and "Terminating session: None" in record.getMessage()
-        ):
-            record.levelno = logging.DEBUG
-            record.levelname = "DEBUG"
-        return True
+        if record.name != "mcp.server.streamable_http":
+            return True
+        try:
+            message = record.getMessage()
+        except (ValueError, TypeError):
+            # A malformed %-format record on this logger is not our target, and
+            # a filter must not raise: filters run in Logger.handle() with no
+            # exception handling, so a raise would crash the logging call.
+            return True
+        # Drop the stateless teardown noise; keep everything else.
+        return "Terminating session: None" not in message
 
 
 class ToolValidationLogFilter(logging.Filter):
