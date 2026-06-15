@@ -3405,3 +3405,111 @@ class TestReadOnlyModeToggle:
         assert 'data-shown="true"' in m.group(0), (
             f"roUnknownNotice must show when features fetch fails: {m.group(0)}"
         )
+
+
+class TestTablistAndStatusBehavior:
+    """Behavioural coverage for the #1596 a11y JS — the ARIA tablist
+    (aria-selected + roving tabindex sync, keyboard navigation) and the
+    failure-path role=alert toggling. The static-markup tests in
+    test_settings_ui.py only assert the affordances exist; these drive the
+    handlers and assert they actually behave.
+    """
+
+    # Two side-effect-free tabs (server + accessibility have no data-load
+    # branch in activateTab), so switching between them touches no network.
+    _TAB_STRIP = (
+        '<div class="tabs" role="tablist" aria-label="Settings sections">'
+        '<button class="tab active" data-panel="server" role="tab" id="tab-server"'
+        ' aria-controls="panel-server" aria-selected="true">Server</button>'
+        '<button class="tab" data-panel="accessibility" role="tab"'
+        ' id="tab-accessibility" aria-controls="panel-accessibility"'
+        ' aria-selected="false" tabindex="-1">Accessibility</button>'
+        "</div>"
+    )
+
+    def _dom_with_tabs(self) -> str:
+        return MIN_DOM.replace("</body>", self._TAB_STRIP + "\n</body>")
+
+    def test_status_failure_toggles_alert_role(self, settings_script: str) -> None:
+        """updateStatus(text, saved, isError) must flip #status to
+        role=alert / aria-live=assertive on failure and back to
+        role=status / aria-live=polite otherwise — the contract every save
+        handler (incl. saveBackupConfig) relies on for assertive
+        announcement."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              updateStatus('Save failed!', false, true);
+              const fr = document.getElementById('status').getAttribute('role');
+              const fl = document.getElementById('status').getAttribute('aria-live');
+              updateStatus('Loaded', false, false);
+              const orr = document.getElementById('status').getAttribute('role');
+              const ol = document.getElementById('status').getAttribute('aria-live');
+              document.body.setAttribute('data-test',
+                `fail=${fr}/${fl} ok=${orr}/${ol}`);
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-test="fail=alert/assertive ok=status/polite"' in result.dom, (
+            f"setStatusAlert polarity wrong; dom tail: {result.dom[-800:]}"
+        )
+
+    def test_tab_click_syncs_aria_selected_and_roving_tabindex(
+        self, settings_script: str
+    ) -> None:
+        """Clicking a tab must mark exactly that tab aria-selected=true with
+        tabIndex 0, and demote the previously selected tab to
+        aria-selected=false / tabIndex -1 (WAI-ARIA APG roving tabindex)."""
+        result = run_script(
+            settings_script,
+            initial_html=self._dom_with_tabs(),
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              document.getElementById('tab-accessibility')
+                .dispatchEvent(new MouseEvent('click', {bubbles: true}));
+              const sel = document.querySelectorAll('.tab[aria-selected="true"]');
+              document.body.setAttribute('data-test',
+                'selcount=' + sel.length +
+                ' active=' + (sel[0] && sel[0].dataset.panel) +
+                ' newidx=' + document.getElementById('tab-accessibility').tabIndex +
+                ' oldidx=' + document.getElementById('tab-server').tabIndex);
+            """,
+        )
+        _assert_clean_init(result)
+        assert (
+            'data-test="selcount=1 active=accessibility newidx=0 oldidx=-1"'
+            in result.dom
+        ), f"activateTab aria/roving-tabindex sync wrong; dom tail: {result.dom[-800:]}"
+
+    def test_tablist_keyboard_navigation(self, settings_script: str) -> None:
+        """Left/Right move + activate the adjacent tab (wrapping), Home/End
+        jump to the ends — the keydown handler bound on the tablist."""
+        result = run_script(
+            settings_script,
+            initial_html=self._dom_with_tabs(),
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              const tablist = document.querySelector('.tabs[role="tablist"]');
+              const active = () =>
+                document.querySelector('.tab[aria-selected="true"]').dataset.panel;
+              const press = (key) => {
+                tablist.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true}));
+                return active();
+              };
+              document.getElementById('tab-server').focus();
+              const right = press('ArrowRight');     // server -> accessibility
+              document.getElementById('tab-server').focus();
+              const wrap = press('ArrowLeft');        // server -> accessibility (wrap)
+              const end = press('End');               // -> accessibility (last)
+              const home = press('Home');             // -> server (first)
+              document.body.setAttribute('data-test',
+                `right=${right} wrap=${wrap} end=${end} home=${home}`);
+            """,
+        )
+        _assert_clean_init(result)
+        assert (
+            'data-test="right=accessibility wrap=accessibility'
+            ' end=accessibility home=server"' in result.dom
+        ), f"tablist keyboard nav wrong; dom tail: {result.dom[-800:]}"

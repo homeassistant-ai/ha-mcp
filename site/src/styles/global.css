@@ -298,6 +298,15 @@ pre {
 fieldset.a11y-options { border: 0; padding: 0; margin: 0; min-inline-size: auto; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0;
   margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+/* Skip-to-content link: visually hidden until focused, then pinned to the
+   top-left above the sticky nav (z-50) so keyboard users can bypass it. */
+.skip-link {
+  position: absolute; left: 8px; top: -56px; z-index: 60;
+  padding: 8px 16px; border-radius: 8px; font-size: 0.875rem; font-weight: 600;
+  background: rgb(var(--surface-0)); color: var(--text-primary);
+  border: 1px solid var(--border); transition: top 0.15s ease;
+}
+.skip-link:focus { top: 8px; outline: 2px solid rgb(var(--brand)); outline-offset: 2px; }
 .a11y-option {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;

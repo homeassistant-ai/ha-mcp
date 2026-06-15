@@ -33,3 +33,17 @@ These feed the picker tiles in the markup section AND the wizard `<script>` bloc
 1. Add an entry to the appropriate inline array (insert at the right `order` position). Keep each array ordered by the `order` field — the wizard renders entries in array order without re-sorting.
 2. Add a wizard branch in the `<script>` block keyed off the new entry's `id`. Match neighboring patterns: JSON clients add an `else if` in the JSON config builder; CLI clients add a CLI command emit; UI clients add an `instruction-block` div with click steps. See `cursor` / `chatgpt` / `claude-code` / `cloudflared` for examples.
 3. If the addition has cross-cutting troubleshooting content (PATH issues, restart requirements, version requirements), add it to `faq.astro`.
+
+## Accessibility & checks
+
+The site is accessibility-anchored (#1574/#1595). Before pushing site changes:
+
+```bash
+cd site
+npm run check       # astro check — types + a11y diagnostics
+npm run lint        # eslint-plugin-astro + jsx-a11y
+npm run build       # required before the audit (writes dist/)
+npm run audit:a11y  # axe-core over the built pages
+```
+
+CI runs these in the `site-checks` job (`.github/workflows/pr.yml`): `check`, `lint`, and the axe-core audit are all blocking. Accessibility conventions — landmarks, skip links, tablist semantics, live status regions, and the theme/contrast tier model — live in `.gemini/styleguide.md` › Accessibility.

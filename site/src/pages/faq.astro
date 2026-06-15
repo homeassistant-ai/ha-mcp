@@ -13,6 +13,8 @@ const withBase = (path: string) => {
 <Layout title="FAQ & Troubleshooting - Home Assistant MCP">
   <Nav active="faq" />
 
+  <main id="main-content" tabindex="-1" class="focus:outline-none">
+
   <div class="container mx-auto px-4 py-8 max-w-3xl">
     <!-- Header -->
     <header class="mb-8">
@@ -21,7 +23,7 @@ const withBase = (path: string) => {
     </header>
 
     <!-- Table of Contents -->
-    <nav class="mb-10 bg-slate-800/30 rounded-xl border border-slate-700/50 p-6">
+    <nav class="mb-10 bg-slate-800/30 rounded-xl border border-slate-700/50 p-6" aria-label="On this page">
       <h2 class="text-lg font-semibold text-white mb-4">On this page</h2>
       <ul class="space-y-2 text-sm">
         <li><a href="#general-questions" class="text-blue-400 hover:underline">General Questions</a></li>
@@ -198,7 +200,7 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
           <p class="text-slate-400 mb-2">Docker solution:</p>
           <ol class="text-slate-300 space-y-3 list-decimal list-inside">
             <li>Create a combined CA bundle:
-              <pre class="code-block mt-2"><code>cat $(python3 -m certifi) /path/to/your-ca.crt > combined-ca-bundle.crt</code></pre>
+              <pre class="code-block mt-2"><code>cat $(python3 -m certifi) /path/to/your-ca.crt &gt; combined-ca-bundle.crt</code></pre>
             </li>
             <li>Mount it and set <code class="bg-slate-800 px-1 rounded">SSL_CERT_FILE</code>:
               <pre class="code-block mt-2"><code>docker run --rm \
@@ -591,6 +593,7 @@ source ~/.zshrc
       </p>
     </div>
   </div>
+  </main>
 </Layout>
 
 <style>

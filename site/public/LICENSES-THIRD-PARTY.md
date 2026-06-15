@@ -35,7 +35,7 @@ SOFTWARE.
 ## Lucide (ISC License)
 
 Icons: home, cloud, wrench, computer, network, globe, search, zap, grid,
-trending-up, settings, link
+trending-up, settings, link, webhook
 
 Source: https://lucide.dev/
 
@@ -61,7 +61,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ## Simple Icons (CC0 1.0 Universal)
 
-Icons: Docker, Linux (Tux)
+Icons: Docker, Linux (Tux), Cloudflare, Python, Home Assistant
 
 Source: https://simpleicons.org/
 

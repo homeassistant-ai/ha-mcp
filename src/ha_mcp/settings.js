@@ -9,11 +9,13 @@ window.addEventListener('error', (e) => {
   const el = document.getElementById('status');
   if (!el) return;
   const where = e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : 'inline';
+  setStatusAlert(el, true);
   el.textContent = `JS error: ${e.message} @ ${where}`;
 });
 window.addEventListener('unhandledrejection', (e) => {
   const el = document.getElementById('status');
   if (!el) return;
+  setStatusAlert(el, true);
   el.textContent = `Async error: ${e.reason && e.reason.message ? e.reason.message : String(e.reason)}`;
 });
 
@@ -135,18 +137,18 @@ async function loadTools() {
   try {
     resp = await fetch('./api/settings/tools');
   } catch (e) {
-    updateStatus('Network error reaching /api/settings/tools: ' + e.message);
+    updateStatus('Network error reaching /api/settings/tools: ' + e.message, false, true);
     return;
   }
   if (!resp.ok) {
-    updateStatus(`/api/settings/tools returned HTTP ${resp.status} ${resp.statusText}`);
+    updateStatus(`/api/settings/tools returned HTTP ${resp.status} ${resp.statusText}`, false, true);
     return;
   }
   let data;
   try {
     data = await resp.json();
   } catch (e) {
-    updateStatus('Failed to parse /api/settings/tools response as JSON: ' + e.message);
+    updateStatus('Failed to parse /api/settings/tools response as JSON: ' + e.message, false, true);
     return;
   }
   toolData = data.tools || [];
@@ -169,14 +171,15 @@ async function loadTools() {
     // the user where to look instead of leaving them on "Loading".
     updateStatus(
       'No tools found. The sidecar reads ~/.ha-mcp/tool_metadata.json — ' +
-      'if missing/empty, restart your MCP client. See ~/.ha-mcp/sidecar.log for details.'
+      'if missing/empty, restart your MCP client. See ~/.ha-mcp/sidecar.log for details.',
+      false, true
     );
     return;
   }
   try {
     render();
   } catch (e) {
-    updateStatus('Render failed: ' + e.message + ' (open browser devtools for the stack)');
+    updateStatus('Render failed: ' + e.message + ' (open browser devtools for the stack)', false, true);
     throw e;
   }
   updateStatus('Loaded');
@@ -765,14 +768,24 @@ async function saveConfig() {
     // are on.
     if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
   } else {
-    updateStatus('Save failed!');
+    updateStatus('Save failed!', false, true);
   }
 }
 
-function updateStatus(text, saved) {
+// Reflect success/error semantics on a status span for assistive tech:
+// failures switch to role=alert/assertive so screen readers interrupt; all
+// other updates stay role=status/polite (matching the static markup). (#1596)
+function setStatusAlert(el, isError) {
+  if (!el) return;
+  el.setAttribute('role', isError ? 'alert' : 'status');
+  el.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+}
+
+function updateStatus(text, saved, isError) {
   const el = document.getElementById('status');
-  el.textContent = text;
+  setStatusAlert(el, isError);
   el.className = saved ? 'status saved' : 'status';
+  el.textContent = text;
 }
 
 function applyToolSearch() {
@@ -916,6 +929,7 @@ async function saveBackupConfig() {
     return;
   }
   btn.disabled = true;
+  setStatusAlert(statusEl, false);
   statusEl.textContent = 'Saving…';
   try {
     const resp = await fetch('./api/settings/backup-config', {
@@ -931,6 +945,7 @@ async function saveBackupConfig() {
         if (typeof data.error === 'string') msg = data.error;
         else if (data.error.message) msg = data.error.message;
       }
+      setStatusAlert(statusEl, true);
       statusEl.textContent = msg;
       return;
     }
@@ -958,6 +973,7 @@ async function saveBackupConfig() {
     }
   } catch (err) {
     btn.disabled = false;
+    setStatusAlert(statusEl, true);
     statusEl.textContent = 'Network error: ' + String(err);
   }
 }
@@ -1050,6 +1066,8 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
     const status = document.createElement('div');
     status.id = 'fsCustomPathsStatus';
     status.className = 'feature-help';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
     control.appendChild(ta);
     control.appendChild(btn);
     control.appendChild(status);
@@ -1070,6 +1088,7 @@ async function saveFsCustomPaths() {
     .map(s => s.trim())
     .filter(s => s.length);
   btn.disabled = true;
+  setStatusAlert(statusEl, false);
   statusEl.textContent = 'Saving…';
   try {
     const resp = await fetch('./api/settings/fs-custom-paths', {
@@ -1085,6 +1104,7 @@ async function saveFsCustomPaths() {
         if (typeof data.error === 'string') msg = data.error;
         else if (data.error.message) msg = data.error.message;
       }
+      setStatusAlert(statusEl, true);
       statusEl.textContent = msg;
       return;
     }
@@ -1101,6 +1121,7 @@ async function saveFsCustomPaths() {
       : 'Saved.';
   } catch (err) {
     btn.disabled = false;
+    setStatusAlert(statusEl, true);
     statusEl.textContent = 'Network error: ' + String(err);
   }
 }
@@ -2453,15 +2474,18 @@ async function removePolicyRule(toolName) {
 
 async function saveGlobalSettings() {
   const statusEl = document.getElementById('policy-global-save-status');
+  setStatusAlert(statusEl, false);
   statusEl.textContent = 'Saving...';
   let resp;
   try {
     resp = await fetch('./api/policy/config');
   } catch (e) {
+    setStatusAlert(statusEl, true);
     statusEl.textContent = 'Network error: ' + e.message;
     return;
   }
   if (!resp.ok) {
+    setStatusAlert(statusEl, true);
     statusEl.textContent = 'Load failed: ' + resp.status;
     return;
   }
@@ -2472,6 +2496,7 @@ async function saveGlobalSettings() {
     await policyPut(policy, 'Save global settings');
     statusEl.textContent = 'Saved.';
   } catch (e) {
+    setStatusAlert(statusEl, true);
     statusEl.textContent = e.message;
   }
 }
@@ -2629,10 +2654,18 @@ setInterval(() => {
 // Generic dispatcher — every .tab button names its target panel via
 // data-panel, every .panel has matching id="panel-<name>". Adding a
 // new tab is one button + one panel div; no JS change needed.
-function activateTab(target) {
-  document.querySelectorAll('.tab').forEach(t =>
-    t.classList.toggle('active', t.dataset.panel === target)
-  );
+function activateTab(target, opts) {
+  const focusTab = opts && opts.focusTab;
+  document.querySelectorAll('.tab').forEach(t => {
+    const selected = t.dataset.panel === target;
+    t.classList.toggle('active', selected);
+    // Expose tab state + roving tabindex to assistive tech (WAI-ARIA APG
+    // tabs pattern). Only the selected tab stays in the Tab sequence;
+    // arrow keys move between the rest. (#1596)
+    t.setAttribute('aria-selected', selected ? 'true' : 'false');
+    t.tabIndex = selected ? 0 : -1;
+    if (selected && focusTab) t.focus();
+  });
   document.querySelectorAll('.panel').forEach(p =>
     p.classList.toggle('active', p.id === 'panel-' + target)
   );
@@ -2648,6 +2681,27 @@ function activateTab(target) {
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => activateTab(tab.dataset.panel));
 });
+
+// Keyboard navigation for the tablist (WAI-ARIA APG tabs pattern): Left/Right
+// move + activate the adjacent tab, Home/End jump to the ends. (#1596)
+{
+  const tablist = document.querySelector('.tabs[role="tablist"]');
+  if (tablist) {
+    tablist.addEventListener('keydown', (e) => {
+      const tabs = Array.from(tablist.querySelectorAll('.tab'));
+      const currentIndex = tabs.indexOf(document.activeElement);
+      if (currentIndex === -1) return;
+      let nextIndex = null;
+      if (e.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'Home') nextIndex = 0;
+      else if (e.key === 'End') nextIndex = tabs.length - 1;
+      if (nextIndex === null) return;
+      e.preventDefault();
+      activateTab(tabs[nextIndex].dataset.panel, { focusTab: true });
+    });
+  }
+}
 
 // Cross-tab links — any <a data-panel-link="<name>"> switches tabs
 // in-page rather than following the href (used by the "no gated
@@ -2858,8 +2912,8 @@ function _advSaveStatusEls() {
     document.getElementById('advSaveStatusTop'),
   ].filter(Boolean);
 }
-function _setAdvSaveStatus(text) {
-  _advSaveStatusEls().forEach(el => { el.textContent = text; });
+function _setAdvSaveStatus(text, isError) {
+  _advSaveStatusEls().forEach(el => { setStatusAlert(el, isError); el.textContent = text; });
 }
 function _setAdvSaveDisabled(disabled) {
   _advSaveBtns().forEach(b => { b.disabled = disabled; });
@@ -2934,7 +2988,7 @@ async function saveAdvancedSettings() {
           data = {restart_required: true};
         } else {
           _setAdvSaveDisabled(false);
-          _setAdvSaveStatus(`Save failed (HTTP ${resp.status}, non-JSON body)`);
+          _setAdvSaveStatus(`Save failed (HTTP ${resp.status}, non-JSON body)`, true);
           return;
         }
       }
@@ -2945,7 +2999,7 @@ async function saveAdvancedSettings() {
           if (typeof data.error === 'string') msg = data.error;
           else if (data.error.message) msg = data.error.message;
         }
-        _setAdvSaveStatus(msg);
+        _setAdvSaveStatus(msg, true);
         return;
       }
     }
@@ -2973,7 +3027,7 @@ async function saveAdvancedSettings() {
     }
   } catch (err) {
     _setAdvSaveDisabled(false);
-    _setAdvSaveStatus('Network error: ' + String(err));
+    _setAdvSaveStatus('Network error: ' + String(err), true);
   }
 }
 
