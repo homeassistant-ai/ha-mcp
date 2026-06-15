@@ -7,6 +7,7 @@ Unit tests mock Supervisor API calls to test discovery logic in start.py.
 import importlib
 import importlib.util
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -276,6 +277,23 @@ class TestWebhookProxyStructure:
             assert cfg[key].get("description"), f"Missing description for {key}"
         # Toggle must be flagged as Beta in the user-facing label
         assert "Beta" in cfg["enable_oauth"]["name"]
+
+    def test_config_yaml_debug_logging_field(self):
+        """Unlike the OAuth fields, debug_logging is a VISIBLE toggle: it has a
+        default in options: (so it shows on the main Configuration page, not
+        under "unused optional configuration") and is bool? in schema, with a
+        Beta-flagged translation."""
+        with open(f"{PROXY_ADDON_DIR}/config.yaml") as f:
+            config = yaml.safe_load(f)
+        assert config["schema"]["debug_logging"] == "bool?"
+        # Present in options with a default → shown on the main config page.
+        assert config["options"]["debug_logging"] is False
+        with open(f"{PROXY_ADDON_DIR}/translations/en.yaml") as f:
+            translations = yaml.safe_load(f)
+        cfg = translations["configuration"]["debug_logging"]
+        assert cfg.get("name"), "Missing name for debug_logging"
+        assert cfg.get("description"), "Missing description for debug_logging"
+        assert "Beta" in cfg["name"]
 
     def test_addon_and_integration_versions_match(self):
         """config.yaml and manifest.json versions track together so that
@@ -1203,6 +1221,114 @@ class TestOAuthOffPreservesBehavior:
         await mod._handle_webhook(hass, "mcp_test", request)
 
         request.read.assert_awaited_once()  # auth gate didn't short-circuit
+
+
+class TestDebugLogging:
+    """The `debug_logging` toggle: OFF keeps the baseline hass.data shape and
+    logs nothing per-request; ON stores the flag and logs each inbound request
+    (before the OAuth gate, so even a 401'd discovery probe is recorded)."""
+
+    @pytest.fixture
+    def mod(self):
+        return _import_mcp_proxy()
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        return h
+
+    async def test_debug_off_omits_key(self, mod, hass):
+        """Toggle off (or absent) → no debug_logging key; hass.data shape is
+        identical to the baseline, mirroring the oauth-off guarantee."""
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "debug_logging": False,
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "debug_logging" not in hass.data[mod.DOMAIN]
+        assert set(hass.data[mod.DOMAIN].keys()) == {
+            "target_url",
+            "webhook_id",
+            "session",
+        }
+
+    async def test_debug_on_stores_flag(self, mod, hass):
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "debug_logging": True,
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert hass.data[mod.DOMAIN]["debug_logging"] is True
+
+    async def test_debug_on_logs_inbound_request(self, mod, caplog):
+        """When on, _handle_webhook logs the inbound request before any upstream
+        work — so a request that fails downstream is still recorded."""
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+                "debug_logging": True,
+            }
+        }
+        request = MagicMock()
+        request.headers = {"X-Forwarded-For": "203.0.113.4"}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.remote = "10.0.0.1"
+        # Fail the upstream call fast; the inbound log already happened by then.
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("stop")
+        )
+        with caplog.at_level(logging.INFO, logger=mod._LOGGER.name):
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+
+        assert any("[inbound]" in r.getMessage() for r in caplog.records)
+
+    async def test_debug_off_logs_no_inbound(self, mod, caplog):
+        """With the flag absent the handler emits no inbound debug lines."""
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("stop")
+        )
+        with caplog.at_level(logging.INFO, logger=mod._LOGGER.name):
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+
+        assert not any("[inbound]" in r.getMessage() for r in caplog.records)
 
 
 class TestOAuthProvider:

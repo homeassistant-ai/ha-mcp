@@ -87,12 +87,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             "You can safely remove 'mcp_proxy:' from configuration.yaml."
         )
         hass.async_create_task(
-            hass.config_entries.flow.async_init(
-                DOMAIN, context={"source": "import"}
-            )
+            hass.config_entries.flow.async_init(DOMAIN, context={"source": "import"})
         )
     if await hass.async_add_executor_job(_marker_present):
         from .repairs import maybe_create_issue
+
         maybe_create_issue(hass, DOMAIN)
     return True
 
@@ -101,6 +100,7 @@ def _marker_present() -> bool:
     # Imported lazily so async_setup doesn't pull in repairs.py module-load
     # cost on the no-marker happy path.
     from .repairs import marker_present
+
     return marker_present()
 
 
@@ -190,16 +190,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             masked_wh,
         )
         await session.close()
-        raise ConfigEntryError(
-            f"Failed to register webhook endpoint: {err}"
-        ) from err
+        raise ConfigEntryError(f"Failed to register webhook endpoint: {err}") from err
 
     hass_data: dict = {
         "target_url": target_url,
         "webhook_id": webhook_id,
         "session": session,
-        "debug_logging": debug_logging,
     }
+    # Mirror the oauth pattern: only add the key when the feature is on, so the
+    # default/OFF path's hass.data shape stays identical to the baseline
+    # (target_url, webhook_id, session) — guarded by TestOAuthOffPreservesBehavior.
+    if debug_logging:
+        hass_data["debug_logging"] = True
 
     # OAuth is opt-in. When the addon writes an `oauth` section into the
     # config file (only when enable_oauth is on AND both creds are non-empty,
@@ -229,11 +231,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not isinstance(public_base_url, str) or not public_base_url:
             public_base_url = None
         from .oauth import OAuthProvider, load_or_create_secret
+
         try:
             # Filesystem I/O — must run off the event loop.
-            signing_key = await hass.async_add_executor_job(
-                load_or_create_secret
-            )
+            signing_key = await hass.async_add_executor_job(load_or_create_secret)
             oauth_provider = OAuthProvider(
                 hass=hass,
                 client_id=client_id,
@@ -270,6 +271,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # in the executor; the issue-registry call is synchronous and safe on
     # the event loop.
     from .repairs import _clear_marker, _delete_issue_only
+
     await hass.async_add_executor_job(_clear_marker)
     _delete_issue_only(hass, DOMAIN)
 
@@ -301,9 +303,7 @@ async def _handle_webhook(
     debug = data.get("debug_logging")
     if debug:
         wh = data["webhook_id"]
-        masked_path = (
-            f"/api/webhook/{wh[:6]}..." if len(wh) > 6 else "/api/webhook/***"
-        )
+        masked_path = f"/api/webhook/{wh[:6]}..." if len(wh) > 6 else "/api/webhook/***"
         source = request.headers.get("X-Forwarded-For") or request.remote or "unknown"
         has_auth = "present" if request.headers.get("Authorization") else "absent"
         _LOGGER.info(
@@ -325,6 +325,7 @@ async def _handle_webhook(
                 "bearer; expected for the initial discovery probe)"
             )
         from .oauth import build_unauthorized_response
+
         return build_unauthorized_response(request, oauth_provider)
 
     body = await request.read()
@@ -333,8 +334,12 @@ async def _handle_webhook(
     forward_headers = {}
     for key, value in request.headers.items():
         if key.lower() in (
-            "host", "content-length", "transfer-encoding", "connection",
-            "cookie", "authorization",
+            "host",
+            "content-length",
+            "transfer-encoding",
+            "connection",
+            "cookie",
+            "authorization",
         ):
             continue
         forward_headers[key] = value
