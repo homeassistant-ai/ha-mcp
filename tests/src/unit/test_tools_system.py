@@ -7,12 +7,16 @@ ha_restart reports failure when a reverse proxy returns 504 during restart.
 import asyncio
 import json
 from contextlib import contextmanager
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools.tools_system import SystemTools
 
 
@@ -1014,14 +1018,17 @@ def _make_dead_entities_client(
     registry_resp=None,
     entries_resp=None,
     states_exc=None,
+    registry_exc=None,
+    entries_exc=None,
 ):
     """Build a mock client for ``_fetch_dead_entities``.
 
     ``get_states`` returns ``states`` (or raises ``states_exc``).
-    ``send_websocket_message`` dispatches on the message ``type`` and returns the
-    HA envelope for the registry / config-entries lists. Pass ``registry_resp`` /
-    ``entries_resp`` to inject a raw (e.g. failure) envelope instead of wrapping a
-    list.
+    ``send_websocket_message`` dispatches on the message ``type`` and returns
+    the HA envelope for the registry / config-entries lists. Pass
+    ``registry_resp`` / ``entries_resp`` to inject a raw (e.g. failure)
+    envelope, or ``registry_exc`` / ``entries_exc`` to make the WS call
+    raise (covering the fatal-propagation paths).
     """
     client = MagicMock()
     if states_exc is not None:
@@ -1032,10 +1039,14 @@ def _make_dead_entities_client(
     async def _ws(message):
         msg_type = message.get("type")
         if msg_type == "config/entity_registry/list":
+            if registry_exc is not None:
+                raise registry_exc
             if registry_resp is not None:
                 return registry_resp
             return {"success": True, "result": registry or []}
         if msg_type == "config_entries/get":
+            if entries_exc is not None:
+                raise entries_exc
             if entries_resp is not None:
                 return entries_resp
             return {"success": True, "result": entries or []}
@@ -1245,7 +1256,14 @@ class TestFetchDeadEntities:
         assert result["config_entries_checked"] is False
         assert result["config_entry_orphans"]["items"] == []
         assert len(result["stale_restored"]["items"]) == 1
-        assert any("config_entry_orphans" in w for w in result["warnings"])
+        # The section returns warnings under the ``_warnings`` sentinel; the
+        # aggregator (``ha_get_system_health``) bubbles them to top-level
+        # ``result["warnings"]``. Direct-call tests assert the sentinel; the
+        # bubbling contract is covered by an integration test below.
+        assert any("config_entry_orphans" in w for w in result["_warnings"])
+        # A genuine fetch failure (success=false) preserves the envelope
+        # error string rather than substituting a fixed "no entries" message.
+        assert any("ws down" in w for w in result["_warnings"])
         assert "error" not in result
 
     @pytest.mark.asyncio
@@ -1321,6 +1339,15 @@ class TestFetchDeadEntities:
         assert bucket["count"] == 50
         assert bucket["total_count"] == 60
         assert bucket["truncated"] is True
+        # The actionable cleanup guidance must (a) be present, (b) name
+        # both cap and total in the documented ``"Showing X of Y"`` form
+        # so a client can render the truncation context, and (c) carry
+        # the "remove ... batches" instruction so the user knows the
+        # cleanup is iterative — a wrong-template copy-paste from the
+        # ZHA truncation hint would fail this.
+        assert "hint" in bucket
+        assert "50 of 60" in bucket["hint"]
+        assert "remove" in bucket["hint"].lower()
 
     @pytest.mark.asyncio
     async def test_entity_without_config_entry_id_classifies_as_stale(self):
@@ -1386,7 +1413,13 @@ class TestFetchDeadEntities:
 
         assert result["config_entry_orphans"]["items"] == []
         assert result["config_entries_checked"] is False
-        assert any("config_entry_orphans" in w for w in result["warnings"])
+        # Direct-call asserts the ``_warnings`` sentinel; integration test
+        # below covers the bubble to top-level ``result["warnings"]``.
+        assert any("config_entry_orphans" in w for w in result["_warnings"])
+        # Real empty list — distinct from a fetch failure, which would
+        # carry the underlying error string. Asserts the two paths produce
+        # distinct messages (the "empty list" vs "failed" branching).
+        assert any("empty list" in w for w in result["_warnings"])
 
     @pytest.mark.asyncio
     async def test_note_present_when_candidates_found(self):
@@ -1469,6 +1502,11 @@ class TestFetchDeadEntities:
         assert bucket["count"] == 50
         assert bucket["total_count"] == 60
         assert bucket["truncated"] is True
+        # Same template assertions as the orphan bucket so a copy-paste
+        # error swapping the two buckets' hints is caught.
+        assert "hint" in bucket
+        assert "50 of 60" in bucket["hint"]
+        assert "remove" in bucket["hint"].lower()
         assert result["summary"]["candidate_total"] == 60
 
     @pytest.mark.asyncio
@@ -1533,3 +1571,349 @@ class TestFetchDeadEntities:
         assert result["success"] is True
         assert result["baseline_available"] is False
         assert result["dead_entities"] == payload
+
+
+class TestWsResultList:
+    """Edge cases for ``SystemTools._ws_result_list``: the unwrap shape is a
+    tuple ``(list | None, error_str | None)``, preserving the underlying cause
+    so the caller can attribute a failure rather than substitute a fixed
+    "unavailable" message that hides whether it was auth, command, or
+    malformed envelope. The recoverable-Exception branch, the non-dict
+    response, and the success-but-result-not-a-list branches were previously
+    only exercised through ``_fetch_dead_entities``; pinning them directly
+    documents the contract and guards against a refactor regressing it."""
+
+    def test_recoverable_exception_returns_cause_string(self):
+        """A bare ``Exception`` from ``gather`` is recoverable (per
+        ``_reraise_if_fatal`` policy): returns ``(None, cause)`` with the
+        exception class name + message preserved."""
+        data, err = SystemTools._ws_result_list(RuntimeError("ws boom"))
+        assert data is None
+        assert err is not None
+        assert "RuntimeError" in err
+        assert "ws boom" in err
+
+    def test_non_dict_response_reports_unexpected_type(self):
+        """A non-dict envelope (e.g. a list slipped through) is a protocol
+        violation worth surfacing in the cause string, not a silent
+        ``None`` substitution."""
+        data, err = SystemTools._ws_result_list(["unexpected", "shape"])
+        assert data is None
+        assert err is not None
+        assert "list" in err
+
+    def test_success_false_envelope_preserves_error_message(self):
+        """An HA error envelope (``{"success": False, "error": {...}}``)
+        carries the actual cause (auth, command name, validation) — the
+        caller surfaces it instead of a fixed "unavailable" substitute."""
+        resp = {
+            "success": False,
+            "error": {"code": "unknown_command", "message": "Unknown command."},
+        }
+        data, err = SystemTools._ws_result_list(resp)
+        assert data is None
+        assert err == "Unknown command."
+
+    def test_success_false_envelope_code_only_falls_back_to_code(self):
+        """When the envelope error dict has only ``code`` (no ``message``),
+        the code is still preserved as the cause — better than substituting
+        a generic "unknown error" and losing the discriminator."""
+        data, err = SystemTools._ws_result_list(
+            {"success": False, "error": {"code": "auth_failed"}}
+        )
+        assert data is None
+        assert err == "auth_failed"
+
+    def test_success_false_envelope_unknown_shape_uses_str_repr(self):
+        """A dict-error envelope with neither ``message`` nor ``code`` still
+        surfaces something attributable to the client — degrades to
+        ``str(err)`` so the discriminating field reaches the cause string."""
+        data, err = SystemTools._ws_result_list(
+            {"success": False, "error": {"detail": "weird"}}
+        )
+        assert data is None
+        assert err is not None
+        assert "weird" in err
+
+    def test_success_false_string_error_preserved(self):
+        """Some envelopes report ``error`` as a plain string; that path must
+        also survive (the envelope-dict branch can't claim it)."""
+        data, err = SystemTools._ws_result_list({"success": False, "error": "ws down"})
+        assert data is None
+        assert err == "ws down"
+
+    def test_success_false_no_error_field_defaults_to_unknown(self):
+        """A malformed envelope without ``error`` shouldn't crash; degrade
+        to a sentinel string so the caller can still attribute the failure."""
+        data, err = SystemTools._ws_result_list({"success": False})
+        assert data is None
+        assert err == "unknown error"
+
+    def test_success_but_result_not_a_list_reports_wrong_shape(self):
+        """``success=True`` with a non-list ``result`` (e.g. a dict from a
+        sibling command shape) is reportable as a wrong-shape failure."""
+        data, err = SystemTools._ws_result_list(
+            {"success": True, "result": {"unexpected": "dict"}}
+        )
+        assert data is None
+        assert err is not None
+        assert "dict" in err
+
+    def test_success_with_list_result_returns_data_and_no_error(self):
+        """Happy path: list returned as data, error slot is ``None``."""
+        data, err = SystemTools._ws_result_list(
+            {"success": True, "result": [{"id": 1}, {"id": 2}]}
+        )
+        assert data == [{"id": 1}, {"id": 2}]
+        assert err is None
+
+    def test_cancelled_error_unwinds_not_returned(self):
+        """Per ``_reraise_if_fatal``: cancellation must propagate; the
+        function never returns ``(None, ...)`` for it."""
+        with pytest.raises(asyncio.CancelledError):
+            SystemTools._ws_result_list(asyncio.CancelledError())
+
+    def test_home_assistant_connection_error_unwinds_not_returned(self):
+        """Transport-dead errors propagate via ``_reraise_if_fatal`` (the
+        #1624 policy folded into this PR) — once the HA connection is dead
+        the remaining section fetches will fail anyway, so a propagated
+        root cause beats N per-section embedded errors."""
+        with pytest.raises(HomeAssistantConnectionError):
+            SystemTools._ws_result_list(HomeAssistantConnectionError("transport dead"))
+
+
+class TestRegistryFailurePreservesCause:
+    """The ``registry`` branch in ``_fetch_dead_entities`` previously
+    substituted a fixed ``"config/entity_registry/list unavailable"`` string
+    and discarded ``resp.get("error")``. The new contract preserves the
+    envelope cause so a client can distinguish auth vs command-error vs
+    malformed envelope."""
+
+    @pytest.mark.asyncio
+    async def test_registry_envelope_error_preserved_in_section_error(self):
+        client = _make_dead_entities_client(
+            states=[],
+            registry_resp={
+                "success": False,
+                "error": {"code": "auth_failed", "message": "Auth required."},
+            },
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+        assert "error" in result
+        # The original envelope message is preserved (rather than masked as
+        # "unavailable"), so the cause class is attributable from the dict.
+        assert "Auth required." in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_registry_exception_class_preserved_in_section_error(self):
+        client = _make_dead_entities_client(
+            states=[],
+            registry_resp=None,
+            registry_exc=RuntimeError("transport hiccup"),
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+        assert "error" in result
+        assert "RuntimeError" in result["error"]
+        assert "transport hiccup" in result["error"]
+
+
+class TestConfigEntriesFailureVsEmpty:
+    """The config-entries branch previously folded the genuine-fetch-failure
+    case and the truly-empty-list case under the same "returned no entries"
+    message. The new contract distinguishes them so a backend failure isn't
+    reported as "no entries"."""
+
+    @pytest.mark.asyncio
+    async def test_failure_message_carries_underlying_cause(self):
+        client = _make_dead_entities_client(
+            states=[],
+            registry=[],
+            entries_resp={
+                "success": False,
+                "error": {"code": "unknown_command", "message": "Bad."},
+            },
+        )
+        result = await SystemTools(client)._fetch_dead_entities()
+        # The bubbled warning surfaces the cause string rather than the
+        # generic "no entries" message — i.e. distinguishable from the
+        # empty-list path below.
+        assert "_warnings" in result
+        msg = next(iter(result["_warnings"]))
+        assert "failed" in msg
+        assert "Bad." in msg
+
+    @pytest.mark.asyncio
+    async def test_empty_list_message_names_the_empty_state_not_a_failure(self):
+        client = _make_dead_entities_client(states=[], registry=[], entries=[])
+        result = await SystemTools(client)._fetch_dead_entities()
+        assert "_warnings" in result
+        msg = next(iter(result["_warnings"]))
+        # Distinguishable from the failure path: this branch names the
+        # actual state ("empty list"/"no integrations configured") rather
+        # than reporting a fetch failure with a cause string.
+        assert "empty list" in msg
+        assert "failed" not in msg
+
+
+class TestWarningsBubbleToTopLevel:
+    """Section-emitted warnings must surface under the top-level
+    ``result["warnings"]`` (the documented contract location), not on the
+    section dict's reserved-term-colliding ``warnings`` key. The section
+    helper uses a ``_warnings`` sentinel that the aggregator pops + appends
+    to ``result["warnings"]``."""
+
+    @pytest.mark.asyncio
+    async def test_dead_entities_warnings_bubble_to_result_warnings(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(return_value={"success": True})
+        tools = SystemTools(client)
+        section_payload = {
+            "summary": {"candidate_total": 0, "registry_total": 0},
+            "_warnings": ["config_entries/get failed (boom); tier skipped."],
+        }
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools,
+                "_fetch_dead_entities",
+                new=AsyncMock(return_value=section_payload),
+            ),
+        ):
+            result = await tools.ha_get_system_health(include="dead_entities")
+        # The sentinel is stripped from the section dict so a client never
+        # sees the internal key.
+        assert "_warnings" not in result["dead_entities"]
+        # And the message lands under the documented contract location.
+        assert any("config_entries/get failed" in w for w in result.get("warnings", []))
+
+    @pytest.mark.asyncio
+    async def test_dead_entities_without_warnings_does_not_create_warnings_key(self):
+        """No warnings ⇒ no spurious top-level ``warnings`` key (avoids
+        adding noise to the aggregator output)."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(return_value={"success": True})
+        tools = SystemTools(client)
+        section_payload = {"summary": {"candidate_total": 0, "registry_total": 0}}
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools,
+                "_fetch_dead_entities",
+                new=AsyncMock(return_value=section_payload),
+            ),
+        ):
+            result = await tools.ha_get_system_health(include="dead_entities")
+        # No-warnings happy path: no spurious top-level key. (The
+        # aggregator may still add unrelated warnings for orphan args etc.
+        # — we assert specifically that no dead-entities-bubbled message
+        # surfaced rather than checking the key's absence outright.)
+        assert all("config_entries/get" not in w for w in result.get("warnings", []))
+
+
+class TestHomeAssistantConnectionErrorPropagation:
+    """#1624 policy folded into this PR: a dead HA transport propagates as
+    ``isError=true`` (via ``_reraise_if_fatal``) rather than being demoted to
+    N per-section embedded errors. Applies to ``_fetch_dead_entities``, every
+    sibling section helper, and the ws ``sections`` gather pre-pass — the
+    cross-section consistency was the whole point of the #1624 decision."""
+
+    @pytest.mark.asyncio
+    async def test_connection_error_from_states_propagates(self):
+        """A ``HomeAssistantConnectionError`` from the REST states fetch
+        unwinds out of ``_fetch_dead_entities`` rather than being demoted
+        to a section error string."""
+        client = _make_dead_entities_client(
+            states=None,
+            states_exc=HomeAssistantConnectionError("transport dead"),
+        )
+        with pytest.raises(HomeAssistantConnectionError):
+            await SystemTools(client)._fetch_dead_entities()
+
+    @pytest.mark.asyncio
+    async def test_connection_error_from_registry_propagates(self):
+        """Connection failure on the WS registry fetch unwinds (via
+        ``_ws_result_list``'s fatal pre-pass) rather than landing as a
+        section error string."""
+        client = _make_dead_entities_client(
+            states=[],
+            registry_resp=None,
+            registry_exc=HomeAssistantConnectionError("ws gone"),
+        )
+        with pytest.raises(HomeAssistantConnectionError):
+            await SystemTools(client)._fetch_dead_entities()
+
+    @pytest.mark.parametrize(
+        "helper_name",
+        [
+            "_fetch_repairs",
+            "_fetch_zha_network",
+            "_fetch_zwave_network",
+            "_fetch_themes",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_connection_error_from_ws_section_helper_propagates(
+        self, helper_name
+    ):
+        """Each ws-backed sibling section helper's ``except Exception`` chain
+        routes through ``_reraise_if_fatal`` as its first line, so a
+        connection error from one section unwinds the request rather than
+        embedding N per-section errors. Parametrized across every helper
+        so a regression that removes the call from one (and only one) is
+        caught — the cross-section consistency #1624 demanded."""
+        ws_client = MagicMock()
+        ws_client.send_command = AsyncMock(
+            side_effect=HomeAssistantConnectionError("ws gone")
+        )
+        helper = getattr(SystemTools, helper_name)
+        kwargs: dict[str, Any] = {}
+        if helper_name == "_fetch_zha_network":
+            kwargs["full"] = False
+        with pytest.raises(HomeAssistantConnectionError):
+            await helper(ws_client, **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_connection_error_from_config_check_propagates(self):
+        """``_fetch_config_check`` is REST-based (calls
+        ``self._client.check_config()``) and runs inline rather than through
+        the gather pre-pass, so its propagation can't piggyback on the
+        ws-section parametrize above. Pin it independently."""
+        client = MagicMock()
+        client.check_config = AsyncMock(
+            side_effect=HomeAssistantConnectionError("rest dead")
+        )
+        with pytest.raises(HomeAssistantConnectionError):
+            await SystemTools(client)._fetch_config_check()
+
+    @pytest.mark.asyncio
+    async def test_aggregator_pre_pass_propagates_connection_error_as_tool_error(
+        self,
+    ):
+        """The ws ``sections`` gather pre-pass uses the same
+        ``_reraise_if_fatal`` policy: a HomeAssistantConnectionError from
+        any section result element unwinds the gather and is then wrapped
+        by ``ha_get_system_health``'s outer ``except Exception``
+        (``exception_to_structured_error``) into a ``ToolError`` with the
+        ``CONNECTION_FAILED`` code — the MCP ``isError=true`` contract for
+        a dead transport. Without ``_reraise_if_fatal``, the connection
+        error would have been demoted to one section's ``error`` string,
+        and the tool would have returned ``success=True`` with the dead
+        transport silently embedded — the exact #1624 anti-pattern."""
+        client = MagicMock()
+        tools = SystemTools(client)
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools,
+                "_fetch_repairs",
+                new=AsyncMock(side_effect=HomeAssistantConnectionError("ws gone")),
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await tools.ha_get_system_health(include="repairs")
+        # The structured error preserves the cause string + the
+        # CONNECTION_FAILED code, so a client sees the real root cause
+        # rather than a per-section embedded ``{"error": "..."}``.
+        msg = str(excinfo.value)
+        assert "CONNECTION_FAILED" in msg
+        assert "ws gone" in msg

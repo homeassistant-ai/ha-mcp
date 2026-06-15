@@ -36,16 +36,37 @@ logger = logging.getLogger(__name__)
 
 def _reraise_if_fatal(exc: BaseException) -> None:
     """Re-raise exceptions that must unwind rather than be demoted to an
-    embedded section error: task cancellation and interpreter exit
-    (``CancelledError``/``KeyboardInterrupt``/``SystemExit`` are all
-    ``BaseException`` but not ``Exception``) plus ``ToolError`` (which carries
-    the MCP ``isError`` contract). Encapsulates the same policy as the
-    re-raise pre-pass on the ws ``sections`` gather in ``ha_get_system_health``
-    — keep both in sync when adding exception classes. Recoverable
-    ``Exception``-level failures fall through to the caller's embed-as-error
-    handling, matching every sibling section helper.
+    embedded section error:
+
+    - ``CancelledError`` / ``KeyboardInterrupt`` / ``SystemExit`` (all
+      ``BaseException`` but not ``Exception``) — task cancellation and
+      interpreter exit.
+    - ``ToolError`` — carries the MCP ``isError`` contract.
+    - ``HomeAssistantConnectionError`` — once the HA transport is dead the
+      remaining section fetches will fail anyway, so propagate the root
+      cause as ``isError=true`` rather than embed N per-section connection
+      errors. The codebase's ``rest_client._request`` already wraps
+      ``OSError`` / timeout / transport failures into this class, so it is
+      the single fatal class to gate on.
+
+    This implements the cross-section policy proposed in #1624: a dead
+    connection fails loud rather than degrade per-section. Every section
+    helper in ``ha_get_system_health`` routes its ``except Exception`` block
+    through this gate as its first line, so the policy is consistent across
+    the ws ``sections`` gather pre-pass and every inline section. Recoverable
+    ``Exception``-level failures still fall through to the caller's
+    embed-as-error handling.
     """
-    if isinstance(exc, ToolError) or not isinstance(exc, Exception):
+    # Local import: ``rest_client`` imports from tool helpers transitively,
+    # so a module-level import here would risk a circular import in the
+    # tools package.
+    from ..client.rest_client import HomeAssistantConnectionError
+
+    if (
+        isinstance(exc, ToolError)
+        or not isinstance(exc, Exception)
+        or isinstance(exc, HomeAssistantConnectionError)
+    ):
         raise exc
 
 
@@ -557,17 +578,13 @@ class SystemTools:
                 # inside a helper would otherwise be silently demoted to
                 # ``{"error": "ToolError: …"}`` and break the MCP
                 # ``isError=true`` contract for the whole tool.
+                # ``_reraise_if_fatal`` encapsulates the policy (cancellation,
+                # interpreter-exit, ``ToolError``, and the codebase's transport
+                # ``HomeAssistantConnectionError``) — the single source of
+                # truth shared with each section helper's ``except`` chain.
                 for section_result in gathered:
-                    if isinstance(section_result, asyncio.CancelledError):
-                        raise section_result
-                    if isinstance(section_result, ToolError):
-                        raise section_result
-                    if isinstance(section_result, BaseException) and not isinstance(
-                        section_result, Exception
-                    ):
-                        # ``KeyboardInterrupt`` / ``SystemExit`` — never demote
-                        # these to a section-level error string.
-                        raise section_result
+                    if isinstance(section_result, BaseException):
+                        _reraise_if_fatal(section_result)
                 for (section_name, _), section_result in zip(
                     sections, gathered, strict=True
                 ):
@@ -669,7 +686,16 @@ class SystemTools:
                 # (states via /api/states, registry + config-entries via the
                 # bridge), not the health ws_client — so it runs inline like
                 # config_check and survives a baseline-WS-down install.
-                result["dead_entities"] = await self._fetch_dead_entities()
+                dead_section = await self._fetch_dead_entities()
+                # Pop the ``_warnings`` sentinel and bubble it to the top-level
+                # ``result["warnings"]`` (the documented contract location).
+                # The section helper uses this sentinel so its return signature
+                # stays uniform with every other section (a plain dict) while
+                # avoiding a collision with the reserved ``warnings`` term.
+                section_warnings = dead_section.pop("_warnings", None)
+                if section_warnings:
+                    result.setdefault("warnings", []).extend(section_warnings)
+                result["dead_entities"] = dead_section
 
             return result
 
@@ -798,6 +824,7 @@ class SystemTools:
                 )
                 repairs["error"] = f"Repairs data not available: {err_msg}"
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to fetch repairs: %s", e)
             repairs["error"] = f"Repairs data not available: {e}"
         return repairs
@@ -843,6 +870,7 @@ class SystemTools:
                         "Use ha_get_device(integration='zha') for full device list."
                     )
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to fetch ZHA network data: %s", e)
             zha_network["error"] = f"ZHA integration not available or error: {e}"
         return zha_network
@@ -906,6 +934,7 @@ class SystemTools:
                         "Use ha_get_device(integration='zwave_js') for full device list."
                     )
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to fetch Z-Wave network data: %s", e)
             zwave_network["error"] = (
                 f"Z-Wave JS integration not available or error: {e}"
@@ -940,36 +969,53 @@ class SystemTools:
                 )
                 themes_data["error"] = f"Themes data not available: {err_msg}"
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to fetch themes: %s", e)
             themes_data["error"] = f"Themes data not available: {e}"
         return themes_data
 
     @staticmethod
-    def _ws_result_list(resp: Any) -> list[dict[str, Any]] | None:
-        """Unwrap a ``send_websocket_message`` response into a list, or None.
+    def _ws_result_list(
+        resp: Any,
+    ) -> tuple[list[dict[str, Any]] | None, str | None]:
+        """Unwrap a ``send_websocket_message`` response into ``(list, None)``
+        on success or ``(None, error_str)`` on failure.
 
         ``send_websocket_message`` returns the HA WebSocket envelope
         (``{"success": bool, "result": [...]}``) on success and
         ``{"success": False, "error": ...}`` on failure; ``return_exceptions``
-        in the caller's ``gather`` can also hand back a raw exception. Returns
-        the ``result`` list on success, else ``None`` so the caller can treat a
-        backend failure as "source unavailable".
+        in the caller's ``gather`` can also hand back a raw exception.
+        Preserves the underlying cause string (envelope error message,
+        exception type, or wrong-shape description) so the caller can
+        attribute the failure rather than substitute a fixed "unavailable"
+        message that hides the root cause (auth vs command error vs
+        malformed envelope). Fatal exceptions (per ``_reraise_if_fatal``)
+        unwind instead of being returned as an error string.
         """
         if isinstance(resp, BaseException):
             # gather(return_exceptions=True) hands back the raw exception; let
             # truly-fatal ones unwind instead of masking them as "unavailable".
             _reraise_if_fatal(resp)
-            return None
+            return None, f"{type(resp).__name__}: {resp}"
         if not isinstance(resp, dict):
-            return None
+            return None, f"unexpected response type: {type(resp).__name__}"
         # Require success truthy before trusting ``result`` — matches the
         # ``if result.get("success")`` convention used by the other WS handlers
         # in this file (and treats a malformed envelope missing the key as a
         # failure rather than reading a half-built result).
         if not resp.get("success"):
-            return None
+            err = resp.get("error")
+            if isinstance(err, dict):
+                err_msg = err.get("message") or err.get("code") or str(err)
+            elif err:
+                err_msg = str(err)
+            else:
+                err_msg = "unknown error"
+            return None, str(err_msg)
         result = resp.get("result")
-        return result if isinstance(result, list) else None
+        if isinstance(result, list):
+            return result, None
+        return None, f"unexpected result shape: {type(result).__name__}"
 
     async def _fetch_dead_entities(self) -> dict[str, Any]:
         """Surface orphaned/stale entity-registry entries.
@@ -1012,6 +1058,14 @@ class SystemTools:
             "stale_restored": {"items": [], "count": 0, "total_count": 0},
             "summary": {"candidate_total": 0, "registry_total": 0},
         }
+        # Warnings collected here are bubbled to the top-level
+        # ``result["warnings"]`` by the aggregator. The section returns a
+        # plain dict (like every other section helper, keeping the return
+        # signature uniform) with a ``_warnings`` sentinel that
+        # ``ha_get_system_health`` pops and extends onto ``result["warnings"]``
+        # — the documented contract location, which a section-local
+        # ``warnings`` key would collide with.
+        bubble_warnings: list[str] = []
         try:
             # Index the gather result (rather than tuple-unpack) so mypy can
             # type each element through the return_exceptions=True overload;
@@ -1038,32 +1092,43 @@ class SystemTools:
                     f"{type(states).__name__}"
                 )
                 return dead
-            registry = self._ws_result_list(results[1])
+            registry, registry_err = self._ws_result_list(results[1])
             if registry is None:
+                # Preserve the underlying cause (envelope error message,
+                # exception type, or wrong-shape description) so the client
+                # can distinguish auth vs command vs malformed envelope
+                # rather than see a fixed "unavailable" substitute.
                 dead["error"] = (
-                    "Could not fetch entity registry "
-                    "(config/entity_registry/list unavailable)"
+                    f"Could not fetch entity registry "
+                    f"(config/entity_registry/list: {registry_err})"
                 )
                 return dead
 
             # config-entries is the only optional source: without it the
             # definitive orphan tier can't be computed, but stale_restored still
             # can — so degrade rather than fail the whole section.
-            entries = self._ws_result_list(results[2])
+            entries, entries_err = self._ws_result_list(results[2])
             live_entry_ids: set[str] | None = None
-            # Treat an empty list like a failed fetch. A config-entry-linked
-            # registry entry implies its config entry exists, so an empty
-            # config_entries/get is either a genuinely integration-less install
-            # (no cfg-linked entries to orphan anyway) or a backend hiccup that
-            # masquerades as success. Either way we cannot tell a removed
-            # integration from the empty result — so skip the orphan tier rather
-            # than flag every cfg-linked entry as dead.
-            if not entries:
+            if entries is None:
+                # Genuine fetch failure — preserve the cause so a backend
+                # failure isn't reported as "no entries".
                 dead["config_entries_checked"] = False
-                dead.setdefault("warnings", []).append(
-                    "config_entries/get returned no entries; config_entry_orphans "
-                    "tier skipped (cannot distinguish a removed integration from "
-                    "an empty or failed fetch). stale_restored still computed."
+                bubble_warnings.append(
+                    f"config_entries/get failed ({entries_err}); "
+                    "config_entry_orphans tier skipped (cannot distinguish a "
+                    "removed integration from a failed fetch). stale_restored "
+                    "still computed."
+                )
+            elif not entries:
+                # Real empty list — HA reports no config entries configured.
+                # Distinct from a fetch failure: the message names the actual
+                # state. The orphan tier still skips since there is no live
+                # set to diff against; stale_restored still computed.
+                dead["config_entries_checked"] = False
+                bubble_warnings.append(
+                    "config_entries/get returned an empty list (no "
+                    "integrations configured); config_entry_orphans tier "
+                    "skipped. stale_restored still computed."
                 )
             else:
                 live_entry_ids = {
@@ -1167,8 +1232,18 @@ class SystemTools:
             # error string here (AGENTS.md error-handling guard pattern).
             raise
         except Exception as e:
-            logger.warning("Failed to compute dead entities: %s", e)
+            _reraise_if_fatal(e)
+            # ``logger.exception`` so an unexpected diff bug gets a full
+            # traceback rather than a one-line warning that hides the
+            # site of the regression.
+            logger.exception("Failed to compute dead entities")
             dead["error"] = f"Dead-entities diff not available: {e}"
+        # ``_warnings`` is a sentinel that ``ha_get_system_health`` pops to
+        # ``result["warnings"]``; it never reaches the client. Attaching it
+        # outside the try/except keeps it correct on both happy and
+        # embed-as-error paths.
+        if bubble_warnings:
+            dead["_warnings"] = bubble_warnings
         return dead
 
     async def _fetch_config_check(self) -> dict[str, Any]:
@@ -1199,6 +1274,7 @@ class SystemTools:
                 "errors": errors,
             }
         except Exception as e:
+            _reraise_if_fatal(e)
             logger.warning("Failed to check config: %s", e)
             config_check["error"] = f"Config check not available: {e}"
         return config_check
