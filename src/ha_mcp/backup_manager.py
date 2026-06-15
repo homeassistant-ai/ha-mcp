@@ -544,6 +544,163 @@ class BackupManager:
             "result": result,
         }
 
+    # ----- diff ----------------------------------------------------------
+
+    async def diff_snapshot(self, name: str) -> dict[str, Any]:
+        """Compare a stored snapshot against the live config of the same entity.
+
+        Returns an RFC 6902-shaped JSON-Patch — the ops a client would
+        apply to ``current`` to recover ``stored`` (i.e. what
+        ``restore_snapshot`` would functionally do). ``entity_missing``
+        flags the case where the entity is gone from HA, so the diff has
+        no live target to compare against; ``truncated`` flags that the
+        patch exceeded ``_MAX_PATCH_OPS`` and was cut short to keep the
+        tool response bounded.
+        """
+        data = self.read_snapshot(name)
+        domain = data["domain"]
+        entity_id = data["entity_id"]
+        stored = data["config"]
+        handler = self._handlers.get(domain)
+        if handler is None:
+            raise LookupError(f"No diff handler registered for domain {domain!r}")
+        current = await handler.fetch(self._client, entity_id)
+        captured_at = data.get("captured")
+        if current is None:
+            return {
+                "kind": "dict",
+                "backup_name": name,
+                "domain": domain,
+                "entity_id": entity_id,
+                "captured_at": captured_at,
+                "entity_missing": True,
+                "patch": [],
+                "counts": {"add": 0, "remove": 0, "replace": 0, "total": 0},
+                "unchanged": False,
+                "truncated": False,
+            }
+        patch: list[dict[str, Any]] = []
+        truncated = _compute_json_patch(stored, current, _MAX_PATCH_OPS, patch)
+        counts = _summarize_patch_counts(patch)
+        return {
+            "kind": "dict",
+            "backup_name": name,
+            "domain": domain,
+            "entity_id": entity_id,
+            "captured_at": captured_at,
+            "entity_missing": False,
+            "patch": patch,
+            "counts": counts,
+            "unchanged": counts["total"] == 0,
+            "truncated": truncated,
+        }
+
+
+# --------------------------- diff helpers -----------------------------------
+
+# Output cap for diff_snapshot. Bounded payload keeps the tool response
+# token-friendly even when the user diffs against a freshly-rewritten
+# automation. Picked to comfortably cover typical edits (a handful of
+# field changes) while still cutting off pathological cases like "I
+# renamed every step of a 500-step script".
+_MAX_PATCH_OPS = 200
+
+
+def _compute_json_patch(
+    stored: Any, current: Any, max_ops: int, out: list[dict[str, Any]]
+) -> bool:
+    """Generate an RFC 6902 JSON-Patch from ``current`` to ``stored``.
+
+    The patch is the op sequence a client would apply to ``current`` to
+    recover ``stored`` (the captured snapshot is the target state).
+    Appends ops to ``out`` in place. Returns True if generation stopped
+    at ``max_ops`` ops (output truncated, not the source of truth).
+    """
+    _diff_node(stored, current, "", out, max_ops)
+    return len(out) >= max_ops
+
+
+def _diff_node(
+    stored: Any,
+    current: Any,
+    path: str,
+    out: list[dict[str, Any]],
+    max_ops: int,
+) -> None:
+    if len(out) >= max_ops:
+        return
+    # ``type(s) is type(c)`` keeps ``True``/``1`` apart (both compare
+    # equal but represent different states for HA toggles); YAML loaders
+    # only emit plain dict/list/scalar containers, so subclass surprises
+    # aren't in scope.
+    if type(stored) is type(current):
+        if isinstance(stored, dict):
+            assert isinstance(current, dict)
+            for key in stored:
+                seg = _pointer_segment(str(key))
+                sub_path = f"{path}/{seg}"
+                if key not in current:
+                    out.append({"op": "add", "path": sub_path, "value": stored[key]})
+                    if len(out) >= max_ops:
+                        return
+                else:
+                    _diff_node(stored[key], current[key], sub_path, out, max_ops)
+                    if len(out) >= max_ops:
+                        return
+            for key in current:
+                if key not in stored:
+                    seg = _pointer_segment(str(key))
+                    out.append({"op": "remove", "path": f"{path}/{seg}"})
+                    if len(out) >= max_ops:
+                        return
+            return
+        if isinstance(stored, list):
+            assert isinstance(current, list)
+            min_len = min(len(stored), len(current))
+            for i in range(min_len):
+                _diff_node(stored[i], current[i], f"{path}/{i}", out, max_ops)
+                if len(out) >= max_ops:
+                    return
+            if len(stored) > len(current):
+                for value in stored[len(current) :]:
+                    out.append({"op": "add", "path": f"{path}/-", "value": value})
+                    if len(out) >= max_ops:
+                        return
+            elif len(current) > len(stored):
+                # Remove tail entries from highest to lowest index so
+                # successive removes stay valid (RFC 6902 reindexes
+                # after each op).
+                for i in range(len(current) - 1, len(stored) - 1, -1):
+                    out.append({"op": "remove", "path": f"{path}/{i}"})
+                    if len(out) >= max_ops:
+                        return
+            return
+    # ``True == 1`` and ``False == 0`` in Python — ``!=`` alone would let
+    # a bool/int type swap pass silently even though they represent
+    # different states for HA toggles. Force a replace whenever the
+    # concrete type changes, even if the equality check is happy.
+    if stored != current or type(stored) is not type(current):
+        out.append({"op": "replace", "path": path or "", "value": stored})
+
+
+def _pointer_segment(key: str) -> str:
+    """Escape one JSON-Pointer reference token per RFC 6901 §3.
+
+    ``~`` becomes ``~0`` first so that the subsequent ``/`` substitution
+    cannot eat freshly-written escapes.
+    """
+    return key.replace("~", "~0").replace("/", "~1")
+
+
+def _summarize_patch_counts(patch: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {"add": 0, "remove": 0, "replace": 0}
+    for op in patch:
+        op_type = op.get("op")
+        if isinstance(op_type, str) and op_type in counts:
+            counts[op_type] += 1
+    counts["total"] = len(patch)
+    return counts
+
 
 # --------------------------- attach to client -------------------------------
 

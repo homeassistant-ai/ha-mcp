@@ -855,6 +855,7 @@ _VALID_COMBOS: set[tuple[str, str]] = {
     ("edits", "create"),
     ("edits", "list"),
     ("edits", "view"),
+    ("edits", "diff"),
     ("edits", "restore"),
     ("edits", "delete"),
 }
@@ -920,6 +921,7 @@ def register_backup_tools(
 | `edits` | `create` | On-demand snapshot of one entity (`domain` + `entity_id` required). Use before the user manually edits in the HA UI. Same handler path the decorator takes on writes; bypasses the `enable_auto_backup` toggle. |
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
 | `edits` | `view` | Read one auto-backup file by name; returns YAML and parsed `config`. |
+| `edits` | `diff` | Compare one auto-backup against the entity's current config. RFC 6902 JSON-Patch + add/remove/replace counts; bounded output. Read-only — fetches the live config, makes no changes. |
 | `edits` | `restore` | Re-apply one auto-backup. Creates a fresh safety snapshot first. **No HA restart.** |
 | `edits` | `delete` | Delete one auto-backup by `backup_name`, or bulk-delete by filter. |
 
@@ -939,6 +941,7 @@ def register_backup_tools(
 - On-demand entity snapshot before a manual UI edit: `ha_manage_backup(scope="edits", action="create", domain="helper_input_boolean", entity_id="kitchen_lights_active")`
 - List recent auto-backups for one automation: `ha_manage_backup(scope="edits", action="list", domain="automation", entity_id="kitchen_lights")`
 - View an auto-backup: `ha_manage_backup(scope="edits", action="view", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
+- Diff an auto-backup vs current state: `ha_manage_backup(scope="edits", action="diff", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
 - Restore an auto-backup: `ha_manage_backup(scope="edits", action="restore", backup_name="automation.kitchen_lights.20260521_153000.yaml")`
 - Delete one auto-backup: `ha_manage_backup(scope="edits", action="delete", backup_name="...")`
 - Bulk-delete old auto-backups: `ha_manage_backup(scope="edits", action="delete", older_than_days=30)`
@@ -958,7 +961,7 @@ def register_backup_tools(
             ),
         ],
         action: Annotated[
-            Literal["create", "restore", "list", "view", "delete"],
+            Literal["create", "restore", "list", "view", "diff", "delete"],
             Field(
                 description="Operation to perform. Valid (scope, action) combinations are listed in the tool description."
             ),
@@ -1139,6 +1142,60 @@ def register_backup_tools(
                     )
                 )
             return {"success": True, "data": data}
+
+        if action == "diff":
+            bname = _require("backup_name", backup_name, scope, action)
+            try:
+                diff = await mgr.diff_snapshot(bname)
+            except FileNotFoundError:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Backup {bname!r} not found",
+                        context={"backup_name": bname},
+                    )
+                )
+            except (ValueError, LookupError) as err:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        str(err),
+                        context={"backup_name": bname},
+                    )
+                )
+            except ToolError:
+                raise
+            except Exception as err:
+                # Fetching the live config for diff goes through the
+                # same domain handler ``restore`` uses, so the same
+                # HA-side failure modes (4xx/5xx, WS errors, schema
+                # drift) apply. Funnel through
+                # ``exception_to_structured_error`` so the structured
+                # response carries enough context to retry.
+                exception_to_structured_error(
+                    err,
+                    context={"backup_name": bname, "action": "diff"},
+                    suggestions=[
+                        "Verify the entity referenced by the backup still "
+                        + "exists; diff fetches its current config",
+                        "Inspect the snapshot YAML via "
+                        + "ha_manage_backup(scope='edits', action='view', "
+                        + "backup_name=...) to confirm it parses",
+                    ],
+                )
+            warnings: list[str] = []
+            if diff.get("entity_missing"):
+                warnings.append("Entity is missing from HA; restore would re-create it")
+            if diff.get("truncated"):
+                warnings.append(
+                    "Patch truncated; entity has more changes than the bounded "
+                    "diff captures — view the snapshot for the full state"
+                )
+            return {
+                "success": True,
+                "data": diff,
+                **({"warnings": warnings} if warnings else {}),
+            }
 
         if action == "restore":
             bname = _require("backup_name", backup_name, scope, action)

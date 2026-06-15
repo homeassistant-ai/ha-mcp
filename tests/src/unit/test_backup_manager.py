@@ -22,10 +22,14 @@ import yaml
 
 from ha_mcp import backup_manager as bm
 from ha_mcp.backup_manager import (
+    _MAX_PATCH_OPS,
     SCHEMA_VERSION,
     BackupManager,
     DomainHandler,
+    _compute_json_patch,
+    _pointer_segment,
     _safe_entity_id,
+    _summarize_patch_counts,
     get_backup_manager,
 )
 
@@ -639,3 +643,252 @@ class TestSupportedDomains:
     def test_empty_when_no_handlers(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path)
         assert mgr.supported_domains() == []
+
+
+# ---------------------------------------------------------------- diff helpers
+
+
+class TestPointerSegment:
+    """RFC 6901 §3 escape order: ``~`` first, then ``/``."""
+
+    def test_plain_segment_passes_through(self) -> None:
+        assert _pointer_segment("alias") == "alias"
+
+    def test_slash_escapes_to_tilde_one(self) -> None:
+        assert _pointer_segment("a/b") == "a~1b"
+
+    def test_tilde_escapes_to_tilde_zero(self) -> None:
+        assert _pointer_segment("a~b") == "a~0b"
+
+    def test_tilde_one_in_input_round_trips(self) -> None:
+        # Without escaping ``~`` before ``/``, the literal ``~1`` in the
+        # input would conflict with the slash substitution and decode
+        # back to ``/`` on the consumer side. ``~`` first prevents that.
+        assert _pointer_segment("~1") == "~01"
+
+
+class TestDiffNode:
+    """``_compute_json_patch`` patch shape against representative configs."""
+
+    def test_identical_configs_produce_empty_patch(self) -> None:
+        out: list[dict[str, Any]] = []
+        truncated = _compute_json_patch({"a": 1}, {"a": 1}, 50, out)
+        assert out == []
+        assert truncated is False
+
+    def test_scalar_change_is_replace(self) -> None:
+        out: list[dict[str, Any]] = []
+        _compute_json_patch({"a": 2}, {"a": 1}, 50, out)
+        assert out == [{"op": "replace", "path": "/a", "value": 2}]
+
+    def test_missing_key_in_current_is_add(self) -> None:
+        out: list[dict[str, Any]] = []
+        _compute_json_patch({"a": 1, "b": 2}, {"a": 1}, 50, out)
+        assert out == [{"op": "add", "path": "/b", "value": 2}]
+
+    def test_extra_key_in_current_is_remove(self) -> None:
+        out: list[dict[str, Any]] = []
+        _compute_json_patch({"a": 1}, {"a": 1, "b": 2}, 50, out)
+        assert out == [{"op": "remove", "path": "/b"}]
+
+    def test_bool_vs_int_does_not_collapse(self) -> None:
+        # ``True == 1`` in Python but they represent different states for
+        # HA-side toggles; the diff must treat the type change as a
+        # replace, not silently equate them.
+        out: list[dict[str, Any]] = []
+        _compute_json_patch({"enabled": True}, {"enabled": 1}, 50, out)
+        assert out == [{"op": "replace", "path": "/enabled", "value": True}]
+
+    def test_list_length_grew_in_current_emits_remove_in_reverse(self) -> None:
+        out: list[dict[str, Any]] = []
+        _compute_json_patch([1, 2], [1, 2, 3, 4], 50, out)
+        # Removes in reverse index order so each op stays valid against
+        # the document state it gets applied to.
+        assert out == [
+            {"op": "remove", "path": "/3"},
+            {"op": "remove", "path": "/2"},
+        ]
+
+    def test_list_length_shrunk_in_current_emits_append(self) -> None:
+        out: list[dict[str, Any]] = []
+        _compute_json_patch([1, 2, 3], [1, 2], 50, out)
+        assert out == [{"op": "add", "path": "/-", "value": 3}]
+
+    def test_nested_change_uses_pointer_path(self) -> None:
+        stored = {"trigger": [{"platform": "state", "entity_id": "binary_sensor.x"}]}
+        current = {"trigger": [{"platform": "time", "entity_id": "binary_sensor.x"}]}
+        out: list[dict[str, Any]] = []
+        _compute_json_patch(stored, current, 50, out)
+        assert out == [
+            {"op": "replace", "path": "/trigger/0/platform", "value": "state"}
+        ]
+
+    def test_key_with_slash_gets_escaped(self) -> None:
+        out: list[dict[str, Any]] = []
+        _compute_json_patch({"a/b": 2}, {"a/b": 1}, 50, out)
+        assert out == [{"op": "replace", "path": "/a~1b", "value": 2}]
+
+    def test_root_type_swap_emits_root_replace(self) -> None:
+        # When the captured shape is a dict but HA now returns a list
+        # (schema migration, integration replaced), the only sane patch
+        # is "replace whole doc" — JSON-Pointer ``""`` per RFC 6901 §6.
+        out: list[dict[str, Any]] = []
+        _compute_json_patch({"a": 1}, [1, 2], 50, out)
+        assert out == [{"op": "replace", "path": "", "value": {"a": 1}}]
+
+    def test_truncation_flag_set_when_max_ops_reached(self) -> None:
+        # Build a config that produces > max_ops change ops.
+        stored = {f"k{i}": i for i in range(10)}
+        current: dict[str, Any] = {}
+        out: list[dict[str, Any]] = []
+        truncated = _compute_json_patch(stored, current, 3, out)
+        assert truncated is True
+        assert len(out) == 3
+        # All three are adds since current is empty.
+        assert {op["op"] for op in out} == {"add"}
+
+
+class TestSummarizePatchCounts:
+    def test_counts_each_op_class_and_total(self) -> None:
+        patch = [
+            {"op": "add", "path": "/x", "value": 1},
+            {"op": "remove", "path": "/y"},
+            {"op": "replace", "path": "/z", "value": 2},
+            {"op": "add", "path": "/q", "value": 3},
+        ]
+        assert _summarize_patch_counts(patch) == {
+            "add": 2,
+            "remove": 1,
+            "replace": 1,
+            "total": 4,
+        }
+
+    def test_empty_patch_zero_counts(self) -> None:
+        assert _summarize_patch_counts([]) == {
+            "add": 0,
+            "remove": 0,
+            "replace": 0,
+            "total": 0,
+        }
+
+
+class TestDiffSnapshot:
+    """``BackupManager.diff_snapshot`` end-to-end against stub handlers."""
+
+    async def test_diff_against_unchanged_current_returns_empty_patch(
+        self, tmp_path: Path
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(fetched={"alias": "kitchen"}))
+        path = await mgr.maybe_snapshot("automation", "x")
+        assert path is not None
+        result = await mgr.diff_snapshot(path.name)
+        assert result["kind"] == "dict"
+        assert result["domain"] == "automation"
+        assert result["entity_id"] == "x"
+        assert result["entity_missing"] is False
+        assert result["unchanged"] is True
+        assert result["patch"] == []
+        assert result["counts"] == {
+            "add": 0,
+            "remove": 0,
+            "replace": 0,
+            "total": 0,
+        }
+        assert result["truncated"] is False
+
+    async def test_diff_reports_scalar_replace(self, tmp_path: Path) -> None:
+        # Capture, then mutate the handler's "current" so a subsequent
+        # diff sees a divergent live state.
+        captured = {"alias": "kitchen", "mode": "single"}
+        current = {"alias": "kitchen", "mode": "queued"}
+        handler_fetch_results: list[Any] = [captured, current]
+
+        async def fetch(_client: Any, _entity_id: str) -> Any:
+            return handler_fetch_results.pop(0)
+
+        async def restore(_client: Any, _entity_id: str, _config: Any) -> Any:
+            return None
+
+        mgr = _mk_manager(tmp_path)
+        mgr.register(DomainHandler(domain="automation", fetch=fetch, restore=restore))
+        path = await mgr.maybe_snapshot("automation", "x")
+        assert path is not None
+        result = await mgr.diff_snapshot(path.name)
+        assert result["unchanged"] is False
+        assert result["patch"] == [
+            {"op": "replace", "path": "/mode", "value": "single"}
+        ]
+        assert result["counts"]["replace"] == 1
+
+    async def test_diff_flags_entity_missing_when_fetch_returns_none(
+        self, tmp_path: Path
+    ) -> None:
+        # First fetch (capture) returns config; second (diff) returns None
+        # to simulate the entity being deleted after capture.
+        results: list[Any] = [{"alias": "x"}, None]
+
+        async def fetch(_client: Any, _entity_id: str) -> Any:
+            return results.pop(0)
+
+        async def restore(_client: Any, _entity_id: str, _config: Any) -> Any:
+            return None
+
+        mgr = _mk_manager(tmp_path)
+        mgr.register(DomainHandler(domain="automation", fetch=fetch, restore=restore))
+        path = await mgr.maybe_snapshot("automation", "x")
+        assert path is not None
+        result = await mgr.diff_snapshot(path.name)
+        assert result["entity_missing"] is True
+        # No patch when entity is gone — the consumer-side action is "the
+        # restore would re-create this", not "apply N ops".
+        assert result["patch"] == []
+        assert result["truncated"] is False
+
+    async def test_diff_raises_lookup_error_on_unknown_domain(
+        self, tmp_path: Path
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        bogus = tmp_path / "alien.x.20260521_120000.yaml"
+        bogus.write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "domain": "alien",
+                    "entity_id": "x",
+                    "config": {"v": 1},
+                }
+            )
+        )
+        with pytest.raises(LookupError):
+            await mgr.diff_snapshot(bogus.name)
+
+    async def test_diff_raises_file_not_found_on_missing_snapshot(
+        self, tmp_path: Path
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(fetched={"alias": "x"}))
+        with pytest.raises(FileNotFoundError):
+            await mgr.diff_snapshot("automation.x.20260521_120000.yaml")
+
+    async def test_diff_truncation_flagged_when_patch_exceeds_cap(
+        self, tmp_path: Path
+    ) -> None:
+        # Capture a large config, then return a divergent one to force
+        # >_MAX_PATCH_OPS ops.
+        big_stored = {f"k{i}": i for i in range(_MAX_PATCH_OPS + 50)}
+        results: list[Any] = [big_stored, {}]
+
+        async def fetch(_client: Any, _entity_id: str) -> Any:
+            return results.pop(0)
+
+        async def restore(_client: Any, _entity_id: str, _config: Any) -> Any:
+            return None
+
+        mgr = _mk_manager(tmp_path)
+        mgr.register(DomainHandler(domain="automation", fetch=fetch, restore=restore))
+        path = await mgr.maybe_snapshot("automation", "x")
+        assert path is not None
+        result = await mgr.diff_snapshot(path.name)
+        assert result["truncated"] is True
+        assert len(result["patch"]) == _MAX_PATCH_OPS
