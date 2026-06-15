@@ -7,7 +7,7 @@ Some ha-mcp tools are gated behind feature flags and disabled by default. They c
 | Tool | Toggle / env var | Description |
 |---|---|---|
 | `ha_config_set_yaml` | `enable_yaml_config_editing` (dev add-on Configuration tab); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `ENABLE_YAML_CONFIG_EDITING=true` env vars | Raw YAML editing of `configuration.yaml` and packages/*.yaml for YAML-only integrations. |
-| `ha_list_files` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | List files in allowed directories (www/, themes/, custom_templates/). Requires `ha_mcp_tools` custom component. |
+| `ha_list_files` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | List files in allowed directories. Requires `ha_mcp_tools` custom component. |
 | `ha_read_file` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Read files from allowed paths. Requires `ha_mcp_tools` custom component. |
 | `ha_write_file` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Write files to allowed directories. Requires `ha_mcp_tools` custom component. |
 | `ha_delete_file` | `enable_filesystem_tools` (dev add-on); or web Settings UI master + sub-toggle; or `ENABLE_BETA_FEATURES=true` + `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` env vars | Delete files from allowed directories. Requires `ha_mcp_tools` custom component. |
@@ -62,7 +62,7 @@ This tool edits `configuration.yaml` and package files directly, bypassing Home 
 
 **Recovery requires filesystem access.** If an edit causes HA to enter recovery mode (e.g., a bad `!include` reference), `ha_config_set_yaml` cannot fix its own damage since the custom component doesn't load in recovery mode. Recovery requires SSH, the File Editor add-on, or `docker exec`.
 
-**Backups are filesystem-only.** Per-edit backups are written to `.ha_mcp_tools_backups/` (at the Home Assistant config root) but no ha-mcp tool can restore them. They are a safety net for manual recovery.
+**Per-edit backups are restorable via `ha_manage_backup`.** Per-edit auto-backups are written to `.ha_mcp_tools_backups/` (at the Home Assistant config root) and can be listed, viewed, restored, and deleted with `ha_manage_backup(scope="edits", ...)`. Full HA snapshot tarballs are separate — create, list, and restore them with `scope="snapshot"`.
 
 **Recommended prerequisites:**
 - Comfort with editing `configuration.yaml` via SSH or File Editor when things go wrong
@@ -74,7 +74,7 @@ These tools provide direct file access to your Home Assistant filesystem and req
 
 `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true` is only needed if you want to allow the `ha_install_mcp_tools` installer tool; it is not required for the filesystem tools themselves.
 
-**Access is restricted but sensitive.** Only `www/`, `themes/`, and `custom_templates/` are writable. `ha_read_file` additionally allows reading config YAML files, logs, and `custom_components/`. An AI assistant with these tools enabled has meaningful read access to your HA configuration.
+**Access is restricted but sensitive.** The built-in writable directories are `www/`, `themes/`, `custom_templates/`, and `dashboards/`; `ha_read_file` additionally allows reading config YAML files, logs, and `custom_components/`. Power users can grant further read+write access to extra config-relative directories or the HAOS sibling volumes (`/share`, `/media`, `/ssl`, `/backup`) via the web Settings UI — each is opt-in and enforced by the `ha_mcp_tools` component. An AI assistant with these tools enabled has meaningful read and write access to your HA configuration.
 
 **No undo.** `ha_delete_file` and `ha_write_file` (with `overwrite=True`) are irreversible. There is no recycle bin or automatic backup for file operations.
 
