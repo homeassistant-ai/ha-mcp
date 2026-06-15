@@ -842,7 +842,6 @@ async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[st
                     type(err).__name__,
                     err,
                 )
-    return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 
 # Valid (scope, action) combinations. Anything outside this set is

@@ -492,7 +492,14 @@ def _is_volume_path_allowed(abs_path: str, extra_dirs: list[str] | None) -> bool
         return False
     if _violates_volume_deny_floor(normalized):
         return False
-    if not _matches_extra_dir(normalized, extra_dirs):
+    # POSIX-explicit allowlist match (not _matches_extra_dir, which joins on
+    # os.sep): a volume path is inherently "/"-separated, so match on a "/"
+    # boundary so a configured "/share" grants "/share" and "/share/..." but
+    # never "/shared". Config-relative entries in the mixed list never match an
+    # absolute path here.
+    if not extra_dirs or not any(
+        normalized == d or normalized.startswith(d + "/") for d in extra_dirs
+    ):
         return False
     return _resolves_within(Path(root), abs_path)
 
