@@ -292,7 +292,8 @@ def _read_config() -> dict | None:
     """
     if not CONFIG_FILE.exists():
         return None
-    return json.loads(CONFIG_FILE.read_text())
+    data: dict | None = json.loads(CONFIG_FILE.read_text())
+    return data
 
 
 async def _handle_webhook(

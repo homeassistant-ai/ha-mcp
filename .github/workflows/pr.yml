@@ -249,7 +249,7 @@ jobs:
     - name: Run mypy
       run: |
         uv run mypy src/ custom_components/ homeassistant-addon/ scripts/
-        uv run mypy homeassistant-addon-webhook-proxy/start.py
+        uv run mypy homeassistant-addon-webhook-proxy/
 
   # Fast unit tests (no Docker, no HA instance needed)
   unit-tests:

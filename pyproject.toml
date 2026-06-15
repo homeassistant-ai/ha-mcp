@@ -87,6 +87,7 @@ module = [
     "aiohasupervisor",
     "aiohasupervisor.*",
     "aiohttp",
+    "yarl",
     "voluptuous",
     "jsonschema",
     "requests",
