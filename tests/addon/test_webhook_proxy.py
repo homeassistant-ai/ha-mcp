@@ -1443,6 +1443,60 @@ class TestDebugLogging:
         await self._run_setup(mod, hass, False)
         assert mod._LOGGER.level == logging.DEBUG
 
+    async def test_debug_logs_auth_presence_never_token(self, mod, caplog):
+        """With an Authorization header present, the log records only
+        'present' — never the token value (security: no credential leak)."""
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+                "debug_logging": True,
+            }
+        }
+        request = MagicMock()
+        request.headers = {"Authorization": "Bearer super-secret-token-value"}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.remote = "203.0.113.4"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("stop")
+        )
+        with caplog.at_level(logging.INFO, logger=mod._LOGGER.name):
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+
+        assert "Authorization header: present" in caplog.text
+        assert "super-secret-token-value" not in caplog.text
+
+    async def test_debug_never_logs_request_body(self, mod, caplog):
+        """The request body is read after the log line and must never appear
+        in the logs."""
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+                "debug_logging": True,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b'{"secret":"DO-NOT-LOG-THIS-BODY"}')
+        request.method = "POST"
+        request.remote = "203.0.113.4"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("stop")
+        )
+        with caplog.at_level(logging.INFO, logger=mod._LOGGER.name):
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+
+        assert "[inbound]" in caplog.text
+        assert "DO-NOT-LOG-THIS-BODY" not in caplog.text
+
 
 class TestOAuthProvider:
     """Direct unit tests against the OAuthProvider class."""

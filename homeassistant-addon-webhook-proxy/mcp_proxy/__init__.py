@@ -169,6 +169,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if debug_logging and _LOGGER.getEffectiveLevel() > logging.INFO:
         _LOGGER.setLevel(logging.INFO)
     elif not debug_logging and _LOGGER.level == logging.INFO:
+        # Edge case: a user who set an explicit level quieter than INFO
+        # (ERROR/CRITICAL) and toggles debug on then off lands at NOTSET rather
+        # than their original level — restoring it would need durable state
+        # across reloads, not worth the cost for a debug aid.
         _LOGGER.setLevel(logging.NOTSET)
     if debug_logging:
         _LOGGER.info(
