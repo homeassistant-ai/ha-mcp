@@ -593,9 +593,7 @@ class TestAutomationDiff:
         # Asserts both the manager-level ``truncated: true`` and the
         # tool-layer warning string the manager flag drives.
         _enable_auto_backup(monkeypatch)
-        import ha_mcp.backup_manager as bm
-
-        monkeypatch.setattr(bm, "_MAX_PATCH_OPS", 1)
+        monkeypatch.setattr("ha_mcp.backup_manager._MAX_PATCH_OPS", 1)
         suffix = uuid.uuid4().hex[:8]
         identifier = f"e2e_diff_trunc_{suffix}"
         original = {
