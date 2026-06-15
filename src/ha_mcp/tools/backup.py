@@ -1185,7 +1185,18 @@ def register_backup_tools(
                 )
             warnings: list[str] = []
             if diff.get("entity_missing"):
-                warnings.append("Entity is missing from HA; restore would re-create it")
+                # ``restore_snapshot`` outcome on a missing entity is
+                # domain-dependent: upsert paths (automation, script,
+                # dashboard) recreate it, but helper / label / category
+                # restores go through ``<domain>/update`` WS commands
+                # that expect the entity to exist and would surface a
+                # WS error if it does not. Hedge rather than promise
+                # one specific outcome.
+                warnings.append(
+                    "Entity is missing from HA; restore behaviour is "
+                    "domain-dependent (upsert paths recreate it; "
+                    "update-only paths return an error)"
+                )
             if diff.get("truncated"):
                 warnings.append(
                     "Patch truncated; entity has more changes than the bounded "
