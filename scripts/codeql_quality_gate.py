@@ -46,6 +46,15 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "second-signal read, so the assignment looks dead.",
     ),
     (
+        "py/unused-global-variable",
+        "homeassistant-addon-webhook-proxy/mcp_proxy/__init__.py",
+        "_LOGGER_LEVEL_RAISED",
+        "Cross-invocation use: set when the debug toggle raises the logger to "
+        "INFO on one async_setup_entry, then read on a later one (a config-entry "
+        "reload) to undo only our own raise. CodeQL's single-pass dead-store "
+        "analysis misses the cross-invocation read, so the assignment looks dead.",
+    ),
+    (
         "py/unused-import",
         "packaging/binary/pyinstaller_hooks/runtime_hook.py",
         "idna",
