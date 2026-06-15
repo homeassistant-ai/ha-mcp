@@ -522,7 +522,7 @@ class BackupManager:
     async def restore_snapshot(
         self, name: str, *, take_safety_backup: bool = True
     ) -> dict[str, Any]:
-        data = self.read_snapshot(name)
+        data = await asyncio.to_thread(self.read_snapshot, name)
         domain = data["domain"]
         entity_id = data["entity_id"]
         config = data["config"]
@@ -556,8 +556,15 @@ class BackupManager:
         no live target to compare against; ``truncated`` flags that the
         patch exceeded ``_MAX_PATCH_OPS`` and was cut short to keep the
         tool response bounded.
+
+        ``unchanged`` tracks the empty-patch invariant (``len(patch)==0``)
+        across both branches — including ``entity_missing=True``, where
+        no live target exists and the patch is therefore empty. Callers
+        MUST check ``entity_missing`` first; ``unchanged`` is only
+        meaningful relative to the empty-patch claim, not as evidence
+        that the stored config matches a live state.
         """
-        data = self.read_snapshot(name)
+        data = await asyncio.to_thread(self.read_snapshot, name)
         domain = data["domain"]
         entity_id = data["entity_id"]
         stored = data["config"]
@@ -576,7 +583,7 @@ class BackupManager:
                 "entity_missing": True,
                 "patch": [],
                 "counts": {"add": 0, "remove": 0, "replace": 0, "total": 0},
-                "unchanged": False,
+                "unchanged": True,
                 "truncated": False,
             }
         patch: list[dict[str, Any]] = []
@@ -675,12 +682,14 @@ def _diff_node(
                     if len(out) >= max_ops:
                         return
             return
-    # ``True == 1`` and ``False == 0`` in Python — ``!=`` alone would let
-    # a bool/int type swap pass silently even though they represent
-    # different states for HA toggles. Force a replace whenever the
-    # concrete type changes, even if the equality check is happy.
-    if stored != current or type(stored) is not type(current):
-        out.append({"op": "replace", "path": path or "", "value": stored})
+        if stored != current:
+            out.append({"op": "replace", "path": path or "", "value": stored})
+        return
+    # ``True == 1`` / ``False == 0`` in Python, so equality alone would
+    # let a bool/int type swap pass silently even though it represents
+    # a different state for HA toggles. The different-type branch
+    # forces a replace unconditionally.
+    out.append({"op": "replace", "path": path or "", "value": stored})
 
 
 def _pointer_segment(key: str) -> str:

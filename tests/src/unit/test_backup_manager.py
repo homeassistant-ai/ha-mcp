@@ -844,6 +844,10 @@ class TestDiffSnapshot:
         # restore would re-create this", not "apply N ops".
         assert result["patch"] == []
         assert result["truncated"] is False
+        # ``unchanged`` tracks the empty-patch invariant across both
+        # branches; ``entity_missing=True`` callers must check
+        # ``entity_missing`` first (see ``diff_snapshot`` docstring).
+        assert result["unchanged"] is True
 
     async def test_diff_raises_lookup_error_on_unknown_domain(
         self, tmp_path: Path

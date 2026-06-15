@@ -1183,6 +1183,7 @@ def register_backup_tools(
                         + "backup_name=...) to confirm it parses",
                     ],
                 )
+                return None  # unreachable: exception_to_structured_error always raises
             warnings: list[str] = []
             if diff.get("entity_missing"):
                 # ``restore_snapshot`` outcome on a missing entity is
@@ -1253,6 +1254,7 @@ def register_backup_tools(
                         + "backup_name=...)",
                     ],
                 )
+                return None  # unreachable: exception_to_structured_error always raises
             return {
                 "success": True,
                 "data": result,

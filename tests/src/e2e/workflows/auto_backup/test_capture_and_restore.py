@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import safe_call_tool
+from ...utilities.assertions import extract_error_message, safe_call_tool
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -175,8 +175,7 @@ class TestManageBackupGating:
             {"scope": "edits", "action": "diff"},
         )
         assert result.get("success") is False
-        error = result.get("error", {})
-        msg = error.get("message", "") if isinstance(error, dict) else ""
+        msg = extract_error_message(result)
         assert "backup_name" in msg
 
 
@@ -432,24 +431,23 @@ class TestAutomationDiff:
             "ha_config_set_automation",
             {"config": original, "identifier": identifier},
         )
-        # Mutate once so the decorator captures pre-edit state (a fresh
-        # entity has no pre-state to snapshot).
-        edited = {**original, "alias": f"E2E Diff Noop Edited {suffix}"}
-        await safe_call_tool(
+        # Capture via (edits, create) so stored == current by
+        # construction. The decorator's auto-on-write path is
+        # unreliable here: snapshot filenames are seconds-resolution,
+        # so a mutate-then-restore inside the same second clobbers
+        # the first capture.
+        create_result = await safe_call_tool(
             mcp_client,
-            "ha_config_set_automation",
-            {"config": edited, "identifier": identifier},
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "create",
+                "domain": "automation",
+                "entity_id": identifier,
+            },
         )
-        # Restore the original so live matches the snapshot for the diff
-        # we're about to take.
-        await safe_call_tool(
-            mcp_client,
-            "ha_config_set_automation",
-            {"config": original, "identifier": identifier},
-        )
-        backup_name = await _wait_for_backup(
-            mcp_client, domain="automation", entity_id=identifier
-        )
+        assert create_result.get("success") is True
+        backup_name = create_result["data"]["backup_name"]
 
         diff = await safe_call_tool(
             mcp_client,
@@ -1456,6 +1454,7 @@ class TestEntityStateCaptureRestore:
             # POST) on some HA versions; if so the entity-domain handler
             # won't fire. Surface clearly rather than asserting wrong.
             pytest.skip("entity-domain handler did not capture for this edit")
+            return  # unreachable: pytest.skip raises Skipped
 
         restore = await safe_call_tool(
             mcp_client,
