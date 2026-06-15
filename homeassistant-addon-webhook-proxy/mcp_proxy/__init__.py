@@ -158,6 +158,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("MCP Proxy: target = %s", masked_target)
     _LOGGER.info("MCP Proxy: webhook endpoint = /api/webhook/%s", masked_wh)
 
+    # Inbound-request debug logging (addon "Log inbound requests" toggle).
+    # Custom-component loggers default to WARNING, so raise our own logger to
+    # INFO when it's on so the per-request lines are actually emitted; reset to
+    # NOTSET (inherit) when off so a later reload that turns it back off stops
+    # the extra output.
+    debug_logging = bool(proxy_config.get("debug_logging", False))
+    _LOGGER.setLevel(logging.INFO if debug_logging else logging.NOTSET)
+    if debug_logging:
+        _LOGGER.info(
+            "MCP Proxy: inbound request debug logging is ON — each request to "
+            "this webhook will be logged here."
+        )
+
     session = aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=300, sock_connect=10, sock_read=300),
     )
@@ -185,6 +198,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "target_url": target_url,
         "webhook_id": webhook_id,
         "session": session,
+        "debug_logging": debug_logging,
     }
 
     # OAuth is opt-in. When the addon writes an `oauth` section into the
@@ -281,11 +295,35 @@ async def _handle_webhook(
     data = hass.data[DOMAIN]
     target_url = data["target_url"]
 
+    # Inbound-request debug logging (opt-in). Logged BEFORE the OAuth gate so
+    # the unauthenticated discovery probe (which gets a 401) is captured too —
+    # that probe arriving is the proof a client actually reached the server.
+    debug = data.get("debug_logging")
+    if debug:
+        wh = data["webhook_id"]
+        masked_path = (
+            f"/api/webhook/{wh[:6]}..." if len(wh) > 6 else "/api/webhook/***"
+        )
+        source = request.headers.get("X-Forwarded-For") or request.remote or "unknown"
+        has_auth = "present" if request.headers.get("Authorization") else "absent"
+        _LOGGER.info(
+            "MCP Proxy [inbound]: %s %s from %s (Authorization header: %s)",
+            request.method,
+            masked_path,
+            source,
+            has_auth,
+        )
+
     # OAuth gate. When OAuth isn't configured, `oauth_provider` is None and
     # this branch is a single attribute lookup with zero behavior change vs
     # the original handler.
     oauth_provider = data.get("oauth")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
+        if debug:
+            _LOGGER.info(
+                "MCP Proxy [inbound]: -> 401 Unauthorized (no/invalid OAuth "
+                "bearer; expected for the initial discovery probe)"
+            )
         from .oauth import build_unauthorized_response
         return build_unauthorized_response(request, oauth_provider)
 
@@ -313,6 +351,13 @@ async def _handle_webhook(
             data=body if body else None,
         ) as upstream_resp:
             content_type = upstream_resp.headers.get("Content-Type", "")
+
+            if debug:
+                _LOGGER.info(
+                    "MCP Proxy [inbound]: -> upstream responded %s (%s)",
+                    upstream_resp.status,
+                    content_type or "no content-type",
+                )
 
             # Common headers for both streaming and non-streaming
             resp_headers = {

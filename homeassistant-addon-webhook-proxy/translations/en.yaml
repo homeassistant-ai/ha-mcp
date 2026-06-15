@@ -67,3 +67,19 @@ configuration:
       Use this when you suspect your OAuth credentials have leaked or
       simply want fresh ones. Remember to update your MCP client (e.g.
       Claude.ai) with the new values afterwards.
+  debug_logging:
+    name: Log inbound requests (Beta)
+    description: |
+      Logs every request that reaches this webhook to the Home Assistant log
+      (Settings -> System -> Logs, filter for "mcp_proxy") — NOT this addon
+      log, because requests hit Home Assistant directly rather than passing
+      through this addon. Each line shows the method, a masked webhook path,
+      the source address, whether an Authorization header was present, and the
+      upstream response status.
+
+      Use this to confirm whether your MCP client (e.g. Claude.ai) is actually
+      reaching the server: turn it on, restart the addon, try to connect from
+      your client, and watch this log. If no inbound lines appear, the request
+      never arrived — the problem is network reachability (public URL / DNS /
+      TLS), not the addon. Restart the addon after changing this option. Leave
+      off for normal operation.

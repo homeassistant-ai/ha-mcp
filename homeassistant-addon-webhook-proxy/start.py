@@ -741,6 +741,7 @@ def main() -> int:
     oauth_client_id = ""
     oauth_client_secret = ""
     regenerate_oauth_creds = False
+    debug_logging = False
     config: dict = {}
 
     if config_file.exists():
@@ -753,6 +754,7 @@ def main() -> int:
             oauth_client_id = config.get("oauth_client_id", "")
             oauth_client_secret = config.get("oauth_client_secret", "")
             regenerate_oauth_creds = bool(config.get("regenerate_oauth_creds", False))
+            debug_logging = bool(config.get("debug_logging", False))
         except (OSError, json.JSONDecodeError) as e:
             log_error(f"Failed to read config ({type(e).__name__}): {e}")
 
@@ -871,6 +873,11 @@ def main() -> int:
             "client_id": oauth_client_id,
             "client_secret": oauth_client_secret,
         }
+    # Inbound-request debug logging. Like the OAuth keys, only added when the
+    # toggle is on, so the default config file shape is unchanged for users
+    # who leave it off.
+    if debug_logging:
+        proxy_config["debug_logging"] = True
     proxy_config_file = Path("/config/.mcp_proxy_config.json")
     try:
         proxy_config_file.write_text(json.dumps(proxy_config))
@@ -1148,6 +1155,14 @@ def main() -> int:
         log_info("    connector setup (Claude.ai: connector → Advanced settings).")
         log_info("    These values persist at /data/oauth_creds.json — same")
         log_info("    values across addon restarts.")
+    if debug_logging:
+        log_info("")
+        log_info("  Inbound request debug logging is ON.")
+        log_info("    Every request hitting this webhook is logged to the Home")
+        log_info("    Assistant log (Settings → System → Logs, filter 'mcp_proxy'),")
+        log_info("    NOT this addon log — requests reach Home Assistant directly,")
+        log_info("    not this addon. Use it to confirm your MCP client is actually")
+        log_info("    reaching the server.")
     log_info("=" * 70)
     log_info("")
 
