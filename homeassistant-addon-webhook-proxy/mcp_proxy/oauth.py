@@ -55,9 +55,9 @@ AUTHORIZE_PATH = "/authorize"
 TOKEN_PATH = "/token"
 SECRET_FILE = Path("/config/.mcp_proxy_oauth_secret")
 
-ACCESS_TOKEN_TTL = 60 * 60  # 1 hour
+ACCESS_TOKEN_TTL = 60 * 60          # 1 hour
 REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60  # 30 days
-AUTH_CODE_TTL = 5 * 60  # 5 minutes
+AUTH_CODE_TTL = 5 * 60              # 5 minutes
 TOKEN_KIND_ACCESS = "access"
 TOKEN_KIND_REFRESH = "refresh"
 
@@ -162,7 +162,9 @@ def _is_valid_redirect_uri(redirect_uri: str) -> bool:
     return not parsed.fragment
 
 
-def _build_base_url(request: web.Request, public_base_url: str | None = None) -> str:
+def _build_base_url(
+    request: web.Request, public_base_url: str | None = None
+) -> str:
     """Build the public base URL used in OAuth metadata and redirects.
 
     When `public_base_url` is provided (the operator-configured
@@ -324,7 +326,9 @@ class OAuthProvider:
     # Authorization codes (PKCE)
     # -----------------------------------------------------------------
 
-    def issue_code(self, redirect_uri: str, code_challenge: str) -> str | None:
+    def issue_code(
+        self, redirect_uri: str, code_challenge: str
+    ) -> str | None:
         """Issue a one-shot authorization code, or return None if the
         pending-code store is at capacity (which signals an abuse attempt
         — see MAX_PENDING_CODES)."""
@@ -347,7 +351,9 @@ class OAuthProvider:
         }
         return code
 
-    def consume_code(self, code: str, redirect_uri: str, code_verifier: str) -> bool:
+    def consume_code(
+        self, code: str, redirect_uri: str, code_verifier: str
+    ) -> bool:
         # Validate the verifier shape per RFC 7636 §4.1 before doing any
         # crypto. A confused client passing an empty/short verifier should
         # be rejected explicitly rather than silently hashing junk.
@@ -378,9 +384,10 @@ class OAuthProvider:
     ) -> bool:
         if not client_id or not client_secret:
             return False
-        return hmac.compare_digest(
-            client_id.encode(), self._client_id.encode()
-        ) and hmac.compare_digest(client_secret.encode(), self._client_secret.encode())
+        return (
+            hmac.compare_digest(client_id.encode(), self._client_id.encode())
+            and hmac.compare_digest(client_secret.encode(), self._client_secret.encode())
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -459,11 +466,12 @@ class AuthorizeView(HomeAssistantView):
         self._provider = provider
 
     @staticmethod
-    def _redirect_with(redirect_uri: str, **params: str) -> web.Response:
+    def _redirect_with(
+        redirect_uri: str, **params: str
+    ) -> web.Response:
         # yarl ships with aiohttp and handles existing-query-string merging
         # plus parameter encoding correctly — safer than hand-rolling.
         import yarl
-
         url = yarl.URL(redirect_uri).update_query(params)
         return web.Response(
             status=302,
@@ -544,7 +552,9 @@ class AuthorizeView(HomeAssistantView):
             return err
 
         if action == "deny":
-            return self._redirect_with(redirect_uri, error="access_denied", state=state)
+            return self._redirect_with(
+                redirect_uri, error="access_denied", state=state
+            )
         if action != "approve":
             return web.Response(status=400, text="invalid action")
 
@@ -608,9 +618,9 @@ class TokenView(HomeAssistantView):
         header = request.headers.get("Authorization", "")
         if header.lower().startswith("basic "):
             try:
-                decoded = base64.b64decode(header[6:].strip(), validate=True).decode(
-                    "utf-8"
-                )
+                decoded = base64.b64decode(
+                    header[6:].strip(), validate=True
+                ).decode("utf-8")
             except (ValueError, UnicodeDecodeError, binascii.Error):
                 return None, None
             if ":" in decoded:
@@ -634,7 +644,9 @@ class TokenView(HomeAssistantView):
             return await self._handle_authorization_code(form)
         if grant_type == "refresh_token":
             return await self._handle_refresh(form)
-        return web.json_response({"error": "unsupported_grant_type"}, status=400)
+        return web.json_response(
+            {"error": "unsupported_grant_type"}, status=400
+        )
 
     async def _handle_authorization_code(self, form: dict) -> web.Response:
         code = str(form.get("code", ""))
@@ -691,7 +703,8 @@ def build_unauthorized_response(
         text="Unauthorized",
         headers={
             "WWW-Authenticate": (
-                f'Bearer realm="MCP Proxy", resource_metadata="{metadata_url}"'
+                f'Bearer realm="MCP Proxy", '
+                f'resource_metadata="{metadata_url}"'
             )
         },
     )

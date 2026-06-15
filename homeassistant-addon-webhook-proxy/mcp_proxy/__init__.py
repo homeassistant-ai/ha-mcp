@@ -160,11 +160,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Inbound-request debug logging (addon "Log inbound requests" toggle).
     # Custom-component loggers default to WARNING, so raise our own logger to
-    # INFO when it's on so the per-request lines are actually emitted; reset to
-    # NOTSET (inherit) when off so a later reload that turns it back off stops
-    # the extra output.
+    # INFO when it's on so the per-request lines are actually emitted — but only
+    # when the effective level is *less* verbose, so we never clobber an explicit
+    # DEBUG a user set via Home Assistant's `logger:` config. Symmetrically, when
+    # the toggle is off we only undo an INFO level WE previously raised, so the
+    # default-config majority's explicit `logger:` level survives every reload.
     debug_logging = bool(proxy_config.get("debug_logging", False))
-    _LOGGER.setLevel(logging.INFO if debug_logging else logging.NOTSET)
+    if debug_logging and _LOGGER.getEffectiveLevel() > logging.INFO:
+        _LOGGER.setLevel(logging.INFO)
+    elif not debug_logging and _LOGGER.level == logging.INFO:
+        _LOGGER.setLevel(logging.NOTSET)
     if debug_logging:
         _LOGGER.info(
             "MCP Proxy: inbound request debug logging is ON — each request to "
@@ -304,7 +309,11 @@ async def _handle_webhook(
     if debug:
         wh = data["webhook_id"]
         masked_path = f"/api/webhook/{wh[:6]}..." if len(wh) > 6 else "/api/webhook/***"
-        source = request.headers.get("X-Forwarded-For") or request.remote or "unknown"
+        # request.remote is the client IP validated by HA's trusted-proxy layer
+        # (it resolves X-Forwarded-For when the proxy is trusted). Reading the
+        # raw X-Forwarded-For header here would let an untrusted client spoof
+        # the logged source.
+        source = request.remote or "unknown"
         has_auth = "present" if request.headers.get("Authorization") else "absent"
         _LOGGER.info(
             "MCP Proxy [inbound]: %s %s from %s (Authorization header: %s)",
