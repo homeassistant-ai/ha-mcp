@@ -462,6 +462,7 @@ class TestAutomationDiff:
         assert data["patch"] == []
         assert data["counts"]["total"] == 0
         assert data["truncated"] is False
+        assert data["captured_at"] is not None
 
         await safe_call_tool(
             mcp_client,
@@ -577,8 +578,73 @@ class TestAutomationDiff:
         data = diff.get("data", {})
         assert data["entity_missing"] is True
         assert data["patch"] == []
+        # ``unchanged`` is False under entity_missing — the empty patch
+        # is an artefact of the absent target, not a "matches live" match.
+        assert data["unchanged"] is False
+        assert data["captured_at"] is not None
         warnings = diff.get("warnings") or []
         assert any("missing" in w.lower() for w in warnings)
+
+    async def test_diff_truncated_surfaces_tool_layer_warning(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Drive the tool-layer ``truncated`` warning end-to-end: cap the
+        # patch budget at 1 op so a real multi-field edit overflows it.
+        # Asserts both the manager-level ``truncated: true`` and the
+        # tool-layer warning string the manager flag drives.
+        _enable_auto_backup(monkeypatch)
+        import ha_mcp.backup_manager as bm
+
+        monkeypatch.setattr(bm, "_MAX_PATCH_OPS", 1)
+        suffix = uuid.uuid4().hex[:8]
+        identifier = f"e2e_diff_trunc_{suffix}"
+        original = {
+            "alias": f"E2E Diff Trunc {suffix}",
+            "trigger": [{"platform": "time", "at": "12:00:00"}],
+            "action": [{"service": "homeassistant.no_op"}],
+        }
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {"config": original, "identifier": identifier},
+        )
+        # Edit several fields so the captured-vs-live diff is > 1 op.
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "config": {
+                    **original,
+                    "alias": f"E2E Diff Trunc Edited {suffix}",
+                    "trigger": [
+                        {"platform": "time", "at": "13:00:00"},
+                        {"platform": "time", "at": "14:00:00"},
+                    ],
+                },
+                "identifier": identifier,
+            },
+        )
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="automation", entity_id=identifier
+        )
+
+        diff = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "diff", "backup_name": backup_name},
+        )
+        assert diff.get("success") is True
+        data = diff.get("data", {})
+        assert data["truncated"] is True
+        assert len(data["patch"]) == 1
+        warnings = diff.get("warnings") or []
+        assert any("truncated" in w.lower() for w in warnings)
+
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_automation",
+            {"identifier": identifier},
+        )
 
 
 # ---------------------------------------------------------------- helper lane

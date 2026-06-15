@@ -28,10 +28,12 @@ from ha_mcp.backup_manager import (
     DomainHandler,
     _compute_json_patch,
     _pointer_segment,
+    _require_list,
     _safe_entity_id,
     _summarize_patch_counts,
     get_backup_manager,
 )
+from ha_mcp.client.rest_client import HomeAssistantError
 
 # ---------------------------------------------------------------- fixtures
 
@@ -661,9 +663,10 @@ class TestPointerSegment:
         assert _pointer_segment("a~b") == "a~0b"
 
     def test_tilde_one_in_input_round_trips(self) -> None:
-        # Without escaping ``~`` before ``/``, the literal ``~1`` in the
-        # input would conflict with the slash substitution and decode
-        # back to ``/`` on the consumer side. ``~`` first prevents that.
+        # Forward order escapes ``~`` → ``~0`` first, so the literal
+        # ``~1`` becomes ``~01``. The reverse order is the real hazard:
+        # a literal ``/`` escaped to ``~1`` would then be corrupted to
+        # ``~01`` by the ``~`` pass (see ``_pointer_segment``).
         assert _pointer_segment("~1") == "~01"
 
 
@@ -747,6 +750,80 @@ class TestDiffNode:
         # All three are adds since current is empty.
         assert {op["op"] for op in out} == {"add"}
 
+    def test_patch_exactly_at_cap_is_not_truncated(self) -> None:
+        # A patch that lands on exactly ``max_ops`` ops is complete, not
+        # cut short — ``len(out) >= max_ops`` would have flagged it as a
+        # false-positive truncation. The generator collects one beyond
+        # the cap to tell "exactly full" from "overflowed".
+        stored = {f"k{i}": i for i in range(3)}
+        current: dict[str, Any] = {}
+        out: list[dict[str, Any]] = []
+        truncated = _compute_json_patch(stored, current, 3, out)
+        assert truncated is False
+        assert len(out) == 3
+        assert {op["op"] for op in out} == {"add"}
+
+    def test_nested_list_of_dicts_grows_emits_append(self) -> None:
+        # A real trigger add: the stored automation has two triggers, the
+        # live one only has the first — recovering ``stored`` means
+        # appending the second trigger.
+        stored = {
+            "trigger": [
+                {"platform": "state", "entity_id": "binary_sensor.a"},
+                {"platform": "time", "at": "12:00:00"},
+            ]
+        }
+        current = {"trigger": [{"platform": "state", "entity_id": "binary_sensor.a"}]}
+        out: list[dict[str, Any]] = []
+        _compute_json_patch(stored, current, 50, out)
+        assert out == [
+            {
+                "op": "add",
+                "path": "/trigger/-",
+                "value": {"platform": "time", "at": "12:00:00"},
+            }
+        ]
+
+    def test_nested_list_of_dicts_shrinks_emits_reverse_remove(self) -> None:
+        # A real action removal: the stored script has one action, the
+        # live one grew a second — recovering ``stored`` means removing
+        # the extra tail entry.
+        stored = {"action": [{"service": "light.turn_on"}]}
+        current = {
+            "action": [
+                {"service": "light.turn_on"},
+                {"service": "light.turn_off"},
+            ]
+        }
+        out: list[dict[str, Any]] = []
+        _compute_json_patch(stored, current, 50, out)
+        assert out == [{"op": "remove", "path": "/action/1"}]
+
+    def test_tilde_in_key_escapes_end_to_end(self) -> None:
+        # ``~`` in a dict key must be escaped to ``~0`` in the pointer
+        # path — exercised through ``_compute_json_patch`` (not just
+        # ``_pointer_segment``) to cover the full diff path.
+        out: list[dict[str, Any]] = []
+        _compute_json_patch({"a~b": 2}, {"a~b": 1}, 50, out)
+        assert out == [{"op": "replace", "path": "/a~0b", "value": 2}]
+
+
+class TestRequireList:
+    """``_require_list`` distinguishes a degraded fetch from a real miss."""
+
+    def test_returns_list_unchanged(self) -> None:
+        items = [{"id": "x"}]
+        assert _require_list(items, "config/label_registry/list") is items
+
+    @pytest.mark.parametrize("bad", [None, {"error": "denied"}, "oops", 42])
+    def test_non_list_envelope_raises(self, bad: Any) -> None:
+        # A non-list envelope is an unexpected/degraded response, not a
+        # missing entity — it must raise (funnelling to a structured
+        # error / capture warning) rather than return None, which callers
+        # read as ``entity_missing``.
+        with pytest.raises(HomeAssistantError):
+            _require_list(bad, "config/label_registry/list")
+
 
 class TestSummarizePatchCounts:
     def test_counts_each_op_class_and_total(self) -> None:
@@ -770,6 +847,25 @@ class TestSummarizePatchCounts:
             "replace": 0,
             "total": 0,
         }
+
+    def test_unrecognized_op_warns_and_undercounts_classes(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # ``_diff_node`` only emits add/remove/replace today; if a future
+        # op type (move/copy/test) ever appears, the class counts sum to
+        # less than ``total``. The warning makes that drift visible.
+        patch = [
+            {"op": "add", "path": "/x", "value": 1},
+            {"op": "move", "from": "/a", "path": "/b"},
+        ]
+        with caplog.at_level("WARNING"):
+            counts = _summarize_patch_counts(patch)
+        assert counts == {"add": 1, "remove": 0, "replace": 0, "total": 2}
+        assert counts["add"] + counts["remove"] + counts["replace"] < counts["total"]
+        assert any(
+            "unrecognized JSON-Patch op" in r.message and "move" in r.message
+            for r in caplog.records
+        )
 
 
 class TestDiffSnapshot:
@@ -796,6 +892,7 @@ class TestDiffSnapshot:
             "total": 0,
         }
         assert result["truncated"] is False
+        assert result["captured_at"] is not None
 
     async def test_diff_reports_scalar_replace(self, tmp_path: Path) -> None:
         # Capture, then mutate the handler's "current" so a subsequent
@@ -844,10 +941,15 @@ class TestDiffSnapshot:
         # restore would re-create this", not "apply N ops".
         assert result["patch"] == []
         assert result["truncated"] is False
-        # ``unchanged`` tracks the empty-patch invariant across both
-        # branches; ``entity_missing=True`` callers must check
-        # ``entity_missing`` first (see ``diff_snapshot`` docstring).
-        assert result["unchanged"] is True
+        # ``unchanged`` must be False under ``entity_missing``: the empty
+        # patch is an artefact of the absent target, not a "live config
+        # matches snapshot" signal. An agent scanning ``unchanged`` to
+        # skip action would otherwise be wrong.
+        assert result["unchanged"] is False
+        # ``captured_at`` is the snapshot timestamp, present in both
+        # branches — asserted so a rename to a non-existent key surfaces
+        # as a failure instead of silently yielding None.
+        assert result["captured_at"] is not None
 
     async def test_diff_raises_lookup_error_on_unknown_domain(
         self, tmp_path: Path

@@ -47,7 +47,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
@@ -546,7 +546,7 @@ class BackupManager:
 
     # ----- diff ----------------------------------------------------------
 
-    async def diff_snapshot(self, name: str) -> dict[str, Any]:
+    async def diff_snapshot(self, name: str) -> DiffResponse:
         """Compare a stored snapshot against the live config of the same entity.
 
         Returns an RFC 6902-shaped JSON-Patch — the ops a client would
@@ -557,12 +557,11 @@ class BackupManager:
         patch exceeded ``_MAX_PATCH_OPS`` and was cut short to keep the
         tool response bounded.
 
-        ``unchanged`` tracks the empty-patch invariant (``len(patch)==0``)
-        across both branches — including ``entity_missing=True``, where
-        no live target exists and the patch is therefore empty. Callers
-        MUST check ``entity_missing`` first; ``unchanged`` is only
-        meaningful relative to the empty-patch claim, not as evidence
-        that the stored config matches a live state.
+        ``unchanged`` means the live config matches the snapshot — it is
+        ``True`` only when the entity exists *and* the patch is empty.
+        Under ``entity_missing=True`` it is ``False``: there is no live
+        target to match, so "no action needed" would be wrong (the
+        empty patch is an artefact of the missing entity, not a match).
         """
         data = await asyncio.to_thread(self.read_snapshot, name)
         domain = data["domain"]
@@ -574,36 +573,91 @@ class BackupManager:
         current = await handler.fetch(self._client, entity_id)
         captured_at = data.get("captured")
         if current is None:
-            return {
-                "kind": "dict",
-                "backup_name": name,
-                "domain": domain,
-                "entity_id": entity_id,
-                "captured_at": captured_at,
-                "entity_missing": True,
-                "patch": [],
-                "counts": {"add": 0, "remove": 0, "replace": 0, "total": 0},
-                "unchanged": True,
-                "truncated": False,
-            }
+            return _build_diff_response(
+                name,
+                domain,
+                entity_id,
+                captured_at,
+                entity_missing=True,
+                patch=[],
+                counts=_summarize_patch_counts([]),
+                truncated=False,
+            )
         patch: list[dict[str, Any]] = []
         truncated = _compute_json_patch(stored, current, _MAX_PATCH_OPS, patch)
-        counts = _summarize_patch_counts(patch)
-        return {
-            "kind": "dict",
-            "backup_name": name,
-            "domain": domain,
-            "entity_id": entity_id,
-            "captured_at": captured_at,
-            "entity_missing": False,
-            "patch": patch,
-            "counts": counts,
-            "unchanged": counts["total"] == 0,
-            "truncated": truncated,
-        }
+        return _build_diff_response(
+            name,
+            domain,
+            entity_id,
+            captured_at,
+            entity_missing=False,
+            patch=patch,
+            counts=_summarize_patch_counts(patch),
+            truncated=truncated,
+        )
 
 
 # --------------------------- diff helpers -----------------------------------
+
+
+class DiffCounts(TypedDict):
+    """Per-op-class tallies for a diff patch. ``total`` is the op count;
+    ``add + remove + replace`` equals it today (see ``_summarize_patch_counts``)."""
+
+    add: int
+    remove: int
+    replace: int
+    total: int
+
+
+class DiffResponse(TypedDict):
+    """Return shape of ``BackupManager.diff_snapshot``. Both the
+    entity-present and ``entity_missing`` branches build this through
+    ``_build_diff_response`` so the key set can't drift between them."""
+
+    kind: str
+    backup_name: str
+    domain: str
+    entity_id: str
+    captured_at: str | None
+    entity_missing: bool
+    patch: list[dict[str, Any]]
+    counts: DiffCounts
+    unchanged: bool
+    truncated: bool
+
+
+def _build_diff_response(
+    name: str,
+    domain: str,
+    entity_id: str,
+    captured_at: str | None,
+    *,
+    entity_missing: bool,
+    patch: list[dict[str, Any]],
+    counts: DiffCounts,
+    truncated: bool,
+) -> DiffResponse:
+    """Assemble the diff return payload for either branch.
+
+    ``unchanged`` means "live config matches the snapshot" — only true
+    when the entity exists and the patch is empty. Under
+    ``entity_missing`` it is forced ``False``: the empty patch is an
+    artefact of the absent target, not evidence of a match.
+    """
+    return {
+        "kind": "dict",
+        "backup_name": name,
+        "domain": domain,
+        "entity_id": entity_id,
+        "captured_at": captured_at,
+        "entity_missing": entity_missing,
+        "patch": patch,
+        "counts": counts,
+        "unchanged": not entity_missing and counts["total"] == 0,
+        "truncated": truncated,
+    }
+
 
 # Output cap for diff_snapshot. Bounded payload keeps the tool response
 # token-friendly even when the user diffs against a freshly-rewritten
@@ -620,11 +674,18 @@ def _compute_json_patch(
 
     The patch is the op sequence a client would apply to ``current`` to
     recover ``stored`` (the captured snapshot is the target state).
-    Appends ops to ``out`` in place. Returns True if generation stopped
-    at ``max_ops`` ops (output truncated, not the source of truth).
+    Appends ops to ``out`` in place (capped at ``max_ops`` entries).
+
+    Returns True only when the diff genuinely exceeded ``max_ops``. The
+    generator collects one op beyond the cap so an exactly-full patch
+    (``len == max_ops``) isn't mistaken for a truncated one; the
+    overflow op is trimmed before returning.
     """
-    _diff_node(stored, current, "", out, max_ops)
-    return len(out) >= max_ops
+    _diff_node(stored, current, "", out, max_ops + 1)
+    truncated = len(out) > max_ops
+    if truncated:
+        del out[max_ops:]
+    return truncated
 
 
 def _diff_node(
@@ -695,20 +756,38 @@ def _diff_node(
 def _pointer_segment(key: str) -> str:
     """Escape one JSON-Pointer reference token per RFC 6901 §3.
 
-    ``~`` becomes ``~0`` first so that the subsequent ``/`` substitution
-    cannot eat freshly-written escapes.
+    Order matters: ``~`` → ``~0`` must run before ``/`` → ``~1``. The
+    reverse order would first turn a literal ``/`` into ``~1``, and the
+    following ``~`` pass would then corrupt that fresh ``~1`` into
+    ``~01``.
     """
     return key.replace("~", "~0").replace("/", "~1")
 
 
-def _summarize_patch_counts(patch: list[dict[str, Any]]) -> dict[str, int]:
-    counts: dict[str, int] = {"add": 0, "remove": 0, "replace": 0}
+def _summarize_patch_counts(patch: list[dict[str, Any]]) -> DiffCounts:
+    """Tally op classes. ``add + remove + replace == total`` holds today
+    because ``_diff_node`` only emits those three ops; if a future change
+    starts emitting ``move``/``copy``/``test``, the class counts would sum
+    to less than ``total``. Warn on any unrecognized op so that drift is
+    visible instead of silently undercounting.
+    """
+    classes: dict[str, int] = {"add": 0, "remove": 0, "replace": 0}
     for op in patch:
         op_type = op.get("op")
-        if isinstance(op_type, str) and op_type in counts:
-            counts[op_type] += 1
-    counts["total"] = len(patch)
-    return counts
+        if isinstance(op_type, str) and op_type in classes:
+            classes[op_type] += 1
+        else:
+            logger.warning(
+                "diff: unrecognized JSON-Patch op %r — not reflected in "
+                "per-class counts (add/remove/replace)",
+                op_type,
+            )
+    return {
+        "add": classes["add"],
+        "remove": classes["remove"],
+        "replace": classes["replace"],
+        "total": len(patch),
+    }
 
 
 # --------------------------- attach to client -------------------------------
@@ -817,8 +896,8 @@ async def _ws_send(client: Any, message: dict[str, Any]) -> Any:
     # — unwrap so fetch / restore handlers downstream see the inner
     # shape directly (list for ``<type>/list`` calls, dict for
     # ``execute_script`` calls, etc.). Without the unwrap the
-    # ``isinstance(items, list)`` guards in every fetch handler would
-    # treat the envelope as a non-list and silently return None.
+    # ``_require_list`` checks in every fetch handler would see the
+    # envelope as a non-list and raise a spurious degraded-fetch error.
     if isinstance(envelope, dict) and "result" in envelope:
         return envelope["result"]
     return envelope
@@ -930,13 +1009,32 @@ async def _restore_dashboard(client: Any, entity_id: str, config: Any) -> Any:
     )
 
 
+def _require_list(value: Any, endpoint: str) -> list[Any]:
+    """Return ``value`` if it's a list, else raise.
+
+    The WS registry-list fetchers below distinguish two cases that used
+    to both collapse to ``None`` (which the diff/capture callers read as
+    "entity missing"): a genuine miss (entity not in the list) stays
+    ``None``, but an unexpected non-list envelope — a degraded response
+    from an auth-scope change or API drift — raises instead. The raise
+    funnels through the diff tool's ``exception_to_structured_error`` and
+    the capture pipeline's ``_CAPTURE_TRANSIENT_ERRORS`` warning, so a
+    broken fetch is never reported as a confident ``entity_missing``.
+    """
+    if not isinstance(value, list):
+        raise HomeAssistantError(
+            f"Expected a list from {endpoint!r}, got {type(value).__name__}"
+        )
+    return value
+
+
 # Dashboard resources — WS lovelace_resources commands.
 
 
 async def _fetch_dashboard_resource(client: Any, entity_id: str) -> Any:
-    resources = await _ws_send(client, {"type": "lovelace/resources"})
-    if not isinstance(resources, list):
-        return None
+    resources = _require_list(
+        await _ws_send(client, {"type": "lovelace/resources"}), "lovelace/resources"
+    )
     for res in resources:
         if str(res.get("id")) == entity_id:
             return res
@@ -974,9 +1072,10 @@ def _strip_readonly(config: dict[str, Any], *extra: str) -> dict[str, Any]:
 
 
 async def _fetch_label(client: Any, entity_id: str) -> Any:
-    items = await _ws_send(client, {"type": "config/label_registry/list"})
-    if not isinstance(items, list):
-        return None
+    items = _require_list(
+        await _ws_send(client, {"type": "config/label_registry/list"}),
+        "config/label_registry/list",
+    )
     for item in items:
         if item.get("label_id") == entity_id:
             return item
@@ -997,11 +1096,12 @@ async def _fetch_category(client: Any, entity_id: str) -> Any:
     scope, _, cat_id = entity_id.partition(":")
     if not cat_id:
         return None
-    items = await _ws_send(
-        client, {"type": "config/category_registry/list", "scope": scope}
+    items = _require_list(
+        await _ws_send(
+            client, {"type": "config/category_registry/list", "scope": scope}
+        ),
+        "config/category_registry/list",
     )
-    if not isinstance(items, list):
-        return None
     for item in items:
         if item.get("category_id") == cat_id:
             return {"scope": scope, **item}
@@ -1117,9 +1217,7 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
 
 
 async def _fetch_zone(client: Any, entity_id: str) -> Any:
-    items = await _ws_send(client, {"type": "zone/list"})
-    if not isinstance(items, list):
-        return None
+    items = _require_list(await _ws_send(client, {"type": "zone/list"}), "zone/list")
     for item in items:
         if item.get("id") == entity_id or item.get("name") == entity_id:
             return item
@@ -1141,16 +1239,18 @@ async def _fetch_area_or_floor(client: Any, entity_id: str) -> Any:
     if not real_id:
         return None
     if kind == "area":
-        items = await _ws_send(client, {"type": "config/area_registry/list"})
-        if not isinstance(items, list):
-            return None
+        items = _require_list(
+            await _ws_send(client, {"type": "config/area_registry/list"}),
+            "config/area_registry/list",
+        )
         for item in items:
             if item.get("area_id") == real_id:
                 return {"kind": "area", **item}
     elif kind == "floor":
-        items = await _ws_send(client, {"type": "config/floor_registry/list"})
-        if not isinstance(items, list):
-            return None
+        items = _require_list(
+            await _ws_send(client, {"type": "config/floor_registry/list"}),
+            "config/floor_registry/list",
+        )
         for item in items:
             if item.get("floor_id") == real_id:
                 return {"kind": "floor", **item}
@@ -1241,9 +1341,9 @@ async def _restore_entity_state(client: Any, entity_id: str, config: Any) -> Any
 
 
 async def _fetch_integration(client: Any, entity_id: str) -> Any:
-    items = await _ws_send(client, {"type": "config_entries/get"})
-    if not isinstance(items, list):
-        return None
+    items = _require_list(
+        await _ws_send(client, {"type": "config_entries/get"}), "config_entries/get"
+    )
     for item in items:
         if item.get("entry_id") == entity_id:
             return item
@@ -1299,9 +1399,9 @@ async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
             helper_type,
         )
         return None
-    items = await _ws_send(client, {"type": f"{helper_type}/list"})
-    if not isinstance(items, list):
-        return None
+    items = _require_list(
+        await _ws_send(client, {"type": f"{helper_type}/list"}), f"{helper_type}/list"
+    )
     object_id = entity_id.split(".", 1)[-1] if "." in entity_id else entity_id
     for item in items:
         if item.get("id") == object_id or item.get("id") == entity_id:
