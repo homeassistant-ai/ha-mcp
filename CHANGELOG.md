@@ -3,6 +3,106 @@
 <!-- version list -->
 
 
+## v7.8.0 (2026-06-15)
+
+### Added
+
+- Support recurring calendar events via rrule in ha_config_set_calendar_event
+  ([#1585](https://github.com/homeassistant-ai/ha-mcp/pull/1585))
+- Add ha_manage_theme tool and themes section in ha_get_system_health (closes #1580)
+  ([#1588](https://github.com/homeassistant-ai/ha-mcp/pull/1588))
+- Accessibility controls and theme presets for settings UI and docs site
+  ([#1574](https://github.com/homeassistant-ai/ha-mcp/pull/1574))
+- Add Read Only Mode toggle (web UI + addon config)
+  ([#1573](https://github.com/homeassistant-ai/ha-mcp/pull/1573))
+
+### Fixed
+
+- SSE stateless_http startup, plus transient-5xx retry and HACS add timeout
+  ([#1623](https://github.com/homeassistant-ai/ha-mcp/pull/1623))
+- Correct setup-wizard transport config and quiet benign access-log noise
+  ([#1620](https://github.com/homeassistant-ai/ha-mcp/pull/1620))
+- **helpers**: Apply icon to flow/template helpers via the entity registry
+  ([#1618](https://github.com/homeassistant-ai/ha-mcp/pull/1618))
+- **toolsearch**: Actionable error + refresh guidance for stale tool-search catalog
+  ([#1617](https://github.com/homeassistant-ai/ha-mcp/pull/1617))
+- Coerce JSON-string dict/list args on all MCP container params
+  ([#1613](https://github.com/homeassistant-ai/ha-mcp/pull/1613))
+- **dashboards**: Recurse into nested cards in find_card + usable python_path
+  ([#1610](https://github.com/homeassistant-ai/ha-mcp/pull/1610))
+- Gate installer uv check on uvx, not uv
+  ([#1606](https://github.com/homeassistant-ai/ha-mcp/pull/1606))
+- **haos-e2e**: Apps/local refresh, Supervisor-update wait, cache-miss local build
+  ([#1600](https://github.com/homeassistant-ai/ha-mcp/pull/1600))
+- Coerce JSON-encoded strings on dict/list tool params
+  ([#1582](https://github.com/homeassistant-ai/ha-mcp/pull/1582))
+- Rename config-entry-flow machinery out of tools_* namespace
+  ([#1584](https://github.com/homeassistant-ai/ha-mcp/pull/1584))
+- Report stored option values instead of schema defaults in options-flow reads
+  ([#1577](https://github.com/homeassistant-ai/ha-mcp/pull/1577))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 7.7.0.dev430 [skip ci]
+  ([`5d1ba14`](https://github.com/homeassistant-ai/ha-mcp/commit/5d1ba14146635d109b6a1995e2dde3f80c5d9625))
+- **addon**: Publish dev addon version 7.7.0.dev429 [skip ci]
+  ([`140ab8a`](https://github.com/homeassistant-ai/ha-mcp/commit/140ab8a75cbf008b0b51fcd38a298544cda83421))
+- **addon**: Publish dev addon version 7.7.0.dev428 [skip ci]
+  ([`52eeeba`](https://github.com/homeassistant-ai/ha-mcp/commit/52eeeba7112e9fd73be9aad3ef14534fe11564b4))
+- **addon**: Publish dev addon version 7.7.0.dev427 [skip ci]
+  ([`8dda905`](https://github.com/homeassistant-ai/ha-mcp/commit/8dda905f6e2336f1fa581f1230a141b2f87506e6))
+- **addon**: Publish dev addon version 7.7.0.dev426 [skip ci]
+  ([`be4863d`](https://github.com/homeassistant-ai/ha-mcp/commit/be4863d8a14de026911a8d30dbd69c61a7cd4ae4))
+- Sync tool docs after merge [skip ci]
+  ([`3193ce4`](https://github.com/homeassistant-ai/ha-mcp/commit/3193ce404bedfb6c00352fc4027e8ce4baca9222))
+- **addon**: Publish dev addon version 7.7.0.dev425 [skip ci]
+  ([`9130d0e`](https://github.com/homeassistant-ai/ha-mcp/commit/9130d0edcc83452015931f47f4868870b530c660))
+- Sync tool docs after merge [skip ci]
+  ([`f21970d`](https://github.com/homeassistant-ai/ha-mcp/commit/f21970de1e7b74d2baa39d72dee848c2feaf348d))
+- **addon**: Publish dev addon version 7.7.0.dev424 [skip ci]
+  ([`62baf73`](https://github.com/homeassistant-ai/ha-mcp/commit/62baf7380cf134273cdaa80b131f8fa4c168bf22))
+- Sync tool docs after merge [skip ci]
+  ([`ae02fe9`](https://github.com/homeassistant-ai/ha-mcp/commit/ae02fe9561a45201aa63c7c3250e59c81ec3012c))
+- **addon**: Publish dev addon version 7.7.0.dev423 [skip ci]
+  ([`118e4e7`](https://github.com/homeassistant-ai/ha-mcp/commit/118e4e7aded032335b45eda5213cd61436deaf8f))
+- **addon**: Publish dev addon version 7.7.0.dev422 [skip ci]
+  ([`1db9ef8`](https://github.com/homeassistant-ai/ha-mcp/commit/1db9ef88fd4eb0ef1604fafc15422108f9b3796d))
+- **addon**: Publish dev addon version 7.7.0.dev421 [skip ci]
+  ([`7c8c7ae`](https://github.com/homeassistant-ai/ha-mcp/commit/7c8c7ae72f630574b424b312181edd26973af5cd))
+- **addon**: Publish dev addon version 7.7.0.dev420 [skip ci]
+  ([`f248ece`](https://github.com/homeassistant-ai/ha-mcp/commit/f248ece51aecf018759ad2a087dde19a27a2ca37))
+- Sync tool docs after merge [skip ci]
+  ([`1e3c18c`](https://github.com/homeassistant-ai/ha-mcp/commit/1e3c18c6e92cb502ef7e4212b8484175b9a9567c))
+- **addon**: Publish dev addon version 7.7.0.dev419 [skip ci]
+  ([`f05d155`](https://github.com/homeassistant-ai/ha-mcp/commit/f05d1554170734c718c5483f622e5e1ea73a7419))
+- Sync tool docs after merge [skip ci]
+  ([`9967d50`](https://github.com/homeassistant-ai/ha-mcp/commit/9967d501e6739630bfda8b3a55ed559ac6fe95a1))
+- **addon**: Publish dev addon version 7.7.0.dev417 [skip ci]
+  ([`c3bf16a`](https://github.com/homeassistant-ai/ha-mcp/commit/c3bf16af9ca4231ea58046f9363d128afebe923c))
+- **addon**: Publish version 7.7.0 [skip ci]
+  ([`edc74fc`](https://github.com/homeassistant-ai/ha-mcp/commit/edc74fc0e8a52d5eaf02c2424cb3a3e57e393b17))
+
+### Continuous Integration
+
+- Fix HAOS bake with a mock screenshot engine; make e2e lanes safe to require
+  ([#1611](https://github.com/homeassistant-ai/ha-mcp/pull/1611))
+- **deps**: Bump esbuild from 0.25.0 to 0.28.1 in /tests/js
+  ([#1591](https://github.com/homeassistant-ai/ha-mcp/pull/1591))
+- Add abandoned PR policy and automated stale-PR reminders
+  ([#1589](https://github.com/homeassistant-ai/ha-mcp/pull/1589))
+
+### Testing
+
+- Cover rrule error paths in ha_config_set_calendar_event
+  ([#1616](https://github.com/homeassistant-ai/ha-mcp/pull/1616))
+</details>
+
+
 ## v7.7.0 (2026-06-10)
 
 ### Added
