@@ -152,6 +152,20 @@ class TestLogbookOrder:
         assert data["total_entries"] == 3
         assert data["filters_applied"]["search"] == "match"
 
+    @pytest.mark.asyncio
+    async def test_non_list_response_still_echoes_order(self):
+        # If HA returns a non-list shape, the windowing is skipped but the
+        # response must still echo `order` and not page.
+        client = AsyncMock()
+        client.get_logbook = AsyncMock(return_value={"unexpected": "shape"})
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        tools = UtilityTools(client)
+        result = await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
+        data = result["data"]
+        assert data["order"] == "newest"
+        assert data["has_more"] is False
+        assert data["total_entries"] == 1
+
 
 class TestSystemOrder:
     """source='system' — sorted deterministically by entry timestamp."""
