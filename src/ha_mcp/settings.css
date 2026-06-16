@@ -284,6 +284,13 @@
   .adv-save-btn:disabled { opacity: 0.55; cursor: not-allowed;
     box-shadow: none; }
   .adv-section { border-top: 1px solid var(--border); }
+  /* Sidecar section greys out in non-stdio deployments (no sidecar to pin),
+     mirroring the .feature-row.*-sub.dimmed treatment. */
+  .adv-section.dimmed { opacity: 0.55; }
+  .adv-section.dimmed input, .adv-section.dimmed select { cursor: not-allowed; }
+  .adv-section-title.dimmed { opacity: 0.55; }
+  .adv-section-note { font-size: 0.72rem; color: var(--text-secondary);
+    margin: 4px 0 8px; line-height: 1.4; }
   .adv-row { display: flex; align-items: flex-start; justify-content: space-between;
     gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
   .adv-row:first-child { border-top: none; }

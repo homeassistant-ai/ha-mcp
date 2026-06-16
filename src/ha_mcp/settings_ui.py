@@ -902,7 +902,7 @@ _SETTINGS_HTML = (
   <div id="advToolsSurface" class="adv-section"></div>
   <h3 class="adv-section-title">Diagnostics</h3>
   <div id="advDiagnostics" class="adv-section"></div>
-  <h3 class="adv-section-title">Settings UI sidecar (stdio-only)</h3>
+  <h3 class="adv-section-title">Settings UI sidecar</h3>
   <div id="advSidecar" class="adv-section"></div>
 
   <!-- Beta features sit at the bottom of the panel — these can damage
@@ -2705,7 +2705,16 @@ def build_settings_handlers(
             if choices is not None:
                 row["choices"] = list(choices)
             fields.append(row)
-        return JSONResponse({"fields": fields, "is_addon": is_running_in_addon()})
+        # is_stdio: the sidecar-port field only applies when this settings
+        # page is served by the stdio settings-UI sidecar. In HTTP/SSE/OAuth
+        # /addon deployments there is no sidecar, so the UI greys the section.
+        return JSONResponse(
+            {
+                "fields": fields,
+                "is_addon": is_running_in_addon(),
+                "is_stdio": get_http_settings_prefix() is None,
+            }
+        )
 
     def _origin_for_advanced_field(
         env_name: str, overrides: dict[str, Any] | None = None

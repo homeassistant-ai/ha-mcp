@@ -2502,6 +2502,25 @@ class TestAdvancedSettingsEndpoints:
         assert "verify_ssl" in field_names
 
     @pytest.mark.asyncio
+    async def test_get_advanced_reports_is_stdio(self, monkeypatch):
+        """is_stdio gates the sidecar-port section: True when no HTTP settings
+        prefix is set (stdio sidecar), False for HTTP/SSE/OAuth/addon."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", None)
+        body = json.loads((await handlers["get_advanced_settings"](MagicMock())).body)
+        assert body["is_stdio"] is True
+
+        monkeypatch.setattr("ha_mcp.settings_ui._http_settings_prefix", "/private_x")
+        body = json.loads((await handlers["get_advanced_settings"](MagicMock())).body)
+        assert body["is_stdio"] is False
+
+    @pytest.mark.asyncio
     async def test_get_advanced_marks_connection_fields_display_only(self, monkeypatch):
         from ha_mcp.config import _reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
