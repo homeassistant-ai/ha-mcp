@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import safe_call_tool
+from ...utilities.assertions import extract_error_message, safe_call_tool
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -164,6 +164,19 @@ class TestManageBackupGating:
             {"scope": "edits", "action": "restore"},
         )
         assert result.get("success") is False
+
+    async def test_edits_diff_requires_backup_name(self, mcp_client) -> None:
+        # Same shape as restore — diff needs a concrete backup to compare
+        # against, so the bare call must fail with a structured
+        # validation error rather than dispatching against nothing.
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "diff"},
+        )
+        assert result.get("success") is False
+        msg = extract_error_message(result)
+        assert "backup_name" in msg
 
 
 # ---------------------------------------------------------------- list
@@ -375,6 +388,256 @@ class TestAutomationCaptureRestore:
         assert delete.get("success") is True
 
         # Cleanup: remove the automation we created.
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_automation",
+            {"identifier": identifier},
+        )
+
+
+# ---------------------------------------------------------------- diff
+
+
+@pytest.mark.automation
+@pytest.mark.cleanup
+@pytest.mark.external_only
+class TestAutomationDiff:
+    """``ha_manage_backup(scope='edits', action='diff', ...)`` against the
+    live entity state.
+
+    Read-only — fetches the current config the same way the capture path
+    does, computes an RFC 6902 patch, and returns it bounded. Doesn't
+    touch any entity, doesn't take a safety snapshot. Sibling test to
+    ``TestAutomationCaptureRestore`` to keep both halves of the
+    "captured vs current" loop covered.
+    """
+
+    async def test_diff_against_unchanged_returns_no_ops(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Capture and immediately diff — the live config matches the
+        # snapshot, so the response carries an empty patch and
+        # ``unchanged: true``.
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        identifier = f"e2e_diff_noop_{suffix}"
+        original = {
+            "alias": f"E2E Diff Noop {suffix}",
+            "trigger": [{"platform": "time", "at": "12:00:00"}],
+            "action": [{"service": "homeassistant.no_op"}],
+        }
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {"config": original, "identifier": identifier},
+        )
+        # Capture via (edits, create) so stored == current by
+        # construction. The decorator's auto-on-write path is
+        # unreliable here: snapshot filenames are seconds-resolution,
+        # so a mutate-then-restore inside the same second clobbers
+        # the first capture.
+        create_result = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {
+                "scope": "edits",
+                "action": "create",
+                "domain": "automation",
+                "entity_id": identifier,
+            },
+        )
+        assert create_result.get("success") is True
+        backup_name = create_result["data"]["backup_name"]
+
+        diff = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "diff", "backup_name": backup_name},
+        )
+        assert diff.get("success") is True
+        data = diff.get("data", {})
+        assert data["kind"] == "dict"
+        assert data["entity_missing"] is False
+        assert data["unchanged"] is True
+        assert data["patch"] == []
+        assert data["counts"]["total"] == 0
+        assert data["truncated"] is False
+        assert data["captured_at"] is not None
+
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_automation",
+            {"identifier": identifier},
+        )
+
+    async def test_diff_after_edit_reports_changes(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Capture pre-edit state, then leave the live config diverged.
+        # The diff must report the alias change as a replace op.
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        identifier = f"e2e_diff_edit_{suffix}"
+        original_alias = f"E2E Diff Original {suffix}"
+        edited_alias = f"E2E Diff Edited {suffix}"
+        original = {
+            "alias": original_alias,
+            "trigger": [{"platform": "time", "at": "12:00:00"}],
+            "action": [{"service": "homeassistant.no_op"}],
+        }
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {"config": original, "identifier": identifier},
+        )
+        # Edit — the decorator snapshots the pre-edit state (alias =
+        # original_alias). Live state ends at alias = edited_alias.
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {"config": {**original, "alias": edited_alias}, "identifier": identifier},
+        )
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="automation", entity_id=identifier
+        )
+
+        diff = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "diff", "backup_name": backup_name},
+        )
+        assert diff.get("success") is True
+        data = diff.get("data", {})
+        assert data["entity_missing"] is False
+        assert data["unchanged"] is False
+        assert data["counts"]["total"] >= 1
+        # The alias delta is the load-bearing assertion; restrict to
+        # ``replace`` ops on a path ending in ``/alias`` to stay robust
+        # against HA-side schema enrichment (added defaults, ordering).
+        alias_op = next(
+            (
+                op
+                for op in data["patch"]
+                if op["op"] == "replace" and op["path"].endswith("/alias")
+            ),
+            None,
+        )
+        assert alias_op is not None
+        assert alias_op["value"] == original_alias
+
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_automation",
+            {"identifier": identifier},
+        )
+
+    async def test_diff_flags_entity_missing_after_delete(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Capture, then delete the entity — diff must report
+        # ``entity_missing: true`` with an empty patch and no
+        # ``LookupError``-style failure (the snapshot still exists, it's
+        # the live target that's gone).
+        _enable_auto_backup(monkeypatch)
+        suffix = uuid.uuid4().hex[:8]
+        identifier = f"e2e_diff_missing_{suffix}"
+        original = {
+            "alias": f"E2E Diff Missing {suffix}",
+            "trigger": [{"platform": "time", "at": "12:00:00"}],
+            "action": [{"service": "homeassistant.no_op"}],
+        }
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {"config": original, "identifier": identifier},
+        )
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "config": {**original, "alias": f"E2E Diff Missing Edited {suffix}"},
+                "identifier": identifier,
+            },
+        )
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="automation", entity_id=identifier
+        )
+
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_remove_automation",
+            {"identifier": identifier},
+        )
+
+        diff = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "diff", "backup_name": backup_name},
+        )
+        assert diff.get("success") is True
+        data = diff.get("data", {})
+        assert data["entity_missing"] is True
+        assert data["patch"] == []
+        # ``unchanged`` is False under entity_missing — the empty patch
+        # is an artefact of the absent target, not a "matches live" match.
+        assert data["unchanged"] is False
+        assert data["captured_at"] is not None
+        warnings = diff.get("warnings") or []
+        assert any("missing" in w.lower() for w in warnings)
+
+    async def test_diff_truncated_surfaces_tool_layer_warning(
+        self, mcp_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Drive the tool-layer ``truncated`` warning end-to-end: cap the
+        # patch budget at 1 op so a real multi-field edit overflows it.
+        # Asserts both the manager-level ``truncated: true`` and the
+        # tool-layer warning string the manager flag drives.
+        _enable_auto_backup(monkeypatch)
+        monkeypatch.setattr("ha_mcp.backup_manager._MAX_PATCH_OPS", 1)
+        suffix = uuid.uuid4().hex[:8]
+        identifier = f"e2e_diff_trunc_{suffix}"
+        original = {
+            "alias": f"E2E Diff Trunc {suffix}",
+            "trigger": [{"platform": "time", "at": "12:00:00"}],
+            "action": [{"service": "homeassistant.no_op"}],
+        }
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {"config": original, "identifier": identifier},
+        )
+        # Edit several fields so the captured-vs-live diff is > 1 op.
+        await safe_call_tool(
+            mcp_client,
+            "ha_config_set_automation",
+            {
+                "config": {
+                    **original,
+                    "alias": f"E2E Diff Trunc Edited {suffix}",
+                    "trigger": [
+                        {"platform": "time", "at": "13:00:00"},
+                        {"platform": "time", "at": "14:00:00"},
+                    ],
+                },
+                "identifier": identifier,
+            },
+        )
+        backup_name = await _wait_for_backup(
+            mcp_client, domain="automation", entity_id=identifier
+        )
+
+        diff = await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "diff", "backup_name": backup_name},
+        )
+        assert diff.get("success") is True
+        data = diff.get("data", {})
+        assert data["truncated"] is True
+        assert len(data["patch"]) == 1
+        warnings = diff.get("warnings") or []
+        assert any("truncated" in w.lower() for w in warnings)
+
         await safe_call_tool(
             mcp_client,
             "ha_config_remove_automation",
@@ -1255,6 +1518,7 @@ class TestEntityStateCaptureRestore:
             # POST) on some HA versions; if so the entity-domain handler
             # won't fire. Surface clearly rather than asserting wrong.
             pytest.skip("entity-domain handler did not capture for this edit")
+            return  # unreachable: pytest.skip raises Skipped
 
         restore = await safe_call_tool(
             mcp_client,

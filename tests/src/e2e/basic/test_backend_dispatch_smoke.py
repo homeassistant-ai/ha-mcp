@@ -82,7 +82,7 @@ _SKIP_CEILING_PER_LANE = {
     # marker-gated skips, plus a 5-9 growth buffer.
     "container": 62,  # was 55 (observed 57 with the 5 addon tests added)
     "haos": 29,  # 14 + 5 addon-test + 5 sidecar skips = 24, + buffer
-    "haos_inaddon": 49,  # 39 + 5 sidecar skips = 44, + buffer (addon tests run here)
+    "haos_inaddon": 55,  # 44 + 3 new auto-backup diff tests (TestAutomationDiff, @external_only) + buffer
 }
 
 
