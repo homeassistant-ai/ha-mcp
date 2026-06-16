@@ -1039,6 +1039,26 @@ def _require_list(value: Any, endpoint: str) -> list[Any]:
     return value
 
 
+def _require_dict(value: Any, endpoint: str) -> dict[str, Any]:
+    """Return ``value`` if it's a dict, else raise.
+
+    Dict-shaped counterpart to :func:`_require_list` for the
+    ``execute_script``-backed fetchers (calendar / todo). Their service
+    response is a dict envelope; a non-dict body is a degraded/malformed
+    200 (auth-scope change, API drift), not a genuine miss. Raising
+    funnels it through the diff tool's ``exception_to_structured_error``
+    and the capture pipeline's ``_CAPTURE_TRANSIENT_ERRORS`` warning,
+    instead of collapsing to ``None`` — which callers read as
+    ``entity_missing``. The genuine-miss signal stays the nested ``uid``
+    lookup returning ``None``.
+    """
+    if not isinstance(value, dict):
+        raise HomeAssistantError(
+            f"Expected a dict from {endpoint!r}, got {type(value).__name__}"
+        )
+    return value
+
+
 # Dashboard resources — WS lovelace_resources commands.
 
 
@@ -1202,8 +1222,7 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
         if getattr(err, "status_code", None) == 404:
             return None
         raise
-    if not isinstance(result, dict):
-        return None
+    result = _require_dict(result, "execute_script")
     events = result.get("response", {}).get("events", {}).get(cal, {}).get("events", [])
     for ev in events:
         if ev.get("uid") == uid:
@@ -1310,8 +1329,7 @@ async def _fetch_todo_item(client: Any, entity_id: str) -> Any:
         if getattr(err, "status_code", None) == 404:
             return None
         raise
-    if not isinstance(result, dict):
-        return None
+    result = _require_dict(result, "execute_script")
     items = result.get("response", {}).get("items", {}).get(cal, {}).get("items", [])
     for item in items:
         if item.get("uid") == uid:

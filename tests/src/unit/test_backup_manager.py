@@ -27,7 +27,10 @@ from ha_mcp.backup_manager import (
     BackupManager,
     DomainHandler,
     _compute_json_patch,
+    _fetch_calendar_event,
+    _fetch_todo_item,
     _pointer_segment,
+    _require_dict,
     _require_list,
     _safe_entity_id,
     _summarize_patch_counts,
@@ -823,6 +826,51 @@ class TestRequireList:
         # read as ``entity_missing``.
         with pytest.raises(HomeAssistantError):
             _require_list(bad, "config/label_registry/list")
+
+
+class TestRequireDict:
+    """``_require_dict`` distinguishes a degraded fetch from a real miss."""
+
+    def test_returns_dict_unchanged(self) -> None:
+        envelope = {"response": {}}
+        assert _require_dict(envelope, "execute_script") is envelope
+
+    @pytest.mark.parametrize("bad", [None, [1, 2], "oops", 42])
+    def test_non_dict_envelope_raises(self, bad: Any) -> None:
+        # Mirror of ``_require_list`` for the execute_script fetchers: a
+        # non-dict envelope is a degraded/malformed 200, not a miss.
+        with pytest.raises(HomeAssistantError):
+            _require_dict(bad, "execute_script")
+
+
+class TestExecuteScriptFetchers:
+    """Calendar / todo fetchers route the ``execute_script`` envelope
+    through ``_require_dict`` (Boy-Scout parity with the registry
+    fetchers): a malformed 200 raises instead of masquerading as
+    ``entity_missing``, while a genuine uid miss still returns ``None``."""
+
+    @pytest.mark.parametrize("fetcher", [_fetch_calendar_event, _fetch_todo_item])
+    async def test_non_dict_envelope_raises(
+        self, fetcher: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _ws_send(_client: Any, _message: dict[str, Any]) -> Any:
+            return ["unexpected", "list", "body"]
+
+        monkeypatch.setattr(bm, "_ws_send", _ws_send)
+        with pytest.raises(HomeAssistantError, match="Expected a dict"):
+            await fetcher(object(), "calendar.x::uid-1")
+
+    @pytest.mark.parametrize("fetcher", [_fetch_calendar_event, _fetch_todo_item])
+    async def test_missing_uid_still_returns_none(
+        self, fetcher: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A well-formed dict whose nested lookup finds no matching uid is a
+        # real miss — it must stay ``None`` (entity_missing), not raise.
+        async def _ws_send(_client: Any, _message: dict[str, Any]) -> Any:
+            return {"response": {}}
+
+        monkeypatch.setattr(bm, "_ws_send", _ws_send)
+        assert await fetcher(object(), "calendar.x::absent-uid") is None
 
 
 class TestSummarizePatchCounts:
