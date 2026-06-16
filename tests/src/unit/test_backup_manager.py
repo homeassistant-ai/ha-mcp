@@ -872,6 +872,35 @@ class TestExecuteScriptFetchers:
         monkeypatch.setattr(bm, "_ws_send", _ws_send)
         assert await fetcher(object(), "calendar.x::absent-uid") is None
 
+    @pytest.mark.parametrize(
+        "fetcher, nested_key, id_key, entity",
+        [
+            (_fetch_calendar_event, "events", "calendar_entity_id", "calendar.x"),
+            (_fetch_todo_item, "items", "todo_entity_id", "todo.x"),
+        ],
+    )
+    async def test_matching_uid_returns_entry(
+        self,
+        fetcher: Any,
+        nested_key: str,
+        id_key: str,
+        entity: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A well-formed envelope whose nested lookup finds the uid returns the
+        # matching entry, merged with the ``<domain>_entity_id`` key the
+        # restore path keys off of. Locks the success branch (and the
+        # entity-keyed nesting) that the raise/miss tests don't exercise.
+        uid = "uid-1"
+        entry = {"uid": uid, "summary": "thing"}
+
+        async def _ws_send(_client: Any, _message: dict[str, Any]) -> Any:
+            return {"response": {nested_key: {entity: {nested_key: [entry]}}}}
+
+        monkeypatch.setattr(bm, "_ws_send", _ws_send)
+        result = await fetcher(object(), f"{entity}::{uid}")
+        assert result == {id_key: entity, **entry}
+
 
 class TestSummarizePatchCounts:
     def test_counts_each_op_class_and_total(self) -> None:
