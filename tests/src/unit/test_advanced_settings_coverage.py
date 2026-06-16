@@ -76,6 +76,7 @@ def test_advanced_section_values_are_in_known_set() -> None:
         "operations",
         "diagnostics",
         "tools_surface",
+        "sidecar",
         "beta_codemode",
     }
     seen = {row[3] for row in ADVANCED_SETTINGS_FIELDS}

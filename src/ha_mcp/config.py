@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     # WebSocket configuration (essential for async operations)
     enable_websocket: bool = Field(True, alias="ENABLE_WEBSOCKET")
 
+    # Settings UI sidecar (stdio mode only, #1587). 0 = pick a free
+    # ephemeral port at every spawn (default); 1024-65535 pins the sidecar
+    # to a fixed port so the settings URL/origin stays stable across
+    # restarts (bookmarks, browser localStorage). Read by run_main() in
+    # stdio_settings_sidecar.py.
+    sidecar_pin_port: int = Field(0, alias="HA_MCP_SIDECAR_PORT")
+
     # Development/Debug configuration
     debug: bool = Field(False, alias="DEBUG")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
@@ -437,6 +444,37 @@ class Settings(BaseSettings):
             raise ValueError(f"Backup hint must be one of {valid_hints}")
         return v.lower()
 
+    @field_validator("sidecar_pin_port", mode="before")
+    @classmethod
+    def _lenient_sidecar_pin_port(cls, v: object) -> int:
+        """0 (default) = ephemeral port; otherwise a non-privileged port.
+
+        Lenient like the time-budget validators: an empty / unparseable /
+        out-of-range value falls back to 0 (ephemeral) with a warning rather
+        than raising, so a bad ``HA_MCP_SIDECAR_PORT`` can never crash the MCP
+        server or the best-effort settings sidecar.
+        """
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return 0
+        # bool is an int subclass but never a meaningful port; reject it
+        # along with anything that isn't int/str-parseable.
+        if v is None or isinstance(v, bool) or not isinstance(v, int | str):
+            logger.warning("Invalid HA_MCP_SIDECAR_PORT=%r; using ephemeral port", v)
+            return 0
+        try:
+            port = int(v)
+        except (ValueError, TypeError):
+            logger.warning("Invalid HA_MCP_SIDECAR_PORT=%r; using ephemeral port", v)
+            return 0
+        if port != 0 and not 1024 <= port <= 65535:
+            logger.warning(
+                "HA_MCP_SIDECAR_PORT=%r outside 1024-65535; using ephemeral port", v
+            )
+            return 0
+        return port
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="allow"
     )
@@ -505,6 +543,7 @@ AdvancedSection = Literal[
     "operations",
     "diagnostics",
     "tools_surface",
+    "sidecar",
     "beta_codemode",
 ]
 
@@ -728,6 +767,10 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     AdvancedField("environment", "ENVIRONMENT", str, "diagnostics", True),
     AdvancedField("log_level", "LOG_LEVEL", str, "diagnostics", True),
     AdvancedField("debug", "DEBUG", bool, "diagnostics", True),
+    # Settings UI sidecar (stdio-only). Pin the sidecar's port so the
+    # settings URL/origin is stable across restarts; 0 = ephemeral
+    # (default). #1587.
+    AdvancedField("sidecar_pin_port", "HA_MCP_SIDECAR_PORT", int, "sidecar", True),
     # NOTE: ``auto_backup_dir`` and ``auto_backup_calendar_lookahead_days``
     # are NOT in this tuple. They are in ``BACKUP_OVERRIDE_FIELDS`` (defined
     # below) so they persist to ``backup_settings.json`` alongside the
@@ -778,6 +821,18 @@ _ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
     "code_mode_max_memory": (1_048_576, 268_435_456),
     "code_mode_max_recursion": (1, 10_000),
     "code_mode_max_invocations": (1, 10_000),
+    # 0 is the "off" sentinel (ephemeral); the range below is the valid
+    # PINNED range. See _ADVANCED_SETTINGS_SENTINELS.
+    "sidecar_pin_port": (1024, 65535),
+}
+
+
+# Fields where a specific value is a valid "off" sentinel that bypasses the
+# _ADVANCED_SETTINGS_BOUNDS range (sidecar_pin_port: 0 = ephemeral). The UI
+# emits min=sentinel so the number input can still express "off"; the
+# override-apply and UI-POST paths accept the sentinel OR the bounded range.
+_ADVANCED_SETTINGS_SENTINELS: dict[str, int] = {
+    "sidecar_pin_port": 0,
 }
 
 
@@ -1159,7 +1214,12 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
             continue
 
         bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
-        if bounds is not None and not (bounds[0] <= coerced <= bounds[1]):
+        sentinel = _ADVANCED_SETTINGS_SENTINELS.get(fname)
+        if (
+            bounds is not None
+            and coerced != sentinel
+            and not (bounds[0] <= coerced <= bounds[1])
+        ):
             logger.warning(
                 "Advanced override for %r is %s, outside %s-%s — ignoring.",
                 fname,

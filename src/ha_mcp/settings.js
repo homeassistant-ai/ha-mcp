@@ -2740,6 +2740,7 @@ const ADVANCED_FIELD_META = {
   code_mode_max_recursion:   { label: "Code-mode max recursion",      help: "Recursion-depth cap per sandbox run. Restart required." },
   code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
   code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
+  sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 = a new free port each restart (default); set 1024–65535 to pin a fixed port so the settings URL stays stable across restarts. Falls back to a free port if the pinned one is busy. Restart required." },
 };
 
 // Fields that require an MCP-host restart to take effect when changed
@@ -2765,6 +2766,9 @@ const ADVANCED_RESTART_REQUIRED = new Set([
   "code_mode_max_duration", "code_mode_max_memory",
   "code_mode_max_recursion", "code_mode_max_invocations",
   "code_mode_saved_tools_path",
+  // The sidecar binds its port once at spawn (run_main), so changing the
+  // pin needs a restart to respawn the sidecar on the new port.
+  "sidecar_pin_port",
 ]);
 
 let _advancedFields = [];
@@ -2825,6 +2829,8 @@ async function loadAdvancedSettings() {
   renderAdvancedSection('advOperations', bySection.operations || []);
   renderAdvancedSection('advToolsSurface', bySection.tools_surface || []);
   renderAdvancedSection('advDiagnostics', bySection.diagnostics || []);
+  renderAdvancedSection('advSidecar', bySection.sidecar || []);
+  applySidecarAvailability(data.is_stdio !== false);
   document.getElementById('advSaveRow').style.display = '';
   const topRow = document.getElementById('advSaveRowTop');
   if (topRow) topRow.style.display = '';
@@ -2838,6 +2844,36 @@ async function loadAdvancedSettings() {
   if (Object.keys(_lastFeatureFlags).length > 0) {
     renderFeatureFlags(_lastFeatureFlags);
   }
+}
+
+function applySidecarAvailability(isStdio) {
+  // The sidecar-port setting only applies when this settings page is served
+  // by the stdio settings-UI sidecar. In HTTP/SSE/OAuth/addon deployments
+  // there is no sidecar, so dim + disable the section and explain why, rather
+  // than letting a user save a value that does nothing.
+  // Remove any note from a prior load first, so the <h3> title is once again
+  // the section's previousElementSibling (an injected note would otherwise
+  // shadow it on a re-render).
+  const prevNote = document.getElementById('advSidecarNote');
+  if (prevNote) prevNote.remove();
+  const section = document.getElementById('advSidecar');
+  if (!section) return;
+  const title = section.previousElementSibling;
+  if (isStdio) {
+    section.classList.remove('dimmed');
+    if (title) title.classList.remove('dimmed');
+    return;
+  }
+  section.classList.add('dimmed');
+  if (title) title.classList.add('dimmed');
+  section.querySelectorAll('input, select').forEach((el) => { el.disabled = true; });
+  const note = document.createElement('div');
+  note.id = 'advSidecarNote';
+  note.className = 'adv-section-note';
+  note.textContent =
+    'Available in stdio mode only. This server runs over HTTP, which has '
+    + 'no settings-UI sidecar to pin.';
+  section.parentNode.insertBefore(note, section);
 }
 
 function renderAdvancedSection(containerId, fields) {

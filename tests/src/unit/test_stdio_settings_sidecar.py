@@ -464,7 +464,7 @@ class TestRunMainWiring:
         self, tmp_data_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
-        monkeypatch.setattr(sidecar, "_pick_free_port", lambda: 54321)
+        monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 54321)
 
         # Mock uvicorn.Server so ``server.run()`` is a no-op and the
         # test doesn't bind a port or block. The test exercises the
@@ -707,7 +707,7 @@ class TestDiscoverabilityFlow:
         sidecar uses at runtime.
         """
         monkeypatch.delenv("HA_MCP_DISABLE_SETTINGS_UI", raising=False)
-        monkeypatch.setattr(sidecar, "_pick_free_port", lambda: 41234)
+        monkeypatch.setattr(sidecar, "_pick_free_port", lambda pinned=0: 41234)
 
         captured: dict[str, object] = {}
 
