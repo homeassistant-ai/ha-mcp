@@ -14,6 +14,7 @@ from pydantic import Field
 
 from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -599,6 +600,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         tags={"Device Registry"},
         annotations={"destructiveHint": True, "title": "Set Device"},
     )
+    @with_auto_backup(domain="device", id_param="device_id", client=client)
     @log_tool_usage
     async def ha_set_device(
         device_id: Annotated[
@@ -700,6 +702,7 @@ def register_registry_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "title": "Remove Device",
         },
     )
+    @with_auto_backup(domain="device", id_param="device_id", client=client)
     @log_tool_usage
     async def ha_remove_device(
         device_id: Annotated[

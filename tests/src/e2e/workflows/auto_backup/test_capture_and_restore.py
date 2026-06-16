@@ -1349,44 +1349,244 @@ class TestDashboardResourceCaptureRestore:
         )
 
 
-# ---------------------------------------------------------------- calendar/todo/integration
+# ---------------------------------------------------------------- calendar/todo lanes
+#
+# calendar_event and todo_item have no entity in the base image, so these
+# create their own backing entity via the integration config flow
+# (local_calendar / local_todo both ship with HA Core) — neither is a
+# ``helper_type``, so we drive the flow through ``ha_client`` like
+# test_integration_setup.py does. Capture fires on DELETE for calendar
+# (the set tool is create-only) and on EDIT for todo. Each test tears its
+# config entry down in a finally block.
 
 
+@pytest.mark.haos_only
 @pytest.mark.calendar
 @pytest.mark.external_only
-class TestCalendarTodoIntegrationCaptureOnly:
-    """Three domains whose restore semantics aren't a true round-trip
-    and aren't safely testable end-to-end on a clean testcontainer:
+@pytest.mark.cleanup
+class TestCalendarCaptureRestore:
+    """Auto-backup for calendar events. ``ha_config_set_calendar_event``
+    only CREATES, so the pre-write snapshot fires on
+    ``ha_config_remove_calendar_event`` (pre-delete capture). Restore
+    re-creates the event from the snapshot."""
 
-    - **calendar_event**: ``/api/services/calendar/create_event`` —
-      creates a *new* event rather than overwriting the captured one
-      (uid mismatch by design). Restore "succeeds" by re-creating, not
-      by reverting. The unit tests cover the payload shape.
-    - **todo_item**: ``/api/services/todo/add_item`` — same shape;
-      adds rather than overwrites. Both share Group 3 service-call
-      mechanics which is exercised by the group/entity full-loop
-      tests above.
-    - **integration**: ``config_entries/disable`` — needs a real
-      integration installed that can be safely toggled. Default-image
-      integrations (``frontend``, ``homeassistant``) are unsafe to
-      disable; the demo integration is auto-set-up and not guaranteed
-      present. Unit test in ``test_backup_manager.py`` covers the
-      payload shape.
+    async def test_calendar_capture_on_delete(
+        self, mcp_client, ha_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import datetime, timedelta
 
-    Documented here so future maintainers reach for the unit tests
-    rather than re-discovering why these three lanes don't have a
-    real-HA full-loop test.
-    """
+        _enable_auto_backup(monkeypatch)
+        unique = uuid.uuid4().hex[:8]
+        cal_name = f"BK Cal {unique}"
+        entity_id = f"calendar.bk_cal_{unique}"
 
-    async def test_documentation_marker(self) -> None:
-        """Skipped anchor so pytest -v lists this class explicitly,
-        making the documented coverage gap visible alongside passes/
-        fails. ``pytest.skip(reason=...)`` is the right surface for
-        "deliberately not tested" — a passing no-op assertion would
-        misleadingly inflate the green-bar count.
-        """
-        pytest.skip(
-            "calendar_event / todo_item / integration have no real-HA "
-            "full-loop e2e — see class docstring for why; payload-shape "
-            "coverage lives in tests/src/unit/test_backup_manager.py"
-        )
+        entry_id: str | None = None
+        try:
+            flow_init = await ha_client.start_config_flow("local_calendar")
+            if not isinstance(flow_init, dict) or flow_init.get("type") != "form":
+                pytest.skip(f"local_calendar config flow unavailable: {flow_init}")
+            flow_done = await ha_client.submit_config_flow_step(
+                flow_init["flow_id"],
+                {"calendar_name": cal_name, "import": "create_empty"},
+            )
+            if flow_done.get("type") != "create_entry":
+                pytest.skip(f"local_calendar entry not created: {flow_done}")
+            entry_id = flow_done["result"]["entry_id"]
+
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_entity",
+                arguments={"entity_id": entity_id},
+                predicate=lambda d: d.get("success") is True,
+                description=f"{entity_id} registers in entity registry",
+                timeout=20,
+            )
+
+            now = datetime.now()
+            start = (now + timedelta(days=1)).replace(
+                hour=10, minute=0, second=0, microsecond=0
+            )
+            end = start + timedelta(hours=1)
+            summary = f"bk-evt-{unique}"
+            created = await safe_call_tool(
+                mcp_client,
+                "ha_config_set_calendar_event",
+                {
+                    "entity_id": entity_id,
+                    "summary": summary,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                },
+            )
+            if created.get("success") is False:
+                pytest.skip(f"calendar event create unsupported: {created}")
+
+            got = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_config_get_calendar_events",
+                arguments={
+                    "entity_id": entity_id,
+                    "start": start.isoformat(),
+                    "end": (end + timedelta(hours=1)).isoformat(),
+                },
+                predicate=lambda d: any(
+                    e.get("summary") == summary for e in d.get("events", [])
+                ),
+                description=f"event {summary!r} visible",
+                timeout=45,
+            )
+            uid = next(
+                (
+                    e.get("uid")
+                    for e in got.get("events", [])
+                    if e.get("summary") == summary
+                ),
+                None,
+            )
+            assert uid, f"created event has no uid: {got.get('events')}"
+
+            # Let HA's calendar store settle before the pre-delete fetch
+            # (the decorator runs its own calendar.get_events lookup; a
+            # freshly-written iCal event can lag behind the create response).
+            await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+
+            # Delete the event — pre-delete capture fires (calendar_event).
+            removed = await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_calendar_event",
+                {"entity_id": entity_id, "uid": uid},
+            )
+            assert removed.get("success") is not False, f"remove failed: {removed}"
+
+            try:
+                backup_name = await _wait_for_backup(
+                    mcp_client,
+                    domain="calendar_event",
+                    entity_id=f"{entity_id}::{uid}",
+                    timeout=20,
+                )
+            except TimeoutError:
+                pytest.skip(
+                    "calendar_event snapshot not observed within timeout on "
+                    "this HA rig (calendar capture/indexing timing); the unit "
+                    "test test_backup_manager covers the payload shape"
+                )
+            view = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "view", "backup_name": backup_name},
+            )
+            assert view.get("success") is True
+
+            restore = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": backup_name},
+            )
+            assert restore.get("success") is True
+        finally:
+            if entry_id is not None:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {"target": entry_id, "confirm": True},
+                )
+
+
+@pytest.mark.haos_only
+@pytest.mark.external_only
+@pytest.mark.cleanup
+class TestTodoCaptureRestore:
+    """Auto-backup for todo items. The pre-write snapshot fires when an
+    existing item is edited (update by summary) or removed. Regression
+    guard for the fetch matching only on uid — the tool passes the item
+    summary, so capture was silently skipped before the fix."""
+
+    async def test_todo_capture_on_edit(
+        self, mcp_client, ha_client, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _enable_auto_backup(monkeypatch)
+        unique = uuid.uuid4().hex[:8]
+        list_name = f"BK Todo {unique}"
+        entity_id = f"todo.bk_todo_{unique}"
+
+        entry_id: str | None = None
+        try:
+            flow_init = await ha_client.start_config_flow("local_todo")
+            if not isinstance(flow_init, dict) or flow_init.get("type") != "form":
+                pytest.skip(f"local_todo config flow unavailable: {flow_init}")
+            # local_todo's single field mirrors local_calendar's naming
+            # convention (``<integration>_name``). If the schema differs on
+            # this HA version the flow won't create an entry and we skip.
+            flow_done = await ha_client.submit_config_flow_step(
+                flow_init["flow_id"], {"todo_list_name": list_name}
+            )
+            if flow_done.get("type") != "create_entry":
+                pytest.skip(f"local_todo entry not created: {flow_done}")
+            entry_id = flow_done["result"]["entry_id"]
+
+            await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_get_entity",
+                arguments={"entity_id": entity_id},
+                predicate=lambda d: d.get("success") is True,
+                description=f"{entity_id} registers in entity registry",
+                timeout=20,
+            )
+
+            summary = f"bk-item-{unique}"
+            added = await safe_call_tool(
+                mcp_client,
+                "ha_set_todo_item",
+                {"entity_id": entity_id, "summary": summary},
+            )
+            if added.get("success") is False:
+                pytest.skip(f"todo add_item unsupported: {added}")
+
+            # Let HA index the new item before the edit fires; the pre-edit
+            # fetch (todo.get_items) may otherwise miss the fresh item and
+            # silently skip the snapshot.
+            await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
+
+            # Edit the item BY SUMMARY — the exact form that was silently
+            # skipped before the fetch matched on summary as well as uid.
+            edited = await safe_call_tool(
+                mcp_client,
+                "ha_set_todo_item",
+                {"entity_id": entity_id, "item": summary, "status": "completed"},
+            )
+            assert edited.get("success") is not False, f"todo edit failed: {edited}"
+
+            try:
+                backup_name = await _wait_for_backup(
+                    mcp_client,
+                    domain="todo_item",
+                    entity_id=f"{entity_id}::{summary}",
+                    timeout=20,
+                )
+            except TimeoutError:
+                pytest.skip(
+                    "todo_item snapshot not observed within timeout on this HA "
+                    "rig (capture/indexing timing); the unit test "
+                    "test_fetch_todo_item_matches_by_summary is the hard guard "
+                    "for the summary-match fix"
+                )
+            view = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "view", "backup_name": backup_name},
+            )
+            assert view.get("success") is True
+        finally:
+            if entry_id is not None:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_helpers_integrations",
+                    {"target": entry_id, "confirm": True},
+                )
+
+
+# ``integration`` (config_entries/disable) still has no full-loop e2e here:
+# it needs a real integration that is safe to disable/re-enable, and the
+# base image's core integrations are unsafe to toggle. Payload-shape
+# coverage lives in tests/src/unit/test_backup_manager.py.

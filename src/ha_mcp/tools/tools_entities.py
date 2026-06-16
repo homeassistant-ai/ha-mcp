@@ -1316,6 +1316,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "title": "Remove Entity",
         },
     )
+    @with_auto_backup(domain="entity", id_param="entity_id", client=client)
     @log_tool_usage
     async def ha_remove_entity(
         entity_id: Annotated[

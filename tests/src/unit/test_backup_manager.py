@@ -98,16 +98,19 @@ class TestAutomationBackupTarget:
         # config.id wins: BBB is the actual storage target HA will overwrite.
         assert target == "BBB"
 
-    def test_falls_back_to_identifier_when_no_config_id(self) -> None:
+    def test_falls_back_to_identifier_entity_id_form_preserved(self) -> None:
         from ha_mcp.tools.auto_backup import automation_backup_target
 
-        # The fallback path strips a leading ``automation.`` so the
-        # snapshot filename doesn't end up with a doubled domain segment
-        # like ``automation.automation.foo.<ts>.yaml``.
+        # Regression (#auto-backup-capture): the fallback path must NOT
+        # strip the ``automation.`` prefix. The capture/restore fetch
+        # resolves the target via _resolve_automation_id, which only does
+        # the entity_id -> numeric unique_id state lookup when the prefix
+        # is present. Stripping it to a bare slug made the resolver treat
+        # the slug as a unique_id -> 404 -> snapshot silently skipped.
         target = automation_backup_target(
             {"identifier": "automation.foo", "config": {"alias": "x"}}
         )
-        assert target == "foo"
+        assert target == "automation.foo"
 
     def test_falls_back_to_identifier_bare_id_unchanged(self) -> None:
         from ha_mcp.tools.auto_backup import automation_backup_target
@@ -134,12 +137,13 @@ class TestAutomationBackupTarget:
     def test_invalid_json_falls_back_to_identifier(self) -> None:
         from ha_mcp.tools.auto_backup import automation_backup_target
 
-        # Falls through to the identifier fallback path, which strips
-        # the leading ``automation.`` prefix.
+        # Falls through to the identifier fallback path, which preserves
+        # the entity_id form (prefix kept so the fetch resolver can map it
+        # to the numeric unique_id).
         target = automation_backup_target(
             {"identifier": "automation.foo", "config": "not-json"}
         )
-        assert target == "foo"
+        assert target == "automation.foo"
 
     def test_no_identifier_no_config_id_returns_empty(self) -> None:
         from ha_mcp.tools.auto_backup import automation_backup_target
@@ -156,6 +160,384 @@ class TestAutomationBackupTarget:
             {"identifier": "automation.foo", "config": {"id": "automation.foo"}}
         )
         assert target == "automation.foo"
+
+
+# ---------------------------------------------------- fetcher id resolution
+#
+# Regression tests for the silent-skip capture bugs: each fetch handler must
+# resolve the id form a realistic caller passes so a pre-write snapshot is
+# actually written (a fetch that returns None makes maybe_snapshot skip
+# silently). These monkeypatch the module-level ``_ws_send`` so no real HA
+# instance is needed.
+
+
+class TestFetcherIdResolution:
+    async def test_fetch_todo_item_matches_by_summary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The decorator passes "<entity_id>::<item>" where <item> is the
+        # human-readable summary (the documented form). Matching only uid
+        # silently skipped the snapshot; the fix matches uid OR summary.
+        async def fake_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            return {
+                "response": {
+                    "items": {
+                        "todo.shopping": {
+                            "items": [
+                                {
+                                    "uid": "abc-123",
+                                    "summary": "Buy milk",
+                                    "status": "needs_action",
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        got = await bm._fetch_todo_item(_StubClient(), "todo.shopping::Buy milk")
+        assert got is not None
+        assert got["uid"] == "abc-123"
+        assert got["todo_entity_id"] == "todo.shopping"
+
+    async def test_fetch_todo_item_still_matches_by_uid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            return {
+                "response": {
+                    "items": {"todo.x": {"items": [{"uid": "u-9", "summary": "Pay"}]}}
+                }
+            }
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        got = await bm._fetch_todo_item(_StubClient(), "todo.x::u-9")
+        assert got is not None
+        assert got["uid"] == "u-9"
+
+    async def test_fetch_helper_resolves_renamed_via_registry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # After an entity_id rename the object_id no longer equals the
+        # collection id; the fix falls back to the registry unique_id.
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            if msg.get("type") == "input_boolean/list":
+                return [{"id": "original_slug", "name": "X"}]
+            if msg.get("type") == "config/entity_registry/get":
+                assert msg.get("entity_id") == "input_boolean.renamed_slug"
+                return {"unique_id": "original_slug"}
+            raise AssertionError(f"unexpected ws message: {msg}")
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        got = await bm._fetch_helper(
+            _StubClient(), "input_boolean.renamed_slug", "input_boolean"
+        )
+        assert got is not None
+        assert got["id"] == "original_slug"
+
+    async def test_fetch_helper_direct_match_skips_registry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            if msg.get("type") == "input_boolean/list":
+                return [{"id": "my_bool", "name": "X"}]
+            raise AssertionError("registry fallback must not run on a direct hit")
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        got = await bm._fetch_helper(
+            _StubClient(), "input_boolean.my_bool", "input_boolean"
+        )
+        assert got is not None
+        assert got["id"] == "my_bool"
+
+    async def test_fetch_helper_propagates_non_notfound_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Rename-fallback registry lookup: a transport/5xx error must
+        # propagate (so maybe_snapshot logs a WARNING) rather than be
+        # swallowed as a not-found and silently skip the snapshot.
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            if msg.get("type") == "input_boolean/list":
+                return [{"id": "original_slug", "name": "X"}]
+            raise bm.HomeAssistantError("Internal Server Error")
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        with pytest.raises(bm.HomeAssistantError):
+            await bm._fetch_helper(
+                _StubClient(), "input_boolean.renamed_slug", "input_boolean"
+            )
+
+    async def test_fetch_device_returns_registry_entry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            assert msg.get("type") == "config/device_registry/list"
+            return [
+                {
+                    "id": "dev-1",
+                    "name_by_user": "Hub",
+                    "area_id": "lr",
+                    "disabled_by": None,
+                    "labels": ["x"],
+                },
+                {"id": "dev-2"},
+            ]
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        got = await bm._fetch_device(_StubClient(), "dev-1")
+        assert got is not None
+        assert got["name_by_user"] == "Hub"
+
+    async def test_restore_device_sends_update_fields(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sent: dict[str, Any] = {}
+
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            sent.update(msg)
+            return {"success": True}
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        await bm._restore_device(
+            _StubClient(),
+            "dev-1",
+            {
+                "name_by_user": "Hub",
+                "area_id": "lr",
+                "disabled_by": None,
+                "labels": ["x"],
+            },
+        )
+        assert sent["type"] == "config/device_registry/update"
+        assert sent["device_id"] == "dev-1"
+        assert sent["name_by_user"] == "Hub"
+        assert sent["labels"] == ["x"]
+
+    async def test_fetch_dashboard_resolves_internal_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The internal (underscored) id must be pre-resolved to the canonical
+        # url_path before the lovelace/config fetch, else it 404s and the
+        # snapshot is silently skipped.
+        import ha_mcp.tools.tools_config_dashboards as dash
+
+        seen: dict[str, Any] = {}
+
+        async def fake_resolve(_client: Any, identifier: str) -> Any:
+            return {"url_path": "my-dash", "id": identifier}, None
+
+        async def fake_get_internal(_client: Any, url_path: str | None) -> Any:
+            seen["url_path"] = url_path
+            return {"views": []}, "hash"
+
+        monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
+        monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
+        got = await bm._fetch_dashboard(_StubClient(), "my_dash")
+        assert got == {"views": []}
+        # fetched via the canonical url_path, not the raw internal id
+        assert seen["url_path"] == "my-dash"
+
+    async def test_fetch_dashboard_unknown_config_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # HA's "Unknown config specified" for an unresolved url_path (also the
+        # brand-new-dashboard create path) must map to None ("nothing to back
+        # up"), not propagate as a hard failure.
+        from fastmcp.exceptions import ToolError
+
+        import ha_mcp.tools.tools_config_dashboards as dash
+
+        async def fake_resolve(_client: Any, _identifier: str) -> Any:
+            return None, None  # no registry match -> fall through with raw id
+
+        async def fake_get_internal(_client: Any, _url_path: str | None) -> Any:
+            raise ToolError("Dashboard fetch failed: Unknown config specified: x")
+
+        monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
+        monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
+        assert await bm._fetch_dashboard(_StubClient(), "x_dash") is None
+
+    async def test_fetch_dashboard_propagates_other_toolerror(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A non-not-found failure must propagate (so maybe_snapshot logs a
+        # WARNING) rather than be misclassified as "nothing to back up".
+        from fastmcp.exceptions import ToolError
+
+        import ha_mcp.tools.tools_config_dashboards as dash
+
+        async def fake_resolve(_client: Any, _identifier: str) -> Any:
+            return None, None
+
+        async def fake_get_internal(_client: Any, _url_path: str | None) -> Any:
+            raise ToolError("Dashboard fetch failed: 500 Internal Server Error")
+
+        monkeypatch.setattr(dash, "_resolve_dashboard", fake_resolve)
+        monkeypatch.setattr(dash, "_get_dashboard_config_internal", fake_get_internal)
+        with pytest.raises(ToolError):
+            await bm._fetch_dashboard(_StubClient(), "x_dash")
+
+    async def test_fetch_calendar_event_matches_uid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Hard guard for the calendar lane (the e2e is skippable): the
+        # pre-delete fetch must find the event by uid and tag the calendar.
+        async def fake_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            return {
+                "response": {
+                    "events": {
+                        "calendar.fam": {
+                            "events": [{"uid": "evt-1", "summary": "Dinner"}]
+                        }
+                    }
+                }
+            }
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        got = await bm._fetch_calendar_event(_StubClient(), "calendar.fam::evt-1")
+        assert got is not None
+        assert got["uid"] == "evt-1"
+        assert got["calendar_entity_id"] == "calendar.fam"
+
+    async def test_fetch_helper_registry_without_unique_id_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Rename fallback tail: registry entry exists but carries no
+        # resolvable unique_id (or it matches nothing) -> genuine not-found.
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            if msg.get("type") == "input_boolean/list":
+                return [{"id": "original_slug", "name": "X"}]
+            if msg.get("type") == "config/entity_registry/get":
+                return {}  # no unique_id
+            raise AssertionError(f"unexpected ws message: {msg}")
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        got = await bm._fetch_helper(
+            _StubClient(), "input_boolean.renamed_slug", "input_boolean"
+        )
+        assert got is None
+
+    async def test_fetch_automation_preserves_entity_id_form(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Headline bug at the FETCH layer: the entity_id form must reach
+        # client.get_automation_config UNSTRIPPED so its resolver maps it to
+        # the numeric unique_id (a bare slug would 404 -> silent skip).
+        import ha_mcp.tools.tools_config_automations as autos
+
+        seen: dict[str, Any] = {}
+
+        class _FakeClient:
+            async def get_automation_config(self, identifier: str) -> Any:
+                seen["id"] = identifier
+                return {"id": "1781613420568", "alias": "X"}
+
+        monkeypatch.setattr(autos, "_normalize_config_for_roundtrip", lambda c: c)
+        got = await bm._fetch_automation(_FakeClient(), "automation.kitchen_lights")
+        assert seen["id"] == "automation.kitchen_lights"
+        assert got == {"id": "1781613420568", "alias": "X"}
+
+    async def test_fetch_automation_returns_none_on_404(self) -> None:
+        from ha_mcp.client.rest_client import HomeAssistantAPIError
+
+        class _FakeClient:
+            async def get_automation_config(self, identifier: str) -> Any:
+                raise HomeAssistantAPIError("Automation not found", status_code=404)
+
+        assert await bm._fetch_automation(_FakeClient(), "automation.gone") is None
+
+
+# --------------------------------------------- with_auto_backup decorator wiring
+
+
+class TestWithAutoBackupDecorator:
+    """The @with_auto_backup wiring the new destructive tools rely on."""
+
+    async def test_id_param_fires_maybe_snapshot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ha_mcp.tools.auto_backup import with_auto_backup
+
+        calls: list[tuple[str, str, str | None]] = []
+
+        class _FakeMgr:
+            async def maybe_snapshot(
+                self, domain: str, entity_id: str, *, tool_name: str | None = None
+            ) -> None:
+                calls.append((domain, entity_id, tool_name))
+
+        class _Settings:
+            enable_auto_backup = True
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings", lambda: _Settings()
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        ran: list[str] = []
+
+        @with_auto_backup(domain="device", id_param="device_id", client=object())
+        async def fake_tool(*, device_id: str) -> str:
+            ran.append(device_id)
+            return "ok"
+
+        assert await fake_tool(device_id="dev-1") == "ok"
+        assert ran == ["dev-1"]  # wrapped write still runs
+        assert calls == [("device", "dev-1", "fake_tool")]
+
+    async def test_capture_failure_does_not_block_write(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ha_mcp.tools.auto_backup import with_auto_backup
+
+        class _FakeMgr:
+            async def maybe_snapshot(self, *a: Any, **k: Any) -> None:
+                raise bm.HomeAssistantError("transient capture failure")
+
+        class _Settings:
+            enable_auto_backup = True
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings", lambda: _Settings()
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        ran: list[str] = []
+
+        @with_auto_backup(domain="device", id_param="device_id", client=object())
+        async def fake_tool(*, device_id: str) -> str:
+            ran.append(device_id)
+            return "ok"
+
+        # best-effort contract: a capture error must NOT block the write
+        assert await fake_tool(device_id="dev-1") == "ok"
+        assert ran == ["dev-1"]
+
+
+def test_destructive_tools_carry_auto_backup_decorator() -> None:
+    """Source guard: the three destructive tools this PR wired must keep
+    their @with_auto_backup decorator — a deleted line would silently stop
+    capturing without failing any behavioral test."""
+    from pathlib import Path
+
+    tools_dir = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools"
+    checks = [
+        ("tools_entities.py", "ha_remove_entity", "entity", "entity_id"),
+        ("tools_registry.py", "ha_set_device", "device", "device_id"),
+        ("tools_registry.py", "ha_remove_device", "device", "device_id"),
+    ]
+    for fname, func, domain, id_param in checks:
+        src = (tools_dir / fname).read_text(encoding="utf-8")
+        idx = src.index(f"async def {func}(")
+        head = src[max(0, idx - 600) : idx]  # the decorator block above the def
+        assert "with_auto_backup(" in head, f"{func} lost @with_auto_backup"
+        assert f'domain="{domain}"' in head, f"{func} wrong/missing backup domain"
+        assert f'id_param="{id_param}"' in head, f"{func} wrong/missing id_param"
 
 
 # ---------------------------------------------------------------- filenames
@@ -480,6 +862,7 @@ class TestFactory:
             "todo_item",
             "calendar_event",
             "entity",
+            "device",
             "integration",
             "helper_input_boolean",
             "helper_timer",
