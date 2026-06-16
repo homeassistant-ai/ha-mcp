@@ -3,6 +3,17 @@
 <!-- version list -->
 
 
+## v7.8.1 (2026-06-16)
+
+### Fixed
+
+- Auto-backup silently skipped pre-write snapshots on several paths — automation
+  edits via python_transform, todo edit/remove by item summary, dashboards
+  addressed by their internal id, and renamed helpers; also added device backup
+  coverage and pre-write snapshots for ha_remove_entity / ha_set_device /
+  ha_remove_device ([#1643](https://github.com/homeassistant-ai/ha-mcp/pull/1643))
+
+
 ## v7.8.0 (2026-06-15)
 
 ### Added
