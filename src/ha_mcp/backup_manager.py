@@ -991,19 +991,46 @@ async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
     """
     from fastmcp.exceptions import ToolError
 
-    from .tools.tools_config_dashboards import _get_dashboard_config_internal
+    from .tools.tools_config_dashboards import (
+        _get_dashboard_config_internal,
+        _resolve_dashboard,
+    )
+
+    # The set/delete tools accept BOTH the canonical hyphenated url_path
+    # AND HA's internal (underscored) dashboard id, eagerly resolving the
+    # latter before writing. ``_get_dashboard_config_internal`` does NOT
+    # lazy-resolve, so an internal-id identifier 404s with "Unknown config
+    # specified" and the pre-write snapshot is silently skipped. Pre-resolve
+    # to the canonical url_path so capture works for whichever form the
+    # caller passed (matching the form the write tool ultimately targets).
+    fetch_path = entity_id
+    try:
+        match, _ = await _resolve_dashboard(client, entity_id)
+        if match and match.get("url_path"):
+            fetch_path = match["url_path"]
+    except (HomeAssistantError, ToolError) as err:
+        # Resolver failure (transport/shape) — fall through with the
+        # original identifier; the canonical form is often already correct.
+        logger.debug(
+            "Auto-backup: dashboard resolve failed for %r: %s — using as-is",
+            entity_id,
+            err,
+        )
 
     try:
-        config, _config_hash = await _get_dashboard_config_internal(client, entity_id)
+        config, _config_hash = await _get_dashboard_config_internal(client, fetch_path)
     except ToolError as err:
-        # ToolError carries the structured failure payload; treat
-        # missing-dashboard responses as "entity doesn't exist yet".
+        # ToolError carries the structured failure payload; treat a
+        # missing/unknown dashboard as "nothing to back up" (also covers a
+        # brand-new dashboard on the create path). "Unknown config
+        # specified" is HA's message for an unresolved url_path.
         msg = str(err).lower()
-        if "not_found" in msg or "config_not_found" in msg:
+        if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
             return None
         raise
     except HomeAssistantError as err:
-        if "not_found" in str(err).lower() or "config_not_found" in str(err).lower():
+        msg = str(err).lower()
+        if "not_found" in msg or "config_not_found" in msg or "unknown config" in msg:
             return None
         raise
     return config
@@ -1305,8 +1332,11 @@ async def _restore_area_or_floor(client: Any, entity_id: str, config: Any) -> An
 
 
 async def _fetch_todo_item(client: Any, entity_id: str) -> Any:
-    cal, _, uid = entity_id.partition("::")
-    if not cal or not uid:
+    # The second segment is whatever the tool's ``item`` param carried.
+    # ha_set_todo_item / ha_remove_todo_item accept EITHER the item uid OR
+    # its exact summary/name, so this can be either form.
+    cal, _, item_ref = entity_id.partition("::")
+    if not cal or not item_ref:
         return None
     payload = {
         "type": "execute_script",
@@ -1332,7 +1362,11 @@ async def _fetch_todo_item(client: Any, entity_id: str) -> Any:
     result = _require_dict(result, "execute_script")
     items = result.get("response", {}).get("items", {}).get(cal, {}).get("items", [])
     for item in items:
-        if item.get("uid") == uid:
+        # Match either form. Matching only on uid silently skipped the
+        # snapshot whenever the caller passed the human-readable summary
+        # (the documented/common case, e.g. ha_remove_todo_item(list, "Buy
+        # milk")) — uid != summary, so the loop found nothing -> None.
+        if item.get("uid") == item_ref or item.get("summary") == item_ref:
             return {"todo_entity_id": cal, **item}
     return None
 
@@ -1364,6 +1398,42 @@ async def _restore_entity_state(client: Any, entity_id: str, config: Any) -> Any
     else:
         payload = {"state": str(config)}
     return await _rest_post(client, f"states/{entity_id}", payload)
+
+
+# Devices — config/device_registry/{list,update}. ``ha_set_device`` mutates
+# the user-editable registry fields (name_by_user / area_id / disabled_by /
+# labels); restore re-applies exactly those. A device deleted by
+# ``ha_remove_device`` cannot be recreated through the registry, so for that
+# path the snapshot is an informational pre-delete record and restore is
+# best-effort.
+
+
+async def _fetch_device(client: Any, entity_id: str) -> Any:
+    items = await _ws_send(client, {"type": "config/device_registry/list"})
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if item.get("id") == entity_id:
+            return item
+    return None
+
+
+async def _restore_device(client: Any, entity_id: str, config: Any) -> Any:
+    # Re-apply the captured registry state. Uses the same field NAMES as
+    # ``_update_device_internal`` but, unlike that partial-update path, always
+    # sends all four — restore reverts the device to the snapshot, so a
+    # captured ``None`` area/name is intentionally re-applied (cleared).
+    return await _ws_send(
+        client,
+        {
+            "type": "config/device_registry/update",
+            "device_id": entity_id,
+            "name_by_user": config.get("name_by_user"),
+            "area_id": config.get("area_id"),
+            "disabled_by": config.get("disabled_by"),
+            "labels": config.get("labels", []),
+        },
+    )
 
 
 # Integration enable/disable — restore re-applies the disabled flag.
@@ -1435,6 +1505,34 @@ async def _fetch_helper(client: Any, entity_id: str, helper_type: str) -> Any:
     for item in items:
         if item.get("id") == object_id or item.get("id") == entity_id:
             return item
+    # Fallback for renamed helpers: after an entity_id rename the object_id
+    # no longer equals the storage collection id (which stays the original
+    # create-time id == the registry unique_id), so the direct match above
+    # misses and the snapshot was silently skipped. Resolve the unique_id
+    # via the entity registry and match on that — the same key the helper
+    # update tool itself resolves to.
+    eid = entity_id if "." in entity_id else f"{helper_type}.{entity_id}"
+    try:
+        entry = await _ws_send(
+            client, {"type": "config/entity_registry/get", "entity_id": eid}
+        )
+    except HomeAssistantError as err:
+        # Only a genuine "entity not found" means there's nothing to back up;
+        # transport/auth/5xx errors must propagate so maybe_snapshot logs a
+        # WARNING rather than silently skipping. Same POLICY as _fetch_automation,
+        # but matched on the message substring because config/entity_registry/get
+        # failures arrive as a WS command error with no status_code to switch on.
+        # Best-effort: if HA's not-found wording ever changes, a real miss
+        # degrades to a WARNING + skip (never a swallowed fatal error).
+        msg = str(err).lower()
+        if "not_found" in msg or "not found" in msg:
+            return None
+        raise
+    unique_id = entry.get("unique_id") if isinstance(entry, dict) else None
+    if unique_id:
+        for item in items:
+            if str(item.get("id")) == str(unique_id):
+                return item
     return None
 
 
@@ -1505,6 +1603,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     )
     mgr.register(DomainHandler("todo_item", _fetch_todo_item, _restore_todo_item))
     mgr.register(DomainHandler("entity", _fetch_entity_state, _restore_entity_state))
+    mgr.register(DomainHandler("device", _fetch_device, _restore_device))
     mgr.register(DomainHandler("integration", _fetch_integration, _restore_integration))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))

@@ -43,8 +43,18 @@ def _parse_decorator_args(decorator_args: str, func_name: str, file_name: str) -
 def extract_tool_decorators(file_path: Path) -> list[dict]:
     """Extract @mcp.tool and @tool decorator information from a Python file."""
     content = file_path.read_text(encoding="utf-8")
-    # Pattern 1: @mcp.tool(...) — closure pattern
-    pattern = r"@mcp\.tool\(([^)]*)\)\s*(?:@\w+\s*)*async def (\w+)"
+    # Pattern 1: @mcp.tool(...) — closure pattern.
+    # The decorator-skip ``(?:@\w+(?:\([^()]*\))?\s*)*`` accepts bare
+    # decorators (``@log_tool_usage``) AND SINGLE-LEVEL parenthesized ones
+    # such as ``@with_auto_backup(domain="entity", id_param="entity_id",
+    # client=client)`` between ``@mcp.tool`` and ``async def``; the old
+    # bare-only ``(?:@\w+\s*)*`` dropped those backed-up tools from the count.
+    # ``\([^()]*\)`` does NOT span nested parens, so a decorator whose args
+    # contain them (e.g. ``ha_set_entity``'s ``id_fn=lambda``) stays unmatched
+    # — pre-existing, not introduced here. Requiring decorators-then-
+    # ``async def`` (not arbitrary text) keeps docstring ``@mcp.tool(...)``
+    # mentions from matching.
+    pattern = r"@mcp\.tool\(([^)]*)\)\s*(?:@\w+(?:\([^()]*\))?\s*)*async def (\w+)"
     tools = [
         _parse_decorator_args(m.group(1), m.group(2), file_path.name)
         for m in re.finditer(pattern, content, re.DOTALL)

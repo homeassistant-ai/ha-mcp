@@ -75,17 +75,20 @@ def automation_backup_target(kw: dict[str, Any]) -> str:
         config_id = config.get("id")
         if config_id:
             return str(config_id)
-    identifier = _resolve_str(kw.get("identifier"))
-    # Strip the leading ``automation.`` prefix when the caller passed an
-    # entity_id form (typical for ``python_transform`` calls that don't
-    # carry a config body). Without this, snapshot files duplicate the
-    # domain segment as ``automation.automation.<slug>.<ts>.yaml`` — the
-    # body's entity_id keeps the prefix, only the filename / list key
-    # tighten up. HA's automation upsert accepts either form for the
-    # ``identifier`` param, so restore is unaffected.
-    if identifier.startswith("automation."):
-        identifier = identifier[len("automation.") :]
-    return identifier
+    # Return the identifier UNCHANGED — do NOT strip the ``automation.``
+    # prefix. Capture and restore resolve the target through
+    # ``client.get_automation_config`` -> ``_resolve_automation_id``, which
+    # converts an entity_id ("automation.<slug>") to the real numeric
+    # ``unique_id`` via a state lookup ONLY when the prefix is present;
+    # otherwise it assumes the string already IS a unique_id. Stripping the
+    # prefix produced a bare object_id slug that the resolver mis-treats as
+    # a unique_id -> GET /config/automation/config/<slug> 404s -> the
+    # pre-write snapshot is silently skipped (and, had it resolved, restore
+    # would POST to the wrong key and create a stray automation). The
+    # doubled domain segment in the snapshot filename
+    # ("automation.automation.<slug>.<ts>.yaml") is purely cosmetic and is
+    # exactly what the remove path (id_param="identifier") already produces.
+    return _resolve_str(kw.get("identifier"))
 
 
 def with_auto_backup(
