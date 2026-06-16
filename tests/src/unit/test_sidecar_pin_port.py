@@ -60,6 +60,7 @@ class TestSidecarPinPortValidator:
             ("80", 0),  # privileged -> off
             ("1023", 0),  # just below range -> off
             ("70000", 0),  # above range -> off
+            ("-1", 0),  # negative -> off
             ("abc", 0),  # unparseable -> off
             ("", 0),  # empty -> off
         ],

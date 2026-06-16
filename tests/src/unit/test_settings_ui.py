@@ -2676,6 +2676,49 @@ class TestAdvancedSettingsEndpoints:
         _reset_global_settings()
 
     @pytest.mark.asyncio
+    async def test_save_advanced_sidecar_pin_port_sentinel_and_bounds(
+        self, monkeypatch, tmp_path
+    ):
+        """POST path: the 0 off-sentinel and a bounded port are accepted, a
+        privileged port is rejected. Exercises the _ADVANCED_SETTINGS_SENTINELS
+        bypass (coerced != sentinel) alongside the (1024, 65535) bounds."""
+        from ha_mcp.config import _reset_global_settings, get_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        monkeypatch.delenv("HA_MCP_SIDECAR_PORT", raising=False)
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+        handlers = build_settings_handlers(server=None)
+
+        async def _save(value):
+            req = MagicMock()
+            req.json = AsyncMock(return_value={"sidecar_pin_port": value})
+            return await handlers["save_advanced_settings"](req)
+
+        # 0 = off sentinel: accepted even though it is below the bounds floor.
+        resp = await _save(0)
+        assert resp.status_code == 200
+        assert get_global_settings().sidecar_pin_port == 0
+
+        _reset_global_settings()
+        # A bounded port: accepted and applied.
+        resp = await _save(8099)
+        assert resp.status_code == 200
+        assert get_global_settings().sidecar_pin_port == 8099
+
+        _reset_global_settings()
+        # A privileged port (not the sentinel, below the floor): rejected.
+        resp = await _save(80)
+        assert resp.status_code == 400
+
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
     async def test_save_advanced_rejects_null_byte_in_str(self, monkeypatch):
         from ha_mcp.config import _reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
