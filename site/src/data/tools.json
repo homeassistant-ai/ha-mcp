@@ -2874,7 +2874,7 @@
           "type": "Annotated[Literal['snapshot', 'edits'], Field(description=\"'snapshot' for full HA tarballs; 'edits' for per-entity auto-backups.\")]"
         },
         "action": {
-          "type": "Annotated[Literal['create', 'restore', 'list', 'view', 'delete'], Field(description='Operation to perform. Valid (scope, action) combinations are listed in the tool description.')]"
+          "type": "Annotated[Literal['create', 'restore', 'list', 'view', 'diff', 'delete'], Field(description='Operation to perform. Valid (scope, action) combinations are listed in the tool description.')]"
         },
         "name": {
           "type": "Annotated[str | None, Field(default=None, description='(snapshot.create) Tarball name. Auto-generated if not provided.')]",
