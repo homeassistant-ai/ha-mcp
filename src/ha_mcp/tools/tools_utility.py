@@ -122,8 +122,14 @@ class UtilityTools:
         entity_id: str | None,
         end_time: str | None,
         slug: str | None,
+        order: Literal["newest", "oldest"],
     ) -> list[str]:
         warnings: list[str] = []
+        if source == "logger" and order != "newest":
+            warnings.append(
+                "Parameter 'order' does not apply to source='logger' "
+                "(entries are sorted by integration name); ignored"
+            )
         if source != "logbook" and any(p is not None for p in [entity_id, end_time]):
             ignored = [
                 p
@@ -200,6 +206,7 @@ class UtilityTools:
         compact: bool,
         level: str | None,
         slug: str | None,
+        order: Literal["newest", "oldest"],
     ) -> dict[str, Any]:
         if source == "logbook":
             return await self._get_logbook(
@@ -210,20 +217,29 @@ class UtilityTools:
                 offset=offset,
                 search=search,
                 compact=compact,
+                order=order,
             )
         if source == "system":
-            return await self._get_system_log(limit=limit, search=search, level=level)
+            return await self._get_system_log(
+                limit=limit, search=search, level=level, order=order
+            )
         if source == "error_log":
-            return await self._get_error_log(limit=limit, search=search, level=level)
+            return await self._get_error_log(
+                limit=limit, search=search, level=level, order=order
+            )
         if source == "logger":
+            # logger reports per-integration levels, not time-ordered events;
+            # 'order' does not apply (a warning is emitted upstream).
             return await self._get_logger_info(limit=limit, search=search)
         if source == "system_service":
             assert slug is not None  # guaranteed by _validate_log_slug
             return await self._get_system_service_log(
-                service=slug, limit=limit, search=search
+                service=slug, limit=limit, search=search, order=order
             )
         assert slug is not None  # guaranteed by _validate_log_slug
-        return await self._get_supervisor_log(slug=slug, limit=limit, search=search)
+        return await self._get_supervisor_log(
+            slug=slug, limit=limit, search=search, order=order
+        )
 
     async def get_logs(
         self,
@@ -237,9 +253,12 @@ class UtilityTools:
         compact: bool,
         level: str | None,
         slug: str | None,
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         level = self._validate_log_level(level)
-        warnings = self._collect_log_warnings(source, level, entity_id, end_time, slug)
+        warnings = self._collect_log_warnings(
+            source, level, entity_id, end_time, slug, order
+        )
         self._validate_log_slug(source, slug)
         result = await self._fetch_log_source(
             source,
@@ -252,6 +271,7 @@ class UtilityTools:
             compact,
             level,
             slug,
+            order,
         )
         if warnings:
             result["warnings"] = warnings
@@ -277,6 +297,7 @@ class UtilityTools:
         entity_id: str | None,
         search: str | None,
         compact_bool: bool,
+        order: Literal["newest", "oldest"] = "newest",
     ) -> str:
         """Build reproducible pagination hint string for logbook results."""
         next_offset = offset_int + effective_limit
@@ -293,6 +314,8 @@ class UtilityTools:
             param_parts.append(f"search={search}")
         if not compact_bool:
             param_parts.append("compact=False")
+        if order != "newest":
+            param_parts.append(f"order={order}")
         param_str = ", ".join(param_parts)
         return (
             f"Showing entries {offset_int + 1}-{offset_int + len(paginated_entries)} of {total_entries}. "
@@ -308,6 +331,7 @@ class UtilityTools:
         offset: int = 0,
         search: str | None = None,
         compact: bool = True,
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch logbook entries with search and pagination."""
         hours_back_int, effective_limit, offset_int = self._coerce_logbook_params(
@@ -342,8 +366,20 @@ class UtilityTools:
             total_entries = len(response) if isinstance(response, list) else 1
 
             if isinstance(response, list):
-                paginated_entries = response[offset_int : offset_int + effective_limit]
-                has_more = (offset_int + effective_limit) < total_entries
+                # HA's /logbook returns entries oldest-first. Take a window from
+                # the end for newest-first (default), or from the start for
+                # oldest-first, with offset paging deeper in the chosen order.
+                if order == "newest":
+                    end = total_entries - offset_int
+                    start = max(end - effective_limit, 0)
+                    paginated_entries = (
+                        list(reversed(response[start:end])) if end > 0 else []
+                    )
+                else:
+                    paginated_entries = response[
+                        offset_int : offset_int + effective_limit
+                    ]
+                has_more = offset_int + len(paginated_entries) < total_entries
             else:
                 paginated_entries = response
                 has_more = False
@@ -368,6 +404,7 @@ class UtilityTools:
                 else 1,
                 "limit": effective_limit,
                 "offset": offset_int,
+                "order": order,
                 "has_more": has_more,
             }
             if filters_applied:
@@ -383,6 +420,7 @@ class UtilityTools:
                     entity_id,
                     search,
                     compact,
+                    order,
                 )
 
             return await add_timezone_metadata(self._client, logbook_data)
@@ -416,11 +454,28 @@ class UtilityTools:
             )
             raise  # unreachable: exception_to_structured_error always raises
 
+    @staticmethod
+    def _system_log_sort_key(entry: Any) -> float:
+        """Total-order-safe sort key for system_log entries.
+
+        ``system_log/list`` does not guarantee a numeric ``timestamp`` on every
+        record. Coerce a missing / non-numeric / non-dict entry to ``0.0`` so
+        sorting never raises a cross-type ``TypeError`` (bools are excluded so
+        a stray ``True`` doesn't read as ``1.0``).
+        """
+        if not isinstance(entry, dict):
+            return 0.0
+        ts = entry.get("timestamp")
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+            return 0.0
+        return float(ts)
+
     async def _get_system_log(
         self,
         limit: int | None = None,
         search: str | None = None,
         level: str | None = None,
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch structured system log entries via system_log/list."""
         effective_limit = self._coerce_limit(limit)
@@ -461,6 +516,17 @@ class UtilityTools:
                 ]
                 filters_applied["search"] = search
 
+            # system_log/list entries carry a 'timestamp' (epoch float, last
+            # occurrence), but HA does not guarantee it on every record. Sort
+            # with a total-order-safe key so 'order' is deterministic regardless
+            # of HA's native ordering (newest-first by default) and a missing /
+            # non-numeric / non-dict entry can never raise a cross-type
+            # TypeError out of this method's narrow except clause.
+            entries.sort(
+                key=self._system_log_sort_key,
+                reverse=(order == "newest"),
+            )
+
             total_entries = len(entries)
             entries = entries[:effective_limit]
 
@@ -471,6 +537,7 @@ class UtilityTools:
                 "total_entries": total_entries,
                 "returned_entries": len(entries),
                 "limit": effective_limit,
+                "order": order,
             }
             if filters_applied:
                 data["filters_applied"] = filters_applied
@@ -500,6 +567,7 @@ class UtilityTools:
         limit: int | None = None,
         search: str | None = None,
         level: str | None = None,
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch raw error log text from home-assistant.log."""
         effective_limit = self._coerce_limit(
@@ -527,8 +595,11 @@ class UtilityTools:
                 filters_applied["search"] = search
 
             total_lines = len(lines)
-            # Return the LAST N lines (most recent)
+            # Always take the most-recent window (the tail of the chronological
+            # file); 'order' controls only the display direction of that window.
             lines = lines[-effective_limit:]
+            if order == "newest":
+                lines = list(reversed(lines))
 
             data: dict[str, Any] = {
                 "success": True,
@@ -537,6 +608,7 @@ class UtilityTools:
                 "total_lines": total_lines,
                 "returned_lines": len(lines),
                 "limit": effective_limit,
+                "order": order,
                 "note": "Returned the most recent log lines matching filters",
             }
             if filters_applied:
@@ -665,6 +737,7 @@ class UtilityTools:
         slug: str,
         limit: int | None = None,
         search: str | None = None,
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch add-on container logs.
 
@@ -692,8 +765,11 @@ class UtilityTools:
                 filters_applied["search"] = search
 
             total_lines = len(lines)
-            # Return the LAST N lines (most recent)
+            # Always take the most-recent window (the tail); 'order' controls
+            # only the display direction of that window.
             lines = lines[-effective_limit:]
+            if order == "newest":
+                lines = list(reversed(lines))
 
             data: dict[str, Any] = {
                 "success": True,
@@ -703,6 +779,7 @@ class UtilityTools:
                 "total_lines": total_lines,
                 "returned_lines": len(lines),
                 "limit": effective_limit,
+                "order": order,
             }
             if filters_applied:
                 data["filters_applied"] = filters_applied
@@ -797,6 +874,7 @@ class UtilityTools:
         service: str,
         limit: int | None = None,
         search: str | None = None,
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch HA system-service logs from Supervisor's per-service endpoint.
 
@@ -826,8 +904,11 @@ class UtilityTools:
                 filters_applied["search"] = search
 
             total_lines = len(lines)
-            # Return the LAST N lines (most recent)
+            # Always take the most-recent window (the tail); 'order' controls
+            # only the display direction of that window.
             lines = lines[-effective_limit:]
+            if order == "newest":
+                lines = list(reversed(lines))
 
             data: dict[str, Any] = {
                 "success": True,
@@ -837,6 +918,7 @@ class UtilityTools:
                 "total_lines": total_lines,
                 "returned_lines": len(lines),
                 "limit": effective_limit,
+                "order": order,
             }
             if filters_applied:
                 data["filters_applied"] = filters_applied
@@ -1035,6 +1117,17 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         # Shared parameters
         limit: int | None = None,
         search: str | None = None,
+        order: Annotated[
+            Literal["newest", "oldest"],
+            Field(
+                description=(
+                    "Sort order for time-ordered sources (logbook, system, "
+                    "error_log, supervisor, system_service): 'newest' (default) "
+                    "returns most-recent first; 'oldest' returns chronological-"
+                    "first. Ignored for source='logger'."
+                )
+            ),
+        ] = "newest",
         # Logbook-specific (ignored for other sources)
         hours_back: Annotated[int, Field(ge=1)] = 1,
         entity_id: str | None = None,
@@ -1059,6 +1152,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
 
         **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
+        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger'. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
         **Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)
         **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)
         **Supervisor params:** slug = add-on slug, e.g. "core_mosquitto" (use
@@ -1078,6 +1172,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             compact=compact,
             level=level,
             slug=slug,
+            order=order,
         )
 
     @mcp.tool(

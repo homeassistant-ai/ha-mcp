@@ -883,7 +883,7 @@ class TestGetSupervisorLogWrapper:
         assert result["success"] is True
         assert result["source"] == "supervisor"
         assert result["slug"] == "core_mosquitto"
-        assert result["log"] == "line 1\nline 2\nline 3"
+        assert result["log"] == "line 3\nline 2\nline 1"  # newest-first default
         assert result["total_lines"] == 3
         assert result["returned_lines"] == 3
         assert "limit" in result
@@ -904,7 +904,8 @@ class TestGetSupervisorLogWrapper:
         )
 
         returned = result["log"].splitlines()
-        assert returned == ["line 16", "line 17", "line 18", "line 19", "line 20"]
+        # Still the last 5 lines (recent window), now newest-first by default.
+        assert returned == ["line 20", "line 19", "line 18", "line 17", "line 16"]
         assert result["total_lines"] == 20
         assert result["returned_lines"] == 5
         assert result["limit"] == 5
