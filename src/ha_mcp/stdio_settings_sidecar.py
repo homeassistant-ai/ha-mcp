@@ -266,19 +266,40 @@ def _spawn_lock() -> Iterator[bool]:
         os.close(fd)
 
 
-def _pick_free_port() -> int:
-    """Bind a transient socket to an ephemeral port and return it.
+def _pick_free_port(pinned: int = 0) -> int:
+    """Return the port the sidecar listener should bind.
 
-    The socket is closed before the sidecar opens its own listener.
-    The OS may hand out the same port again to the sidecar; if another
-    process snatches it in the gap, the sidecar startup will fail and
-    log to ``sidecar.log`` — the parent moves on (settings UI is
-    advisory, not required for MCP operation).
+    ``pinned == 0`` (default): bind a transient socket to an ephemeral
+    port and return it. The socket is closed before the sidecar opens its
+    own listener. The OS may hand out the same port again; if another
+    process snatches it in the gap, the sidecar startup will fail and log
+    to ``sidecar.log`` — the parent moves on (settings UI is advisory, not
+    required for MCP operation).
+
+    ``pinned != 0``: try to reserve the requested fixed port with
+    ``SO_REUSEADDR`` so the settings URL/origin survives restarts (#1587).
+    ``SO_REUSEADDR`` lets the bind succeed even if a crashed sidecar left
+    the port in ``TIME_WAIT``. If the port is genuinely unavailable (in
+    use by another process), log a warning and fall back to an ephemeral
+    port rather than failing the sidecar.
     """
+    if pinned:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", pinned))
+                return int(sock.getsockname()[1])
+            except OSError as exc:
+                logger.warning(
+                    "Sidecar pin port %d unavailable (%s); "
+                    "falling back to an ephemeral port",
+                    pinned,
+                    exc,
+                )
+        return _pick_free_port(0)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
-        port: int = sock.getsockname()[1]
-        return port
+        return int(sock.getsockname()[1])
 
 
 def maybe_spawn() -> None:
@@ -795,7 +816,13 @@ def run_main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    port = _pick_free_port()
+    # Effective pin port honours both the env var (HA_MCP_SIDECAR_PORT) and
+    # a value set via the settings UI Advanced tab (persisted to the override
+    # file and applied by get_global_settings). 0 = ephemeral. The lenient
+    # validator in config.Settings has already clamped any bad value to 0.
+    from .config import get_global_settings
+
+    port = _pick_free_port(get_global_settings().sidecar_pin_port)
     secret_token = secrets.token_urlsafe(16)
     secret_path = f"/private_{secret_token}"
     url = f"http://127.0.0.1:{port}{secret_path}/settings"

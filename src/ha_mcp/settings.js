@@ -2740,6 +2740,7 @@ const ADVANCED_FIELD_META = {
   code_mode_max_recursion:   { label: "Code-mode max recursion",      help: "Recursion-depth cap per sandbox run. Restart required." },
   code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
   code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
+  sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "stdio mode only. 0 = a new free port each restart (default); set 1024–65535 to pin a fixed port so the settings URL stays stable across restarts. Falls back to a free port if the pinned one is busy. No effect for HTTP/add-on deployments, which serve settings from the main server. Restart required." },
 };
 
 // Fields that require an MCP-host restart to take effect when changed
@@ -2765,6 +2766,9 @@ const ADVANCED_RESTART_REQUIRED = new Set([
   "code_mode_max_duration", "code_mode_max_memory",
   "code_mode_max_recursion", "code_mode_max_invocations",
   "code_mode_saved_tools_path",
+  // The sidecar binds its port once at spawn (run_main), so changing the
+  // pin needs a restart to respawn the sidecar on the new port.
+  "sidecar_pin_port",
 ]);
 
 let _advancedFields = [];
@@ -2825,6 +2829,7 @@ async function loadAdvancedSettings() {
   renderAdvancedSection('advOperations', bySection.operations || []);
   renderAdvancedSection('advToolsSurface', bySection.tools_surface || []);
   renderAdvancedSection('advDiagnostics', bySection.diagnostics || []);
+  renderAdvancedSection('advSidecar', bySection.sidecar || []);
   document.getElementById('advSaveRow').style.display = '';
   const topRow = document.getElementById('advSaveRowTop');
   if (topRow) topRow.style.display = '';

@@ -902,6 +902,8 @@ _SETTINGS_HTML = (
   <div id="advToolsSurface" class="adv-section"></div>
   <h3 class="adv-section-title">Diagnostics</h3>
   <div id="advDiagnostics" class="adv-section"></div>
+  <h3 class="adv-section-title">Settings UI sidecar (stdio-only)</h3>
+  <div id="advSidecar" class="adv-section"></div>
 
   <!-- Beta features sit at the bottom of the panel — these can damage
        the HA system, so they come last and the user sees safer
@@ -2650,6 +2652,7 @@ def build_settings_handlers(
         from .config import (
             _ADVANCED_SETTINGS_BOUNDS,
             _ADVANCED_SETTINGS_CHOICES,
+            _ADVANCED_SETTINGS_SENTINELS,
             ADVANCED_SETTINGS_FIELDS,
             OAUTH_MODE_TOKEN,
             _read_feature_flag_override_file,
@@ -2692,6 +2695,12 @@ def build_settings_handlers(
             bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
             if bounds is not None:
                 row["min"], row["max"] = bounds
+                # Sentinel fields (e.g. sidecar_pin_port: 0 = off) need the
+                # number input to reach below the bounded range, so expose
+                # the sentinel as the UI minimum.
+                sentinel = _ADVANCED_SETTINGS_SENTINELS.get(fname)
+                if sentinel is not None:
+                    row["min"] = sentinel
             choices = _ADVANCED_SETTINGS_CHOICES.get(fname)
             if choices is not None:
                 row["choices"] = list(choices)
@@ -2770,6 +2779,7 @@ def build_settings_handlers(
         from .config import (
             _ADVANCED_SETTINGS_BOUNDS,
             _ADVANCED_SETTINGS_CHOICES,
+            _ADVANCED_SETTINGS_SENTINELS,
             _FEATURE_FLAG_OVERRIDE_FILENAME,
             ADVANCED_SETTINGS_FIELDS,
         )
@@ -2890,7 +2900,12 @@ def build_settings_handlers(
                 return _bad_advanced_type(fname, ftype, raw)
 
             bounds = _ADVANCED_SETTINGS_BOUNDS.get(fname)
-            if bounds is not None and not (bounds[0] <= coerced <= bounds[1]):
+            sentinel = _ADVANCED_SETTINGS_SENTINELS.get(fname)
+            if (
+                bounds is not None
+                and coerced != sentinel
+                and not (bounds[0] <= coerced <= bounds[1])
+            ):
                 return JSONResponse(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
