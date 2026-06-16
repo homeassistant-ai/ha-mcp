@@ -20,6 +20,13 @@ env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/${{ github.repository }}-addon
 
+# Needed by the reusable completion jobs below (binaries upload release assets,
+# addon-config pushes config.yaml to master). build-addon keeps its own
+# job-level permissions.
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build-addon:
     name: Build Add-on Image (${{ matrix.arch }})
@@ -109,4 +116,3 @@ jobs:
     with:
       release_tag: v${{ inputs.version }}
       is_prerelease: false
-    secrets: inherit
