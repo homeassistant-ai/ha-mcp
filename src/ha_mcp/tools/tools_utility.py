@@ -122,7 +122,7 @@ class UtilityTools:
         entity_id: str | None,
         end_time: str | None,
         slug: str | None,
-        order: str,
+        order: Literal["newest", "oldest"],
     ) -> list[str]:
         warnings: list[str] = []
         if source == "logger" and order != "newest":
@@ -206,7 +206,7 @@ class UtilityTools:
         compact: bool,
         level: str | None,
         slug: str | None,
-        order: str,
+        order: Literal["newest", "oldest"],
     ) -> dict[str, Any]:
         if source == "logbook":
             return await self._get_logbook(
@@ -253,7 +253,7 @@ class UtilityTools:
         compact: bool,
         level: str | None,
         slug: str | None,
-        order: str = "newest",
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         level = self._validate_log_level(level)
         warnings = self._collect_log_warnings(
@@ -297,7 +297,7 @@ class UtilityTools:
         entity_id: str | None,
         search: str | None,
         compact_bool: bool,
-        order: str = "newest",
+        order: Literal["newest", "oldest"] = "newest",
     ) -> str:
         """Build reproducible pagination hint string for logbook results."""
         next_offset = offset_int + effective_limit
@@ -331,7 +331,7 @@ class UtilityTools:
         offset: int = 0,
         search: str | None = None,
         compact: bool = True,
-        order: str = "newest",
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch logbook entries with search and pagination."""
         hours_back_int, effective_limit, offset_int = self._coerce_logbook_params(
@@ -454,12 +454,28 @@ class UtilityTools:
             )
             raise  # unreachable: exception_to_structured_error always raises
 
+    @staticmethod
+    def _system_log_sort_key(entry: Any) -> float:
+        """Total-order-safe sort key for system_log entries.
+
+        ``system_log/list`` does not guarantee a numeric ``timestamp`` on every
+        record. Coerce a missing / non-numeric / non-dict entry to ``0.0`` so
+        sorting never raises a cross-type ``TypeError`` (bools are excluded so
+        a stray ``True`` doesn't read as ``1.0``).
+        """
+        if not isinstance(entry, dict):
+            return 0.0
+        ts = entry.get("timestamp")
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+            return 0.0
+        return float(ts)
+
     async def _get_system_log(
         self,
         limit: int | None = None,
         search: str | None = None,
         level: str | None = None,
-        order: str = "newest",
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch structured system log entries via system_log/list."""
         effective_limit = self._coerce_limit(limit)
@@ -501,10 +517,13 @@ class UtilityTools:
                 filters_applied["search"] = search
 
             # system_log/list entries carry a 'timestamp' (epoch float, last
-            # occurrence). Sort explicitly so 'order' is deterministic regardless
-            # of HA's native ordering: newest-first by default.
+            # occurrence), but HA does not guarantee it on every record. Sort
+            # with a total-order-safe key so 'order' is deterministic regardless
+            # of HA's native ordering (newest-first by default) and a missing /
+            # non-numeric / non-dict entry can never raise a cross-type
+            # TypeError out of this method's narrow except clause.
             entries.sort(
-                key=lambda e: e.get("timestamp") or 0,
+                key=self._system_log_sort_key,
                 reverse=(order == "newest"),
             )
 
@@ -548,7 +567,7 @@ class UtilityTools:
         limit: int | None = None,
         search: str | None = None,
         level: str | None = None,
-        order: str = "newest",
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch raw error log text from home-assistant.log."""
         effective_limit = self._coerce_limit(
@@ -718,7 +737,7 @@ class UtilityTools:
         slug: str,
         limit: int | None = None,
         search: str | None = None,
-        order: str = "newest",
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch add-on container logs.
 
@@ -855,7 +874,7 @@ class UtilityTools:
         service: str,
         limit: int | None = None,
         search: str | None = None,
-        order: str = "newest",
+        order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
         """Fetch HA system-service logs from Supervisor's per-service endpoint.
 

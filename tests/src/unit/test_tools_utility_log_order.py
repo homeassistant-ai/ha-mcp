@@ -100,6 +100,58 @@ class TestLogbookOrder:
         result = await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
         assert "order=" not in result["data"]["pagination_hint"]
 
+    @pytest.mark.asyncio
+    async def test_newest_offset_beyond_total_returns_empty(self):
+        tools = UtilityTools(self._client(self._entries()))
+        result = await tools.get_logs(
+            **_call_kwargs(source="logbook", limit=2, offset=10)
+        )
+        data = result["data"]
+        # end = 5 - 10 < 0 -> guarded to []; no negative-index slice.
+        assert data["entries"] == []
+        assert data["has_more"] is False
+        assert data["offset"] == 10
+
+    @pytest.mark.asyncio
+    async def test_newest_limit_exceeds_total_returns_all_reversed(self):
+        tools = UtilityTools(self._client(self._entries()))
+        result = await tools.get_logs(**_call_kwargs(source="logbook", limit=100))
+        data = result["data"]
+        # start clamped to 0 via max(end - limit, 0).
+        assert [e["state"] for e in data["entries"]] == ["s4", "s3", "s2", "s1", "s0"]
+        assert data["has_more"] is False
+
+    @pytest.mark.asyncio
+    async def test_newest_last_page_sets_has_more_false(self):
+        tools = UtilityTools(self._client(self._entries()))
+        result = await tools.get_logs(
+            **_call_kwargs(source="logbook", limit=2, offset=4)
+        )
+        data = result["data"]
+        # total=5, offset=4 -> end=1, start=0, response[0:1]=[s0] reversed.
+        assert [e["state"] for e in data["entries"]] == ["s0"]
+        assert data["has_more"] is False
+
+    @pytest.mark.asyncio
+    async def test_newest_filters_by_search_then_orders(self):
+        entries = [
+            {
+                "when": f"2026-06-16T00:0{i}:00+00:00",
+                "entity_id": "light.match" if i % 2 == 0 else "light.other",
+                "state": f"s{i}",
+            }
+            for i in range(5)
+        ]
+        tools = UtilityTools(self._client(entries))
+        result = await tools.get_logs(
+            **_call_kwargs(source="logbook", limit=10, search="match")
+        )
+        data = result["data"]
+        # s0,s2,s4 match (oldest-first); newest order reverses to s4,s2,s0.
+        assert [e["state"] for e in data["entries"]] == ["s4", "s2", "s0"]
+        assert data["total_entries"] == 3
+        assert data["filters_applied"]["search"] == "match"
+
 
 class TestSystemOrder:
     """source='system' — sorted deterministically by entry timestamp."""
@@ -147,6 +199,30 @@ class TestSystemOrder:
         result = await tools.get_logs(**_call_kwargs(source="system", order="oldest"))
         assert result["order"] == "oldest"
         assert [e["timestamp"] for e in result["entries"]] == [100.0, 200.0, 300.0]
+
+    @pytest.mark.asyncio
+    async def test_tolerates_missing_none_and_non_dict_entries(self):
+        # system_log/list does not guarantee a numeric timestamp on every
+        # record; the sort key must not raise a cross-type TypeError.
+        client = AsyncMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"name": "has_ts", "level": "ERROR", "timestamp": 100.0},
+                    {"name": "no_ts", "level": "ERROR"},
+                    {"name": "none_ts", "level": "ERROR", "timestamp": None},
+                    "not-a-dict",
+                ],
+            }
+        )
+        tools = UtilityTools(client)
+        result = await tools.get_logs(**_call_kwargs(source="system"))
+        assert result["order"] == "newest"
+        assert result["returned_entries"] == 4
+        # The only timestamped entry sorts newest-first; keyless/non-dict
+        # entries collapse to 0.0 and trail it.
+        assert result["entries"][0]["timestamp"] == 100.0
 
 
 class TestRawTextOrder:
