@@ -90,3 +90,23 @@ jobs:
         build-args: |
           BUILD_VERSION=${{ steps.version.outputs.version }}
           BUILD_ARCH=${{ matrix.arch }}
+
+  # Maintenance completion (release/7.8.x): after the add-on images are pushed,
+  # bump the add-on config.yaml to the released version (app-token push to
+  # master) and attach standalone binaries to the GitHub release — the two
+  # lanes hotfix-release.yml normally chains. Kept here so one dispatch of this
+  # already-dispatchable workflow finishes the add-on + binary channels.
+  update-addon-config:
+    needs: build-addon
+    uses: ./.github/workflows/_update-addon-config.yml
+    with:
+      version: ${{ inputs.version }}
+      commit_message_prefix: 'publish hotfix version'
+    secrets: inherit
+
+  binaries:
+    uses: ./.github/workflows/_build-and-release.yml
+    with:
+      release_tag: v${{ inputs.version }}
+      is_prerelease: false
+    secrets: inherit
