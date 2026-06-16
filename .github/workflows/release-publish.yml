@@ -41,6 +41,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          # release/7.8.x maintenance branch: when dispatched, publish the
+          # v7.8.1 hotfix tag (the 7.8.0 stable line + the auto-backup fix).
+          # The git-describe path below would resolve v7.8.0 here because the
+          # maintenance tag is not a master ancestor, so override it. The
+          # publish_pypi / publish_docker jobs already checkout release_tag,
+          # so they build the v7.8.1 tree (not master).
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "release_tag=v7.8.1" >> "$GITHUB_OUTPUT"
+            echo "version=7.8.1" >> "$GITHUB_OUTPUT"
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "## Release Publish — maintenance v7.8.1" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           # Resolve the latest stable tag. A real failure (corrupt repo, shallow
           # clone missing tags, etc.) should fail loudly — only exit-code 128
           # from `git describe` means "no matching tags exist in history" and is
