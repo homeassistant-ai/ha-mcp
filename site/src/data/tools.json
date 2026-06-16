@@ -1852,7 +1852,7 @@
   {
     "name": "ha_get_logs",
     "title": "Get Logs",
-    "description": "Get Home Assistant logs from various sources.\n\n**Sources:**\n- \"logbook\" (default): Entity state change history with pagination\n- \"system\": Structured system log entries (errors, warnings) via system_log/list\n- \"error_log\": Raw home-assistant.log text\n- \"supervisor\": Add-on container logs (requires slug = add-on slug)\n- \"system_service\": HA-Supervisor-managed system service logs (requires\n  slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})\n- \"logger\": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)\n\n**Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')\n**Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)\n**System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)\n**Supervisor params:** slug = add-on slug, e.g. \"core_mosquitto\" (use\n    ha_get_addon() to list installed slugs)\n**System-service params:** slug = service name. The slug \"supervisor\"\n    here means the Supervisor service's own logs, NOT an add-on with\n    that name — the source param disambiguates.",
+    "description": "Get Home Assistant logs from various sources.\n\n**Sources:**\n- \"logbook\" (default): Entity state change history with pagination\n- \"system\": Structured system log entries (errors, warnings) via system_log/list\n- \"error_log\": Raw home-assistant.log text\n- \"supervisor\": Add-on container logs (requires slug = add-on slug)\n- \"system_service\": HA-Supervisor-managed system service logs (requires\n  slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})\n- \"logger\": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)\n\n**Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')\n**Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger'. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.\n**Logbook params:** hours_back, entity_id, end_time, offset, compact (default True — strips attribute dicts to save context)\n**System/error_log params:** level (ERROR, WARNING, INFO, DEBUG)\n**Supervisor params:** slug = add-on slug, e.g. \"core_mosquitto\" (use\n    ha_get_addon() to list installed slugs)\n**System-service params:** slug = service name. The slug \"supervisor\"\n    here means the Supervisor service's own logs, NOT an add-on with\n    that name — the source param disambiguates.",
     "inputSchema": {
       "properties": {
         "source": {
@@ -1866,6 +1866,10 @@
         "search": {
           "type": "str | None",
           "default": null
+        },
+        "order": {
+          "type": "Annotated[Literal['newest', 'oldest'], Field(description=\"Sort order for time-ordered sources (logbook, system, error_log, supervisor, system_service): 'newest' (default) returns most-recent first; 'oldest' returns chronological-first. Ignored for source='logger'.\")]",
+          "default": "newest"
         },
         "hours_back": {
           "type": "Annotated[int, Field(ge=1)]",
