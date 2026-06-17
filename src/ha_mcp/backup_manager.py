@@ -1740,6 +1740,12 @@ async def _fetch_yaml(client: Any, entity_id: str) -> Any:
             return None
         raise HomeAssistantError(f"read_file failed for {file!r}: {error}")
     # The component extracts the subtree (it has ruamel); None = key absent.
+    # ``yaml_path`` is a backward-compatible read_file enhancement, so it is
+    # NOT gated by MIN_COMPONENT_VERSION: a component too old to support it
+    # returns no ``subtree`` (or rejects the key), and capture degrades to a
+    # logged skip — the yaml edit still works, it just isn't snapshotted. The
+    # add-on always ships the matching component, so this only affects a
+    # mismatched standalone install.
     return result.get("subtree")
 
 

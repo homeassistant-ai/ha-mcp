@@ -616,6 +616,11 @@ class FilesystemTools:
         - Configuration files (configuration.yaml, etc.) cannot be written
         - Path traversal (../) is blocked
 
+        Text content only. Overwriting a file that currently holds binary
+        content still succeeds, but its prior bytes cannot be captured by
+        auto-backup (only modifications/deletions of text files are
+        snapshotted); the skip is logged, the write is not blocked.
+
         **Returns:**
         - success: Whether the operation succeeded
         - path: The file path that was written
