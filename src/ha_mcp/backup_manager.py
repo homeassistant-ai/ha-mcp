@@ -43,23 +43,16 @@ import difflib
 import logging
 import os
 import re
-import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from io import StringIO
 from pathlib import Path
 from typing import Any, TypedDict
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
 
-# NB: ruamel.yaml is imported lazily inside ``_yaml_subtree_text`` (not at
-# module level). It is a PEP-420 namespace package that the PyInstaller
-# build cannot resolve when it imports ``ha_mcp`` during analysis; keeping
-# it out of the eager import chain lets the frozen binary build, while the
-# .spec's hiddenimports still bundle it for the runtime call.
 from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
 
 logger = logging.getLogger(__name__)
@@ -109,51 +102,6 @@ _TEXT_DOMAINS = frozenset({"file", "yaml"})
 # so a pathological whole-file rewrite stays token-friendly; the response
 # sets ``truncated`` and points the caller at the full snapshot via view.
 _MAX_DIFF_LINES = 400
-
-# Per-thread ruamel YAML instance cache. Constructing ``YAML(typ="rt")``
-# triggers ruamel's filesystem-scanning plugin discovery, so it is reused
-# across calls; ruamel instances are not thread-safe, and ``_yaml_subtree_text``
-# runs under ``asyncio.to_thread`` (a thread pool), so the cache is keyed
-# per-thread. Mirrors the component's ``yaml_rt.make_yaml()`` pattern.
-_yaml_thread_local = threading.local()
-
-
-def _yaml_subtree_text(content: str, yaml_path: str) -> str | None:
-    """Extract the YAML subtree at ``yaml_path`` as round-trip text.
-
-    Loads ``content`` with ruamel round-trip (preserves comments and HA
-    custom tags like ``!secret`` / ``!include`` losslessly — verified;
-    no custom constructors needed) and walks the dotted ``yaml_path``
-    (``command_line`` or ``lovelace.dashboards.<url_path>``). Returns the
-    dumped subtree, or ``None`` when the file root is not a mapping or the
-    key is absent (new-key write — nothing to snapshot).
-
-    The ``YAML`` instance is cached per-thread (see ``_yaml_thread_local``)
-    so the expensive plugin-discovery construction happens once per worker
-    thread rather than on every capture.
-
-    ruamel is imported lazily here (see the module-top note) and its
-    ``YAMLError`` is converted to ``HomeAssistantError`` so the capture
-    pipeline still treats malformed existing YAML as a transient WARNING
-    skip (``RuamelYAMLError`` is no longer in ``_CAPTURE_TRANSIENT_ERRORS``).
-    """
-    from ruamel.yaml import YAML
-    from ruamel.yaml import YAMLError as RuamelYAMLError
-
-    ry = getattr(_yaml_thread_local, "ry", None)
-    if ry is None:
-        ry = _yaml_thread_local.ry = YAML(typ="rt")
-    try:
-        node: Any = ry.load(StringIO(content))
-        for seg in yaml_path.split("."):
-            if not isinstance(node, dict) or seg not in node:
-                return None
-            node = node[seg]
-        buf = StringIO()
-        ry.dump(node, buf)
-        return buf.getvalue()
-    except RuamelYAMLError as err:
-        raise HomeAssistantError(f"could not parse YAML for backup: {err}") from err
 
 
 # ----------------------------- handler protocol -----------------------------
@@ -1761,11 +1709,15 @@ async def _restore_file(client: Any, entity_id: str, config: Any) -> Any:
 async def _fetch_yaml(client: Any, entity_id: str) -> Any:
     """Read the current YAML subtree for a ``{file}::{yaml_path}`` target.
 
-    Returns the subtree as round-trip text (comments + HA tags preserved),
-    or None when the file or key is absent (new-key write — nothing to
-    snapshot). Malformed existing YAML surfaces (via ``_yaml_subtree_text``)
-    as ``HomeAssistantError``, which the capture pipeline treats as a
-    transient WARNING skip.
+    Delegates the round-trip subtree extraction to the ha_mcp_tools
+    ``read_file`` service (its ``yaml_path`` param): the component carries
+    ``ruamel`` (a manifest requirement, so comments and HA tags like
+    ``!secret`` / ``!include`` survive), whereas the MCP server's runtime
+    does not. Returns the subtree text, or None when the file or key is
+    absent (new-key write — nothing to snapshot). A non-not-found read
+    failure raises so the capture pipeline logs it at WARNING rather than
+    silently producing no backup (the mandatory gate let this write through
+    on the promise that it is backed up).
     """
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
@@ -1776,24 +1728,19 @@ async def _fetch_yaml(client: Any, entity_id: str) -> Any:
     file, sep, yaml_path = entity_id.rpartition("::")
     if not sep or not file or not yaml_path:
         return None
-    result = await call_mcp_tools_service(client, "read_file", {"path": file})
+    result = await call_mcp_tools_service(
+        client, "read_file", {"path": file, "yaml_path": yaml_path}
+    )
     if not isinstance(result, dict):
         return None
     result = unwrap_service_response(result)
     if not result.get("success", False):
-        # Mirror _fetch_file: a missing file is the new-write case (skip
-        # quietly); any other read failure is a real problem and must
-        # raise so the capture pipeline logs it at WARNING rather than
-        # silently producing no backup (the mandatory gate already let
-        # this write through on the promise that it is backed up).
         error = str(result.get("error", ""))
         if "does not exist" in error or "not a file" in error:
             return None
         raise HomeAssistantError(f"read_file failed for {file!r}: {error}")
-    content = result.get("content")
-    if not isinstance(content, str):
-        return None
-    return await asyncio.to_thread(_yaml_subtree_text, content, yaml_path)
+    # The component extracts the subtree (it has ruamel); None = key absent.
+    return result.get("subtree")
 
 
 async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:

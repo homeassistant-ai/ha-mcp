@@ -36,7 +36,6 @@ from ha_mcp.backup_manager import (
     _require_list,
     _safe_entity_id,
     _summarize_patch_counts,
-    _yaml_subtree_text,
     get_backup_manager,
 )
 from ha_mcp.client.rest_client import HomeAssistantError
@@ -1490,42 +1489,6 @@ class TestDiffSnapshot:
 # ---------------------------------------------------------------- file/YAML fold (#1579 PR2)
 
 
-class TestYamlSubtreeText:
-    def test_extracts_top_level_key(self) -> None:
-        src = "rest:\n  resource: http://a\n  method: GET\ntimer: {}\n"
-        out = _yaml_subtree_text(src, "rest")
-        assert out is not None
-        assert "resource: http://a" in out
-        assert "timer" not in out
-
-    def test_preserves_comments_and_ha_tags(self) -> None:
-        src = "command_line:\n  - command: !secret cmd  # inline note\n"
-        out = _yaml_subtree_text(src, "command_line")
-        assert out is not None
-        assert "!secret cmd" in out
-        assert "# inline note" in out
-
-    def test_walks_dotted_path(self) -> None:
-        src = "lovelace:\n  dashboards:\n    my-d:\n      mode: yaml\n"
-        out = _yaml_subtree_text(src, "lovelace.dashboards.my-d")
-        assert out is not None
-        assert out.strip() == "mode: yaml"
-
-    def test_missing_key_returns_none(self) -> None:
-        assert _yaml_subtree_text("a: 1\n", "nope") is None
-
-    def test_non_mapping_root_returns_none(self) -> None:
-        assert _yaml_subtree_text("- just\n- a\n- list\n", "anything") is None
-
-    def test_malformed_yaml_raises_ha_error(self) -> None:
-        # ruamel is imported lazily and its YAMLError is converted to
-        # HomeAssistantError so the capture pipeline treats malformed
-        # existing YAML as a transient WARNING skip (it is no longer in
-        # _CAPTURE_TRANSIENT_ERRORS directly).
-        with pytest.raises(HomeAssistantError):
-            _yaml_subtree_text("key: [1, 2\n", "key")
-
-
 class TestBuildTextDiffResponse:
     def test_changed_emits_unified_diff(self) -> None:
         r = _build_text_diff_response(
@@ -1624,17 +1587,33 @@ class TestFileHandler:
 
 
 class TestYamlHandler:
-    async def test_fetch_extracts_subtree(
+    async def test_fetch_returns_component_subtree(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        content = "rest:\n  resource: http://a\nother: 1\n"
+        # The component (which has ruamel) extracts the subtree and returns
+        # it under ``subtree``; the server just forwards it. Verify the call
+        # passes ``yaml_path`` so the component knows what to extract.
+        calls: list[Any] = []
         _patch_services(
-            monkeypatch, {"read_file": {"success": True, "content": content}}, []
+            monkeypatch,
+            {"read_file": {"success": True, "subtree": "resource: http://a\n"}},
+            calls,
         )
         out = await bm._fetch_yaml(_StubClient(), "configuration.yaml::rest")
-        assert out is not None
-        assert "resource: http://a" in out
-        assert "other" not in out
+        assert out == "resource: http://a\n"
+        service, data = calls[0]
+        assert service == "read_file"
+        assert data["path"] == "configuration.yaml"
+        assert data["yaml_path"] == "rest"
+
+    async def test_fetch_absent_key_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # File exists but the key is absent → component returns subtree=None.
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "subtree": None}}, []
+        )
+        assert await bm._fetch_yaml(_StubClient(), "configuration.yaml::nope") is None
 
     async def test_fetch_missing_file_returns_none(
         self, monkeypatch: pytest.MonkeyPatch

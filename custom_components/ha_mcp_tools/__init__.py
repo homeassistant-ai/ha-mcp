@@ -113,6 +113,10 @@ SERVICE_READ_FILE_SCHEMA = vol.Schema(
     {
         vol.Required("path"): cv.string,
         vol.Optional("tail_lines"): vol.Coerce(int),
+        # When set, also return the round-trip text of the YAML subtree at this
+        # dotted path under ``subtree`` (used by ha-mcp's per-edit auto-backup
+        # to snapshot the prior value before ha_config_set_yaml edits it, #1579).
+        vol.Optional("yaml_path"): cv.string,
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
@@ -1234,6 +1238,30 @@ def _build_edit_yaml_config_handler(
     return handle_edit_yaml_config
 
 
+def _extract_yaml_subtree(content: str, yaml_path: str) -> str | None:
+    """Return the YAML subtree at the dotted ``yaml_path`` as round-trip text.
+
+    Used by ``read_file``'s optional ``yaml_path`` to let ha-mcp's per-edit
+    auto-backup snapshot the prior value of a key before ``edit_yaml_config``
+    changes it (#1579). Runs here, in the component, because the round-trip
+    parse needs ``ruamel`` (a component requirement) which the MCP server's
+    runtime does not carry. Comments and HA tags (``!secret`` / ``!include``)
+    are preserved. Returns ``None`` when the root is not a mapping or the key
+    is absent (new-key write — nothing to snapshot); malformed YAML also
+    yields ``None`` (the edit itself would then fail and report the error).
+    """
+    try:
+        ry = make_yaml()
+        node = ry.load(StringIO(content))
+        for seg in yaml_path.split("."):
+            if not isinstance(node, dict) or seg not in node:
+                return None
+            node = node[seg]
+        return yaml_dumps(ry, node)
+    except YAMLError:
+        return None
+
+
 def _parse_and_validate_yaml_path(
     yaml_path: str,
     *,
@@ -1563,6 +1591,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return _unauthorized_response(SERVICE_READ_FILE)
         rel_path = call.data["path"]
         tail_lines = call.data.get("tail_lines")
+        yaml_path = call.data.get("yaml_path")
 
         # Security check
         extra_dirs = _current_extra_dirs()
@@ -1652,13 +1681,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if len(lines) > tail_lines:
                 content = "\n".join(lines[-tail_lines:])
 
-        return {
+        response: dict[str, Any] = {
             "success": True,
             "path": rel_path,
             "content": content,
             "size": stat_size,
             "modified": modified_dt.isoformat(),
         }
+        if yaml_path:
+            response["subtree"] = await hass.async_add_executor_job(
+                _extract_yaml_subtree, content, yaml_path
+            )
+        return response
 
     async def handle_write_file(call: ServiceCall) -> ServiceResponse:
         """Handle the write_file service call."""

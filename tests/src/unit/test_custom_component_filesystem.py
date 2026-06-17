@@ -29,6 +29,7 @@ sys.modules["homeassistant.loader"] = MagicMock()
 # Now we can import the functions
 from custom_components.ha_mcp_tools import (  # noqa: E402
     _delete_file_sync,
+    _extract_yaml_subtree,
     _is_path_allowed_for_dir,
     _is_path_allowed_for_read,
     _is_within_config_dir,
@@ -1322,3 +1323,40 @@ class TestVolumeSymlinkEscape:
         (volume / "secrets.yaml").write_text("x: y\n")
         (volume / "innocent").symlink_to(volume / "secrets.yaml")
         assert _normalize_extra_dir(str(volume / "innocent"), tmp_path) is None
+
+
+class TestExtractYamlSubtree:
+    """``_extract_yaml_subtree`` — the round-trip subtree extraction the
+    read_file service exposes via ``yaml_path`` for ha-mcp's per-edit
+    auto-backup (#1579). Runs component-side because ruamel lives here."""
+
+    def test_extracts_top_level_key(self):
+        src = "rest:\n  resource: http://a\n  method: GET\ntimer: {}\n"
+        out = _extract_yaml_subtree(src, "rest")
+        assert out is not None
+        assert "resource: http://a" in out
+        assert "timer" not in out
+
+    def test_preserves_comments_and_ha_tags(self):
+        src = "command_line:\n  - command: !secret cmd  # inline note\n"
+        out = _extract_yaml_subtree(src, "command_line")
+        assert out is not None
+        assert "!secret cmd" in out
+        assert "# inline note" in out
+
+    def test_walks_dotted_path(self):
+        src = "lovelace:\n  dashboards:\n    my-d:\n      mode: yaml\n"
+        out = _extract_yaml_subtree(src, "lovelace.dashboards.my-d")
+        assert out is not None
+        assert out.strip() == "mode: yaml"
+
+    def test_missing_key_returns_none(self):
+        assert _extract_yaml_subtree("a: 1\n", "nope") is None
+
+    def test_non_mapping_root_returns_none(self):
+        assert _extract_yaml_subtree("- a\n- b\n", "anything") is None
+
+    def test_malformed_yaml_returns_none(self):
+        # Malformed YAML yields None (the edit itself would then fail and
+        # report the parse error); capture just skips.
+        assert _extract_yaml_subtree("key: [1, 2\n", "key") is None
