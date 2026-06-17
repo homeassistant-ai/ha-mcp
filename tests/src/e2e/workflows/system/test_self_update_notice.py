@@ -13,9 +13,11 @@ and ``latest`` is a known constant. The lru-cached check is cleared so the next
 call re-resolves with the patched fetch.
 
 External-only: the monkeypatch reaches the server only when it runs in-process
-(testcontainer / HAOS external). In inaddon mode ``mcp_client`` is an HTTP
-transport into a separate addon container the test process can't patch — and the
-add-on is auto-updated by the Supervisor there anyway.
+(testcontainer / HAOS external), where the running version is a PyPI version. In
+inaddon mode ``mcp_client`` is an HTTP transport into a separate add-on container
+the test process can't patch, AND the add-on takes a different code path (it
+sources the notice from the Supervisor add-on store, not PyPI). The inaddon path
+is covered by ``test_self_update_notice_inaddon.py``.
 """
 
 from __future__ import annotations

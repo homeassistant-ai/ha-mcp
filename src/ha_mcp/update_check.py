@@ -1,25 +1,27 @@
-"""Self-update notifier for standalone ha-mcp deployments.
+"""Self-update notifier for ha-mcp.
 
-The HA add-on is kept current by the Supervisor, but the standalone channels
-(pip / Docker / stdio) have no auto-update — an operator can sit on an old build
-without ever knowing. This does a fail-silent PyPI check, holds the result in
-memory for the process, and surfaces a newer release via a startup log banner
-and the ``ha_get_overview`` / ``ha_get_system_health`` / ``ha_get_updates`` tool
-fields.
+An operator can sit on an old build without ever knowing. This does a
+fail-silent check, holds the result in memory for the process, and surfaces a
+newer release via a startup log banner and the ``ha_get_overview`` /
+``ha_get_system_health`` / ``ha_get_updates`` tool fields.
 
-Both channels are covered, matching the HA add-on (which surfaces every dev
-update): a stable install (the ``ha-mcp`` package) is compared against the latest
-stable on PyPI; a dev install (``ha-mcp-dev``, a ``.dev`` version) against the
-latest dev build.
+The comparison reference depends on how ha-mcp is deployed, because the running
+version only means something against the matching source:
+
+* **pip / Docker / stdio** — the running version IS a PyPI version, so it is
+  compared against PyPI: stable installs against ``ha-mcp``, dev installs
+  (``.dev``) against ``ha-mcp-dev``.
+* **HA add-on (stable AND dev)** — the add-on is built from source and updated
+  through the Supervisor add-on store, so its ``HA_MCP_BUILD_VERSION`` is on the
+  add-on's own counter, NOT PyPI's. The reference is therefore the Supervisor
+  add-on store (``GET /addons/self/info`` → ``version`` / ``version_latest`` /
+  ``update_available``), which is the same counter — so the dev add-on, like
+  every other deployment, correctly says "you're on X, Y is out."
 
 The check runs once per process — memoized in memory, no disk, no throttle. For
 stdio that is once per session (the server is spawned per conversation); for a
-long-running Docker/web server, once at boot. It is a no-op only for the
-``unknown`` version (nothing to compare) and the ``HA_MCP_DISABLE_UPDATE_CHECK``
-opt-out. The startup banner (see ``__main__``) and the tool fields surface the
-result on every deployment including the add-on — copying FastMCP, whose
-``log_server_banner`` announces an available update on each startup regardless of
-how it's run, so an add-on user who missed the Supervisor prompt still sees it.
+long-running Docker/web server or the add-on, once at boot. It is a no-op for the
+``unknown`` version (PyPI path) and the ``HA_MCP_DISABLE_UPDATE_CHECK`` opt-out.
 Every network call is best-effort: any failure yields "no update info" rather
 than raising, so callers never need to guard it.
 """
@@ -31,11 +33,17 @@ import functools
 import logging
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 from packaging.version import InvalidVersion, Version
 
-from ._version import get_version, is_dev_version, is_running_in_addon
+from ._version import (
+    get_supervisor_base_url,
+    get_version,
+    is_dev_version,
+    is_running_in_addon,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,16 +114,67 @@ def _fetch_latest_from_pypi(package: str) -> str | None:
         return None
 
 
+def _fetch_supervisor_addon_info() -> dict[str, Any] | None:
+    """Return this add-on's Supervisor info dict, or None on any failure.
+
+    GET ``/addons/self/info`` carries ``version`` (installed), ``version_latest``
+    (the add-on store's latest), and ``update_available`` — all on the add-on's
+    own version counter. Sync + fail-silent, mirroring ``_fetch_latest_from_pypi``.
+    """
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        return None
+    try:
+        resp = httpx.get(
+            f"{get_supervisor_base_url()}/addons/self/info",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=_HTTP_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        # Supervisor REST envelope is {"result": "ok", "data": {...}}; some mocks
+        # return the data dict directly — handle both (mirrors settings_ui).
+        data = body.get("data") if isinstance(body, dict) and "data" in body else body
+        return data if isinstance(data, dict) else None
+    except (httpx.HTTPError, ValueError, TypeError) as err:
+        logger.debug("ha-mcp update check skipped (Supervisor fetch failed: %s)", err)
+        return None
+
+
+def _resolve_from_supervisor() -> UpdateInfo | None:
+    """Build UpdateInfo for the add-on from the Supervisor add-on store."""
+    info = _fetch_supervisor_addon_info()
+    if info is None:
+        return None
+    current = info.get("version")
+    latest = info.get("version_latest")
+    if not isinstance(current, str) or not isinstance(latest, str):
+        return None
+    return UpdateInfo(
+        current=current,
+        latest=latest,
+        update_available=bool(info.get("update_available")),
+    )
+
+
 def _resolve_update_info() -> UpdateInfo | None:
     """Update-check logic; see ``get_update_info`` for the memo + never-raises wrapper."""
     if _is_disabled():
         return None
+    # In the add-on (stable OR dev), the authoritative reference is the
+    # Supervisor add-on store, which tracks the SAME version counter as the
+    # installed add-on. PyPI is the wrong reference there: the add-on builds
+    # ha-mcp from source on its own cadence (HA_MCP_BUILD_VERSION), unrelated to
+    # the ha-mcp/ha-mcp-dev PyPI counters — comparing them yields false
+    # positives/negatives. Non-add-on deployments (pip / Docker / stdio) report a
+    # real PyPI version and take the PyPI path below.
+    if is_running_in_addon():
+        return _resolve_from_supervisor()
     current = get_version()
     if current == "unknown":
         return None
     # A dev install (``.dev`` version) tracks the renamed ``ha-mcp-dev`` package;
-    # a stable install tracks ``ha-mcp``. Compare like-for-like so dev users get
-    # newer-dev-build parity with the add-on's dev channel.
+    # a stable install tracks ``ha-mcp``.
     package = _DEV_PACKAGE if is_dev_version(current) else _STABLE_PACKAGE
     latest = _fetch_latest_from_pypi(package)
     if latest is None:

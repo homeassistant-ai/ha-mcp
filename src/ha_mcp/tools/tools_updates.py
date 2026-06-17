@@ -717,9 +717,9 @@ class UpdateTools:
         - categories: Updates grouped by category (core, addons, devices, hacs, os)
         - ha_mcp_update: This MCP server's own update status
           {current, latest, update_available} — so you can flag a newer ha-mcp
-          release (stable or dev, matching the running channel). Present on all
-          install types; omitted only for the unknown version and when
-          HA_MCP_DISABLE_UPDATE_CHECK is set.
+          release (from PyPI for pip/Docker, the Supervisor add-on store for the
+          add-on). Present on all install types; omitted only for the unknown
+          version and when HA_MCP_DISABLE_UPDATE_CHECK is set.
 
         RETURNS (when getting specific update):
         - Update details including installed/latest versions

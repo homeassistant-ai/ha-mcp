@@ -377,11 +377,12 @@ class SystemTools:
 
         The result also carries an ``ha_mcp_update`` object —
         ``{current, latest, update_available}`` — reporting whether a newer
-        ha-mcp release is on PyPI for the running channel (stable or dev), so you
-        can proactively tell the user to upgrade. Present on every install type
-        including the HA add-on (so a user who missed the Supervisor's update
-        prompt still hears about it); omitted only for the ``unknown`` version
-        and when ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
+        ha-mcp release is available (from PyPI for pip/Docker, or the Supervisor
+        add-on store for the add-on), so you can proactively tell the user to
+        upgrade. Present on every install type including the HA add-on (so a user
+        who missed the Supervisor's update prompt still hears about it); omitted
+        only for the ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK``
+        is set.
 
         **Parameters:**
         - include: Optional comma-separated list of additional data to include.

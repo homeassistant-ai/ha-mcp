@@ -1940,10 +1940,10 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         The response also carries an ``ha_mcp_update`` object
         ``{current, latest, update_available}`` reporting whether a newer ha-mcp
-        release is on PyPI for the running channel (stable or dev) — proactively
-        tell the user when ``update_available`` is true. Emitted regardless of
-        ``fields=``; omitted only for the ``unknown`` version and when
-        ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
+        release is available (PyPI for pip/Docker, the Supervisor add-on store
+        for the add-on) — proactively tell the user when ``update_available`` is
+        true. Emitted regardless of ``fields=``; omitted only for the
+        ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields" (ha_get_overview has no outer try/except, so

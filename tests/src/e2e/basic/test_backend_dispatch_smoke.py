@@ -80,8 +80,8 @@ _SKIP_CEILING_PER_LANE = {
     # Baselines are the observed skip counts as of 2026-05-22 (container=46,
     # haos=14, haos_inaddon=39 from the prose above), plus this PR's new
     # marker-gated skips, plus a 5-9 growth buffer.
-    "container": 62,  # was 55 (observed 57 with the 5 addon tests added)
-    "haos": 29,  # 14 + 5 addon-test + 5 sidecar skips = 24, + buffer
+    "container": 65,  # was 62; +3 self-update-notice inaddon tests (@inaddon_only, skip here)
+    "haos": 32,  # was 29; +3 self-update-notice inaddon tests (@inaddon_only, skip here)
     "haos_inaddon": 58,  # was 55; +3 self-update notice tests (TestSelfUpdateNoticeSurfacedInTools, @external_only)
 }
 

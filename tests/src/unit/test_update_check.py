@@ -24,8 +24,11 @@ def _isolate(monkeypatch: pytest.MonkeyPatch):
 
     The real ``is_dev_version`` is left in place (it just inspects the string),
     so a test can flip the channel simply by setting ``get_version``.
+    ``SUPERVISOR_TOKEN`` is cleared so the default path is non-add-on (PyPI);
+    add-on tests set it explicitly.
     """
     monkeypatch.delenv(update_check.DISABLE_ENV, raising=False)
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0")
     get_update_info.cache_clear()
     yield
@@ -104,15 +107,24 @@ class TestGetUpdateInfoGating:
         else:
             assert result is None  # disabled
 
-    def test_addon_env_does_not_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The add-on no longer suppresses the check itself — only the startup
-        banner is add-on-suppressed (in __main__). The in-chat tool fields must
-        still surface the notice for an add-on user who missed the Supervisor
-        prompt, so SUPERVISOR_TOKEN being set must NOT zero out the result."""
+    def test_addon_sources_from_supervisor_not_pypi(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """In the add-on the check reads the Supervisor add-on store, never PyPI
+        (whose counter is unrelated to the add-on's own version)."""
         monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
-        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", lambda _p: "7.9.0")
+        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", _no_network)
+        monkeypatch.setattr(
+            update_check,
+            "_fetch_supervisor_addon_info",
+            lambda: {
+                "version": "7.8.0.dev443",
+                "version_latest": "7.8.0.dev450",
+                "update_available": True,
+            },
+        )
         info = get_update_info()
-        assert info is not None and info.update_available is True
+        assert info == UpdateInfo("7.8.0.dev443", "7.8.0.dev450", True)
 
 
 class TestGetUpdateInfoChannels:
@@ -175,6 +187,119 @@ class TestGetUpdateInfoChannels:
         monkeypatch.setattr(update_check, "get_version", boom)
         get_update_info.cache_clear()
         assert get_update_info() is None
+
+
+class TestAddonSupervisorSource:
+    """In the add-on (stable OR dev), the update reference is the Supervisor
+    add-on store (same counter as the installed add-on), not PyPI."""
+
+    def test_dev_addon_update_from_supervisor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Dev add-on gets a real 'you're on X, Y is out' from the store."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
+        monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0.dev443")
+        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", _no_network)
+        monkeypatch.setattr(
+            update_check,
+            "_fetch_supervisor_addon_info",
+            lambda: {
+                "version": "7.8.0.dev443",
+                "version_latest": "7.8.0.dev450",
+                "update_available": True,
+            },
+        )
+        info = get_update_info()
+        assert info == UpdateInfo("7.8.0.dev443", "7.8.0.dev450", True)
+
+    def test_addon_up_to_date(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
+        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", _no_network)
+        monkeypatch.setattr(
+            update_check,
+            "_fetch_supervisor_addon_info",
+            lambda: {
+                "version": "7.8.1",
+                "version_latest": "7.8.1",
+                "update_available": False,
+            },
+        )
+        info = get_update_info()
+        assert info is not None and info.update_available is False
+
+    def test_addon_supervisor_unreachable_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
+        monkeypatch.setattr(update_check, "_fetch_supervisor_addon_info", lambda: None)
+        assert get_update_info() is None
+
+    def test_addon_disable_env_short_circuits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The opt-out is honored before any add-on source is consulted."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
+        monkeypatch.setenv(update_check.DISABLE_ENV, "1")
+
+        def boom() -> dict | None:
+            raise AssertionError("disabled check must not consult Supervisor")
+
+        monkeypatch.setattr(update_check, "_fetch_supervisor_addon_info", boom)
+        assert get_update_info() is None
+
+    def test_dev_non_addon_still_uses_pypi(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Docker :dev / pip ha-mcp-dev (a .dev version, NO add-on token) IS a real
+        PyPI version, so it stays on the PyPI path against ha-mcp-dev."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(update_check, "get_version", lambda: "7.8.0.dev443")
+        monkeypatch.setattr(
+            update_check, "_fetch_latest_from_pypi", lambda _p: "7.8.0.dev500"
+        )
+        info = get_update_info()
+        assert info is not None and info.update_available is True
+
+
+class TestFetchSupervisorAddonInfo:
+    """The Supervisor /addons/self/info fetch: envelope handling + fail-silent."""
+
+    def test_unwraps_data_envelope(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
+
+        class FakeResp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                return {
+                    "result": "ok",
+                    "data": {
+                        "version": "1",
+                        "version_latest": "2",
+                        "update_available": True,
+                    },
+                }
+
+        monkeypatch.setattr(update_check.httpx, "get", lambda *a, **k: FakeResp())
+        assert update_check._fetch_supervisor_addon_info() == {
+            "version": "1",
+            "version_latest": "2",
+            "update_available": True,
+        }
+
+    def test_no_token_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        assert update_check._fetch_supervisor_addon_info() is None
+
+    def test_http_error_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "tok")
+
+        def boom(*a: object, **k: object) -> object:
+            raise httpx.ConnectError("no supervisor")
+
+        monkeypatch.setattr(update_check.httpx, "get", boom)
+        assert update_check._fetch_supervisor_addon_info() is None
 
 
 class TestInMemoryMemo:

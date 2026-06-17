@@ -485,13 +485,12 @@ def _log_startup_version() -> None:
     ``:latest``, or ``pip install ha-mcp-dev``). It is suppressed under the HA
     Supervisor because add-on users already pick dev vs stable in the HAOS UI.
 
-    The update banner fires on *every* startup when a newer release is on PyPI —
-    in every deployment including the add-on — mirroring FastMCP's
-    ``log_server_banner``, which announces an available update on each start
-    regardless of how it's run. It covers both the stable (``ha-mcp``) and dev
-    (``ha-mcp-dev``) channels, so a dev install hears about newer dev builds too.
-    ``get_update_info`` is a no-op for the ``unknown`` version and the
-    ``HA_MCP_DISABLE_UPDATE_CHECK`` opt-out, and never raises.
+    The update banner fires on every startup when a newer release is available,
+    on every deployment — pip/Docker/stdio compare against PyPI, the HA add-on
+    (stable AND dev) against the Supervisor add-on store — mirroring FastMCP's
+    ``log_server_banner``. ``get_update_info`` is a no-op for the ``unknown``
+    version (PyPI path) and the ``HA_MCP_DISABLE_UPDATE_CHECK`` opt-out, and
+    never raises.
     """
     from ha_mcp._version import get_version, is_dev_version, is_running_in_addon
 
