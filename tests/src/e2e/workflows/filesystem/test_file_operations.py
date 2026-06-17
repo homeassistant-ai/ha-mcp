@@ -1042,3 +1042,45 @@ class TestFileWriteAutoBackup:
             assert "color: red" in read["content"], read["content"]
         finally:
             await safe_call_tool(mcp, "ha_delete_file", {"path": path, "confirm": True})
+
+
+@pytest.mark.filesystem
+@pytest.mark.external_only
+class TestMandatoryBackupRefusal:
+    """With auto-backup disabled, the mandatory file/YAML writes (#1579) must
+    REFUSE with a structured error instead of writing un-backed-up content.
+
+    This exercises the refusal path live (the in-process server reads the env
+    toggle, so the test is external_only). All three mandatory tools share the
+    one ``@with_auto_backup(mandatory=True)`` gate — covered per-tool by the
+    source-guard unit test — so one live file-write refusal validates the gate
+    end-to-end.
+    """
+
+    async def test_write_refused_when_autobackup_disabled(
+        self, mcp_client_with_filesystem, monkeypatch
+    ):
+        monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
+        from ha_mcp.config import _reset_global_settings
+
+        _reset_global_settings()
+
+        marker = uuid.uuid4().hex[:8]
+        path = f"www/_e2e_refuse_{marker}.css"
+        result = await safe_call_tool(
+            mcp_client_with_filesystem,
+            "ha_write_file",
+            {"path": path, "content": ".x { color: red; }", "overwrite": True},
+        )
+        # Refused with the structured toggle-off error, not written.
+        assert result.get("success") is False, result
+        assert result.get("error", {}).get("code") == "CONFIG_VALIDATION_FAILED", result
+        assert "auto-backup" in result.get("error", {}).get("message", "").lower()
+
+        # The write was blocked — the file must not exist.
+        read_back = await safe_call_tool(
+            mcp_client_with_filesystem, "ha_read_file", {"path": path}
+        )
+        assert read_back.get("success") is False, (
+            f"file was written despite the refusal: {read_back}"
+        )
