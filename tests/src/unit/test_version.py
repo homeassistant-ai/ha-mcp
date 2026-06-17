@@ -100,6 +100,29 @@ class TestIsDevVersion:
         assert is_dev_version(version) is False
 
 
+class TestAddonStartLogsVersionBanner:
+    """The add-on must log the ha-mcp version + update banner at startup."""
+
+    def test_addon_start_invokes_log_startup_version(self) -> None:
+        """``homeassistant-addon/start.py`` runs its own startup (it does NOT go
+        through ``__main__.main_web``), so it must call ``_log_startup_version()``
+        itself — otherwise the ha-mcp version + self-update banner never reach the
+        add-on logs (only FastMCP's banner does, via ``run_async``). Regression
+        guard for that wiring."""
+        from pathlib import Path
+
+        start_py = (
+            Path(__file__).resolve().parents[3] / "homeassistant-addon" / "start.py"
+        )
+        source = start_py.read_text(encoding="utf-8")
+        assert "_log_startup_version" in source, (
+            "start.py must import _log_startup_version"
+        )
+        assert "_log_startup_version()" in source, (
+            "start.py must call _log_startup_version() during add-on startup"
+        )
+
+
 class TestIsRunningInAddon:
     """Tests for HA add-on environment detection."""
 
