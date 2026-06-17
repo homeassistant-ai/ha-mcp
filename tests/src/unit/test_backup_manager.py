@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 import yaml
+from fastmcp.exceptions import ToolError
 
 from ha_mcp import backup_manager as bm
 from ha_mcp.backup_manager import (
@@ -26,6 +27,7 @@ from ha_mcp.backup_manager import (
     SCHEMA_VERSION,
     BackupManager,
     DomainHandler,
+    _build_text_diff_response,
     _compute_json_patch,
     _fetch_calendar_event,
     _fetch_todo_item,
@@ -34,9 +36,11 @@ from ha_mcp.backup_manager import (
     _require_list,
     _safe_entity_id,
     _summarize_patch_counts,
+    _yaml_subtree_text,
     get_backup_manager,
 )
 from ha_mcp.client.rest_client import HomeAssistantError
+from ha_mcp.tools.auto_backup import with_auto_backup
 
 # ---------------------------------------------------------------- fixtures
 
@@ -1481,3 +1485,286 @@ class TestDiffSnapshot:
         result = await mgr.diff_snapshot(path.name)
         assert result["truncated"] is True
         assert len(result["patch"]) == _MAX_PATCH_OPS
+
+
+# ---------------------------------------------------------------- file/YAML fold (#1579 PR2)
+
+
+class TestYamlSubtreeText:
+    def test_extracts_top_level_key(self) -> None:
+        src = "rest:\n  resource: http://a\n  method: GET\ntimer: {}\n"
+        out = _yaml_subtree_text(src, "rest")
+        assert out is not None
+        assert "resource: http://a" in out
+        assert "timer" not in out
+
+    def test_preserves_comments_and_ha_tags(self) -> None:
+        src = "command_line:\n  - command: !secret cmd  # inline note\n"
+        out = _yaml_subtree_text(src, "command_line")
+        assert out is not None
+        assert "!secret cmd" in out
+        assert "# inline note" in out
+
+    def test_walks_dotted_path(self) -> None:
+        src = "lovelace:\n  dashboards:\n    my-d:\n      mode: yaml\n"
+        out = _yaml_subtree_text(src, "lovelace.dashboards.my-d")
+        assert out is not None
+        assert out.strip() == "mode: yaml"
+
+    def test_missing_key_returns_none(self) -> None:
+        assert _yaml_subtree_text("a: 1\n", "nope") is None
+
+    def test_non_mapping_root_returns_none(self) -> None:
+        assert _yaml_subtree_text("- just\n- a\n- list\n", "anything") is None
+
+
+class TestBuildTextDiffResponse:
+    def test_changed_emits_unified_diff(self) -> None:
+        r = _build_text_diff_response(
+            "snap", "file", "www/x.css", "t0", "a\nb\nc\n", "a\nB\nc\n"
+        )
+        assert r["kind"] == "text"
+        assert r["entity_missing"] is False
+        assert r["unchanged"] is False
+        assert r["truncated"] is False
+        assert "-B" in r["diff"] and "+b" in r["diff"]
+
+    def test_unchanged_when_identical(self) -> None:
+        r = _build_text_diff_response("snap", "file", "p", "t0", "same\n", "same\n")
+        assert r["unchanged"] is True
+        assert r["diff"] == ""
+
+    def test_missing_target(self) -> None:
+        r = _build_text_diff_response("snap", "file", "p", "t0", "x\n", None)
+        assert r["entity_missing"] is True
+        assert r["unchanged"] is False
+        assert r["diff"] == ""
+
+    def test_truncates_at_cap(self) -> None:
+        stored = "".join(f"s{i}\n" for i in range(bm._MAX_DIFF_LINES + 50))
+        r = _build_text_diff_response("snap", "file", "p", "t0", stored, "current\n")
+        assert r["truncated"] is True
+        assert len(r["diff"].splitlines()) == bm._MAX_DIFF_LINES
+
+
+def _patch_services(
+    monkeypatch: pytest.MonkeyPatch, responses: dict[str, Any], calls: list[Any]
+) -> None:
+    """Stub call_mcp_tools_service + unwrap so the file/yaml handlers run
+    without a HA instance. ``responses`` maps service name -> return dict."""
+
+    async def fake_call(_client: Any, service: str, data: dict[str, Any]) -> Any:
+        calls.append((service, data))
+        return responses[service]
+
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", fake_call
+    )
+    monkeypatch.setattr(
+        "ha_mcp.tools.util_helpers.unwrap_service_response", lambda r: r
+    )
+
+
+class TestFileHandler:
+    async def test_fetch_returns_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "content": "body"}}, []
+        )
+        assert await bm._fetch_file(_StubClient(), "www/x.css") == "body"
+
+    async def test_fetch_missing_file_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {"read_file": {"success": False, "error": "File does not exist: www/x"}},
+            [],
+        )
+        assert await bm._fetch_file(_StubClient(), "www/x.css") is None
+
+    async def test_fetch_other_error_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {"read_file": {"success": False, "error": "Permission denied: www/x"}},
+            [],
+        )
+        with pytest.raises(HomeAssistantError):
+            await bm._fetch_file(_StubClient(), "www/x.css")
+
+    async def test_restore_writes_via_write_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[Any] = []
+        _patch_services(monkeypatch, {"write_file": {"success": True}}, calls)
+        await bm._restore_file(_StubClient(), "www/x.css", "new body")
+        service, data = calls[0]
+        assert service == "write_file"
+        assert data["path"] == "www/x.css"
+        assert data["content"] == "new body"
+        assert data["overwrite"] is True
+
+    async def test_restore_raises_on_service_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch, {"write_file": {"success": False, "error": "nope"}}, []
+        )
+        with pytest.raises(HomeAssistantError):
+            await bm._restore_file(_StubClient(), "www/x.css", "body")
+
+
+class TestYamlHandler:
+    async def test_fetch_extracts_subtree(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        content = "rest:\n  resource: http://a\nother: 1\n"
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "content": content}}, []
+        )
+        out = await bm._fetch_yaml(_StubClient(), "configuration.yaml::rest")
+        assert out is not None
+        assert "resource: http://a" in out
+        assert "other" not in out
+
+    async def test_fetch_missing_file_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch, {"read_file": {"success": False, "error": "gone"}}, []
+        )
+        assert await bm._fetch_yaml(_StubClient(), "configuration.yaml::rest") is None
+
+    async def test_fetch_bad_entity_id_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        assert await bm._fetch_yaml(_StubClient(), "no-separator") is None
+
+    async def test_restore_replaces_via_edit_yaml_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[Any] = []
+        _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
+        await bm._restore_yaml(
+            _StubClient(), "configuration.yaml::rest", "resource: http://a\n"
+        )
+        service, data = calls[0]
+        assert service == "edit_yaml_config"
+        assert data["file"] == "configuration.yaml"
+        assert data["yaml_path"] == "rest"
+        assert data["action"] == "replace"
+        assert data["content"] == "resource: http://a\n"
+
+    async def test_restore_bad_entity_id_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with pytest.raises(ValueError):
+            await bm._restore_yaml(_StubClient(), "no-separator", "x")
+
+    async def test_file_path_with_double_colon_splits_on_last(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A file path that itself contains "::" must split on the LAST "::"
+        # so the (file, yaml_path) pair stays correct (rpartition, not
+        # partition).
+        calls: list[Any] = []
+        _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
+        await bm._restore_yaml(
+            _StubClient(), "packages/weird::name.yaml::rest", "resource: x\n"
+        )
+        _, data = calls[0]
+        assert data["file"] == "packages/weird::name.yaml"
+        assert data["yaml_path"] == "rest"
+
+
+class TestTextSnapshotKind:
+    async def test_write_snapshot_marks_text_domain(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+
+        async def fetch(_c: Any, _e: str) -> Any:
+            return "file body\n"
+
+        async def restore(_c: Any, _e: str, cfg: Any) -> Any:
+            return cfg
+
+        mgr.register(DomainHandler("file", fetch, restore))
+        snap = await mgr.maybe_snapshot("file", "www/x.css", force=True)
+        assert snap is not None
+        data = yaml.safe_load(snap.read_text())
+        assert data["kind"] == "text"
+        assert data["config"] == "file body\n"
+
+    async def test_dict_domain_has_no_kind(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(domain="automation", fetched={"alias": "x"}))
+        snap = await mgr.maybe_snapshot("automation", "a1", force=True)
+        assert snap is not None
+        data = yaml.safe_load(snap.read_text())
+        assert "kind" not in data
+
+    async def test_diff_snapshot_text_branch(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        seq = iter(["a\nb\nc\n", "a\nB\nc\n"])
+
+        async def fetch(_c: Any, _e: str) -> Any:
+            return next(seq)
+
+        async def restore(_c: Any, _e: str, cfg: Any) -> Any:
+            return cfg
+
+        mgr.register(DomainHandler("file", fetch, restore))
+        snap = await mgr.maybe_snapshot("file", "www/x.css", force=True)
+        assert snap is not None
+        diff = await mgr.diff_snapshot(snap.name)
+        assert diff["kind"] == "text"
+        assert diff["unchanged"] is False
+        assert "-B" in diff["diff"] and "+b" in diff["diff"]
+
+
+class TestMandatoryGate:
+    def _decorate(self, *, mandatory: bool) -> Any:
+        @with_auto_backup(domain="file", id_param="path", mandatory=mandatory)
+        async def tool(self_obj: Any, path: str) -> str:
+            return "wrote"
+
+        return tool
+
+    async def test_refuses_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=False),
+        )
+
+        class _Self:
+            _client = None
+
+        tool = self._decorate(mandatory=True)
+        with pytest.raises(ToolError):
+            await tool(_Self(), path="www/x.css")
+
+    async def test_proceeds_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+
+        class _Self:
+            _client = None  # capture skipped (no client) — isolates the gate
+
+        tool = self._decorate(mandatory=True)
+        assert await tool(_Self(), path="www/x.css") == "wrote"
+
+    async def test_non_mandatory_proceeds_when_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=False),
+        )
+
+        class _Self:
+            _client = None
+
+        tool = self._decorate(mandatory=False)
+        assert await tool(_Self(), path="www/x.css") == "wrote"

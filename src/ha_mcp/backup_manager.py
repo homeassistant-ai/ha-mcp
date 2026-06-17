@@ -39,6 +39,7 @@ WS endpoint shape.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import logging
 import os
 import re
@@ -46,11 +47,14 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from io import StringIO
 from pathlib import Path
 from typing import Any, TypedDict
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
+from ruamel.yaml import YAML
+from ruamel.yaml import YAMLError as RuamelYAMLError
 
 from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
 
@@ -72,6 +76,7 @@ _CAPTURE_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     asyncio.TimeoutError,
     ConnectionError,
     yaml.YAMLError,
+    RuamelYAMLError,
     ToolError,
 )
 
@@ -90,6 +95,42 @@ _FILENAME_RE = re.compile(
     r"(?P<entity_id>[A-Za-z0-9._-]+)\."
     r"(?P<ts>\d{8}_\d{6})\.yaml$"
 )
+
+# Domains whose snapshot ``config`` is raw text (file/YAML content) rather
+# than a structured dict. They carry a ``kind: "text"`` marker in the
+# snapshot payload and diff via a unified text diff instead of JSON-Patch
+# (#1579 PR2). Everything else is the implicit ``"dict"`` kind.
+_TEXT_DOMAINS = frozenset({"file", "yaml"})
+
+# Output cap for the text (file/YAML) diff. Bounded like ``_MAX_PATCH_OPS``
+# so a pathological whole-file rewrite stays token-friendly; the response
+# sets ``truncated`` and points the caller at the full snapshot via view.
+_MAX_DIFF_LINES = 400
+
+
+def _yaml_subtree_text(content: str, yaml_path: str) -> str | None:
+    """Extract the YAML subtree at ``yaml_path`` as round-trip text.
+
+    Loads ``content`` with ruamel round-trip (preserves comments and HA
+    custom tags like ``!secret`` / ``!include`` losslessly — verified;
+    no custom constructors needed) and walks the dotted ``yaml_path``
+    (``command_line`` or ``lovelace.dashboards.<url_path>``). Returns the
+    dumped subtree, or ``None`` when the file root is not a mapping or the
+    key is absent (new-key write — nothing to snapshot).
+
+    One ``YAML`` instance is reused for load + dump: constructing it
+    triggers ruamel's (filesystem-scanning) plugin discovery, so a second
+    instance would double that cost on the write path for no benefit.
+    """
+    ry = YAML(typ="rt")
+    node: Any = ry.load(StringIO(content))
+    for seg in yaml_path.split("."):
+        if not isinstance(node, dict) or seg not in node:
+            return None
+        node = node[seg]
+    buf = StringIO()
+    ry.dump(node, buf)
+    return buf.getvalue()
 
 
 # ----------------------------- handler protocol -----------------------------
@@ -372,7 +413,7 @@ class BackupManager:
         ts = _now_ts()
         filename = f"{domain}.{safe}.{ts}.yaml"
         target = self._dir / filename
-        payload = {
+        payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "domain": domain,
             "entity_id": entity_id,
@@ -380,6 +421,8 @@ class BackupManager:
             "tool": tool_name,
             "config": config,
         }
+        if domain in _TEXT_DOMAINS:
+            payload["kind"] = "text"
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
         # Atomic write via tmp+rename
         tmp = target.with_suffix(".yaml.tmp")
@@ -554,22 +597,22 @@ class BackupManager:
 
     # ----- diff ----------------------------------------------------------
 
-    async def diff_snapshot(self, name: str) -> DiffResponse:
+    async def diff_snapshot(self, name: str) -> DiffResponse | DiffResponseText:
         """Compare a stored snapshot against the live config of the same entity.
 
-        Returns an RFC 6902-shaped JSON-Patch — the ops a client would
-        apply to ``current`` to recover ``stored`` (i.e. what
-        ``restore_snapshot`` would functionally do). ``entity_missing``
-        flags the case where the entity is gone from HA, so the diff has
-        no live target to compare against; ``truncated`` flags that the
-        patch exceeded ``_MAX_PATCH_OPS`` and was cut short to keep the
-        tool response bounded.
+        For structured (``"dict"``) snapshots, returns an RFC 6902-shaped
+        JSON-Patch — the ops a client would apply to ``current`` to recover
+        ``stored``. For text snapshots (file/YAML, ``kind: "text"``) returns
+        a unified text diff instead. ``entity_missing`` flags the case where
+        the target is gone from HA, so the diff has no live target to compare
+        against; ``truncated`` flags that the diff exceeded its bound and was
+        cut short to keep the tool response token-friendly.
 
         ``unchanged`` means the live config matches the snapshot — it is
-        ``True`` only when the entity exists *and* the patch is empty.
+        ``True`` only when the target exists *and* the diff is empty.
         Under ``entity_missing=True`` it is ``False``: there is no live
         target to match, so "no action needed" would be wrong (the
-        empty patch is an artefact of the missing entity, not a match).
+        empty diff is an artefact of the missing target, not a match).
         """
         data = await asyncio.to_thread(self.read_snapshot, name)
         domain = data["domain"]
@@ -580,6 +623,10 @@ class BackupManager:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, entity_id)
         captured_at = data.get("captured")
+        if data.get("kind") == "text":
+            return _build_text_diff_response(
+                name, domain, entity_id, captured_at, str(stored), current
+            )
         if current is None:
             return _build_diff_response(
                 name,
@@ -663,6 +710,79 @@ def _build_diff_response(
         "patch": patch,
         "counts": counts,
         "unchanged": not entity_missing and counts["total"] == 0,
+        "truncated": truncated,
+    }
+
+
+class DiffResponseText(TypedDict):
+    """Return shape of ``diff_snapshot`` for text (file/YAML) snapshots.
+
+    Mirrors ``DiffResponse``'s control keys (``entity_missing`` /
+    ``unchanged`` / ``truncated``) so ``ha_manage_backup`` handles both
+    kinds uniformly, but carries a unified text ``diff`` instead of a
+    JSON-Patch."""
+
+    kind: str
+    backup_name: str
+    domain: str
+    entity_id: str
+    captured_at: str | None
+    entity_missing: bool
+    diff: str
+    unchanged: bool
+    truncated: bool
+
+
+def _build_text_diff_response(
+    name: str,
+    domain: str,
+    entity_id: str,
+    captured_at: str | None,
+    stored: str,
+    current: Any,
+) -> DiffResponseText:
+    """Assemble the unified-text-diff payload for a file/YAML snapshot.
+
+    ``current is None`` means the target (file or YAML key) is gone, so
+    there is no live text to diff against — ``entity_missing`` is set and
+    the diff is empty (mirrors the dict branch's missing-target handling).
+    The diff recovers ``stored`` *from* ``current`` (snapshot is the target
+    state), consistent with the JSON-Patch direction. Output is bounded by
+    ``_MAX_DIFF_LINES``; overflow sets ``truncated``.
+    """
+    if current is None:
+        return {
+            "kind": "text",
+            "backup_name": name,
+            "domain": domain,
+            "entity_id": entity_id,
+            "captured_at": captured_at,
+            "entity_missing": True,
+            "diff": "",
+            "unchanged": False,
+            "truncated": False,
+        }
+    lines = list(
+        difflib.unified_diff(
+            str(current).splitlines(),
+            stored.splitlines(),
+            fromfile="current",
+            tofile="snapshot",
+            lineterm="",
+        )
+    )
+    truncated = len(lines) > _MAX_DIFF_LINES
+    if truncated:
+        lines = lines[:_MAX_DIFF_LINES]
+    return {
+        "kind": "text",
+        "backup_name": name,
+        "domain": domain,
+        "entity_id": entity_id,
+        "captured_at": captured_at,
+        "entity_missing": False,
+        "diff": "\n".join(lines),
+        "unchanged": len(lines) == 0,
         "truncated": truncated,
     }
 
@@ -1558,6 +1678,127 @@ async def _restore_helper(
     return await _ws_send(client, payload)
 
 
+# Files & YAML (#1579 PR2) — capture is MCP-side via the ha_mcp_tools
+# services, mirroring every other handler (the component runs in a
+# separate process and cannot reach the shared backup store). ``file``
+# snapshots the whole file content; ``yaml`` snapshots one config-key
+# subtree, because ``write_file`` cannot write the config files that
+# ``ha_config_set_yaml`` edits — restore must route through
+# ``edit_yaml_config``. Both store the content as ``kind: "text"``.
+
+
+async def _fetch_file(client: Any, entity_id: str) -> Any:
+    """Read a file's current content via the read_file service.
+
+    ``entity_id`` is the file path. Returns the content string, or None
+    when the file does not exist — a brand-new write has no prior content
+    to snapshot, so capture skips (same as creating a new entity). Other
+    read failures raise so the capture pipeline logs them at WARNING.
+    """
+    from .tools.tools_filesystem import call_mcp_tools_service
+    from .tools.util_helpers import unwrap_service_response
+
+    result = await call_mcp_tools_service(client, "read_file", {"path": entity_id})
+    if not isinstance(result, dict):
+        return None
+    result = unwrap_service_response(result)
+    if result.get("success", False):
+        content = result.get("content")
+        return content if isinstance(content, str) else None
+    error = str(result.get("error", ""))
+    if "does not exist" in error or "not a file" in error:
+        return None
+    raise HomeAssistantError(f"read_file failed for {entity_id!r}: {error}")
+
+
+async def _restore_file(client: Any, entity_id: str, config: Any) -> Any:
+    """Re-write a file's captured content via the write_file service."""
+    from .tools.tools_filesystem import call_mcp_tools_service
+    from .tools.util_helpers import unwrap_service_response
+
+    result = await call_mcp_tools_service(
+        client,
+        "write_file",
+        {
+            "path": entity_id,
+            "content": str(config),
+            "overwrite": True,
+            "create_dirs": True,
+        },
+    )
+    if isinstance(result, dict):
+        result = unwrap_service_response(result)
+        if not result.get("success", True):
+            raise HomeAssistantError(
+                f"write_file restore failed for {entity_id!r}: {result.get('error')}"
+            )
+    return result
+
+
+async def _fetch_yaml(client: Any, entity_id: str) -> Any:
+    """Read the current YAML subtree for a ``{file}::{yaml_path}`` target.
+
+    Returns the subtree as round-trip text (comments + HA tags preserved),
+    or None when the file or key is absent (new-key write — nothing to
+    snapshot). Malformed existing YAML surfaces as ``RuamelYAMLError``,
+    which the capture pipeline treats as a transient WARNING skip.
+    """
+    from .tools.tools_filesystem import call_mcp_tools_service
+    from .tools.util_helpers import unwrap_service_response
+
+    # Split on the LAST "::": yaml_path never contains "::" but a file path
+    # legally can, so partitioning from the right keeps an exotic filename
+    # from being mis-split into the wrong (file, key) pair.
+    file, sep, yaml_path = entity_id.rpartition("::")
+    if not sep or not file or not yaml_path:
+        return None
+    result = await call_mcp_tools_service(client, "read_file", {"path": file})
+    if not isinstance(result, dict):
+        return None
+    result = unwrap_service_response(result)
+    if not result.get("success", False):
+        return None
+    content = result.get("content")
+    if not isinstance(content, str):
+        return None
+    return await asyncio.to_thread(_yaml_subtree_text, content, yaml_path)
+
+
+async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
+    """Re-apply a captured YAML subtree via the edit_yaml_config service.
+
+    ``edit_yaml_config`` is the only write path that reaches HA config
+    files (``write_file`` rejects them), so YAML restore goes through it
+    with ``action="replace"``.
+    """
+    from .tools.tools_filesystem import call_mcp_tools_service
+    from .tools.util_helpers import unwrap_service_response
+
+    # Split on the LAST "::" (see _fetch_yaml) so an exotic file path
+    # containing "::" still restores to the right file and key.
+    file, sep, yaml_path = entity_id.rpartition("::")
+    if not sep or not file or not yaml_path:
+        raise ValueError(f"Invalid yaml snapshot target: {entity_id!r}")
+    result = await call_mcp_tools_service(
+        client,
+        "edit_yaml_config",
+        {
+            "file": file,
+            "action": "replace",
+            "yaml_path": yaml_path,
+            "content": str(config),
+        },
+    )
+    if isinstance(result, dict):
+        result = unwrap_service_response(result)
+        if not result.get("success", True):
+            raise HomeAssistantError(
+                f"edit_yaml_config restore failed for {entity_id!r}: "
+                f"{result.get('error')}"
+            )
+    return result
+
+
 def _make_helper_handler(helper_type: str) -> DomainHandler:
     async def fetch(client: Any, entity_id: str) -> Any:
         return await _fetch_helper(client, entity_id, helper_type)
@@ -1605,5 +1846,7 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("entity", _fetch_entity_state, _restore_entity_state))
     mgr.register(DomainHandler("device", _fetch_device, _restore_device))
     mgr.register(DomainHandler("integration", _fetch_integration, _restore_integration))
+    mgr.register(DomainHandler("file", _fetch_file, _restore_file))
+    mgr.register(DomainHandler("yaml", _fetch_yaml, _restore_yaml))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))

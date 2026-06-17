@@ -283,32 +283,6 @@ class TestThemeEditHandler:
         assert "theme-b:" in written
         assert "primary-color: '#222222'" in written
 
-    async def test_theme_backup_true_creates_backup(
-        self, handler, hass, call_factory, tmp_path
-    ):
-        theme_file = tmp_path / "themes" / "backed-up.yaml"
-        theme_file.parent.mkdir(parents=True, exist_ok=True)
-        original = "backed-up:\n  primary-color: '#101010'\n"
-        theme_file.write_text(original)
-
-        call = call_factory(
-            {
-                "file": "themes/backed-up.yaml",
-                "action": "replace",
-                "yaml_path": "backed-up",
-                "content": "primary-color: '#202020'",
-                "backup": True,
-            }
-        )
-
-        result = await handler(call)
-
-        assert result["success"] is True
-        backup_path = result.get("backup_path")
-        assert backup_path, f"backup_path missing from response: {result}"
-        assert (tmp_path / backup_path).read_text() == original
-        assert "primary-color: '#202020'" in theme_file.read_text()
-
     async def test_theme_remove_not_found_error(
         self, handler, hass, call_factory, tmp_path
     ):

@@ -87,7 +87,6 @@ SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
         vol.Required("action"): vol.In(["add", "replace", "remove"]),
         vol.Required("yaml_path"): cv.string,
         vol.Optional("content"): cv.string,
-        vol.Optional("backup", default=True): cv.boolean,
         # Caller-provided list of PACKAGES_ONLY_YAML_KEYS that the
         # caller wants the component to reject. Empty list (the
         # default) means no extra restrictions on top of the
@@ -853,7 +852,6 @@ def _build_edit_yaml_config_handler(
         action = call.data["action"]
         yaml_path = call.data["yaml_path"]
         content = call.data.get("content")
-        do_backup = call.data.get("backup", True)
         # Caller-provided per-key opt-out for PACKAGES_ONLY_YAML_KEYS.
         # Filter to the recognised set so a caller that types
         # ``automatoin`` doesn't accidentally pass through; only
@@ -963,7 +961,6 @@ def _build_edit_yaml_config_handler(
                 }
 
         target_file = config_dir / normalized
-        backup_path_str = None
 
         try:
             # Read existing file content (or start with empty dict)
@@ -991,23 +988,14 @@ def _build_edit_yaml_config_handler(
                         "error": f"File does not exist: {rel_path}",
                     }
                 data = {}
-                raw_content = ""
 
-            # Create backup before editing (from already-read content, not disk).
-            # Backups go under .ha_mcp_tools_backups/ at the config root — NOT
-            # under www/, which Home Assistant serves unauthenticated at /local/
-            # (GHSA-g39v-cvjh-8fpf).
-            if do_backup and raw_content:
-                backup_dir = config_dir / ".ha_mcp_tools_backups"
-                await hass.async_add_executor_job(
-                    lambda: backup_dir.mkdir(parents=True, exist_ok=True)
-                )
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                safe_name = normalized.replace(os.sep, "_")
-                backup_file = backup_dir / f"{safe_name}.{timestamp}.bak"
-                await hass.async_add_executor_job(backup_file.write_text, raw_content)
-                backup_path_str = str(backup_file.relative_to(config_dir))
-                _LOGGER.info("Backup created: %s", backup_path_str)
+            # Pre-write backups are captured MCP-side by ha-mcp's shared
+            # auto-backup layer (#1579): ha_config_set_yaml snapshots the
+            # prior key state before calling this service, so the edit is
+            # restorable via ha_manage_backup(scope="edits"). The component
+            # no longer writes its own .ha_mcp_tools_backups/ copy. (Pre-fix
+            # backups already on disk there stay readable; the separate
+            # GHSA-g39v-cvjh-8fpf startup migration is unaffected.)
 
             # Perform the action — branch on kind
             if kind == "lovelace_dashboard":
@@ -1169,8 +1157,6 @@ def _build_edit_yaml_config_handler(
                 "size": stat.st_size,
                 "modified": modified_dt.isoformat(),
             }
-            if backup_path_str:
-                result["backup_path"] = backup_path_str
 
             # Surface the post-edit action required to activate the change
             if kind == "lovelace_dashboard":

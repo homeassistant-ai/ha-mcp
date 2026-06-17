@@ -31,6 +31,8 @@ from typing import Any
 
 from ..backup_manager import _CAPTURE_TRANSIENT_ERRORS, get_backup_manager
 from ..config import get_global_settings
+from ..errors import ErrorCode, create_error_response
+from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +100,7 @@ def with_auto_backup(
     domain_fn: Callable[[dict[str, Any]], str] | None = None,
     id_fn: Callable[[dict[str, Any]], str] | None = None,
     client: Any = None,
+    mandatory: bool = False,
 ) -> Callable[..., Any]:
     """Decorate a write/destructive tool with pre-write auto-backup capture.
 
@@ -114,6 +117,13 @@ def with_auto_backup(
 
     Backup capture is best-effort: failure logs a WARNING and the wrapped
     write proceeds regardless.
+
+    ``mandatory=True`` makes auto-backup a precondition: when the master
+    toggle is off, the tool is refused with a structured error instead of
+    writing un-backed-up (file/YAML writes, #1579 — those formerly kept
+    their own private backups). The refusal is raised *before* the
+    best-effort capture's ``try`` so it can't be swallowed by the
+    transient-error handler (``ToolError`` is in that tuple).
     """
     if (domain is None) == (domain_fn is None):
         raise ValueError("with_auto_backup needs exactly one of domain or domain_fn")
@@ -125,6 +135,32 @@ def with_auto_backup(
     def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            # Mandatory gate — raised OUTSIDE the try below, because
+            # ``ToolError`` is in ``_DECORATOR_TRANSIENT_ERRORS`` and would
+            # otherwise be swallowed, letting an un-backed-up write through.
+            if mandatory and not getattr(
+                get_global_settings(), "enable_auto_backup", False
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.CONFIG_VALIDATION_FAILED,
+                        f"'{func.__name__}' requires auto-backup, which is "
+                        "currently disabled. Enable it in the Backups tab of "
+                        "the ha-mcp settings UI before using this tool — the "
+                        "write was blocked and nothing was changed.",
+                        suggestions=[
+                            "Enable auto-backup in the ha-mcp settings UI "
+                            "(Backups tab), or set ENABLE_AUTO_BACKUP=true",
+                            "Once enabled, this write is snapshotted and "
+                            "becomes restorable via ha_manage_backup("
+                            "scope='edits')",
+                        ],
+                        context={
+                            "tool_name": func.__name__,
+                            "enable_auto_backup": False,
+                        },
+                    )
+                )
             try:
                 settings = get_global_settings()
                 if getattr(settings, "enable_auto_backup", False):

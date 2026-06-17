@@ -32,6 +32,7 @@ from ...utilities.assertions import (
     extract_error_message,
     safe_call_tool,
 )
+from ...utilities.wait_helpers import wait_for_tool_result
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -955,3 +956,79 @@ class TestMcpToolsComponentNotInstalled:
             logger.info(
                 "ha_mcp_tools service is available, component is installed - test passes"
             )
+
+
+# ---------------------------------------------------------------------------
+# #1579 PR2 — ha_write_file / ha_delete_file fold into the edits auto-backup
+# ---------------------------------------------------------------------------
+
+
+async def _wait_file_backup_name(mcp_client, *, marker: str, timeout: int = 20):
+    """Poll the edits-backup list for a ``file`` snapshot whose entity_id
+    contains ``marker`` (a unique token in the path); return its name."""
+
+    def _entries(d):
+        return d.get("backups") or d.get("data", {}).get("backups", []) or []
+
+    data = await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_manage_backup",
+        arguments={"scope": "edits", "action": "list", "domain": "file"},
+        predicate=lambda d: any(marker in e["entity_id"] for e in _entries(d)),
+        description=f"file auto-backup containing {marker!r}",
+        timeout=timeout,
+    )
+    matches = [e for e in _entries(data) if marker in e["entity_id"]]
+    return matches[0]["name"]
+
+
+@pytest.mark.filesystem
+class TestFileWriteAutoBackup:
+    """ha_write_file / ha_delete_file capture prior file content into the
+    shared edits store (#1579), so file edits are list/diff/restore-able and
+    deletes are recoverable."""
+
+    async def test_overwrite_captures_and_restores(self, mcp_client_with_filesystem):
+        mcp = mcp_client_with_filesystem
+        marker = uuid.uuid4().hex[:8]
+        path = f"www/_e2e_backup_{marker}.css"
+
+        # Create — file did not exist, so capture is skipped.
+        create = await safe_call_tool(
+            mcp,
+            "ha_write_file",
+            {"path": path, "content": ".a { color: red; }", "overwrite": True},
+        )
+        assert create.get("success") is True, create
+
+        try:
+            # Overwrite — captures the prior content as a text snapshot.
+            overwrite = await safe_call_tool(
+                mcp,
+                "ha_write_file",
+                {"path": path, "content": ".a { color: blue; }", "overwrite": True},
+            )
+            assert overwrite.get("success") is True, overwrite
+
+            name = await _wait_file_backup_name(mcp, marker=marker)
+
+            diff = await safe_call_tool(
+                mcp,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "diff", "backup_name": name},
+            )
+            assert diff.get("success") is True, diff
+            assert diff["data"]["kind"] == "text", diff
+
+            restore = await safe_call_tool(
+                mcp,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": name},
+            )
+            assert restore.get("success") is True, restore
+
+            read = await safe_call_tool(mcp, "ha_read_file", {"path": path})
+            assert read.get("success") is True, read
+            assert "color: red" in read["content"], read["content"]
+        finally:
+            await safe_call_tool(mcp, "ha_delete_file", {"path": path, "confirm": True})

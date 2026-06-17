@@ -24,6 +24,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -552,6 +553,7 @@ class FilesystemTools:
             "title": "Write File",
         },
     )
+    @with_auto_backup(domain="file", id_param="path", mandatory=True)
     @log_tool_usage
     async def ha_write_file(
         self,
@@ -688,6 +690,7 @@ class FilesystemTools:
             "title": "Delete File",
         },
     )
+    @with_auto_backup(domain="file", id_param="path", mandatory=True)
     @log_tool_usage
     async def ha_delete_file(
         self,
