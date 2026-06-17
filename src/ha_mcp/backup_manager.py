@@ -43,6 +43,7 @@ import difflib
 import logging
 import os
 import re
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -109,6 +110,13 @@ _TEXT_DOMAINS = frozenset({"file", "yaml"})
 # sets ``truncated`` and points the caller at the full snapshot via view.
 _MAX_DIFF_LINES = 400
 
+# Per-thread ruamel YAML instance cache. Constructing ``YAML(typ="rt")``
+# triggers ruamel's filesystem-scanning plugin discovery, so it is reused
+# across calls; ruamel instances are not thread-safe, and ``_yaml_subtree_text``
+# runs under ``asyncio.to_thread`` (a thread pool), so the cache is keyed
+# per-thread. Mirrors the component's ``yaml_rt.make_yaml()`` pattern.
+_yaml_thread_local = threading.local()
+
 
 def _yaml_subtree_text(content: str, yaml_path: str) -> str | None:
     """Extract the YAML subtree at ``yaml_path`` as round-trip text.
@@ -120,9 +128,9 @@ def _yaml_subtree_text(content: str, yaml_path: str) -> str | None:
     dumped subtree, or ``None`` when the file root is not a mapping or the
     key is absent (new-key write — nothing to snapshot).
 
-    One ``YAML`` instance is reused for load + dump: constructing it
-    triggers ruamel's (filesystem-scanning) plugin discovery, so a second
-    instance would double that cost on the write path for no benefit.
+    The ``YAML`` instance is cached per-thread (see ``_yaml_thread_local``)
+    so the expensive plugin-discovery construction happens once per worker
+    thread rather than on every capture.
 
     ruamel is imported lazily here (see the module-top note) and its
     ``YAMLError`` is converted to ``HomeAssistantError`` so the capture
@@ -132,7 +140,9 @@ def _yaml_subtree_text(content: str, yaml_path: str) -> str | None:
     from ruamel.yaml import YAML
     from ruamel.yaml import YAMLError as RuamelYAMLError
 
-    ry = YAML(typ="rt")
+    ry = getattr(_yaml_thread_local, "ry", None)
+    if ry is None:
+        ry = _yaml_thread_local.ry = YAML(typ="rt")
     try:
         node: Any = ry.load(StringIO(content))
         for seg in yaml_path.split("."):
