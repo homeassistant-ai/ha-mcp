@@ -288,9 +288,16 @@ Skills can still be installed manually for clients that prefer local skill files
 
 ## 🔍 Tool Discovery for AI Agents
 
-By default, the full tool catalog (~86 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (Claude Sonnet, Claude Opus,) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
+By default, the full tool catalog (~84 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (Claude Sonnet, Claude Opus) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
 
-For models *without* deferred tool support — Claude Haiku, Gemini, ChatGPT OpenAI-compatible local models, smaller open-weights models — listing 86 tools eats ~46K tokens of idle context. To address that, the server ships with a **search-based discovery mode** built on top of FastMCP's BM25 search transform.
+For models *without* deferred tool support — Claude Haiku, Gemini, ChatGPT OpenAI-compatible local models, smaller open-weights models — listing the full tool catalog up front adds a lot of idle context and can overwhelm smaller models. To address that, the server ships with a **search-based discovery mode** built on top of FastMCP's BM25 search transform.
+
+### Smaller or local LLMs (Ollama, etc.)
+
+If your model can't see the tools or your Home Assistant, it may be getting handed the whole tool catalog at once and struggling with it. It's recommended to try the following to see if it helps:
+
+- **Enable tool search** (`ENABLE_TOOL_SEARCH=true`, or the add-on option below). Instead of listing every tool up front, the server defers the catalog behind a search interface so the model pulls in only the tools it needs, when it needs them.
+- **Raise the model's context window above the default.** Local runtimes ship with small defaults (Ollama's `num_ctx` is one example) that can't hold a large tool set plus the conversation — increase it well beyond the default.
 
 ### Enable search-based discovery
 
@@ -307,14 +314,14 @@ The proxy split lets MCP clients apply different permission policies per categor
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `ENABLE_TOOL_SEARCH` | `false` | Replace full tool catalog with search-based discovery (~46K → ~5K idle tokens). |
+| `ENABLE_TOOL_SEARCH` | `false` | Replace full tool catalog with search-based discovery (tools deferred behind on-demand search). |
 | `TOOL_SEARCH_MAX_RESULTS` | `5` | Max results returned by `ha_search_tools` (range 2–10). |
 | `PINNED_TOOLS` | empty | Comma-separated tool names to keep always visible. The web settings UI is the primary way to manage this. |
 
 ### When to enable
 
 - **Claude Haiku, OpenAI-compatible local models, Gemini, ChatGPT or any model without native deferred tool support** — large idle-context savings.
-- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 86.
+- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 84.
 - **Cost-sensitive deployments** — fewer idle tokens per turn.
 
 Leave it off when using Claude Sonnet/Opus or any client with deferred tool loading; the full catalog has no idle cost there and direct calls skip the search step. If you choose to use our toolsearch then you should disable the native Claude Opus/Sonnet toolsearch, which is called deferred tools in the settings.

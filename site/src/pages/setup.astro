@@ -2250,6 +2250,15 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
             <p class="mt-1">For stdio-based servers, use <a href="https://github.com/open-webui/mcpo" class="text-blue-400 hover:underline" target="_blank" rel="noopener">mcpo</a> proxy to bridge stdio to HTTP.</p>
             <p><a href="https://docs.openwebui.com/features/mcp/" class="text-blue-400 hover:underline" target="_blank" rel="noopener">Open WebUI MCP docs →</a></p>
           </div>
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
+            <p class="text-amber-300 text-sm font-medium">Using a smaller or local LLM (Ollama, etc.)?</p>
+            <p class="text-amber-200/80 text-xs mt-1">If the model can't see the tools or your Home Assistant, it may be getting handed all 80+ tools at once. It's recommended to try the following to see if it helps:</p>
+            <ul class="text-amber-200/80 text-xs mt-1 space-y-1 list-disc list-inside">
+              <li>Enable tool search (add-on option <code class="bg-amber-900/30 px-1 rounded">enable_tool_search</code>, or <code class="bg-amber-900/30 px-1 rounded">ENABLE_TOOL_SEARCH=true</code>): the full catalog is deferred behind a search interface so tools load on demand instead of all at once.</li>
+              <li>Raise your model's context window above the default (in Ollama, <code class="bg-amber-900/30 px-1 rounded">num_ctx</code>) so the tool definitions and your conversation fit.</li>
+            </ul>
+            <p class="text-amber-200/80 text-xs mt-1"><a href="https://github.com/homeassistant-ai/ha-mcp#smaller-or-local-llms-ollama-etc" target="_blank" rel="noopener" class="text-amber-300 hover:underline">Smaller or local LLM setup →</a></p>
+          </div>
         </div>`;
       } else if (state.client.id === 'copilot-cli') {
         if (isStdio) {
