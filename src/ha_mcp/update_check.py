@@ -44,6 +44,7 @@ from ._version import (
     is_dev_version,
     is_running_in_addon,
 )
+from .stdio_settings_sidecar import _TRUTHY  # shared HA_MCP_DISABLE_* truthy set
 
 logger = logging.getLogger(__name__)
 
@@ -70,16 +71,11 @@ class UpdateInfo:
 
 
 def _is_disabled() -> bool:
-    # Treat 0/false/no/off (and empty/unset) as NOT disabled, so a user who sets
-    # HA_MCP_DISABLE_UPDATE_CHECK=0 or =false to "keep it on" isn't surprised by
-    # any non-empty value silently disabling the check.
-    return os.environ.get(DISABLE_ENV, "").strip().lower() not in (
-        "",
-        "0",
-        "false",
-        "no",
-        "off",
-    )
+    # Reuse the shared _TRUTHY set so HA_MCP_DISABLE_UPDATE_CHECK parses
+    # identically to the sibling HA_MCP_DISABLE_SETTINGS_UI flag: only a truthy
+    # value disables; 0/false/no/off/blank (and anything unrecognized) keep the
+    # check enabled, so a user who sets =0 to "keep it on" isn't surprised.
+    return os.environ.get(DISABLE_ENV, "").strip().lower() in _TRUTHY
 
 
 def _is_newer(latest: str, current: str) -> bool:
