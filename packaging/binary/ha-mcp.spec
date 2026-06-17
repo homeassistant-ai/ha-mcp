@@ -11,7 +11,7 @@ Build with: pyinstaller packaging/binary/ha-mcp.spec
 import os
 import sys
 import sysconfig
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules, copy_metadata
 
 # Get project root (spec file is in packaging/binary/)
 # SPECPATH is the directory containing the spec file
@@ -64,11 +64,6 @@ packages_to_collect = [
     'key_value',
     'beartype',
     'pathvalidate',
-    # ruamel.yaml is a namespace package whose plugin submodules
-    # PyInstaller's static analysis misses; collect_all bundles them so
-    # the frozen binary can import it (backup_manager round-trips YAML
-    # for the file/edit auto-backup, #1579).
-    'ruamel.yaml',
     'exceptiongroup',
     'cachetools',
     'anyio',
@@ -100,6 +95,18 @@ hiddenimports += [
     'mcp.types',
     'mcp.shared',
 ]
+
+# ruamel.yaml is a PEP-420 namespace package (no ruamel/__init__.py), so
+# collect_all mis-handles it ("skipping ... as it is not a package") and the
+# frozen binary can't follow `from ruamel.yaml import YAML` — backup_manager
+# round-trips YAML for the file/edit auto-backup (#1579). Pin its submodules,
+# the C-extension clib, and the distribution metadata explicitly.
+hiddenimports += collect_submodules('ruamel.yaml')
+hiddenimports += ['ruamel.yaml', 'ruamel.yaml.clib']
+try:
+    datas += copy_metadata('ruamel.yaml')
+except Exception as e:
+    print(f"Warning: Could not copy ruamel.yaml metadata: {e}")
 
 # Add commonly missing modules for PyInstaller
 hiddenimports += [
