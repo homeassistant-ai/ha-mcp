@@ -375,6 +375,14 @@ class SystemTools:
         Returns health check results from integrations, system resources, and connectivity.
         Available information varies by installation type and loaded integrations.
 
+        The result also carries an ``ha_mcp_update`` object —
+        ``{current, latest, update_available}`` — reporting whether a newer
+        ha-mcp release is on PyPI for the running channel (stable or dev), so you
+        can proactively tell the user to upgrade. Present on every install type
+        including the HA add-on (so a user who missed the Supervisor's update
+        prompt still hears about it); omitted only for the ``unknown`` version
+        and when ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
+
         **Parameters:**
         - include: Optional comma-separated list of additional data to include.
           - "repairs": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all)
@@ -699,6 +707,16 @@ class SystemTools:
                 if section_warnings:
                     result.setdefault("warnings", []).extend(section_warnings)
                 result["dead_entities"] = dead_section
+
+            # Surface the MCP server's own update status so the model can relay
+            # it in chat. ``get_update_field`` is best-effort, thread-offloaded,
+            # and never raises (omits the field on any hiccup); see
+            # ha_mcp.update_check for gating/throttle details.
+            from ..update_check import get_update_field
+
+            mcp_update = await get_update_field()
+            if mcp_update is not None:
+                result["ha_mcp_update"] = mcp_update
 
             return result
 

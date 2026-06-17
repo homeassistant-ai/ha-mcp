@@ -479,21 +479,44 @@ def _setup_logging(log_level_str: str, force: bool = False) -> None:
 
 
 def _log_startup_version() -> None:
-    """Log ha-mcp version at startup, plus a dev-channel banner when relevant.
+    """Log ha-mcp version at startup, plus dev-channel / update banners.
 
     The dev banner only fires for standalone dev installs (Docker ``:dev`` /
     ``:latest``, or ``pip install ha-mcp-dev``). It is suppressed under the HA
     Supervisor because add-on users already pick dev vs stable in the HAOS UI.
+
+    A second banner surfaces a newer release if PyPI has one — for both the
+    stable channel (``ha-mcp``) and the dev channel (``ha-mcp-dev``), so a dev
+    install hears about newer dev builds too. The banner is suppressed under the
+    add-on (the Supervisor already prompts there, and logs are noisy) — but the
+    in-chat tool fields still surface it, so an add-on user who missed the prompt
+    isn't left in the dark. ``get_update_info`` is a no-op for the ``unknown``
+    version and the ``HA_MCP_DISABLE_UPDATE_CHECK`` opt-out, and never raises.
     """
     from ha_mcp._version import get_version, is_dev_version, is_running_in_addon
 
     version = get_version()
     logger.info(f"ha-mcp {version}")
-    if is_dev_version(version) and not is_running_in_addon():
+    if is_running_in_addon():
+        return
+
+    if is_dev_version(version):
         logger.warning(
             "This is the dev channel. For the stable release use the "
             "'ghcr.io/homeassistant-ai/ha-mcp:stable' Docker tag "
             "(or 'pip install ha-mcp' on PyPI)."
+        )
+        # Fall through: dev installs still get a newer-dev-build banner below.
+
+    from ha_mcp.update_check import get_update_info, update_command_hint
+
+    info = get_update_info()
+    if info is not None and info.update_available:
+        logger.warning(
+            "A newer ha-mcp release is available: %s (you have %s). %s",
+            info.latest,
+            info.current,
+            update_command_hint(info.current),
         )
 
 

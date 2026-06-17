@@ -143,6 +143,8 @@ class TestLogStartupVersion:
     ) -> None:
         monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.3.0")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Disable the self-update check so this dev-banner test stays offline.
+        monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
         self._call(caplog)
         info_messages = [
             r.getMessage() for r in caplog.records if r.levelno == logging.INFO
@@ -180,14 +182,81 @@ class TestLogStartupVersion:
         # Version line still fires — add-on users should still see what they're running.
         assert any("7.3.0.dev42" in msg for msg in info_messages), info_messages
 
-    def test_stable_version_never_emits_banner(
+    def test_stable_version_never_emits_dev_banner(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Guard against an inverted is_dev_version check leaking the banner to stable users."""
+        """Guard against an inverted is_dev_version check leaking the dev-channel
+        banner to stable users. The self-update check is disabled here so this
+        stays focused on the dev banner (the update banner has its own tests)."""
         monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.3.0")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
+        self._call(caplog)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == []
+
+    def test_stable_emits_update_banner_when_newer_available(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A standalone stable install with a newer PyPI release gets an
+        update banner (the dev-channel banner stays silent)."""
+        from ha_mcp import update_check
+
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.8.0")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(
+            update_check,
+            "get_update_info",
+            lambda: update_check.UpdateInfo("7.8.0", "7.9.0", True),
+        )
+        self._call(caplog)
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("available: 7.9.0" in m for m in warnings), warnings
+        assert not any("dev channel" in m for m in warnings), warnings
+
+    def test_stable_no_update_banner_when_current(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """No banner when already on the latest stable."""
+        from ha_mcp import update_check
+
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.9.0")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(
+            update_check,
+            "get_update_info",
+            lambda: update_check.UpdateInfo("7.9.0", "7.9.0", False),
+        )
+        self._call(caplog)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == []
+
+    def test_update_banner_suppressed_under_supervisor_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The startup banner is add-on-suppressed even when an update IS
+        available — the in-chat tool fields carry the notice for add-on users
+        instead, so the log stays quiet (Supervisor already prompts there)."""
+        from ha_mcp import update_check
+
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.8.0")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
+        # Even if a check would report an update, the add-on early-return wins.
+        monkeypatch.setattr(
+            update_check,
+            "get_update_info",
+            lambda: update_check.UpdateInfo("7.8.0", "7.9.0", True),
+        )
         self._call(caplog)
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings == []

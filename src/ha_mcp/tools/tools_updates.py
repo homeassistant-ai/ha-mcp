@@ -524,7 +524,7 @@ class UpdateTools:
 
         categories = {k: v for k, v in categories.items() if v}
 
-        return {
+        result: dict[str, Any] = {
             "success": True,
             "updates_available": len(available_updates),
             "skipped_count": len(skipped_updates),
@@ -532,6 +532,19 @@ class UpdateTools:
             "categories": categories,
             "include_skipped": include_skipped,
         }
+
+        # Surface the MCP server's OWN update status alongside HA's updates so the
+        # model is more likely to mention "you're on X, but Y is out" — this tool
+        # is HA-centric, but spreading the ha-mcp self-update signal across the
+        # status surfaces raises the odds an AI relays it. ``get_update_field`` is
+        # best-effort and never raises; see ha_mcp.update_check for details.
+        from ..update_check import get_update_field
+
+        mcp_update = await get_update_field()
+        if mcp_update is not None:
+            result["ha_mcp_update"] = mcp_update
+
+        return result
 
     async def _get_update_details(
         self, entity_id: str, include_release_notes: bool = False
@@ -702,6 +715,11 @@ class UpdateTools:
         - updates_available: Count of available updates
         - updates: List of update entities with version info
         - categories: Updates grouped by category (core, addons, devices, hacs, os)
+        - ha_mcp_update: This MCP server's own update status
+          {current, latest, update_available} — so you can flag a newer ha-mcp
+          release (stable or dev, matching the running channel). Present on all
+          install types; omitted only for the unknown version and when
+          HA_MCP_DISABLE_UPDATE_CHECK is set.
 
         RETURNS (when getting specific update):
         - Update details including installed/latest versions
