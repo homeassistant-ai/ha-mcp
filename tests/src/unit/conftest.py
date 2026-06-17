@@ -87,5 +87,6 @@ def _clear_update_check_memo():
 
         get_update_info.cache_clear()
     except ImportError:
+        # ha_mcp not importable in this test run; nothing to clear.
         pass
     yield

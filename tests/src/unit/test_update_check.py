@@ -176,7 +176,8 @@ class TestFetchLatestFromPypi:
         seen: dict[str, str] = {}
 
         class FakeResp:
-            def raise_for_status(self) -> None: ...
+            def raise_for_status(self) -> None:
+                pass
 
             def json(self) -> dict:
                 return {"info": {"version": "7.8.0.dev720"}}
@@ -200,7 +201,8 @@ class TestFetchLatestFromPypi:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class FakeResp:
-            def raise_for_status(self) -> None: ...
+            def raise_for_status(self) -> None:
+                pass
 
             def json(self) -> dict:
                 return {"info": {}}  # missing "version" -> KeyError -> None
