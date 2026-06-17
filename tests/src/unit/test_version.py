@@ -239,24 +239,29 @@ class TestLogStartupVersion:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings == []
 
-    def test_update_banner_suppressed_under_supervisor_token(
+    def test_update_banner_fires_under_supervisor_token(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """The startup banner is add-on-suppressed even when an update IS
-        available — the in-chat tool fields carry the notice for add-on users
-        instead, so the log stays quiet (Supervisor already prompts there)."""
+        """The update banner fires in the add-on too (copying FastMCP, which
+        announces on every startup regardless of deployment) — an add-on user who
+        ignored the Supervisor prompt still sees it in the logs. The add-on
+        upgrade hint points at the Supervisor UI, not pip/docker."""
         from ha_mcp import update_check
 
         monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.8.0")
         monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
-        # Even if a check would report an update, the add-on early-return wins.
         monkeypatch.setattr(
             update_check,
             "get_update_info",
             lambda: update_check.UpdateInfo("7.8.0", "7.9.0", True),
         )
         self._call(caplog)
-        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert warnings == []
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("available: 7.9.0" in m for m in warnings), warnings
+        # add-on upgrade hint, not the dev-channel banner (suppressed in add-on)
+        assert any("Settings -> Add-ons" in m for m in warnings), warnings
+        assert not any("dev channel" in m for m in warnings), warnings

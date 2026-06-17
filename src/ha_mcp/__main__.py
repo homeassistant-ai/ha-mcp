@@ -485,28 +485,25 @@ def _log_startup_version() -> None:
     ``:latest``, or ``pip install ha-mcp-dev``). It is suppressed under the HA
     Supervisor because add-on users already pick dev vs stable in the HAOS UI.
 
-    A second banner surfaces a newer release if PyPI has one — for both the
-    stable channel (``ha-mcp``) and the dev channel (``ha-mcp-dev``), so a dev
-    install hears about newer dev builds too. The banner is suppressed under the
-    add-on (the Supervisor already prompts there, and logs are noisy) — but the
-    in-chat tool fields still surface it, so an add-on user who missed the prompt
-    isn't left in the dark. ``get_update_info`` is a no-op for the ``unknown``
-    version and the ``HA_MCP_DISABLE_UPDATE_CHECK`` opt-out, and never raises.
+    The update banner fires on *every* startup when a newer release is on PyPI —
+    in every deployment including the add-on — mirroring FastMCP's
+    ``log_server_banner``, which announces an available update on each start
+    regardless of how it's run. It covers both the stable (``ha-mcp``) and dev
+    (``ha-mcp-dev``) channels, so a dev install hears about newer dev builds too.
+    ``get_update_info`` is a no-op for the ``unknown`` version and the
+    ``HA_MCP_DISABLE_UPDATE_CHECK`` opt-out, and never raises.
     """
     from ha_mcp._version import get_version, is_dev_version, is_running_in_addon
 
     version = get_version()
     logger.info(f"ha-mcp {version}")
-    if is_running_in_addon():
-        return
 
-    if is_dev_version(version):
+    if is_dev_version(version) and not is_running_in_addon():
         logger.warning(
             "This is the dev channel. For the stable release use the "
             "'ghcr.io/homeassistant-ai/ha-mcp:stable' Docker tag "
             "(or 'pip install ha-mcp' on PyPI)."
         )
-        # Fall through: dev installs still get a newer-dev-build banner below.
 
     from ha_mcp.update_check import get_update_info, update_command_hint
 

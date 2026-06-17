@@ -259,3 +259,12 @@ class TestUpdateCommandHint:
     def test_dev_docker_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(update_check, "_running_in_docker", lambda: True)
         assert "ha-mcp:dev" in update_command_hint("7.8.0.dev720")
+
+    def test_addon_hint_points_to_supervisor_ui(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """In the add-on, the hint points at the Supervisor UI, not pip/docker."""
+        monkeypatch.setattr(update_check, "is_running_in_addon", lambda: True)
+        hint = update_command_hint("7.9.0")
+        assert "Add-ons" in hint
+        assert "pip install" not in hint and "docker pull" not in hint

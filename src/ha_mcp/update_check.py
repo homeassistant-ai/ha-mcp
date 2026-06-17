@@ -14,12 +14,14 @@ latest dev build.
 
 The check runs once per process — memoized in memory, no disk, no throttle. For
 stdio that is once per session (the server is spawned per conversation); for a
-long-running Docker/web server, once at boot. It is suppressed only for the
+long-running Docker/web server, once at boot. It is a no-op only for the
 ``unknown`` version (nothing to compare) and the ``HA_MCP_DISABLE_UPDATE_CHECK``
-opt-out. Separately, only the startup *banner* is suppressed under the add-on
-(the Supervisor already prompts there) — the tool fields still surface it, for a
-user who missed the prompt. Every network call is best-effort: any failure
-yields "no update info" rather than raising, so callers never need to guard it.
+opt-out. The startup banner (see ``__main__``) and the tool fields surface the
+result on every deployment including the add-on — copying FastMCP, whose
+``log_server_banner`` announces an available update on each startup regardless of
+how it's run, so an add-on user who missed the Supervisor prompt still sees it.
+Every network call is best-effort: any failure yields "no update info" rather
+than raising, so callers never need to guard it.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from dataclasses import dataclass
 import httpx
 from packaging.version import InvalidVersion, Version
 
-from ._version import get_version, is_dev_version
+from ._version import get_version, is_dev_version, is_running_in_addon
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +167,9 @@ def _running_in_docker() -> bool:
 
 def update_command_hint(current: str) -> str:
     """Return a deployment- and channel-aware one-liner for how to upgrade."""
+    if is_running_in_addon():
+        # Add-on users update through the Supervisor UI, not pip/docker.
+        return "Update from Settings -> Add-ons -> Home Assistant MCP Server."
     dev = is_dev_version(current)
     if _running_in_docker():
         # Dev images are tagged :dev (rolling); :stable is the stable channel.
