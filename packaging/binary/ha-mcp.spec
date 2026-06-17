@@ -64,6 +64,11 @@ packages_to_collect = [
     'key_value',
     'beartype',
     'pathvalidate',
+    # ruamel.yaml is a namespace package whose plugin submodules
+    # PyInstaller's static analysis misses; collect_all bundles them so
+    # the frozen binary can import it (backup_manager round-trips YAML
+    # for the file/edit auto-backup, #1579).
+    'ruamel.yaml',
     'exceptiongroup',
     'cachetools',
     'anyio',

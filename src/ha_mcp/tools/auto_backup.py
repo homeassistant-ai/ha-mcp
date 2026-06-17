@@ -150,10 +150,10 @@ def with_auto_backup(
                         "write was blocked and nothing was changed.",
                         suggestions=[
                             "Enable auto-backup in the ha-mcp settings UI "
-                            "(Backups tab), or set ENABLE_AUTO_BACKUP=true",
+                            + "(Backups tab), or set ENABLE_AUTO_BACKUP=true",
                             "Once enabled, this write is snapshotted and "
-                            "becomes restorable via ha_manage_backup("
-                            "scope='edits')",
+                            + "becomes restorable via "
+                            + "ha_manage_backup(scope='edits')",
                         ],
                         context={
                             "tool_name": func.__name__,
