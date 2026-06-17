@@ -1632,9 +1632,29 @@ class TestYamlHandler:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _patch_services(
-            monkeypatch, {"read_file": {"success": False, "error": "gone"}}, []
+            monkeypatch,
+            {
+                "read_file": {
+                    "success": False,
+                    "error": "File does not exist: configuration.yaml",
+                }
+            },
+            [],
         )
         assert await bm._fetch_yaml(_StubClient(), "configuration.yaml::rest") is None
+
+    async def test_fetch_other_error_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A non-not-found read failure must propagate (not silently skip the
+        # backup) so the mandatory-gate promise holds — mirrors _fetch_file.
+        _patch_services(
+            monkeypatch,
+            {"read_file": {"success": False, "error": "Permission denied"}},
+            [],
+        )
+        with pytest.raises(HomeAssistantError):
+            await bm._fetch_yaml(_StubClient(), "configuration.yaml::rest")
 
     async def test_fetch_bad_entity_id_returns_none(
         self, monkeypatch: pytest.MonkeyPatch

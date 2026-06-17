@@ -1757,7 +1757,15 @@ async def _fetch_yaml(client: Any, entity_id: str) -> Any:
         return None
     result = unwrap_service_response(result)
     if not result.get("success", False):
-        return None
+        # Mirror _fetch_file: a missing file is the new-write case (skip
+        # quietly); any other read failure is a real problem and must
+        # raise so the capture pipeline logs it at WARNING rather than
+        # silently producing no backup (the mandatory gate already let
+        # this write through on the promise that it is backed up).
+        error = str(result.get("error", ""))
+        if "does not exist" in error or "not a file" in error:
+            return None
+        raise HomeAssistantError(f"read_file failed for {file!r}: {error}")
     content = result.get("content")
     if not isinstance(content, str):
         return None
