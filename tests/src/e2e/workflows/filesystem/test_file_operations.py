@@ -24,6 +24,7 @@ Tests are designed for the Docker Home Assistant test environment.
 import logging
 import os
 import uuid
+from typing import Any
 
 import pytest
 
@@ -963,11 +964,13 @@ class TestMcpToolsComponentNotInstalled:
 # ---------------------------------------------------------------------------
 
 
-async def _wait_file_backup_name(mcp_client, *, marker: str, timeout: int = 20):
+async def _wait_file_backup_name(
+    mcp_client: Any, *, marker: str, timeout: int = 20
+) -> str:
     """Poll the edits-backup list for a ``file`` snapshot whose entity_id
     contains ``marker`` (a unique token in the path); return its name."""
 
-    def _entries(d):
+    def _entries(d: dict[str, Any]) -> list[Any]:
         return d.get("backups") or d.get("data", {}).get("backups", []) or []
 
     data = await wait_for_tool_result(
