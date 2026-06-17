@@ -475,7 +475,12 @@ class TestWithAutoBackupDecorator:
 
         class _FakeMgr:
             async def maybe_snapshot(
-                self, domain: str, entity_id: str, *, tool_name: str | None = None
+                self,
+                domain: str,
+                entity_id: str,
+                *,
+                tool_name: str | None = None,
+                mandatory: bool = False,
             ) -> None:
                 calls.append((domain, entity_id, tool_name))
 
@@ -538,18 +543,27 @@ def test_destructive_tools_carry_auto_backup_decorator() -> None:
     from pathlib import Path
 
     tools_dir = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools"
+    # (fname, func, domain, id_param-or-None, mandatory). The file/YAML writes
+    # (#1579) are mandatory; ha_config_set_yaml computes its key via id_fn so it
+    # has no id_param to assert.
     checks = [
-        ("tools_entities.py", "ha_remove_entity", "entity", "entity_id"),
-        ("tools_registry.py", "ha_set_device", "device", "device_id"),
-        ("tools_registry.py", "ha_remove_device", "device", "device_id"),
+        ("tools_entities.py", "ha_remove_entity", "entity", "entity_id", False),
+        ("tools_registry.py", "ha_set_device", "device", "device_id", False),
+        ("tools_registry.py", "ha_remove_device", "device", "device_id", False),
+        ("tools_filesystem.py", "ha_write_file", "file", "path", True),
+        ("tools_filesystem.py", "ha_delete_file", "file", "path", True),
+        ("tools_yaml_config.py", "ha_config_set_yaml", "yaml", None, True),
     ]
-    for fname, func, domain, id_param in checks:
+    for fname, func, domain, id_param, mandatory in checks:
         src = (tools_dir / fname).read_text(encoding="utf-8")
         idx = src.index(f"async def {func}(")
         head = src[max(0, idx - 600) : idx]  # the decorator block above the def
         assert "with_auto_backup(" in head, f"{func} lost @with_auto_backup"
         assert f'domain="{domain}"' in head, f"{func} wrong/missing backup domain"
-        assert f'id_param="{id_param}"' in head, f"{func} wrong/missing id_param"
+        if id_param is not None:
+            assert f'id_param="{id_param}"' in head, f"{func} wrong/missing id_param"
+        if mandatory:
+            assert "mandatory=True" in head, f"{func} lost mandatory=True"
 
 
 # ---------------------------------------------------------------- filenames
@@ -1729,13 +1743,79 @@ class TestTextSnapshotKind:
         assert "-B" in diff["diff"] and "+b" in diff["diff"]
 
 
+class TestMaybeSnapshotMandatory:
+    """``maybe_snapshot(mandatory=True)`` raises ``MandatoryBackupError`` on a
+    genuine capture failure, but still returns None for a legitimate skip."""
+
+    async def test_raises_on_fetch_failure(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(
+            _mk_handler(domain="file", raise_on_fetch=HomeAssistantError("boom"))
+        )
+        with pytest.raises(bm.MandatoryBackupError):
+            await mgr.maybe_snapshot("file", "www/x.css", mandatory=True, force=True)
+
+    async def test_raises_on_write_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(domain="file", fetched="body\n"))
+
+        def _boom(*_a: Any, **_k: Any) -> Any:
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(mgr, "_write_snapshot", _boom)
+        with pytest.raises(bm.MandatoryBackupError) as exc:
+            await mgr.maybe_snapshot("file", "www/x.css", mandatory=True, force=True)
+        # disk-full remediation is carried for the structured error to surface.
+        assert exc.value.suggestions
+
+    async def test_raises_on_init_dir_error(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(domain="file", fetched="body\n"))
+        mgr._init_dir_error = "backup dir not writable"
+        with pytest.raises(bm.MandatoryBackupError):
+            await mgr.maybe_snapshot("file", "www/x.css", mandatory=True, force=True)
+
+    async def test_new_entity_returns_none_not_raise(self, tmp_path: Path) -> None:
+        """config is None (new file/key) is a legitimate skip, not a failure."""
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(domain="file", fetched=None))
+        assert (
+            await mgr.maybe_snapshot("file", "www/new.css", mandatory=True, force=True)
+            is None
+        )
+
+    async def test_best_effort_fetch_failure_returns_none(self, tmp_path: Path) -> None:
+        """Without mandatory, a fetch failure stays swallowed (returns None)."""
+        mgr = _mk_manager(tmp_path)
+        mgr.register(
+            _mk_handler(domain="file", raise_on_fetch=HomeAssistantError("boom"))
+        )
+        assert await mgr.maybe_snapshot("file", "www/x.css", force=True) is None
+
+
 class TestMandatoryGate:
+    """``mandatory=True`` fails the write closed (#1579): a disabled toggle OR
+    a genuine capture failure blocks the wrapped write with a structured error
+    and never runs it; a legitimate "nothing to snapshot" skip proceeds."""
+
     def _decorate(self, *, mandatory: bool) -> Any:
+        ran: list[str] = []
+
         @with_auto_backup(domain="file", id_param="path", mandatory=mandatory)
         async def tool(self_obj: Any, path: str) -> str:
+            ran.append(path)
             return "wrote"
 
+        tool.ran = ran  # type: ignore[attr-defined]
         return tool
+
+    @staticmethod
+    def _error_code(exc: ToolError) -> str:
+        import json
+
+        return str(json.loads(str(exc))["error"]["code"])
 
     async def test_refuses_when_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
@@ -1747,20 +1827,122 @@ class TestMandatoryGate:
             _client = None
 
         tool = self._decorate(mandatory=True)
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as exc:
             await tool(_Self(), path="www/x.css")
+        # Pin the code + the user-facing "blocked, nothing changed" guarantee so
+        # a reword can't silently gut it.
+        assert self._error_code(exc.value) == "CONFIG_VALIDATION_FAILED"
+        assert "requires auto-backup" in str(exc.value)
+        assert "blocked and nothing was changed" in str(exc.value)
+        assert tool.ran == []  # type: ignore[attr-defined]
 
-    async def test_proceeds_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_no_client_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Toggle on but no client to capture with → block, don't write
+        un-backed-up. (This used to silently proceed.)"""
         monkeypatch.setattr(
             "ha_mcp.tools.auto_backup.get_global_settings",
             lambda: _StubSettings(enable_auto_backup=True),
         )
 
         class _Self:
-            _client = None  # capture skipped (no client) — isolates the gate
+            _client = None
 
         tool = self._decorate(mandatory=True)
-        assert await tool(_Self(), path="www/x.css") == "wrote"
+        with pytest.raises(ToolError) as exc:
+            await tool(_Self(), path="www/x.css")
+        assert self._error_code(exc.value) == "BACKUP_CAPTURE_FAILED"
+        assert tool.ran == []  # type: ignore[attr-defined]
+
+    async def test_capture_failure_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A genuine capture failure (MandatoryBackupError) blocks the write and
+        surfaces its remediation in the structured error."""
+
+        class _FakeMgr:
+            async def maybe_snapshot(self, *a: Any, **k: Any) -> None:
+                assert k.get("mandatory") is True
+                raise bm.MandatoryBackupError(
+                    "disk full", suggestions=["Free up disk space"]
+                )
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        ran: list[str] = []
+
+        @with_auto_backup(
+            domain="file", id_param="path", mandatory=True, client=object()
+        )
+        async def tool(*, path: str) -> str:
+            ran.append(path)
+            return "wrote"
+
+        with pytest.raises(ToolError) as exc:
+            await tool(path="www/x.css")
+        assert self._error_code(exc.value) == "BACKUP_CAPTURE_FAILED"
+        assert "disk full" in str(exc.value)
+        assert "Free up disk space" in str(exc.value)
+        assert ran == []  # write never ran
+
+    async def test_legitimate_skip_proceeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A new file/key (maybe_snapshot returns None — nothing to snapshot) is
+        not a failure: the write proceeds."""
+
+        class _FakeMgr:
+            async def maybe_snapshot(self, *a: Any, **k: Any) -> None:
+                return None
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        @with_auto_backup(
+            domain="file", id_param="path", mandatory=True, client=object()
+        )
+        async def tool(*, path: str) -> str:
+            return "wrote"
+
+        assert await tool(path="www/new.css") == "wrote"
+
+    async def test_target_resolution_error_is_not_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An id_fn that raises a transient-tuple error must NOT be swallowed
+        into a silent un-backed-up write — target resolution sits outside the
+        best-effort capture handler, so the error aborts the call (fail closed).
+        """
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+
+        def _boom(_kw: dict[str, Any]) -> str:
+            raise bm.HomeAssistantError("cannot resolve backup target")
+
+        ran: list[str] = []
+
+        @with_auto_backup(domain="file", id_fn=_boom, mandatory=True, client=object())
+        async def tool(*, path: str) -> str:
+            ran.append(path)
+            return "wrote"
+
+        with pytest.raises(bm.HomeAssistantError):
+            await tool(path="www/x.css")
+        assert ran == []  # write never ran
 
     async def test_non_mandatory_proceeds_when_disabled(
         self, monkeypatch: pytest.MonkeyPatch

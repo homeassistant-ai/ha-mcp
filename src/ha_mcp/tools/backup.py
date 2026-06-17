@@ -1199,9 +1199,12 @@ def register_backup_tools(
                     "update-only paths return an error)"
                 )
             if diff.get("truncated"):
+                # Text snapshots (file/YAML) carry a unified diff, not a
+                # JSON-Patch — name it accordingly.
+                noun = "Diff" if diff.get("kind") == "text" else "Patch"
                 warnings.append(
-                    "Patch truncated; entity has more changes than the bounded "
-                    "diff captures — view the snapshot for the full state"
+                    f"{noun} truncated; the target has more changes than the "
+                    "bounded diff captures — view the snapshot for the full state"
                 )
             return {
                 "success": True,

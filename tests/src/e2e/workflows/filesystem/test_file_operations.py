@@ -982,6 +982,13 @@ async def _wait_file_backup_name(
         timeout=timeout,
     )
     matches = [e for e in _entries(data) if marker in e["entity_id"]]
+    # Capture is pre-write and synchronous, so by the time the overwrite has
+    # returned both captures (if any) have landed. The create is supposed to be
+    # skipped (file didn't exist → nothing to snapshot), so exactly one snapshot
+    # — the overwrite — must match the marker; a spurious create-time capture
+    # would surface as a second entry and is caught here rather than passing
+    # silently via matches[0].
+    assert len(matches) == 1, f"expected exactly one file snapshot, got {matches}"
     return matches[0]["name"]
 
 

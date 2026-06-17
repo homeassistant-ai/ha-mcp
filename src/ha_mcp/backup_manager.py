@@ -48,7 +48,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
@@ -76,6 +76,26 @@ _CAPTURE_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     ToolError,
 )
 
+
+class MandatoryBackupError(Exception):
+    """A required pre-write snapshot could not be captured.
+
+    Raised by ``maybe_snapshot(..., mandatory=True)`` when capture genuinely
+    fails (fetch error, snapshot-write failure such as disk-full, or an
+    unusable backup directory) — as opposed to a legitimate skip (nothing to
+    snapshot for a new file/key). Deliberately a plain ``Exception`` and NOT a
+    member of ``_CAPTURE_TRANSIENT_ERRORS`` so the ``@with_auto_backup``
+    decorator's best-effort handler can't swallow it; the decorator maps it to
+    a structured ``BACKUP_CAPTURE_FAILED`` error that fails the write closed.
+
+    ``suggestions`` carries remediation surfaced in that structured error.
+    """
+
+    def __init__(self, message: str, *, suggestions: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.suggestions = suggestions or []
+
+
 # Soft cap on per-entity throttle/lock tracker size. Auto-pruning kicks
 # in once exceeded; protects long-running servers from unbounded growth
 # while staying well above any realistic HA install (typical: dozens to
@@ -97,6 +117,12 @@ _FILENAME_RE = re.compile(
 # snapshot payload and diff via a unified text diff instead of JSON-Patch
 # (#1579 PR2). Everything else is the implicit ``"dict"`` kind.
 _TEXT_DOMAINS = frozenset({"file", "yaml"})
+
+# Discriminator values for the snapshot ``kind`` marker and the
+# DiffResponse/DiffResponseText union. Typed as ``Literal`` so they satisfy
+# the discriminated-union fields without widening to ``str``.
+_TEXT_KIND: Literal["text"] = "text"
+_DICT_KIND: Literal["dict"] = "dict"
 
 # Output cap for the text (file/YAML) diff. Bounded like ``_MAX_PATCH_OPS``
 # so a pathological whole-file rewrite stays token-friendly; the response
@@ -254,12 +280,22 @@ class BackupManager:
         *,
         tool_name: str | None = None,
         force: bool = False,
+        mandatory: bool = False,
     ) -> Path | None:
         """Capture a snapshot for ``domain:entity_id`` if throttle elapsed.
 
-        Returns the Path written or None if skipped. Never raises — all
-        errors are logged at WARNING and swallowed so the wrapped write
-        can proceed regardless.
+        Returns the Path written or None if skipped. In the default
+        (best-effort) mode it never raises — all errors are logged at WARNING
+        and swallowed so the wrapped write can proceed regardless.
+
+        ``mandatory=True`` makes the snapshot a precondition (file/YAML writes,
+        #1579): a *genuine* capture failure — an unusable backup dir, a failed
+        fetch, or a failed snapshot write (e.g. disk-full) — raises
+        ``MandatoryBackupError`` so the caller can fail the write closed instead
+        of overwriting un-backed-up content. A *legitimate* skip still returns
+        None and lets the write proceed: nothing to snapshot for a new file/key
+        (``config is None``) or a no-id create call, and a throttle skip (a
+        recent snapshot already covers this entity).
 
         ``force=True`` bypasses the ``enable_auto_backup`` toggle and the
         per-entity throttle window so the caller can drive an explicit
@@ -271,6 +307,15 @@ class BackupManager:
         doesn't exist or has no registered handler).
         """
         if self._init_dir_error is not None:
+            if mandatory:
+                raise MandatoryBackupError(
+                    f"the auto-backup directory is unusable: {self._init_dir_error}",
+                    suggestions=[
+                        "Check the auto-backup directory's permissions and "
+                        "free space, or set HAMCP_BACKUP_DIR to a writable "
+                        "path",
+                    ],
+                )
             return None
         if not force and not self.enabled:
             return None
@@ -279,6 +324,10 @@ class BackupManager:
             return None
         handler = self._handlers.get(domain)
         if handler is None:
+            if mandatory:
+                raise MandatoryBackupError(
+                    f"no auto-backup handler is registered for domain {domain!r}"
+                )
             logger.warning(
                 "Auto-backup: no handler registered for domain %r — skipping",
                 domain,
@@ -313,6 +362,11 @@ class BackupManager:
                 # restore propagates to the tool layer as a structured
                 # error. The warning level (vs the debug log below) is what
                 # distinguishes "fetch broke" from "entity didn't exist".
+                if mandatory:
+                    raise MandatoryBackupError(
+                        f"could not read the current state of {key} to back "
+                        f"it up: {type(err).__name__}: {err}"
+                    ) from err
                 logger.warning(
                     "Auto-backup: fetch failed for %s — %s: %s",
                     key,
@@ -333,6 +387,15 @@ class BackupManager:
                     self._write_snapshot, domain, entity_id, config, tool_name
                 )
             except (OSError, yaml.YAMLError) as err:
+                if mandatory:
+                    raise MandatoryBackupError(
+                        f"could not write the pre-write snapshot for {key}: "
+                        f"{type(err).__name__}: {err}",
+                        suggestions=[
+                            "Free up disk space, or delete old snapshots via "
+                            "ha_manage_backup(scope='edits', action='delete')",
+                        ],
+                    ) from err
                 logger.warning(
                     "Auto-backup: write failed for %s — %s: %s",
                     key,
@@ -393,7 +456,7 @@ class BackupManager:
             "config": config,
         }
         if domain in _TEXT_DOMAINS:
-            payload["kind"] = "text"
+            payload["kind"] = _TEXT_KIND
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
         # Atomic write via tmp+rename
         tmp = target.with_suffix(".yaml.tmp")
@@ -594,7 +657,7 @@ class BackupManager:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
         current = await handler.fetch(self._client, entity_id)
         captured_at = data.get("captured")
-        if data.get("kind") == "text":
+        if data.get("kind") == _TEXT_KIND:
             return _build_text_diff_response(
                 name, domain, entity_id, captured_at, str(stored), current
             )
@@ -641,7 +704,7 @@ class DiffResponse(TypedDict):
     entity-present and ``entity_missing`` branches build this through
     ``_build_diff_response`` so the key set can't drift between them."""
 
-    kind: str
+    kind: Literal["dict"]
     backup_name: str
     domain: str
     entity_id: str
@@ -672,7 +735,7 @@ def _build_diff_response(
     artefact of the absent target, not evidence of a match.
     """
     return {
-        "kind": "dict",
+        "kind": _DICT_KIND,
         "backup_name": name,
         "domain": domain,
         "entity_id": entity_id,
@@ -693,7 +756,7 @@ class DiffResponseText(TypedDict):
     kinds uniformly, but carries a unified text ``diff`` instead of a
     JSON-Patch."""
 
-    kind: str
+    kind: Literal["text"]
     backup_name: str
     domain: str
     entity_id: str
@@ -723,7 +786,7 @@ def _build_text_diff_response(
     """
     if current is None:
         return {
-            "kind": "text",
+            "kind": _TEXT_KIND,
             "backup_name": name,
             "domain": domain,
             "entity_id": entity_id,
@@ -746,7 +809,7 @@ def _build_text_diff_response(
     if truncated:
         lines = lines[:_MAX_DIFF_LINES]
     return {
-        "kind": "text",
+        "kind": _TEXT_KIND,
         "backup_name": name,
         "domain": domain,
         "entity_id": entity_id,
@@ -1699,7 +1762,7 @@ async def _restore_file(client: Any, entity_id: str, config: Any) -> Any:
     )
     if isinstance(result, dict):
         result = unwrap_service_response(result)
-        if not result.get("success", True):
+        if not result.get("success", False):
             raise HomeAssistantError(
                 f"write_file restore failed for {entity_id!r}: {result.get('error')}"
             )
@@ -1776,7 +1839,7 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     )
     if isinstance(result, dict):
         result = unwrap_service_response(result)
-        if not result.get("success", True):
+        if not result.get("success", False):
             raise HomeAssistantError(
                 f"edit_yaml_config restore failed for {entity_id!r}: "
                 f"{result.get('error')}"

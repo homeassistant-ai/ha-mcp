@@ -1,7 +1,10 @@
 """``@with_auto_backup`` decorator for write/destructive MCP tools (#1288).
 
-Applied above ``@mcp.tool(...)`` on each backed-up tool. Best-effort:
-backup capture failures log WARNING but never block the wrapped tool.
+Applied above ``@mcp.tool(...)`` on each backed-up tool. Best-effort by
+default: backup capture failures log WARNING but never block the wrapped
+tool. Tools decorated ``mandatory=True`` (file/YAML writes, #1579) instead
+fail closed — a genuine capture failure blocks the write with a structured
+``BACKUP_CAPTURE_FAILED`` error so content is never overwritten un-backed-up.
 
 Usage
 -----
@@ -29,7 +32,11 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..backup_manager import _CAPTURE_TRANSIENT_ERRORS, get_backup_manager
+from ..backup_manager import (
+    _CAPTURE_TRANSIENT_ERRORS,
+    MandatoryBackupError,
+    get_backup_manager,
+)
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import raise_tool_error
@@ -118,12 +125,20 @@ def with_auto_backup(
     Backup capture is best-effort: failure logs a WARNING and the wrapped
     write proceeds regardless.
 
-    ``mandatory=True`` makes auto-backup a precondition: when the master
-    toggle is off, the tool is refused with a structured error instead of
-    writing un-backed-up (file/YAML writes, #1579 — those formerly kept
-    their own private backups). The refusal is raised *before* the
-    best-effort capture's ``try`` so it can't be swallowed by the
-    transient-error handler (``ToolError`` is in that tuple).
+    ``mandatory=True`` makes auto-backup a precondition (file/YAML writes,
+    #1579 — those formerly kept their own private backups). It fails the
+    write closed in two cases, both with a structured error and without
+    calling the wrapped tool:
+
+    1. The master toggle is off — refused *before* the best-effort ``try``
+       so the refusal can't be swallowed (``ToolError`` is in the transient
+       tuple).
+    2. The toggle is on but capture genuinely fails — ``maybe_snapshot``
+       raises ``MandatoryBackupError`` (an unusable backup dir, a failed
+       fetch, or a failed snapshot write such as disk-full), caught here and
+       mapped to ``BACKUP_CAPTURE_FAILED``. A legitimate "nothing to
+       snapshot" skip (new file/key) is NOT a failure and lets the write
+       proceed.
     """
     if (domain is None) == (domain_fn is None):
         raise ValueError("with_auto_backup needs exactly one of domain or domain_fn")
@@ -135,12 +150,17 @@ def with_auto_backup(
     def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Mandatory gate — raised OUTSIDE the try below, because
-            # ``ToolError`` is in ``_DECORATOR_TRANSIENT_ERRORS`` and would
-            # otherwise be swallowed, letting an un-backed-up write through.
-            if mandatory and not getattr(
-                get_global_settings(), "enable_auto_backup", False
-            ):
+            # Settings + target resolution happen OUTSIDE the best-effort
+            # ``try`` below: under ``mandatory`` a transient-tuple error from
+            # ``get_global_settings`` / ``domain_fn`` / ``id_fn`` must NOT be
+            # swallowed (that would let an un-backed-up write through). Only the
+            # capture dispatch itself is wrapped.
+            settings = get_global_settings()
+            enabled = bool(getattr(settings, "enable_auto_backup", False))
+            # Mandatory gate — the toggle-off refusal is raised here, before the
+            # try, because ``ToolError`` is in ``_DECORATOR_TRANSIENT_ERRORS``
+            # and would otherwise be swallowed.
+            if mandatory and not enabled:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.CONFIG_VALIDATION_FAILED,
@@ -161,33 +181,59 @@ def with_auto_backup(
                         },
                     )
                 )
-            try:
-                settings = get_global_settings()
-                if getattr(settings, "enable_auto_backup", False):
-                    client_obj = explicit_client
-                    if client_obj is None and args:
-                        client_obj = getattr(args[0], "_client", None) or getattr(
-                            args[0], "client", None
-                        )
-                    if client_obj is not None:
-                        snap_domain: str = (
-                            domain_fn(kwargs) if domain_fn is not None else domain or ""
-                        )
-                        if id_fn is not None:
-                            entity_id = _resolve_str(id_fn(kwargs))
-                        else:
-                            entity_id = _resolve_str(kwargs.get(id_param or ""))
-                        if entity_id:
+            if enabled:
+                client_obj = explicit_client
+                if client_obj is None and args:
+                    client_obj = getattr(args[0], "_client", None) or getattr(
+                        args[0], "client", None
+                    )
+                snap_domain: str = (
+                    domain_fn(kwargs) if domain_fn is not None else domain or ""
+                )
+                if id_fn is not None:
+                    entity_id = _resolve_str(id_fn(kwargs))
+                else:
+                    entity_id = _resolve_str(kwargs.get(id_param or ""))
+                if entity_id:
+                    try:
+                        if client_obj is not None:
                             mgr = get_backup_manager(client_obj, settings)
                             await mgr.maybe_snapshot(
-                                snap_domain, entity_id, tool_name=func.__name__
+                                snap_domain,
+                                entity_id,
+                                tool_name=func.__name__,
+                                mandatory=mandatory,
                             )
-            except _DECORATOR_TRANSIENT_ERRORS as err:
-                logger.warning(
-                    "Auto-backup: pre-write hook raised %s: %s — write proceeding",
-                    type(err).__name__,
-                    err,
-                )
+                        elif mandatory:
+                            # No client to capture with, but this tool requires a
+                            # backup — fail closed rather than write un-backed-up.
+                            raise MandatoryBackupError(
+                                "no Home Assistant client is available to capture "
+                                "the pre-write backup"
+                            )
+                    except MandatoryBackupError as err:
+                        # A required pre-write snapshot genuinely failed (not a
+                        # legitimate "nothing to snapshot" skip). Fail closed: the
+                        # wrapped write never runs, so nothing has been changed.
+                        # The ToolError this raises propagates rather than being
+                        # swallowed by the best-effort handler below.
+                        raise_tool_error(
+                            create_error_response(
+                                ErrorCode.BACKUP_CAPTURE_FAILED,
+                                f"'{func.__name__}' requires a pre-write backup, "
+                                f"but the snapshot could not be captured: {err}. "
+                                "The write was blocked and nothing was changed.",
+                                suggestions=err.suggestions
+                                or ["Retry once the underlying issue is resolved"],
+                                context={"tool_name": func.__name__},
+                            )
+                        )
+                    except _DECORATOR_TRANSIENT_ERRORS as err:
+                        logger.warning(
+                            "Auto-backup: capture raised %s: %s — write proceeding",
+                            type(err).__name__,
+                            err,
+                        )
             return await func(*args, **kwargs)
 
         return wrapper
