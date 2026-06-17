@@ -75,6 +75,35 @@ class TestGetUpdateInfoGating:
         monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", _no_network)
         assert get_update_info() is None
 
+    @pytest.mark.parametrize(
+        "val,enabled",
+        [
+            ("1", False),
+            ("true", False),
+            ("TRUE", False),
+            ("yes", False),
+            ("on", False),
+            ("0", True),
+            ("false", True),
+            ("no", True),
+            ("off", True),
+            ("   ", True),
+        ],
+    )
+    def test_disable_env_parses_falsy_values(
+        self, monkeypatch: pytest.MonkeyPatch, val: str, enabled: bool
+    ) -> None:
+        """HA_MCP_DISABLE_UPDATE_CHECK=0/false/no/off (or blank) keeps the check
+        ENABLED — only truthy values disable it, so a user setting =0/=false to
+        'keep it on' isn't surprised."""
+        monkeypatch.setenv(update_check.DISABLE_ENV, val)
+        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", lambda _p: "7.9.0")
+        result = get_update_info()
+        if enabled:
+            assert result is not None  # the check ran
+        else:
+            assert result is None  # disabled
+
     def test_addon_env_does_not_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The add-on no longer suppresses the check itself — only the startup
         banner is add-on-suppressed (in __main__). The in-chat tool fields must
@@ -234,6 +263,12 @@ class TestGetUpdateField:
     async def test_swallows_unexpected_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        import functools
+
+        # lru_cache so get_update_field's cache_info() check works; it never
+        # caches (the call raises), so currsize stays 0 -> the to_thread path
+        # runs it and the error is swallowed.
+        @functools.lru_cache(maxsize=1)
         def boom() -> UpdateInfo | None:
             raise RuntimeError("boom")
 

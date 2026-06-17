@@ -62,7 +62,16 @@ class UpdateInfo:
 
 
 def _is_disabled() -> bool:
-    return bool(os.environ.get(DISABLE_ENV))
+    # Treat 0/false/no/off (and empty/unset) as NOT disabled, so a user who sets
+    # HA_MCP_DISABLE_UPDATE_CHECK=0 or =false to "keep it on" isn't surprised by
+    # any non-empty value silently disabling the check.
+    return os.environ.get(DISABLE_ENV, "").strip().lower() not in (
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    )
 
 
 def _is_newer(latest: str, current: str) -> bool:
@@ -148,7 +157,14 @@ async def get_update_field() -> dict[str, str | bool] | None:
     so the shaping and event-loop offload live in one place.
     """
     try:
-        info = await asyncio.to_thread(get_update_info)
+        # Once the lru_cache is warm (normally at startup), the result is a
+        # sub-microsecond cache hit, so call it directly. Only the cold first
+        # call — which may hit PyPI — is offloaded to a thread so it can't block
+        # the event loop.
+        if get_update_info.cache_info().currsize > 0:
+            info = get_update_info()
+        else:
+            info = await asyncio.to_thread(get_update_info)
     except Exception as err:  # pragma: no cover - defensive
         logger.debug("ha-mcp self-update check skipped: %s", err)
         return None
