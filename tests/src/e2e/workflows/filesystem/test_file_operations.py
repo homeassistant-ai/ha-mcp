@@ -1044,6 +1044,34 @@ class TestFileWriteAutoBackup:
             await safe_call_tool(mcp, "ha_delete_file", {"path": path, "confirm": True})
 
 
+@pytest.fixture
+def _auto_backup_disabled():
+    """Disable auto-backup for one test, then restore the env AND re-read the
+    settings singleton.
+
+    The settings singleton is cached, so flipping the env back (or letting
+    monkeypatch undo it) is not enough on its own — without a re-read the
+    disabled state leaks into later tests on the same xdist worker and makes
+    their mandatory writes refuse. Restoring + re-resetting in ``finally``
+    keeps the toggle scoped to this test.
+    """
+    import os
+
+    from ha_mcp.config import _reset_global_settings
+
+    prev = os.environ.get("ENABLE_AUTO_BACKUP")
+    os.environ["ENABLE_AUTO_BACKUP"] = "false"
+    _reset_global_settings()
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("ENABLE_AUTO_BACKUP", None)
+        else:
+            os.environ["ENABLE_AUTO_BACKUP"] = prev
+        _reset_global_settings()
+
+
 @pytest.mark.filesystem
 @pytest.mark.external_only
 class TestMandatoryBackupRefusal:
@@ -1058,13 +1086,8 @@ class TestMandatoryBackupRefusal:
     """
 
     async def test_write_refused_when_autobackup_disabled(
-        self, mcp_client_with_filesystem, monkeypatch
+        self, mcp_client_with_filesystem, _auto_backup_disabled
     ):
-        monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
-        from ha_mcp.config import _reset_global_settings
-
-        _reset_global_settings()
-
         marker = uuid.uuid4().hex[:8]
         path = f"www/_e2e_refuse_{marker}.css"
         result = await safe_call_tool(
