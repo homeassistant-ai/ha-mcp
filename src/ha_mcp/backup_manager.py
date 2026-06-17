@@ -53,9 +53,12 @@ from typing import Any, TypedDict
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
-from ruamel.yaml import YAML
-from ruamel.yaml import YAMLError as RuamelYAMLError
 
+# NB: ruamel.yaml is imported lazily inside ``_yaml_subtree_text`` (not at
+# module level). It is a PEP-420 namespace package that the PyInstaller
+# build cannot resolve when it imports ``ha_mcp`` during analysis; keeping
+# it out of the eager import chain lets the frozen binary build, while the
+# .spec's hiddenimports still bundle it for the runtime call.
 from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
 
 logger = logging.getLogger(__name__)
@@ -76,7 +79,6 @@ _CAPTURE_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     asyncio.TimeoutError,
     ConnectionError,
     yaml.YAMLError,
-    RuamelYAMLError,
     ToolError,
 )
 
@@ -121,16 +123,27 @@ def _yaml_subtree_text(content: str, yaml_path: str) -> str | None:
     One ``YAML`` instance is reused for load + dump: constructing it
     triggers ruamel's (filesystem-scanning) plugin discovery, so a second
     instance would double that cost on the write path for no benefit.
+
+    ruamel is imported lazily here (see the module-top note) and its
+    ``YAMLError`` is converted to ``HomeAssistantError`` so the capture
+    pipeline still treats malformed existing YAML as a transient WARNING
+    skip (``RuamelYAMLError`` is no longer in ``_CAPTURE_TRANSIENT_ERRORS``).
     """
+    from ruamel.yaml import YAML
+    from ruamel.yaml import YAMLError as RuamelYAMLError
+
     ry = YAML(typ="rt")
-    node: Any = ry.load(StringIO(content))
-    for seg in yaml_path.split("."):
-        if not isinstance(node, dict) or seg not in node:
-            return None
-        node = node[seg]
-    buf = StringIO()
-    ry.dump(node, buf)
-    return buf.getvalue()
+    try:
+        node: Any = ry.load(StringIO(content))
+        for seg in yaml_path.split("."):
+            if not isinstance(node, dict) or seg not in node:
+                return None
+            node = node[seg]
+        buf = StringIO()
+        ry.dump(node, buf)
+        return buf.getvalue()
+    except RuamelYAMLError as err:
+        raise HomeAssistantError(f"could not parse YAML for backup: {err}") from err
 
 
 # ----------------------------- handler protocol -----------------------------
@@ -1740,8 +1753,9 @@ async def _fetch_yaml(client: Any, entity_id: str) -> Any:
 
     Returns the subtree as round-trip text (comments + HA tags preserved),
     or None when the file or key is absent (new-key write — nothing to
-    snapshot). Malformed existing YAML surfaces as ``RuamelYAMLError``,
-    which the capture pipeline treats as a transient WARNING skip.
+    snapshot). Malformed existing YAML surfaces (via ``_yaml_subtree_text``)
+    as ``HomeAssistantError``, which the capture pipeline treats as a
+    transient WARNING skip.
     """
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response

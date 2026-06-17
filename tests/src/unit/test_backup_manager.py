@@ -1517,6 +1517,14 @@ class TestYamlSubtreeText:
     def test_non_mapping_root_returns_none(self) -> None:
         assert _yaml_subtree_text("- just\n- a\n- list\n", "anything") is None
 
+    def test_malformed_yaml_raises_ha_error(self) -> None:
+        # ruamel is imported lazily and its YAMLError is converted to
+        # HomeAssistantError so the capture pipeline treats malformed
+        # existing YAML as a transient WARNING skip (it is no longer in
+        # _CAPTURE_TRANSIENT_ERRORS directly).
+        with pytest.raises(HomeAssistantError):
+            _yaml_subtree_text("key: [1, 2\n", "key")
+
 
 class TestBuildTextDiffResponse:
     def test_changed_emits_unified_diff(self) -> None:
