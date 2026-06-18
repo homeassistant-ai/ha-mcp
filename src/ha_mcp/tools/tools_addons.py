@@ -2622,7 +2622,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         body: Annotated[
             dict[str, Any] | str | None,
             Field(
-                description="Proxy mode only. Request body for POST/PUT/PATCH. Pass a JSON object or JSON string.",
+                description="Proxy mode only. Request body for POST/PUT/PATCH — or, with websocket=True, the initial WebSocket message. Pass a JSON object or JSON string.",
                 default=None,
             ),
         ] = None,
@@ -2844,18 +2844,21 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         **ESPHome Device Builder dashboard (current rewrite):** config and log
         access is a WebSocket JSON-command API, NOT REST. The legacy endpoints
-        (`GET /edit?configuration=`, and the `/compile` `/validate` `/logs`
-        WebSocket paths taking `{"type": "spawn", ...}` bodies) are gone — they
-        now return the dashboard SPA. Use instead:
+        are gone — `GET /edit?configuration=` now returns the dashboard SPA, and
+        the old `/compile` `/validate` `/logs` WebSocket paths (which took
+        `{"type": "spawn", ...}` bodies) reject the upgrade (HTTP 200). Use
+        instead:
         - HTTP `GET /devices` → JSON list of configured devices; each entry's
           `configuration` field is the YAML filename to pass below.
         - WebSocket `path="/ws"` with body
           `{"command": "<cmd>", "message_id": "1", "args": {...}}`. The server
           sends a `server_info` message first, then one reply per `message_id`.
-          Useful commands: `devices/get_config` `{configuration}` → raw YAML
-          (in the reply's `result`); `devices/update_config` `{configuration,
-          content}` → save; `devices/logs` (stream) `{configuration, port:
-          "OTA"}` → live device logs; `devices/validate`; `firmware/compile`.
+          Wire-confirmed commands: `devices/get_config` `{configuration}` → raw
+          YAML (in the reply's `result`); `devices/logs` (stream)
+          `{configuration, port: "OTA"}` → live device logs. Also exposed by the
+          dashboard frontend (command/arg names not wire-tested here):
+          `devices/update_config` `{configuration, content}` → save,
+          `devices/validate`, `firmware/compile`.
         - The `/ws` channel stays open, so for a one-shot read or a bounded log
           capture pass `wait_for_close=False` with `message_limit` (and
           `message_offset` to skip the server_info / config-banner preamble).
