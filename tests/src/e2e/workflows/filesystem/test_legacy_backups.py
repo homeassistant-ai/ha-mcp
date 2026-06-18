@@ -9,12 +9,15 @@ the legacy store against real artifacts staged by the fixture.
 The two ``.bak`` files are seeded **pre-boot** by ``ha_container_with_fresh_config``
 (see ``_seed_legacy_yaml_backups`` in conftest) — a post-boot host write to the
 bind-mounted config dir doesn't propagate in CI, so the round-trip reads
-fixture-staged files that exist when the component boots. The toggle-off
-mandatory-write refusal is covered separately by
-``TestMandatoryBackupRefusal`` in ``test_file_operations.py``.
+fixture-staged files that exist when the component boots. That staging only runs
+on the testcontainer backend (HAOS/inaddon has no host ``config_path``), so these
+tests skip on other backends. The toggle-off mandatory-write refusal is covered
+separately by ``TestMandatoryBackupRefusal`` in ``test_file_operations.py``.
 """
 
 import logging
+
+import pytest
 
 from ...utilities.assertions import extract_error_message, safe_call_tool
 
@@ -24,6 +27,15 @@ logger = logging.getLogger(__name__)
 # Fixed artifacts staged pre-boot by conftest._seed_legacy_yaml_backups.
 _UNAMBIGUOUS = "legacy:themes_e2elegacy.yaml.20200101_000000.bak"
 _AMBIGUOUS = "legacy:packages_foo_bar.yaml.20200101_000000.bak"
+
+
+def _require_seeded_backend(container_info: dict) -> None:
+    """Skip unless the legacy ``.bak`` were staged (testcontainer backend only)."""
+    if container_info.get("backend") != "container":
+        pytest.skip(
+            "legacy-backup e2e relies on the pre-boot seed in the container "
+            "config_path (testcontainer backend only)"
+        )
 
 
 def _legacy_entry(listed: dict, name: str) -> dict:
@@ -37,8 +49,11 @@ def _legacy_entry(listed: dict, name: str) -> dict:
 class TestLegacyBackupAccess:
     """Legacy .ha_mcp_tools_backups/ surfaced through ha_manage_backup edits."""
 
-    async def test_list_view_diff_restore_unambiguous(self, mcp_client_with_filesystem):
-        mcp = mcp_client_with_filesystem
+    async def test_list_view_diff_restore_unambiguous(
+        self, ha_container_with_fresh_config, mcp_client
+    ):
+        _require_seeded_backend(ha_container_with_fresh_config)
+        mcp = mcp_client
 
         # LIST — the seeded legacy entry surfaces with source + decoded path.
         listed = await safe_call_tool(
@@ -60,7 +75,7 @@ class TestLegacyBackupAccess:
         assert viewed.get("success") is True, viewed
         assert "e2elegacy" in viewed["data"]["content"], viewed
 
-        # DIFF — text diff (file may or may not exist; kind is always text).
+        # DIFF — text diff against the (currently absent) live file.
         diff = await safe_call_tool(
             mcp,
             "ha_manage_backup",
@@ -79,17 +94,21 @@ class TestLegacyBackupAccess:
         assert restored["data"]["domain"] == "yaml_file", restored
         assert restored["data"]["entity_id"] == "themes/e2elegacy.yaml", restored
 
-        # The file now exists on disk with the restored content.
-        read = await safe_call_tool(
-            mcp, "ha_read_file", {"path": "themes/e2elegacy.yaml"}
+        # Re-diff — the live file now matches the backup, proving the restore
+        # actually wrote it (no filesystem tool needed).
+        rediff = await safe_call_tool(
+            mcp,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "diff", "backup_name": _UNAMBIGUOUS},
         )
-        assert read.get("success") is True, read
-        assert "e2elegacy" in read["content"], read["content"]
+        assert rediff.get("success") is True, rediff
+        assert rediff["data"]["unchanged"] is True, rediff
 
     async def test_ambiguous_name_restore_refused_but_view_works(
-        self, mcp_client_with_filesystem
+        self, ha_container_with_fresh_config, mcp_client
     ):
-        mcp = mcp_client_with_filesystem
+        _require_seeded_backend(ha_container_with_fresh_config)
+        mcp = mcp_client
 
         listed = await safe_call_tool(
             mcp, "ha_manage_backup", {"scope": "edits", "action": "list"}
