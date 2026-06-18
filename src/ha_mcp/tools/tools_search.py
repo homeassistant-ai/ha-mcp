@@ -1896,13 +1896,14 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "notification_count, notifications, repair_count, "
                     "dismissed_repair_count, repairs, repairs_error, "
                     "tool_discovery, settings_url, settings_url_hint, "
-                    "read_only_mode, read_only_mode_hint. Note: "
+                    "read_only_mode, read_only_mode_hint, ha_mcp_update. Note: "
                     "``settings_url`` (stdio mode), ``settings_url_hint`` "
-                    "(HTTP/Docker/OAuth mode), and the ``read_only_mode`` / "
+                    "(HTTP/Docker/OAuth mode), the ``read_only_mode`` / "
                     "``read_only_mode_hint`` pair (only while Read Only Mode "
-                    "is on) are emitted regardless of ``fields=`` projection "
-                    "so the settings page and the active mode stay "
-                    "discoverable; see the tool description."
+                    "is on), and ``ha_mcp_update`` (when an update check applies) "
+                    "are emitted regardless of ``fields=`` projection so the "
+                    "settings page, the active mode, and a newer ha-mcp release "
+                    "stay discoverable; see the tool description."
                 ),
             ),
         ] = None,
@@ -1936,6 +1937,13 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         instead carries a ``settings_url_hint`` string telling the user where
         the page is mounted and to read the full URL from the startup logs.
         Hand whichever of the two fields is present to the user.
+
+        The response also carries an ``ha_mcp_update`` object
+        ``{current, latest, update_available}`` reporting whether a newer ha-mcp
+        release is available (PyPI for pip/Docker, the Supervisor add-on store
+        for the add-on) — proactively tell the user when ``update_available`` is
+        true. Emitted regardless of ``fields=``; omitted only for the
+        ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields" (ha_get_overview has no outer try/except, so
@@ -2171,6 +2179,17 @@ def register_search_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "the ha-mcp settings UI (Tools tab) or the add-on "
                 "configuration."
             )
+
+        # Surface the MCP server's own update status after projection (like
+        # settings_url / read_only_mode) so it survives any fields= filter — the
+        # model should learn about a newer ha-mcp release even from a minimal
+        # overview, the most common session-start call. Best-effort and never
+        # raises; see ha_mcp.update_check.
+        from ..update_check import get_update_field
+
+        mcp_update = await get_update_field()
+        if mcp_update is not None:
+            projected["ha_mcp_update"] = mcp_update
 
         return projected
 

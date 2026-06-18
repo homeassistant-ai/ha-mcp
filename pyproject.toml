@@ -33,6 +33,7 @@ dependencies = [
     "cryptography==49.0.0",
     "pydantic-monty==0.0.18",
     "tzdata>=2024.1",
+    "packaging>=24.0",
 ]
 
 [project.urls]

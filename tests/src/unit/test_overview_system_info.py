@@ -546,6 +546,86 @@ class TestHaGetOverviewReadOnlyMode:
         assert "Read Only Mode is ON" in result.get("read_only_mode_hint", "")
 
 
+class TestHaGetOverviewHaMcpUpdate:
+    """ha_get_overview surfaces the MCP server's own update status."""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        mcp = MagicMock()
+        self.registered_tools: dict = {}
+
+        def tool_decorator(*args, **kwargs):
+            def wrapper(func):
+                self.registered_tools[func.__name__] = func
+                return func
+
+            return wrapper
+
+        mcp.tool = tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://localhost:8123"
+        client.get_config = AsyncMock(return_value={})
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        return client
+
+    @pytest.fixture
+    def mock_smart_tools(self):
+        smart = MagicMock()
+        smart.get_system_overview = AsyncMock(return_value={"success": True})
+        return smart
+
+    @pytest.fixture
+    def overview_tool(self, mock_mcp, mock_client, mock_smart_tools):
+        register_search_tools(mock_mcp, mock_client, smart_tools=mock_smart_tools)
+        return self.registered_tools["ha_get_overview"]
+
+    @pytest.mark.asyncio
+    async def test_ha_mcp_update_present_and_survives_projection(
+        self, overview_tool, monkeypatch
+    ):
+        """When a notice applies, ``ha_mcp_update`` is emitted AND survives a
+        narrow ``fields=["system_info"]`` projection (like ``settings_url`` /
+        ``read_only_mode``) so a minimal overview still surfaces it."""
+        from ha_mcp import update_check
+
+        monkeypatch.setattr(
+            update_check,
+            "get_update_field",
+            AsyncMock(
+                return_value={
+                    "current": "7.8.0",
+                    "latest": "7.9.0",
+                    "update_available": True,
+                }
+            ),
+        )
+        result = await overview_tool(fields=["system_info"])
+        assert "system_info" in result
+        assert result["ha_mcp_update"] == {
+            "current": "7.8.0",
+            "latest": "7.9.0",
+            "update_available": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_ha_mcp_update_absent_when_check_not_applicable(
+        self, overview_tool, monkeypatch
+    ):
+        """No notice (dev/unknown/opt-out → ``get_update_field`` returns None) →
+        the key is omitted entirely, not emitted as null."""
+        from ha_mcp import update_check
+
+        monkeypatch.setattr(
+            update_check, "get_update_field", AsyncMock(return_value=None)
+        )
+        result = await overview_tool(detail_level="minimal")
+        assert "ha_mcp_update" not in result
+
+
 class TestHaGetOverviewAlwaysEmittedKeys:
     """Keys advertised in the ``fields=`` docstring must always be in
     the result so ``fields=[<key>]`` never trips the ``project_fields``
