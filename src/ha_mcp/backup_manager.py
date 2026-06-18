@@ -116,7 +116,18 @@ _FILENAME_RE = re.compile(
 # than a structured dict. They carry a ``kind: "text"`` marker in the
 # snapshot payload and diff via a unified text diff instead of JSON-Patch
 # (#1579 PR2). Everything else is the implicit ``"dict"`` kind.
-_TEXT_DOMAINS = frozenset({"file", "yaml"})
+#
+# ``yaml_file`` is a whole-file YAML-config snapshot: same fetch as ``file``
+# (read_file), but restored via edit_yaml_config(action="replace_file") because
+# write_file rejects config files. It backs the pre-restore safety snapshot and
+# the legacy-store restore (#1579).
+_TEXT_DOMAINS = frozenset({"file", "yaml", "yaml_file"})
+
+# Pre-#1579 backups (``.ha_mcp_tools_backups/*.bak``) are surfaced through the
+# same scope="edits" actions under a synthetic name ``legacy:<filename>``. The
+# ":" never appears in a real snapshot filename (see ``_FILENAME_RE``), so the
+# prefix is an unambiguous routing discriminator.
+LEGACY_PREFIX = "legacy:"
 
 # Discriminator values for the snapshot ``kind`` marker and the
 # DiffResponse/DiffResponseText union. Typed as ``Literal`` so they satisfy
@@ -607,6 +618,10 @@ class BackupManager:
     async def restore_snapshot(
         self, name: str, *, take_safety_backup: bool = True
     ) -> dict[str, Any]:
+        if name.startswith(LEGACY_PREFIX):
+            return await self._restore_legacy(
+                name[len(LEGACY_PREFIX) :], take_safety_backup=take_safety_backup
+            )
         data = await asyncio.to_thread(self.read_snapshot, name)
         domain = data["domain"]
         entity_id = data["entity_id"]
@@ -648,6 +663,8 @@ class BackupManager:
         target to match, so "no action needed" would be wrong (the
         empty diff is an artefact of the missing target, not a match).
         """
+        if name.startswith(LEGACY_PREFIX):
+            return await self._diff_legacy(name[len(LEGACY_PREFIX) :])
         data = await asyncio.to_thread(self.read_snapshot, name)
         domain = data["domain"]
         entity_id = data["entity_id"]
@@ -684,6 +701,141 @@ class BackupManager:
             counts=_summarize_patch_counts(patch),
             truncated=truncated,
         )
+
+    # ----- legacy store (pre-#1579 .ha_mcp_tools_backups/) ---------------
+
+    async def list_legacy(self) -> list[dict[str, Any]]:
+        """List pre-#1579 ``.bak`` backups via the component service.
+
+        Each entry is normalized to a synthetic ``name`` (``legacy:<file>``)
+        plus ``source="legacy"`` and the decode hints (``file_path`` /
+        ``path_ambiguous``) so the caller can route view/diff/restore and warn
+        on un-restorable (ambiguous) names. Returns ``[]`` when the component
+        is too old to expose the service, so ``list`` still works.
+        """
+        backups = await _list_legacy_backups(self._client)
+        out: list[dict[str, Any]] = []
+        for b in backups:
+            filename = b.get("filename")
+            if not isinstance(filename, str):
+                continue
+            out.append(
+                {
+                    "name": f"{LEGACY_PREFIX}{filename}",
+                    "domain": "yaml_file",
+                    "entity_id": b.get("file_path"),
+                    "timestamp": b.get("timestamp"),
+                    "size": b.get("size"),
+                    "source": "legacy",
+                    "path_ambiguous": b.get("path_ambiguous", True),
+                }
+            )
+        return out
+
+    async def read_legacy(self, filename: str) -> dict[str, Any]:
+        """Read one legacy ``.bak`` (raw content + decode hints).
+
+        Maps a service-level failure to the same error types the edits-store
+        read raises, so the tool layer's existing handling applies unchanged: a
+        missing backup → ``FileNotFoundError``, anything else → ``ValueError``.
+        """
+        info = await _read_legacy_backup(self._client, filename)
+        if not info.get("success", False):
+            err = str(info.get("error", ""))
+            if "does not exist" in err or "not found" in err.lower():
+                raise FileNotFoundError(filename)
+            raise ValueError(f"Cannot read legacy backup {filename!r}: {err}")
+        return info
+
+    async def list_edits_and_legacy(
+        self,
+        *,
+        domain: str | None = None,
+        entity_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Edits-store snapshots plus pre-#1579 legacy ``.bak`` entries (#1579).
+
+        ``list_snapshots`` is sync (dir glob, run off-thread); the legacy store
+        is an async component service call — so the merge lives here, off the
+        sync path, keeping the tool layer source-agnostic. Legacy maps to the
+        ``yaml_file`` domain and is merged only on an unfiltered (or explicitly
+        ``yaml_file``) list: its decoded ``entity_id`` is a best-effort path,
+        not the sanitized form the entity filter matches on.
+        """
+        entries = await asyncio.to_thread(
+            self.list_snapshots, domain=domain, entity_id=entity_id, limit=limit
+        )
+        if domain in (None, "yaml_file") and entity_id is None:
+            entries.extend(await self.list_legacy())
+            if limit:
+                entries = entries[:limit]
+        return entries
+
+    async def _diff_legacy(self, filename: str) -> DiffResponseText:
+        info = await self.read_legacy(filename)
+        stored = info.get("content")
+        if not isinstance(stored, str):
+            stored = ""
+        file_path = info.get("file_path")
+        # Ambiguous/undecodable name → no trustworthy live target to diff
+        # against; show the stored content as a full add (entity_missing form).
+        current: Any = None
+        if file_path and not info.get("path_ambiguous", True):
+            current = await _fetch_file(self._client, file_path)
+        return _build_text_diff_response(
+            f"{LEGACY_PREFIX}{filename}",
+            "yaml_file",
+            file_path or filename,
+            info.get("timestamp"),
+            stored,
+            current,
+        )
+
+    async def _restore_legacy(
+        self, filename: str, *, take_safety_backup: bool = True
+    ) -> dict[str, Any]:
+        info = await self.read_legacy(filename)
+        file_path = info.get("file_path")
+        if not file_path or info.get("path_ambiguous", True):
+            raise ValueError(
+                f"Cannot auto-restore {filename!r}: its original path can't be "
+                "unambiguously recovered from the backup filename. View it "
+                "(action='view') and restore the content manually to the "
+                "intended file via ha_config_set_yaml."
+            )
+        content = info.get("content")
+        if not isinstance(content, str):
+            raise ValueError(f"Legacy backup {filename!r} has no readable content")
+        handler = self._handlers.get("yaml_file")
+        if handler is None:
+            raise LookupError("No restore handler registered for domain 'yaml_file'")
+        # Pre-restore safety: capture the file's CURRENT whole content so this
+        # overwrite is itself undoable. MANDATORY (fail-closed): a legacy restore
+        # overwrites the entire config file, so — unlike the per-key
+        # restore_snapshot — a genuine capture failure raises MandatoryBackupError
+        # and the restore never runs, matching Blocker B's "block the write when a
+        # backup can't be taken" (#1579). The tool layer maps that to
+        # BACKUP_CAPTURE_FAILED, exactly as the @with_auto_backup write path does.
+        # A legitimate "nothing to snapshot" (target file absent) still returns
+        # None and proceeds. force=True bypasses the throttle/toggle.
+        safety_path: Path | None = None
+        if take_safety_backup:
+            safety_path = await self.maybe_snapshot(
+                "yaml_file",
+                file_path,
+                tool_name="ha_manage_backup.restore.legacy.safety",
+                force=True,
+                mandatory=True,
+            )
+        result = await handler.restore(self._client, file_path, content)
+        return {
+            "restored_from": f"{LEGACY_PREFIX}{filename}",
+            "domain": "yaml_file",
+            "entity_id": file_path,
+            "safety_backup": safety_path.name if safety_path else None,
+            "result": result,
+        }
 
 
 # --------------------------- diff helpers -----------------------------------
@@ -1847,6 +1999,85 @@ async def _restore_yaml(client: Any, entity_id: str, config: Any) -> Any:
     return result
 
 
+async def _restore_yaml_file(client: Any, entity_id: str, config: Any) -> Any:
+    """Re-write a whole YAML config file via edit_yaml_config(replace_file).
+
+    ``entity_id`` is the config-relative file path. ``write_file`` rejects HA
+    config files, so a whole-file restore goes through edit_yaml_config's
+    ``replace_file`` action (#1579): it validates the path against the same
+    allowlist and writes the content verbatim + atomically.
+    """
+    from .tools.tools_filesystem import call_mcp_tools_service
+    from .tools.util_helpers import unwrap_service_response
+
+    result = await call_mcp_tools_service(
+        client,
+        "edit_yaml_config",
+        {
+            "file": entity_id,
+            "action": "replace_file",
+            "yaml_path": "",
+            "content": str(config),
+        },
+    )
+    if isinstance(result, dict):
+        result = unwrap_service_response(result)
+        if not result.get("success", False):
+            raise HomeAssistantError(
+                f"edit_yaml_config replace_file restore failed for "
+                f"{entity_id!r}: {result.get('error')}"
+            )
+    return result
+
+
+async def _list_legacy_backups(client: Any) -> list[dict[str, Any]]:
+    """Fetch pre-#1579 ``.bak`` backups via the component list_legacy_backups
+    service.
+
+    Returns ``[]`` (logged at debug) when the component predates the service —
+    a service-unavailable rejection surfaces either as a ``success: False``
+    response or a ``HomeAssistantError`` — so the edits ``list`` still works
+    against an older standalone component. Genuine programming errors propagate.
+    """
+    from .tools.tools_filesystem import call_mcp_tools_service
+    from .tools.util_helpers import unwrap_service_response
+
+    try:
+        result = await call_mcp_tools_service(client, "list_legacy_backups", {})
+    except HomeAssistantError as err:
+        logger.debug("legacy backup list unavailable: %s", err)
+        return []
+    if not isinstance(result, dict):
+        return []
+    result = unwrap_service_response(result)
+    if not result.get("success", False):
+        return []
+    backups = result.get("backups")
+    return backups if isinstance(backups, list) else []
+
+
+async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
+    """Read one legacy ``.bak`` via the component read_legacy_backup service.
+
+    Returns the unwrapped service response (carries ``success`` / ``content`` /
+    ``file_path`` / ``path_ambiguous`` / ``timestamp``). A service-unavailable
+    ``HomeAssistantError`` is mapped to a ``success: False`` dict so the caller
+    surfaces a not-found rather than crashing.
+    """
+    from .tools.tools_filesystem import call_mcp_tools_service
+    from .tools.util_helpers import unwrap_service_response
+
+    try:
+        result = await call_mcp_tools_service(
+            client, "read_legacy_backup", {"filename": filename}
+        )
+    except HomeAssistantError as err:
+        return {"success": False, "error": str(err)}
+    if not isinstance(result, dict):
+        return {"success": False, "error": f"no response for {filename!r}"}
+    return unwrap_service_response(result)
+
+
 def _make_helper_handler(helper_type: str) -> DomainHandler:
     async def fetch(client: Any, entity_id: str) -> Any:
         return await _fetch_helper(client, entity_id, helper_type)
@@ -1896,5 +2127,9 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     mgr.register(DomainHandler("integration", _fetch_integration, _restore_integration))
     mgr.register(DomainHandler("file", _fetch_file, _restore_file))
     mgr.register(DomainHandler("yaml", _fetch_yaml, _restore_yaml))
+    # Whole-file YAML config: same fetch as "file" (read_file), but restored via
+    # edit_yaml_config(replace_file) since write_file rejects config files.
+    # Backs the legacy-restore write path and its pre-restore safety snapshot.
+    mgr.register(DomainHandler("yaml_file", _fetch_file, _restore_yaml_file))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))

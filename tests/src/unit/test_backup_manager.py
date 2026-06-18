@@ -1957,3 +1957,370 @@ class TestMandatoryGate:
 
         tool = self._decorate(mandatory=False)
         assert await tool(_Self(), path="www/x.css") == "wrote"
+
+
+# ----------------------------------------------------------------- #1579 PR2
+# legacy store (.ha_mcp_tools_backups/) surfaced through scope="edits"
+
+
+class TestYamlFileHandler:
+    """yaml_file domain: whole-file config restore via edit_yaml_config(replace_file)."""
+
+    def test_is_text_domain(self) -> None:
+        assert "yaml_file" in bm._TEXT_DOMAINS
+
+    async def test_registered_in_defaults(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, _StubClient())
+        assert mgr.handler_for("yaml_file") is not None
+        assert "yaml_file" in mgr.supported_domains()
+
+    async def test_restore_calls_replace_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[Any] = []
+        _patch_services(monkeypatch, {"edit_yaml_config": {"success": True}}, calls)
+        await bm._restore_yaml_file(_StubClient(), "configuration.yaml", "a: 1\n")
+        service, data = calls[0]
+        assert service == "edit_yaml_config"
+        assert data["file"] == "configuration.yaml"
+        assert data["action"] == "replace_file"
+        assert data["yaml_path"] == ""
+        assert data["content"] == "a: 1\n"
+
+    async def test_restore_failure_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {"edit_yaml_config": {"success": False, "error": "bad path"}},
+            [],
+        )
+        with pytest.raises(HomeAssistantError):
+            await bm._restore_yaml_file(_StubClient(), "configuration.yaml", "a: 1\n")
+
+
+class TestLegacyList:
+    async def test_unavailable_service_degrades_to_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def boom(_c: Any, _s: str, _d: dict[str, Any]) -> Any:
+            raise HomeAssistantError("service not found")
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", boom
+        )
+        assert await bm._list_legacy_backups(_StubClient()) == []
+
+    async def test_unsuccessful_response_degrades_to_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(monkeypatch, {"list_legacy_backups": {"success": False}}, [])
+        assert await bm._list_legacy_backups(_StubClient()) == []
+
+    async def test_manager_normalizes_entries(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {
+                "list_legacy_backups": {
+                    "success": True,
+                    "backups": [
+                        {
+                            "filename": "configuration.yaml.20260101_120000.bak",
+                            "file_path": "configuration.yaml",
+                            "path_ambiguous": False,
+                            "timestamp": "20260101_120000",
+                            "size": 12,
+                        }
+                    ],
+                }
+            },
+            [],
+        )
+        mgr = _mk_manager(tmp_path)
+        out = await mgr.list_legacy()
+        assert out[0]["name"] == "legacy:configuration.yaml.20260101_120000.bak"
+        assert out[0]["domain"] == "yaml_file"
+        assert out[0]["source"] == "legacy"
+        assert out[0]["entity_id"] == "configuration.yaml"
+        assert out[0]["path_ambiguous"] is False
+
+
+class TestLegacyRead:
+    async def test_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {
+                "read_legacy_backup": {
+                    "success": True,
+                    "content": "a: 1\n",
+                    "file_path": "configuration.yaml",
+                    "path_ambiguous": False,
+                }
+            },
+            [],
+        )
+        mgr = _mk_manager(tmp_path)
+        info = await mgr.read_legacy("configuration.yaml.20260101_120000.bak")
+        assert info["content"] == "a: 1\n"
+
+    async def test_not_found_raises_filenotfound(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {
+                "read_legacy_backup": {
+                    "success": False,
+                    "error": "Backup does not exist: x",
+                }
+            },
+            [],
+        )
+        mgr = _mk_manager(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            await mgr.read_legacy("x.bak")
+
+    async def test_other_error_raises_valueerror(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {
+                "read_legacy_backup": {
+                    "success": False,
+                    "error": "Invalid backup filename",
+                }
+            },
+            [],
+        )
+        mgr = _mk_manager(tmp_path)
+        with pytest.raises(ValueError):
+            await mgr.read_legacy("bad")
+
+
+class TestLegacyDiff:
+    async def test_unambiguous_diffs_against_current(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {
+                "read_legacy_backup": {
+                    "success": True,
+                    "content": "a: 1\nb: 2\n",
+                    "file_path": "configuration.yaml",
+                    "path_ambiguous": False,
+                    "timestamp": "20260101_120000",
+                },
+                "read_file": {"success": True, "content": "a: 1\n"},
+            },
+            [],
+        )
+        mgr = _mk_manager(tmp_path)
+        diff = await mgr.diff_snapshot("legacy:configuration.yaml.20260101_120000.bak")
+        assert diff["kind"] == "text"
+        assert diff["entity_missing"] is False
+        assert "b: 2" in diff["diff"]
+
+    async def test_ambiguous_is_entity_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # file_path None / ambiguous → no trustworthy live target → entity_missing,
+        # and read_file must NOT be called (no response stubbed for it).
+        _patch_services(
+            monkeypatch,
+            {
+                "read_legacy_backup": {
+                    "success": True,
+                    "content": "a: 1\n",
+                    "file_path": None,
+                    "path_ambiguous": True,
+                    "timestamp": None,
+                }
+            },
+            [],
+        )
+        mgr = _mk_manager(tmp_path)
+        diff = await mgr.diff_snapshot("legacy:weird_name.bak")
+        assert diff["entity_missing"] is True
+
+
+class TestLegacyRestore:
+    async def test_happy_path_replace_file_with_safety(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[Any] = []
+        _patch_services(
+            monkeypatch,
+            {
+                "read_legacy_backup": {
+                    "success": True,
+                    "content": "a: 1\n",
+                    "file_path": "configuration.yaml",
+                    "path_ambiguous": False,
+                    "timestamp": "20260101_120000",
+                },
+                "read_file": {"success": True, "content": "a: OLD\n"},
+                "edit_yaml_config": {"success": True},
+            },
+            calls,
+        )
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, _StubClient())
+        result = await mgr.restore_snapshot(
+            "legacy:configuration.yaml.20260101_120000.bak"
+        )
+        assert (
+            result["restored_from"] == "legacy:configuration.yaml.20260101_120000.bak"
+        )
+        assert result["domain"] == "yaml_file"
+        assert result["entity_id"] == "configuration.yaml"
+        # Pre-restore safety snapshot of the current whole file was captured...
+        assert result["safety_backup"] is not None
+        # ...and it actually landed on disk (mandatory — not just a metadata
+        # field): a real yaml_file snapshot holding the prior content.
+        safety_files = list(tmp_path.glob("yaml_file.*.yaml"))
+        assert len(safety_files) == 1, safety_files
+        assert safety_files[0].name == result["safety_backup"]
+        assert "a: OLD" in safety_files[0].read_text()
+        # The restore wrote via replace_file, not write_file.
+        assert any(
+            s == "edit_yaml_config" and d["action"] == "replace_file" for s, d in calls
+        )
+
+    async def test_ambiguous_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {
+                "read_legacy_backup": {
+                    "success": True,
+                    "content": "a: 1\n",
+                    "file_path": None,
+                    "path_ambiguous": True,
+                    "timestamp": None,
+                }
+            },
+            [],
+        )
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, _StubClient())
+        with pytest.raises(ValueError, match="unambiguously"):
+            await mgr.restore_snapshot("legacy:weird.bak")
+
+    async def test_missing_content_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {
+                "read_legacy_backup": {
+                    "success": True,
+                    "content": None,
+                    "file_path": "configuration.yaml",
+                    "path_ambiguous": False,
+                }
+            },
+            [],
+        )
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, _StubClient())
+        with pytest.raises(ValueError):
+            await mgr.restore_snapshot("legacy:configuration.yaml.20260101_120000.bak")
+
+    async def test_safety_capture_failure_blocks_restore(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A genuine safety-snapshot failure fails the restore CLOSED — the
+        MandatoryBackupError propagates (not swallowed), so the tool layer maps
+        it to BACKUP_CAPTURE_FAILED and nothing is overwritten un-backed-up."""
+        _patch_services(
+            monkeypatch,
+            {
+                "read_legacy_backup": {
+                    "success": True,
+                    "content": "a: 1\n",
+                    "file_path": "configuration.yaml",
+                    "path_ambiguous": False,
+                    "timestamp": "20260101_120000",
+                }
+            },
+            [],
+        )
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, _StubClient())
+
+        async def _boom(*_a: Any, **_k: Any) -> Any:
+            raise bm.MandatoryBackupError("backup dir unusable")
+
+        monkeypatch.setattr(mgr, "maybe_snapshot", _boom)
+        with pytest.raises(bm.MandatoryBackupError):
+            await mgr.restore_snapshot("legacy:configuration.yaml.20260101_120000.bak")
+
+
+class TestListEditsAndLegacy:
+    """list_edits_and_legacy merges edits snapshots + legacy entries (#1579)."""
+
+    async def test_merges_when_unfiltered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        monkeypatch.setattr(
+            mgr,
+            "list_snapshots",
+            lambda **_kw: [{"name": "file.x.20260101_000000.yaml", "domain": "file"}],
+        )
+
+        async def _legacy() -> list[Any]:
+            return [{"name": "legacy:configuration.yaml.20200101_000000.bak"}]
+
+        monkeypatch.setattr(mgr, "list_legacy", _legacy)
+        names = [e["name"] for e in await mgr.list_edits_and_legacy()]
+        assert "file.x.20260101_000000.yaml" in names
+        assert "legacy:configuration.yaml.20200101_000000.bak" in names
+
+    async def test_legacy_skipped_when_filtered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        monkeypatch.setattr(mgr, "list_snapshots", lambda **_kw: [])
+
+        async def _legacy() -> list[Any]:
+            return [{"name": "legacy:x.bak"}]
+
+        monkeypatch.setattr(mgr, "list_legacy", _legacy)
+        # A non-yaml_file domain filter excludes legacy (legacy maps to yaml_file).
+        assert await mgr.list_edits_and_legacy(domain="automation") == []
+        # An entity_id filter excludes legacy (decoded path != sanitized filter).
+        assert await mgr.list_edits_and_legacy(entity_id="foo") == []
+        # Unfiltered (or explicit yaml_file) surfaces it.
+        out = await mgr.list_edits_and_legacy()
+        assert any(e["name"] == "legacy:x.bak" for e in out)
+        out2 = await mgr.list_edits_and_legacy(domain="yaml_file")
+        assert any(e["name"] == "legacy:x.bak" for e in out2)
+
+    async def test_limit_truncates_combined(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        monkeypatch.setattr(
+            mgr,
+            "list_snapshots",
+            lambda **_kw: [
+                {"name": f"file.e{i}.20260101_000000.yaml"} for i in range(3)
+            ],
+        )
+
+        async def _legacy() -> list[Any]:
+            return [{"name": "legacy:a.bak"}, {"name": "legacy:b.bak"}]
+
+        monkeypatch.setattr(mgr, "list_legacy", _legacy)
+        # 3 edits + 2 legacy = 5, capped to 4 across BOTH sources.
+        out = await mgr.list_edits_and_legacy(limit=4)
+        assert len(out) == 4

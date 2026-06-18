@@ -24,7 +24,11 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from ..backup_manager import get_backup_manager
+from ..backup_manager import (
+    LEGACY_PREFIX,
+    MandatoryBackupError,
+    get_backup_manager,
+)
 from ..client.rest_client import HomeAssistantClient, HomeAssistantError
 from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..config import get_global_settings
@@ -1100,11 +1104,10 @@ def register_backup_tools(
             }
 
         if action == "list":
-            # list_snapshots does sync directory globbing + per-file stat;
-            # offload to the executor so it doesn't block the event loop
-            # when the backup dir holds many files.
-            entries = await asyncio.to_thread(
-                mgr.list_snapshots,
+            # Edits-store snapshots + pre-#1579 legacy .bak entries (#1579).
+            # The manager owns the merge (sync dir-glob off-thread + async
+            # legacy service call) so this layer stays source-agnostic.
+            entries = await mgr.list_edits_and_legacy(
                 domain=domain,
                 entity_id=entity_id,
                 limit=limit,
@@ -1124,7 +1127,12 @@ def register_backup_tools(
         if action == "view":
             bname = _require("backup_name", backup_name, scope, action)
             try:
-                data = await asyncio.to_thread(mgr.read_snapshot, bname)
+                if bname.startswith(LEGACY_PREFIX):
+                    # Legacy read is an async service call (component-side store),
+                    # not a local-dir read; same FileNotFound/ValueError contract.
+                    data = await mgr.read_legacy(bname[len(LEGACY_PREFIX) :])
+                else:
+                    data = await asyncio.to_thread(mgr.read_snapshot, bname)
             except FileNotFoundError:
                 raise_tool_error(
                     create_error_response(
@@ -1230,6 +1238,21 @@ def register_backup_tools(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         str(err),
                         context={"backup_name": bname},
+                    )
+                )
+            except MandatoryBackupError as err:
+                # A legacy restore's mandatory pre-restore safety snapshot
+                # genuinely failed — the overwrite was blocked, nothing changed.
+                # Same fail-closed contract + error code as the @with_auto_backup
+                # write path (#1579), so callers see one consistent failure mode.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.BACKUP_CAPTURE_FAILED,
+                        f"Restore blocked: the pre-restore safety snapshot could "
+                        f"not be captured: {err}. Nothing was changed.",
+                        context={"backup_name": bname},
+                        suggestions=err.suggestions
+                        or ["Retry once the underlying issue is resolved"],
                     )
                 )
             except ToolError:
