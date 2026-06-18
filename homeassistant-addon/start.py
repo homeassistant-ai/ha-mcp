@@ -677,8 +677,10 @@ def main() -> int:
     )
     from ha_mcp.settings_ui import register_settings_routes
 
-    # Log the ha-mcp version + a self-update banner if a newer release is on
-    # PyPI. The addon runs its own startup here (it doesn't go through
+    # Log the ha-mcp version + a self-update banner when a newer release is
+    # available. In the add-on that comes from the Supervisor add-on store, not
+    # PyPI (see update_check._resolve_update_info's is_running_in_addon branch).
+    # The addon runs its own startup here (it doesn't go through
     # __main__.main_web), so without this the ha-mcp banner never reaches the
     # addon logs — only FastMCP's own banner does (via run_async). Mirrors how
     # FastMCP surfaces its update notice in these same startup logs.

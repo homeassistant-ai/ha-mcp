@@ -33,7 +33,7 @@ import functools
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 from packaging.version import InvalidVersion, Version
@@ -201,7 +201,15 @@ def get_update_info() -> UpdateInfo | None:
         return None
 
 
-async def get_update_field() -> dict[str, str | bool] | None:
+class UpdateField(TypedDict):
+    """The ``ha_mcp_update`` object embedded in status-tool responses."""
+
+    current: str
+    latest: str
+    update_available: bool
+
+
+async def get_update_field() -> UpdateField | None:
     """Return an embeddable self-update dict for tool responses, or None.
 
     Off-loads the (memoized, networks-at-most-once-per-process) check to a thread

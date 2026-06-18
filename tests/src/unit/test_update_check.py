@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import pytest
 
@@ -399,6 +401,33 @@ class TestGetUpdateField:
 
         monkeypatch.setattr(update_check, "get_update_info", boom)
         assert await update_check.get_update_field() is None
+
+    async def test_warm_cache_skips_thread_offload(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Once the memo is warm (currsize > 0 — the common post-startup case),
+        get_update_field calls get_update_info directly and must NOT offload to a
+        thread (only the cold first call does)."""
+        monkeypatch.setattr(update_check, "_fetch_latest_from_pypi", lambda _p: "7.9.0")
+        # Prime the memo so the warm branch is the one exercised below.
+        assert update_check.get_update_info() is not None
+        assert update_check.get_update_info.cache_info().currsize == 1
+
+        offloaded = False
+
+        async def tracking_to_thread(func: Any) -> Any:
+            nonlocal offloaded
+            offloaded = True
+            return func()
+
+        monkeypatch.setattr(update_check.asyncio, "to_thread", tracking_to_thread)
+        field = await update_check.get_update_field()
+        assert offloaded is False, "warm cache must not offload to a thread"
+        assert field == {
+            "current": "7.8.0",
+            "latest": "7.9.0",
+            "update_available": True,
+        }
 
 
 class TestUpdateCommandHint:
