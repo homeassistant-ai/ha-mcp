@@ -2305,22 +2305,25 @@ class TestListEditsAndLegacy:
         out2 = await mgr.list_edits_and_legacy(domain="yaml_file")
         assert any(e["name"] == "legacy:x.bak" for e in out2)
 
-    async def test_limit_truncates_combined(
+    async def test_limit_reserves_room_for_legacy(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         mgr = _mk_manager(tmp_path)
-        monkeypatch.setattr(
-            mgr,
-            "list_snapshots",
-            lambda **_kw: [
-                {"name": f"file.e{i}.20260101_000000.yaml"} for i in range(3)
-            ],
-        )
+
+        # list_snapshots honours the limit it's handed (mimics a full edits
+        # store): without reserved room the legacy entries get truncated out.
+        def _snaps(**kw: Any) -> list[Any]:
+            n = kw.get("limit") or 100
+            return [{"name": f"file.e{i}.20260101_000000.yaml"} for i in range(n)]
+
+        monkeypatch.setattr(mgr, "list_snapshots", _snaps)
 
         async def _legacy() -> list[Any]:
             return [{"name": "legacy:a.bak"}, {"name": "legacy:b.bak"}]
 
         monkeypatch.setattr(mgr, "list_legacy", _legacy)
-        # 3 edits + 2 legacy = 5, capped to 4 across BOTH sources.
         out = await mgr.list_edits_and_legacy(limit=4)
         assert len(out) == 4
+        names = {e["name"] for e in out}
+        # Legacy survives the cap (room reserved): 2 edits + 2 legacy.
+        assert "legacy:a.bak" in names and "legacy:b.bak" in names

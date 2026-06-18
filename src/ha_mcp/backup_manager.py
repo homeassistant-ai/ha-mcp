@@ -762,14 +762,20 @@ class BackupManager:
         ``yaml_file`` domain and is merged only on an unfiltered (or explicitly
         ``yaml_file``) list: its decoded ``entity_id`` is a best-effort path,
         not the sanitized form the entity filter matches on.
+
+        Legacy entries get reserved room within ``limit`` so a full edits store
+        (>= ``limit`` snapshots) can't truncate the few historical legacy
+        entries out of the listing — surfacing them is the whole point.
         """
+        want_legacy = domain in (None, "yaml_file") and entity_id is None
+        legacy = await self.list_legacy() if want_legacy else []
+        edits_limit = max(1, limit - len(legacy)) if limit and legacy else limit
         entries = await asyncio.to_thread(
-            self.list_snapshots, domain=domain, entity_id=entity_id, limit=limit
+            self.list_snapshots, domain=domain, entity_id=entity_id, limit=edits_limit
         )
-        if domain in (None, "yaml_file") and entity_id is None:
-            entries.extend(await self.list_legacy())
-            if limit:
-                entries = entries[:limit]
+        entries.extend(legacy)
+        if limit:
+            entries = entries[:limit]
         return entries
 
     async def _diff_legacy(self, filename: str) -> DiffResponseText:
