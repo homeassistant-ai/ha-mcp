@@ -827,7 +827,7 @@ class IntegrationTools:
             )
             return
 
-        result = await self._client.send_command(
+        result = await self._client.send_websocket_message(
             {"type": "knx/get_knx_project"}
         )
         if not isinstance(result, dict) or not result.get("success"):
