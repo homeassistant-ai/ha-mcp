@@ -160,71 +160,21 @@ gh issue list --state open --json number,title,labels --jq '.[] | select(.labels
 
 ### PR Review Comments
 
-**Always check for comments after pushing to a PR.** Comments may come from bots (Gemini Code Assist, Copilot) or humans.
+**Always check for comments after pushing to a PR.** They come from bots
+(Gemini Code Assist, Copilot) or humans. Address human comments with highest
+priority; treat bot comments as suggestions to assess, not commands.
 
-**Priority:**
-- **Human comments**: Address with highest priority
-- **Bot comments**: Treat as suggestions to assess, not commands. Evaluate if they add value.
+**Reply, then resolve.** After addressing an inline comment, reply on its
+thread documenting the fix, then mark the thread resolved. When a review has
+inline comments, do both: reply per-thread *and* post one PR-level summary
+comment. Leave a thread open only when the reply asks the reviewer for
+clarification. Unresolved threads block merge even after approval: the merge
+button stays disabled until every thread is resolved.
 
-**Check for comments:**
-```bash
-# Check all PR comments (general comments on the PR)
-gh pr view <PR> --json comments --jq '.comments[] | {author: .author.login, created: .createdAt}'
-
-# Check inline review comments (specific to code lines)
-gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[] | {id, path, line, author: .user.login, created_at}'
-
-# Check for unresolved review threads
-gh pr view <PR> --json reviews --jq '.reviews[] | select(.state == "COMMENTED") | .body'
-```
-
-**Resolve threads:**
-After addressing a comment, **ALWAYS post a comment explaining the resolution, then mark the thread as resolved**.
-
-When there are inline review comments, do **both**: reply on each inline thread *and* post a PR-level review comment summarising the changes. The inline replies document the per-thread resolution where future readers expect it; the PR-level comment gives a single summary for anyone scanning the PR timeline.
-
-**Always resolve the inline thread after replying**, unless the reply is asking the reviewer for further clarification (in which case leave the thread open so they can respond). An unresolved thread signals "still needs attention"; don't leave resolved work in that state. Unresolved threads also **block the PR from merging even after a maintainer has approved it** — the merge button stays disabled until every thread is marked resolved.
-
-```bash
-# 1a. Reply on each inline thread via the /replies sub-endpoint.
-#     <comment-id> is the numeric ID from:
-#       gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments --jq '.[].id'
-gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments/<comment-id>/replies \
-  -f body="✅ Fixed in [commit]. [Explanation]"
-# OR for dismissed suggestions:
-gh api repos/homeassistant-ai/ha-mcp/pulls/<PR>/comments/<comment-id>/replies \
-  -f body="📝 Not addressing because [reason]."
-
-# 1b. Also post a PR-level review comment summarising the batch of changes:
-gh pr review <PR> --comment --body "✅ Addressed review feedback in [commit]. [Summary]"
-
-# If there are no inline comments (just a general review), the PR-level
-# review comment alone is sufficient.
-
-# 2. THEN: Resolve each thread. The GraphQL input field is `threadId` — NOT
-#    `pullRequestReviewThreadId`, which GitHub rejects. The thread node ID
-#    (PRRT_...) comes from a reviewThreads query; match databaseId against
-#    the inline-comment numeric ID to pick the right one:
-gh api graphql -f query='
-query {
-  repository(owner: "homeassistant-ai", name: "ha-mcp") {
-    pullRequest(number: <PR>) {
-      reviewThreads(first: 100) {
-        nodes {
-          id isResolved path line
-          comments(first: 1) { nodes { databaseId } }
-        }
-      }
-    }
-  }
-}'
-
-gh api graphql -f query='mutation($threadId: ID!) {
-  resolveReviewThread(input: {threadId: $threadId}) {
-    thread { id isResolved }
-  }
-}' -f threadId=<PRRT_...>
-```
+The `/my-pr-checker` skill carries the exact commands (the inline-reply
+`pulls/<PR>/comments/<id>/replies` endpoint, the PR-level review, and the
+`resolveReviewThread` GraphQL mutation, whose input field is `threadId`, not
+`pullRequestReviewThreadId`).
 
 ## Git & PR Policies
 
@@ -684,6 +634,22 @@ Tools have an optional `wait` parameter (default `True`) that polls for completi
 - `wait_for_entity_registered(client, entity_id)` — polls until entity accessible via state API
 - `wait_for_entity_removed(client, entity_id)` — polls until entity no longer accessible
 - `wait_for_state_change(client, entity_id, expected_state)` — polls until state changes
+
+## Custom Component
+
+The `custom_components/ha_mcp_tools/` integration ships separately from the
+`ha-mcp` server package (it reaches the HA instance via HACS), so CI cannot
+fully validate a component change before merge.
+
+- **Bump `manifest.json`'s `version` on every component change.** When the
+  change adds a service or argument the server depends on, raise
+  `MIN_COMPONENT_VERSION` in `src/ha_mcp/tools/tools_filesystem.py` to match in
+  the same PR. `get_caller_token` reports the manifest version and the server
+  gates on it, so without a bump the old and new component are
+  indistinguishable: a caller on the old version passes the gate and then hits
+  raw "service not found" errors instead of an actionable "update" prompt.
+- **Live-test on the dev server immediately after merge**, before the next
+  stable cut. The component path cannot be fully exercised by CI pre-merge.
 
 ## Home Assistant Add-on
 
