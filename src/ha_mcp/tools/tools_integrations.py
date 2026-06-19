@@ -445,6 +445,25 @@ class IntegrationTools:
                 default=False,
             ),
         ] = False,
+        include_knx_project: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When entry_id is a KNX config entry, also return the parsed "
+                    "ETS project: the full group-address table (address, name, "
+                    "DPT, description) under knx_project.group_addresses, plus the "
+                    "group-range hierarchy and project metadata. This is the "
+                    "parsed-project GA table that is NOT in the diagnostics dump; "
+                    "per-entity GA assignments are already covered by "
+                    "include_diagnostics (config_store / configuration_yaml). "
+                    "Ignored (with a warning) when the entry is not a KNX "
+                    "integration. The KNX integration exposes a single project, "
+                    "so the result is the same regardless of which KNX entry_id "
+                    "is used."
+                ),
+                default=False,
+            ),
+        ] = False,
         device_id: Annotated[
             str | None,
             Field(
@@ -553,6 +572,7 @@ class IntegrationTools:
         - Get entry with editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
         - Get entry with diagnostics dump: ha_get_integration(entry_id="abc123", include_diagnostics=True)
         - Get device-scoped diagnostics: ha_get_integration(entry_id="abc123", include_diagnostics=True, device_id="dev123")
+        - Get the parsed KNX ETS project (group-address table): ha_get_integration(entry_id="<knx entry>", include_knx_project=True)
         - Walk a sub-tree: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<dotted-path>")
         - Paginate a large list: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
         - List config subentries: ha_get_integration(entry_id="abc123", include_subentries=True)
@@ -580,6 +600,7 @@ class IntegrationTools:
             include_opts = include_options
             include_schema_bool = include_schema
             include_diagnostics_bool = include_diagnostics
+            include_knx_project_bool = include_knx_project
             include_subentries_bool = include_subentries
             include_subentry_schema_bool = include_subentry_schema
             show_advanced_options_bool = show_advanced_options
@@ -639,6 +660,8 @@ class IntegrationTools:
                         "device_id was provided but ignored because "
                         "include_diagnostics=False"
                     )
+                if include_knx_project_bool:
+                    await self._attach_knx_project(resp, entry_id)
                 return resp
 
             # List mode - get all config entries
@@ -648,6 +671,8 @@ class IntegrationTools:
             ignored_detail_params = []
             if include_diagnostics_bool:
                 ignored_detail_params.append("include_diagnostics")
+            if include_knx_project_bool:
+                ignored_detail_params.append("include_knx_project")
             if device_id is not None:
                 ignored_detail_params.append("device_id")
             if fields_list is not None:
@@ -776,6 +801,69 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    async def _attach_knx_project(self, resp: dict[str, Any], entry_id: str) -> None:
+        """Attach the parsed KNX ETS project to a single-entry response.
+
+        Reads ``knx/get_knx_project`` (the same command the KNX panel uses) and
+        attaches the group-address table, group-range hierarchy, and project
+        metadata under ``resp["knx_project"]``. The KNX integration exposes one
+        project globally, so the command takes no entry scope; this is gated on
+        the entry actually being a KNX integration to avoid attaching unrelated
+        data to a non-KNX entry.
+
+        Failures are surfaced as warnings rather than raised — the primary
+        entry read already succeeded, mirroring how diagnostics fetch failures
+        are handled. The "KNX integration not loaded" case collapses into
+        ha_get_integration's existing no-such-entry handling (no KNX entry → no
+        entry_id to pass here), so it needs no special casing.
+        """
+        entry = resp.get("entry") if isinstance(resp.get("entry"), dict) else {}
+        domain = entry.get("domain") if isinstance(entry, dict) else None
+        if domain != "knx":
+            resp.setdefault("warnings", []).append(
+                f"include_knx_project ignored: entry {entry_id} is not a KNX "
+                f"integration (domain={domain!r})"
+            )
+            return
+
+        result = await self._client.send_websocket_message(
+            {"type": "knx/get_knx_project"}
+        )
+        if not isinstance(result, dict) or not result.get("success"):
+            error_msg = websocket_error_message(
+                result.get("error", "Unknown error")
+                if isinstance(result, dict)
+                else result
+            )
+            resp.setdefault("warnings", []).append(
+                f"Failed to fetch KNX project: {error_msg}"
+            )
+            return
+
+        project = result.get("result")
+        if not project:
+            # No ETS project uploaded yet — get_knxproject() returns None.
+            resp["knx_project"] = {
+                "count": 0,
+                "group_addresses": {},
+                "group_ranges": {},
+                "info": {},
+                "note": (
+                    "The KNX integration is loaded but no ETS project has been "
+                    "uploaded yet. Upload a .knxproj file via the KNX panel to "
+                    "populate the group-address table."
+                ),
+            }
+            return
+
+        group_addresses = project.get("group_addresses", {})
+        resp["knx_project"] = {
+            "count": len(group_addresses),
+            "group_addresses": group_addresses,
+            "group_ranges": project.get("group_ranges", {}),
+            "info": project.get("info", {}),
+        }
 
     async def _fetch_config_subentries(self, entry_id: str) -> list[dict[str, Any]]:
         """Fetch config subentries for a detailed entry response."""

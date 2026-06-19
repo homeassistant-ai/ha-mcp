@@ -1,32 +1,50 @@
 """
-E2E smoke test for ha_knx_get_project.
+E2E smoke test for the KNX project fold into ha_get_integration.
 
-The test container does not have the KNX integration configured, so
-``knx/get_knx_project`` returns the upstream "KNX integration not loaded."
-error. This test confirms the tool maps that to a clean COMPONENT_NOT_INSTALLED
-ToolError over the real WebSocket plumbing — catching any command rename
-(``knx/get_knx_project``) or error-serialisation divergence that the mocked
-unit tests cannot. The success path (parsed group addresses) is covered by the
-unit tests, which would otherwise require a live HA with an uploaded ETS
+The test container has no KNX integration configured, so there is no KNX
+config entry to pass include_knx_project against. This exercises the
+not-loaded path the maintainer asked us to keep: requesting
+include_knx_project on a non-KNX entry must degrade cleanly (a warning, no
+crash, no KNX data attached) over the real WebSocket/REST plumbing. The
+parsed-project success path is covered by the unit tests, which would
+otherwise require a live HA with the KNX integration and an uploaded ETS
 project.
 """
 
 import logging
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ..utilities.assertions import assert_mcp_success
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-async def test_knx_get_project_without_integration_raises_clean_error(mcp_client):
-    """Without the KNX integration loaded, the tool raises a clear
-    COMPONENT_NOT_INSTALLED error rather than leaking a stacktrace."""
-    with pytest.raises(ToolError) as exc_info:
-        await mcp_client.call_tool("ha_knx_get_project", {})
+async def test_include_knx_project_on_non_knx_entry_degrades_cleanly(mcp_client):
+    """include_knx_project against a non-KNX entry returns a warning, not data.
 
-    message = str(exc_info.value)
-    assert "COMPONENT_NOT_INSTALLED" in message
-    assert "KNX" in message
-    logger.info("ha_knx_get_project surfaced a clean not-loaded error")
+    Picks the first available config entry (none are KNX in the test
+    container) and asserts the response succeeds with no knx_project key and a
+    warning explaining the flag was ignored.
+    """
+    listing = await mcp_client.call_tool("ha_get_integration", {})
+    raw_list = assert_mcp_success(listing, "list integrations")
+    entries = raw_list.get("data", raw_list).get("entries", [])
+    if not entries:
+        pytest.skip("no config entries available in the test container")
+    entry_id = entries[0]["entry_id"]
+
+    result = await mcp_client.call_tool(
+        "ha_get_integration",
+        {"entry_id": entry_id, "include_knx_project": True},
+    )
+    raw = assert_mcp_success(result, "get integration with include_knx_project")
+    data = raw.get("data", raw)
+
+    assert "knx_project" not in data
+    warnings = data.get("warnings", [])
+    assert any("KNX" in w for w in warnings), (
+        f"expected an include_knx_project warning, got warnings={warnings}"
+    )
+    logger.info("include_knx_project degraded cleanly on a non-KNX entry")
