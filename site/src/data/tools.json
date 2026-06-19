@@ -2090,6 +2090,20 @@
     "source_file": "tools_integrations.py"
   },
   {
+    "name": "ha_knx_get_project",
+    "title": "Get KNX Project",
+    "description": "Get the KNX group addresses parsed from the uploaded ETS project.\n\nReturns the group-address table (address, name, DPT, description) plus\nthe group-range hierarchy and project metadata, read via the\n``knx/get_knx_project`` WebSocket command — the same data the KNX\npanel displays. This is the only way to inspect the parsed ``.knxproj``\ncontents programmatically.\n\nThe result's ``group_addresses`` is a map keyed by the group-address\nstring (e.g. ``\"1/2/3\"``); each entry carries its ``name``, ``dpt``\n(``{\"main\", \"sub\"}`` or null), ``description`` and other ETS metadata.\nIt contains no Home Assistant entity-assignment data — reconcile group\naddresses with configured entities client-side if needed.\n\nRead-only: this never modifies the KNX bus or configuration. Requires\nan admin token. If the KNX integration is not installed, this raises a\nCOMPONENT_NOT_INSTALLED error. If the integration is loaded but no\nproject has been uploaded, it returns an empty group-address map with\nan explanatory note.",
+    "inputSchema": {},
+    "annotations": {
+      "idempotentHint": true,
+      "readOnlyHint": true
+    },
+    "tags": [
+      "KNX"
+    ],
+    "source_file": "tools_knx.py"
+  },
+  {
     "name": "ha_config_get_category",
     "title": "Get Category",
     "description": "Get category info - list all categories for a scope or get a specific one by ID.\n\nWithout a category_id: Lists all Home Assistant categories for the given scope.\nWith a category_id: Returns configuration for that specific category.\n\nCategories are domain-scoped organizational groups for automations, scripts, scenes, and helpers.\n\nCATEGORY PROPERTIES:\n- ID (category_id), Name\n- Icon (optional)\n\nEXAMPLES:\n- List automation categories: ha_config_get_category(\"automation\")\n- List script categories: ha_config_get_category(\"script\")\n- List helper categories: ha_config_get_category(\"helpers\")\n- Get specific category: ha_config_get_category(\"automation\", category_id=\"my_category_id\")\n\nUse ha_config_set_category() to create or update categories.\nUse ha_set_entity(categories={\"automation\": \"category_id\"}) to assign categories to entities.",
