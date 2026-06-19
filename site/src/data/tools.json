@@ -1274,7 +1274,7 @@
   {
     "name": "ha_write_file",
     "title": "Write File",
-    "description": "Write a file to allowed directories in the Home Assistant config.\n\nCreates or updates files in restricted directories only. This is useful for:\n- Creating custom CSS/JS for dashboards\n- Creating Jinja2 templates\n\n**Allowed Write Directories:**\n- `www/` - Web assets for dashboards\n- `themes/` - Theme YAML files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\n  (pass the absolute path for volumes)\n\n**Security:**\n- Only the directories above allow writes\n- Configuration files (configuration.yaml, etc.) cannot be written\n- Path traversal (../) is blocked\n\n**Returns:**\n- success: Whether the operation succeeded\n- path: The file path that was written\n- size: Size of the written file in bytes\n- created: Whether this was a new file (vs overwrite)\n\n**Example:**\n```python\n# Create a custom CSS file\nresult = ha_write_file(\n    path=\"www/custom-dashboard.css\",\n    content=\".card { background: #333; }\",\n    overwrite=True\n)\n\n# Create a custom Jinja template file\nresult = ha_write_file(\n    path=\"custom_templates/formatters.jinja\",\n    content=\"{% macro shout(text) %}{{ text | upper }}{% endmacro %}\",\n    overwrite=False\n)\n```",
+    "description": "Write a file to allowed directories in the Home Assistant config.\n\nCreates or updates files in restricted directories only. This is useful for:\n- Creating custom CSS/JS for dashboards\n- Creating Jinja2 templates\n\n**Allowed Write Directories:**\n- `www/` - Web assets for dashboards\n- `themes/` - Theme YAML files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\n  (pass the absolute path for volumes)\n\n**Security:**\n- Only the directories above allow writes\n- Configuration files (configuration.yaml, etc.) cannot be written\n- Path traversal (../) is blocked\n\nText content only. Overwriting a file that currently holds binary\ncontent still succeeds, but its prior bytes cannot be captured by\nauto-backup (only modifications/deletions of text files are\nsnapshotted); the skip is logged, the write is not blocked.\n\n**Returns:**\n- success: Whether the operation succeeded\n- path: The file path that was written\n- size: Size of the written file in bytes\n- created: Whether this was a new file (vs overwrite)\n\n**Example:**\n```python\n# Create a custom CSS file\nresult = ha_write_file(\n    path=\"www/custom-dashboard.css\",\n    content=\".card { background: #333; }\",\n    overwrite=True\n)\n\n# Create a custom Jinja template file\nresult = ha_write_file(\n    path=\"custom_templates/formatters.jinja\",\n    content=\"{% macro shout(text) %}{{ text | upper }}{% endmacro %}\",\n    overwrite=False\n)\n```",
     "inputSchema": {
       "properties": {
         "path": {
@@ -2813,10 +2813,6 @@
         "file": {
           "type": "Annotated[str, Field(default='configuration.yaml', description=\"Relative path to the YAML config file. Defaults to 'configuration.yaml'. Also supports 'packages/*.yaml' and 'themes/*.yaml' (yaml_path is the theme name; frontend.reload_themes is triggered automatically).\")]",
           "default": "configuration.yaml"
-        },
-        "backup": {
-          "type": "Annotated[bool, Field(default=True, description='Create a backup before editing. Defaults to True. Backups are saved to .ha_mcp_tools_backups/.')]",
-          "default": true
         },
         "MandatoryBPS": {
           "type": "Annotated[bool, Field(default=True)]",
