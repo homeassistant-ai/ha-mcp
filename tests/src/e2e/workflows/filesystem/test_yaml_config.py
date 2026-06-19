@@ -663,9 +663,14 @@ class TestYamlConfigSafeguards:
             )
             inner = data
             assert inner.get("success") is True, f"Add should succeed: {data}"
-            # config_check should be present (ok, errors, or unavailable)
-            assert "config_check" in inner, (
-                f"Config check result should be in response: {data}"
+            # The seeded config is valid, so the guard must actually run and
+            # report "ok" — asserting mere presence accepts "unavailable" and
+            # would stay green if the check regressed to the silently-dead mode
+            # (#1660). This is the only test that exercises the real HA
+            # config-check path; the unit tests stub async_check_ha_config_file.
+            assert inner.get("config_check") == "ok", (
+                f"Config check should be 'ok' for a valid seeded config "
+                f"(behavioral regression guard for #1660): {data}"
             )
             logger.info(f"Config check result: {inner.get('config_check')}")
 
