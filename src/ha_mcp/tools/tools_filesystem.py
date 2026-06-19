@@ -62,7 +62,12 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 # /media, /ssl, /backup — issue #1586). A <0.9.0 component's allowlist
 # normalizer rejects every absolute path, so adding a volume would silently
 # do nothing; the version gate surfaces an actionable "update" prompt instead.
-MIN_COMPONENT_VERSION = "0.9.0"
+# 0.10.0: legacy-backup restore + whole-file YAML replace add new component
+# services (``replace_file``, ``list_legacy_backups``, ``read_legacy_backup``)
+# and a ``yaml_path`` arg on ``read_file``. A <0.10.0 component lacks these
+# services; the gate surfaces an actionable "update" instead of a raw
+# "service not found".
+MIN_COMPONENT_VERSION = "0.10.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
