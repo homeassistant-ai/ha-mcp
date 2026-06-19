@@ -22,6 +22,7 @@ from pydantic import Field
 
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -139,6 +140,13 @@ class YamlConfigTools:
             "title": "Raw YAML Config Edit",
         },
     )
+    @with_auto_backup(
+        domain="yaml",
+        id_fn=lambda kw: (
+            f"{kw.get('file') or 'configuration.yaml'}::{kw.get('yaml_path') or ''}"
+        ),
+        mandatory=True,
+    )
     @log_tool_usage
     async def ha_config_set_yaml(
         self,
@@ -196,16 +204,6 @@ class YamlConfigTools:
                 ),
             ),
         ] = "configuration.yaml",
-        backup: Annotated[
-            bool,
-            Field(
-                default=True,
-                description=(
-                    "Create a backup before editing. Defaults to True. "
-                    "Backups are saved to .ha_mcp_tools_backups/."
-                ),
-            ),
-        ] = True,
         MandatoryBPS: Annotated[
             bool,
             Field(default=True),
@@ -349,7 +347,6 @@ class YamlConfigTools:
                 "file": file,
                 "action": action,
                 "yaml_path": yaml_path,
-                "backup": backup,
                 "disabled_packages_keys": disabled_keys,
             }
             if content is not None:

@@ -24,6 +24,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
+from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -61,7 +62,12 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 # /media, /ssl, /backup — issue #1586). A <0.9.0 component's allowlist
 # normalizer rejects every absolute path, so adding a volume would silently
 # do nothing; the version gate surfaces an actionable "update" prompt instead.
-MIN_COMPONENT_VERSION = "0.9.0"
+# 0.10.0: legacy-backup restore + whole-file YAML replace add new component
+# services (``replace_file``, ``list_legacy_backups``, ``read_legacy_backup``)
+# and a ``yaml_path`` arg on ``read_file``. A <0.10.0 component lacks these
+# services; the gate surfaces an actionable "update" instead of a raw
+# "service not found".
+MIN_COMPONENT_VERSION = "0.10.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -552,6 +558,7 @@ class FilesystemTools:
             "title": "Write File",
         },
     )
+    @with_auto_backup(domain="file", id_param="path", mandatory=True)
     @log_tool_usage
     async def ha_write_file(
         self,
@@ -613,6 +620,11 @@ class FilesystemTools:
         - Only the directories above allow writes
         - Configuration files (configuration.yaml, etc.) cannot be written
         - Path traversal (../) is blocked
+
+        Text content only. Overwriting a file that currently holds binary
+        content still succeeds, but its prior bytes cannot be captured by
+        auto-backup (only modifications/deletions of text files are
+        snapshotted); the skip is logged, the write is not blocked.
 
         **Returns:**
         - success: Whether the operation succeeded
@@ -688,6 +700,7 @@ class FilesystemTools:
             "title": "Delete File",
         },
     )
+    @with_auto_backup(domain="file", id_param="path", mandatory=True)
     @log_tool_usage
     async def ha_delete_file(
         self,

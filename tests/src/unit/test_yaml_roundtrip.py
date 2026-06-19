@@ -114,6 +114,7 @@ class TestIncludeDirTags:
             "!include_dir_list",
             "!include_dir_merge_list",
             "!include_dir_named",
+            "!include_dir_merge_named",
         ],
     )
     def test_include_dir_tag_preserved(self, tag):

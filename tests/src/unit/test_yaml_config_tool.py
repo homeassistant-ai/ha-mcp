@@ -20,10 +20,25 @@ def enable_flag(monkeypatch):
     with ``enable_yaml_config_editing=False`` regardless of the
     sub-flag env var.
     """
+    from types import SimpleNamespace
+
     from ha_mcp import config as ha_mcp_config
 
     monkeypatch.setenv("ENABLE_YAML_CONFIG_EDITING", "true")
     monkeypatch.setenv("ENABLE_BETA_FEATURES", "true")
+    # ha_config_set_yaml now mandates auto-backup (#1579); the unit-test
+    # conftest forces it off process-wide, which would make every dispatch
+    # refuse. Enable it for these tests and stub the capture so they stay
+    # hermetic (no snapshot dir, no extra service round-trips).
+    monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
+
+    async def _noop_snapshot(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(
+        "ha_mcp.tools.auto_backup.get_backup_manager",
+        lambda *_a, **_k: SimpleNamespace(maybe_snapshot=_noop_snapshot),
+    )
     monkeypatch.setattr(ha_mcp_config, "_settings", None)
     yield
     # Reset the cache so other tests don't see our enabled flag.

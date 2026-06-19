@@ -39,6 +39,7 @@ _HA_TAGS = (
     "!include_dir_list",
     "!include_dir_named",
     "!include_dir_merge_list",
+    "!include_dir_merge_named",
     "!secret",
     "!env_var",
 )

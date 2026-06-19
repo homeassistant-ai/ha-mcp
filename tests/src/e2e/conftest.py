@@ -606,6 +606,33 @@ def _install_custom_component(
     return True
 
 
+def _seed_legacy_yaml_backups(config_path: Path) -> None:
+    """Stage pre-#1579 legacy ``.bak`` artifacts before the container boots (#1579).
+
+    The component's ``list_legacy_backups`` / ``read_legacy_backup`` services read
+    ``<config>/.ha_mcp_tools_backups/`` live, but a post-boot host write to the
+    bind-mounted config dir doesn't propagate in CI — so the legacy-backup e2e
+    seeds here, at the same pre-boot stage the rest of the test config is laid
+    down (``_setup_config_permissions`` then runs over it like everything else).
+
+    Two fixed artifacts:
+    - ``themes_e2elegacy.yaml.<ts>.bak`` decodes unambiguously to
+      ``themes/e2elegacy.yaml`` (no underscore in the basename), so restore can
+      target it.
+    - ``packages_foo_bar.yaml.<ts>.bak`` has a literal underscore, making
+      ``packages/foo_bar.yaml`` vs ``packages/foo/bar.yaml`` indistinguishable,
+      so restore must refuse rather than guess.
+    """
+    legacy_dir = config_path / ".ha_mcp_tools_backups"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "themes_e2elegacy.yaml.20200101_000000.bak").write_text(
+        "e2elegacy:\n  primary-color: '#abcdef'\n"
+    )
+    (legacy_dir / "packages_foo_bar.yaml.20200101_000000.bak").write_text(
+        "# legacy ambiguous artifact\nswitch: []\n"
+    )
+
+
 def _collect_manifest_requirements(config_path: Path) -> list[str]:
     """Aggregate ``requirements`` from every installed custom-component manifest.
 
@@ -1504,6 +1531,11 @@ def ha_container_with_fresh_config(request):
         "ha_mcp_tools",
         "HA MCP Tools",
     )
+
+    # Pre-#1579 legacy backups for the legacy-restore e2e: seed before boot so
+    # the bind-mounted .ha_mcp_tools_backups/ is populated when the component
+    # reads it (a post-boot host write doesn't propagate in CI).
+    _seed_legacy_yaml_backups(config_path)
 
     # Shift the pre-baked recorder timestamps forward so the seeded rows
     # look "recent" to history queries with a 24h window. The recorder DB in

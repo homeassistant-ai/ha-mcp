@@ -28,15 +28,19 @@ sys.modules["homeassistant.loader"] = MagicMock()
 
 # Now we can import the functions
 from custom_components.ha_mcp_tools import (  # noqa: E402
+    _decode_legacy_backup_name,
     _delete_file_sync,
+    _extract_yaml_subtree,
     _is_path_allowed_for_dir,
     _is_path_allowed_for_read,
     _is_within_config_dir,
     _list_files_sync,
+    _list_legacy_backups_sync,
     _mask_secrets_content,
     _migrate_legacy_backup_dir,
     _normalize_extra_dir,
     _read_file_sync,
+    _read_legacy_backup_sync,
     _resolves_within,
     _violates_deny_floor,
     _volume_root_for,
@@ -714,6 +718,175 @@ class TestMigrateLegacyBackupDir:
         )
 
 
+class TestDecodeLegacyBackupName:
+    """_decode_legacy_backup_name is the best-effort inverse of the lossy
+    pre-#1579 .bak naming (<safe_name>.<YYYYMMDD>_<HHMMSS>.bak)."""
+
+    def test_configuration_yaml_unambiguous(self):
+        out = _decode_legacy_backup_name("configuration.yaml.20260101_120000.bak")
+        assert out == {
+            "file_path": "configuration.yaml",
+            "timestamp": "20260101_120000",
+            "path_ambiguous": False,
+        }
+
+    def test_flat_package_unambiguous(self):
+        out = _decode_legacy_backup_name("packages_lights.yaml.20260102_010203.bak")
+        assert out["file_path"] == "packages/lights.yaml"
+        assert out["timestamp"] == "20260102_010203"
+        assert out["path_ambiguous"] is False
+
+    def test_flat_theme_unambiguous(self):
+        out = _decode_legacy_backup_name("themes_dark.yaml.20260102_010203.bak")
+        assert out["file_path"] == "themes/dark.yaml"
+        assert out["path_ambiguous"] is False
+
+    def test_underscore_in_rest_is_flagged_ambiguous(self):
+        # "packages_my_lights.yaml" could be packages/my_lights.yaml (literal _)
+        # OR packages/my/lights.yaml (collapsed nested sep) — indistinguishable.
+        out = _decode_legacy_backup_name("packages_my_lights.yaml.20260102_010203.bak")
+        assert out["file_path"] == "packages/my_lights.yaml"
+        assert out["path_ambiguous"] is True
+
+    def test_unknown_flat_name_has_no_path(self):
+        # A safe_name that is neither configuration.yaml nor a packages_/themes_
+        # prefix can't be mapped back to an allowed write target.
+        out = _decode_legacy_backup_name("automations.yaml.20260101_120000.bak")
+        assert out["file_path"] is None
+        assert out["timestamp"] == "20260101_120000"
+        assert out["path_ambiguous"] is True
+
+    def test_non_timestamped_name_does_not_decode(self):
+        # Pre-fix www/yaml_backups names or migration-renamed .legacy.bak files
+        # don't carry the timestamp suffix → undecodable, never auto-restored.
+        for name in (
+            "x.bak",
+            "configuration.yaml.20260101_120000.legacy.bak",
+            "random-file.bak",
+        ):
+            out = _decode_legacy_backup_name(name)
+            assert out["file_path"] is None
+            assert out["timestamp"] is None
+            assert out["path_ambiguous"] is True
+
+
+class TestListLegacyBackupsSync:
+    """_list_legacy_backups_sync enumerates regular .bak files only."""
+
+    def test_missing_dir_returns_empty(self, tmp_path):
+        assert _list_legacy_backups_sync(tmp_path / ".ha_mcp_tools_backups") == []
+
+    def test_lists_only_bak_files_skips_strays(self, tmp_path):
+        d = tmp_path / ".ha_mcp_tools_backups"
+        d.mkdir()
+        (d / "configuration.yaml.20260101_120000.bak").write_text("a: 1")
+        (d / "notes.txt").write_text("not a backup")
+        (d / "subdir").mkdir()
+        target = tmp_path / "outside.bak"
+        target.write_text("x: 9")
+        (d / "link.bak").symlink_to(target)
+
+        out = _list_legacy_backups_sync(d)
+
+        names = [b["filename"] for b in out]
+        assert names == ["configuration.yaml.20260101_120000.bak"]
+        entry = out[0]
+        assert entry["file_path"] == "configuration.yaml"
+        assert entry["path_ambiguous"] is False
+        assert entry["timestamp"] == "20260101_120000"
+        assert entry["size"] == len("a: 1")
+
+    def test_sorted_newest_first(self, tmp_path):
+        d = tmp_path / ".ha_mcp_tools_backups"
+        d.mkdir()
+        old = d / "configuration.yaml.20260101_120000.bak"
+        new = d / "themes_dark.yaml.20260201_120000.bak"
+        old.write_text("a: 1")
+        new.write_text("b: 2")
+        os.utime(old, (1000, 1000))
+        os.utime(new, (2000, 2000))
+
+        out = _list_legacy_backups_sync(d)
+
+        assert [b["filename"] for b in out] == [new.name, old.name]
+
+
+class TestReadLegacyBackupSync:
+    """_read_legacy_backup_sync reads a single .bak file's text content."""
+
+    def test_reads_content(self, tmp_path):
+        f = tmp_path / "configuration.yaml.20260101_120000.bak"
+        f.write_text("a: 1\nb: 2\n")
+        out = _read_legacy_backup_sync(f)
+        assert out["content"] == "a: 1\nb: 2\n"
+        assert out["size"] == len("a: 1\nb: 2\n")
+        assert "mtime" in out
+
+    def test_missing_file(self, tmp_path):
+        out = _read_legacy_backup_sync(tmp_path / "nope.bak")
+        assert out == {"_error": "not_found"}
+
+    def test_directory_is_not_a_file(self, tmp_path):
+        d = tmp_path / "adir.bak"
+        d.mkdir()
+        assert _read_legacy_backup_sync(d) == {"_error": "not_a_file"}
+
+    def test_symlink_is_not_a_file(self, tmp_path):
+        target = tmp_path / "real.bak"
+        target.write_text("a: 1")
+        link = tmp_path / "link.bak"
+        link.symlink_to(target)
+        assert _read_legacy_backup_sync(link) == {"_error": "not_a_file"}
+
+
+class TestLegacyBackupServiceWiring:
+    """Source-level guards: the read-only legacy-backup services must stay
+    registered, token-gated, and confined to .ha_mcp_tools_backups/."""
+
+    def test_services_registered_and_unregistered(self):
+        import inspect
+
+        from custom_components.ha_mcp_tools import (
+            async_setup_entry,
+            async_unload_entry,
+        )
+
+        setup_src = inspect.getsource(async_setup_entry)
+        assert "SERVICE_LIST_LEGACY_BACKUPS" in setup_src
+        assert "SERVICE_READ_LEGACY_BACKUP" in setup_src
+        # Both handlers must token-gate before any FS access.
+        assert "handle_list_legacy_backups" in setup_src
+        assert "handle_read_legacy_backup" in setup_src
+        assert setup_src.count("_caller_token_ok") >= 2
+
+        unload_src = inspect.getsource(async_unload_entry)
+        assert "SERVICE_LIST_LEGACY_BACKUPS" in unload_src
+        assert "SERVICE_READ_LEGACY_BACKUP" in unload_src
+
+
+class TestEditYamlConfigBackCompat:
+    """Source guard: the strict (PREVENT_EXTRA) edit_yaml_config schema must
+    keep accepting the legacy ``backup`` key. A pre-7.9.0 server still sends
+    it, and the component reaches users via HACS ahead of the server, so
+    dropping the key would reject every ha_config_set_yaml call from an old
+    server ("extra keys not allowed"). Voluptuous is mocked in this suite, so
+    this asserts the shim at the source level rather than by validating the
+    schema object."""
+
+    def test_schema_tolerates_backup_key(self):
+        import inspect
+
+        import custom_components.ha_mcp_tools as comp
+
+        src = inspect.getsource(comp)
+        start = src.index("SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(")
+        block = src[start : src.index("\n)\n", start)]
+        assert 'vol.Optional("backup")' in block, (
+            "edit_yaml_config dropped the back-compat 'backup' shim; "
+            "pre-7.9.0 servers still send it and would be rejected"
+        )
+
+
 class TestDenyFloor:
     """The non-overridable deny floor (issue #1567): a user-configured extra
     directory can NEVER reach .storage or an unmasked secrets file, even when
@@ -1322,3 +1495,40 @@ class TestVolumeSymlinkEscape:
         (volume / "secrets.yaml").write_text("x: y\n")
         (volume / "innocent").symlink_to(volume / "secrets.yaml")
         assert _normalize_extra_dir(str(volume / "innocent"), tmp_path) is None
+
+
+class TestExtractYamlSubtree:
+    """``_extract_yaml_subtree`` — the round-trip subtree extraction the
+    read_file service exposes via ``yaml_path`` for ha-mcp's per-edit
+    auto-backup (#1579). Runs component-side because ruamel lives here."""
+
+    def test_extracts_top_level_key(self):
+        src = "rest:\n  resource: http://a\n  method: GET\ntimer: {}\n"
+        out = _extract_yaml_subtree(src, "rest")
+        assert out is not None
+        assert "resource: http://a" in out
+        assert "timer" not in out
+
+    def test_preserves_comments_and_ha_tags(self):
+        src = "command_line:\n  - command: !secret cmd  # inline note\n"
+        out = _extract_yaml_subtree(src, "command_line")
+        assert out is not None
+        assert "!secret cmd" in out
+        assert "# inline note" in out
+
+    def test_walks_dotted_path(self):
+        src = "lovelace:\n  dashboards:\n    my-d:\n      mode: yaml\n"
+        out = _extract_yaml_subtree(src, "lovelace.dashboards.my-d")
+        assert out is not None
+        assert out.strip() == "mode: yaml"
+
+    def test_missing_key_returns_none(self):
+        assert _extract_yaml_subtree("a: 1\n", "nope") is None
+
+    def test_non_mapping_root_returns_none(self):
+        assert _extract_yaml_subtree("- a\n- b\n", "anything") is None
+
+    def test_malformed_yaml_returns_none(self):
+        # Malformed YAML yields None (the edit itself would then fail and
+        # report the parse error); capture just skips.
+        assert _extract_yaml_subtree("key: [1, 2\n", "key") is None

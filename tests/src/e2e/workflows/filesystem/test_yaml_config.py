@@ -5,7 +5,7 @@ This test suite validates:
 - Security boundaries: path traversal, file allowlist, key allowlist
 - CRUD operations: add, replace, remove actions
 - Validation: null content rejection, type mismatch errors
-- Safeguards: backup creation, config check integration, post-edit action hints
+- Safeguards: config check integration, post-edit action hints
 - Feature flag behavior (disabled by default)
 - Comment and HA tag preservation (ruamel.yaml round-trip)
 
@@ -18,6 +18,8 @@ Tests are designed for the Docker Home Assistant test environment.
 
 import logging
 import os
+import uuid
+from typing import Any
 
 import pytest
 
@@ -26,6 +28,7 @@ from ...utilities.assertions import (
     extract_error_message,
     safe_call_tool,
 )
+from ...utilities.wait_helpers import wait_for_tool_result
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -205,7 +208,6 @@ class TestYamlConfigSecurity:
                     "action": "add",
                     "content": "test: true",
                     "file": "configuration.yaml",
-                    "backup": False,
                 },
             )
             inner = data
@@ -236,7 +238,6 @@ class TestYamlConfigValidation:
                 "action": "add",
                 "content": "null",
                 "file": "packages/_test_null.yaml",
-                "backup": False,
             },
         )
         inner = data
@@ -254,7 +255,6 @@ class TestYamlConfigValidation:
                 "action": "add",
                 "content": "  bad:\n yaml: [\n  unclosed",
                 "file": "packages/_test_invalid.yaml",
-                "backup": False,
             },
         )
         inner = data
@@ -300,7 +300,6 @@ class TestYamlConfigOperations:
                     "action": "add",
                     "content": content,
                     "file": "packages/_e2e_test_add.yaml",
-                    "backup": False,
                 },
             )
             inner = data
@@ -327,7 +326,6 @@ class TestYamlConfigOperations:
                     "action": "add",
                     "content": content,
                     "file": "packages/_e2e_test_knx.yaml",
-                    "backup": False,
                 },
             )
             inner = data
@@ -395,7 +393,6 @@ class TestYamlConfigOperations:
                     "action": "add",
                     "content": content,
                     "file": f"packages/_e2e_test_{key}.yaml",
-                    "backup": False,
                 },
             )
             assert data.get("success") is True, (
@@ -445,7 +442,6 @@ class TestYamlConfigOperations:
                     "action": "add",
                     "content": content,
                     "file": "packages/_e2e_nested/automations.yaml",
-                    "backup": False,
                 },
             )
             assert data.get("success") is True, (
@@ -474,7 +470,6 @@ class TestYamlConfigOperations:
                     "action": "add",
                     "content": "- id: x\n  alias: x\n",
                     "file": "configuration.yaml",
-                    "backup": False,
                 },
             )
             assert data.get("success") is False, (
@@ -525,7 +520,6 @@ class TestYamlConfigOperations:
                     "action": "add",
                     "content": initial,
                     "file": "packages/_e2e_test_replace.yaml",
-                    "backup": False,
                 },
             )
 
@@ -536,7 +530,6 @@ class TestYamlConfigOperations:
                     "action": "replace",
                     "content": replacement,
                     "file": "packages/_e2e_test_replace.yaml",
-                    "backup": False,
                 },
             )
             inner = data
@@ -558,7 +551,6 @@ class TestYamlConfigOperations:
                     "action": "add",
                     "content": content,
                     "file": "packages/_e2e_test_remove.yaml",
-                    "backup": False,
                 },
             )
 
@@ -569,7 +561,6 @@ class TestYamlConfigOperations:
                     "yaml_path": "template",
                     "action": "remove",
                     "file": "packages/_e2e_test_remove.yaml",
-                    "backup": False,
                 },
             )
             inner = data
@@ -589,7 +580,6 @@ class TestYamlConfigOperations:
                     "action": "add",
                     "content": "- platform: template\n  sensors:\n    test:\n      value_template: 'ok'",
                     "file": "packages/_e2e_test_remove_missing.yaml",
-                    "backup": False,
                 },
             )
 
@@ -621,7 +611,6 @@ class TestYamlConfigOperations:
                     "action": "add",
                     "content": "- platform: template\n  sensors:\n    test:\n      value_template: 'ok'",
                     "file": "packages/_e2e_test_mismatch.yaml",
-                    "backup": False,
                 },
             )
 
@@ -634,7 +623,6 @@ class TestYamlConfigOperations:
                 "action": "add",
                 "content": "key: value",
                 "file": "packages/_e2e_test_mismatch.yaml",
-                "backup": False,
             },
         )
         inner = data
@@ -650,50 +638,13 @@ class TestYamlConfigOperations:
 
 @pytest.mark.filesystem
 class TestYamlConfigSafeguards:
-    """Test backup creation and config check integration."""
+    """Test config check integration.
 
-    async def test_backup_created(self, mcp_client_with_yaml_config):
-        """Backup should be created when backup=True (default)."""
-
-        content = "- sensor:\n    - name: Backup Test\n      state: 'ok'"
-
-        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            # Create initial file
-            await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "template",
-                    "action": "add",
-                    "content": content,
-                    "file": "packages/_e2e_test_backup.yaml",
-                    "backup": False,
-                },
-            )
-
-            # Now modify with backup enabled
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
-                {
-                    "yaml_path": "template",
-                    "action": "replace",
-                    "content": "- sensor:\n    - name: Modified\n      state: 'v2'",
-                    "file": "packages/_e2e_test_backup.yaml",
-                    "backup": True,
-                },
-            )
-            inner = data
-            assert inner.get("success") is True, f"Replace should succeed: {data}"
-            backup_path = inner.get("backup_path", "")
-            assert backup_path, f"Backup path should be present: {data}"
-            # Backups must live directly under .ha_mcp_tools_backups/ (config
-            # root, not served by HA's /local/ static handler). Anything else
-            # — including a www/.ha_mcp_tools_backups/ variant or any other
-            # publicly-served prefix — is a regression of GHSA-g39v-cvjh-8fpf.
-            assert backup_path.startswith(".ha_mcp_tools_backups/"), (
-                f"Backup path must start with .ha_mcp_tools_backups/ "
-                f"(not under www/ or any served path): {backup_path}"
-            )
-            logger.info(f"Backup created at: {backup_path}")
+    Per-edit backups moved to ha-mcp's shared auto-backup layer (#1579);
+    ha_config_set_yaml no longer writes a component-side backup, so the
+    former ``test_backup_created`` was removed. Restore-via-snapshot is
+    covered in the auto-backup edits-layer tests.
+    """
 
     async def test_config_check_included_in_response(self, mcp_client_with_yaml_config):
         """Config check result should be included in the response."""
@@ -708,7 +659,6 @@ class TestYamlConfigSafeguards:
                     "action": "add",
                     "content": content,
                     "file": "packages/_e2e_test_config_check.yaml",
-                    "backup": False,
                 },
             )
             inner = data
@@ -732,7 +682,6 @@ class TestYamlConfigSafeguards:
                     "action": "add",
                     "content": content,
                     "file": "packages/_e2e_test_post_action_reload.yaml",
-                    "backup": False,
                 },
             )
             inner = data
@@ -761,7 +710,6 @@ class TestYamlConfigSafeguards:
                     "action": "add",
                     "content": "test_cmd: echo hello",
                     "file": "packages/_e2e_test_post_action_restart.yaml",
-                    "backup": False,
                 },
             )
             inner = data
@@ -805,7 +753,6 @@ class TestYamlConfigCommentPreservation:
                     "action": "replace",
                     "content": initial_content,
                     "file": test_file,
-                    "backup": False,
                 },
             )
             inner = data
@@ -819,7 +766,6 @@ class TestYamlConfigCommentPreservation:
                     "action": "add",
                     "content": "- platform: template\n  sensors:\n    extra:\n      value_template: 'yes'",
                     "file": test_file,
-                    "backup": False,
                 },
             )
             inner = data
@@ -864,7 +810,6 @@ class TestYamlConfigCommentPreservation:
                     "action": "replace",
                     "content": initial_content,
                     "file": test_file,
-                    "backup": False,
                 },
             )
             inner = data
@@ -878,7 +823,6 @@ class TestYamlConfigCommentPreservation:
                     "action": "add",
                     "content": "- platform: time_date\n  display_options:\n    - date",
                     "file": test_file,
-                    "backup": False,
                 },
             )
             inner = data
@@ -940,7 +884,6 @@ class TestYamlModeDashboardRegistration:
                     "show_in_sidebar: false\n"
                 ),
                 "file": "configuration.yaml",
-                "backup": True,
             },
         )
         assert add_data.get("success") is True, add_data
@@ -963,7 +906,6 @@ class TestYamlModeDashboardRegistration:
                 "yaml_path": yaml_path,
                 "action": "remove",
                 "file": "configuration.yaml",
-                "backup": False,
             },
         )
         assert remove_data.get("success") is True, remove_data
@@ -1095,7 +1037,6 @@ class TestYamlConfigThemesIntegration:
                         "action": "add",
                         "content": theme_content,
                         "file": theme_file,
-                        "backup": False,
                     },
                 )
                 assert add_data.get("success") is True, (
@@ -1134,7 +1075,6 @@ class TestYamlConfigThemesIntegration:
                         "yaml_path": theme_name,
                         "action": "remove",
                         "file": theme_file,
-                        "backup": False,
                     },
                 )
                 assert remove_data.get("success") is True, (
@@ -1182,7 +1122,6 @@ class TestYamlConfigSkillContentDelivery:
                 "action": "add",
                 "content": self._TEMPLATE_SENSOR,
                 "file": "packages/_e2e_skill_bps_on.yaml",
-                "backup": False,
             },
         )
         assert result.get("success") is True, f"yaml add failed: {result}"
@@ -1210,7 +1149,6 @@ class TestYamlConfigSkillContentDelivery:
                 "action": "add",
                 "content": self._TEMPLATE_SENSOR,
                 "file": "packages/_e2e_skill_bps_off.yaml",
-                "backup": False,
                 "MandatoryBPS": False,
             },
         )
@@ -1221,3 +1159,101 @@ class TestYamlConfigSkillContentDelivery:
         assert "skill_content_hint" not in result, (
             "MandatoryBPS=False must suppress skill_content_hint"
         )
+
+
+# ---------------------------------------------------------------------------
+# #1579 PR2 — ha_config_set_yaml folds into the shared edits auto-backup
+# ---------------------------------------------------------------------------
+
+
+async def _wait_backup_name(
+    mcp_client: Any, *, domain: str, marker: str, timeout: int = 20
+) -> str:
+    """Poll the edits-backup list until a snapshot whose entity_id contains
+    ``marker`` appears for ``domain``; return its name. ``marker`` is a unique
+    token in the path (survives entity_id sanitization, which only swaps
+    non-[A-Za-z0-9._-] chars)."""
+
+    def _entries(d: dict[str, Any]) -> list[Any]:
+        return d.get("backups") or d.get("data", {}).get("backups", []) or []
+
+    data = await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_manage_backup",
+        arguments={"scope": "edits", "action": "list", "domain": domain},
+        predicate=lambda d: any(marker in e["entity_id"] for e in _entries(d)),
+        description=f"{domain} auto-backup containing {marker!r}",
+        timeout=timeout,
+    )
+    matches = [e for e in _entries(data) if marker in e["entity_id"]]
+    return matches[0]["name"]
+
+
+@pytest.mark.filesystem
+class TestYamlConfigAutoBackup:
+    """ha_config_set_yaml writes are captured into the shared edits store
+    (replacing the old component-side .ha_mcp_tools_backups/ copy) and are
+    list/diff/restore-able like every other auto-backed-up write."""
+
+    async def test_yaml_edit_captures_and_restores(self, mcp_client_with_yaml_config):
+        mcp = mcp_client_with_yaml_config
+        marker = uuid.uuid4().hex[:8]
+        file = f"packages/_e2e_backup_{marker}.yaml"
+        ypath = "template"
+
+        # Create the key — no prior value, so capture is skipped.
+        add = await safe_call_tool(
+            mcp,
+            TOOL_NAME,
+            {
+                "yaml_path": ypath,
+                "action": "add",
+                "content": "- sensor:\n    - name: V1\n      state: '1'",
+                "file": file,
+            },
+        )
+        assert add.get("success") is True, add
+
+        try:
+            # Replace — captures the prior (V1) subtree as a yaml snapshot.
+            replace = await safe_call_tool(
+                mcp,
+                TOOL_NAME,
+                {
+                    "yaml_path": ypath,
+                    "action": "replace",
+                    "content": "- sensor:\n    - name: V2\n      state: '2'",
+                    "file": file,
+                },
+            )
+            assert replace.get("success") is True, replace
+
+            name = await _wait_backup_name(mcp, domain="yaml", marker=marker)
+
+            # Diff: stored (V1) vs current (V2) — text kind, non-empty.
+            diff = await safe_call_tool(
+                mcp,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "diff", "backup_name": name},
+            )
+            assert diff.get("success") is True, diff
+            assert diff["data"]["kind"] == "text", diff
+            assert diff["data"]["unchanged"] is False, diff
+
+            # Restore → reverts the key to V1.
+            restore = await safe_call_tool(
+                mcp,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": name},
+            )
+            assert restore.get("success") is True, restore
+
+            read = await safe_call_tool(mcp, READ_TOOL, {"path": file})
+            assert read.get("success") is True, read
+            assert "V1" in read["content"], read["content"]
+        finally:
+            await safe_call_tool(
+                mcp,
+                TOOL_NAME,
+                {"yaml_path": ypath, "action": "remove", "file": file},
+            )

@@ -648,6 +648,15 @@ fully validate a component change before merge.
   gates on it, so without a bump the old and new component are
   indistinguishable: a caller on the old version passes the gate and then hits
   raw "service not found" errors instead of an actionable "update" prompt.
+- **The component reaches users ahead of the server – keep it
+  backward-compatible with the released server.** HACS pushes a component
+  update immediately, while the server (add-on or PyPI/Docker) stays on the
+  prior stable until its next release, so a new component runs against the
+  *old* server in that window. Never remove or tighten an existing service
+  schema (e.g. dropping a param from a strict `vol.Schema`) without a shim the
+  prior server still satisfies; the version gate can't protect this direction
+  (the old server is the caller). Remove the shim once the matching
+  `MIN_COMPONENT_VERSION` server is the floor.
 - **Live-test on the dev server immediately after merge**, before the next
   stable cut. The component path cannot be fully exercised by CI pre-merge.
 
