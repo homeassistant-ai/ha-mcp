@@ -301,6 +301,38 @@ class TestReplaceFileAction:
         assert result["config_check"] == "errors"
         assert result["config_check_errors"] == "boom: bad config"
 
+    def test_surfaces_config_check_unavailable_on_failure(
+        self, tmp_path, hass, call_factory, monkeypatch
+    ):
+        """A config check that cannot run surfaces as "unavailable" while the
+        (already atomic) write still stands. Behavioral guard for the #1660
+        locus — the swallowed-exception branch that the source-string guard
+        below cannot catch."""
+        monkeypatch.setattr(
+            "custom_components.ha_mcp_tools.async_check_ha_config_file",
+            AsyncMock(side_effect=RuntimeError("check boom")),
+        )
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text("default_config:\n")
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "configuration.yaml",
+                        "action": "replace_file",
+                        "yaml_path": "",
+                        "content": "template: []\n",
+                    }
+                )
+            )
+        )
+
+        assert result["success"] is True
+        assert result["config_check"] == "unavailable", result
+        assert "check boom" in result.get("config_check_error", ""), result
+
 
 def test_run_config_check_does_not_misuse_return_response():
     """Regression for #1660: the post-write config check must validate via

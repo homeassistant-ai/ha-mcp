@@ -41,8 +41,7 @@ def _stub_config_check(monkeypatch):
     """Stub the post-write config check (``async_check_ha_config_file``) to pass.
 
     Dashboard edits route through ``_run_config_check``; without a stub the
-    handler would await a bare mock. Tests that need a failing check override
-    this locally.
+    handler would await a bare mock.
     """
     monkeypatch.setattr(
         "custom_components.ha_mcp_tools.async_check_ha_config_file",
