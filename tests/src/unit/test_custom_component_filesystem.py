@@ -864,6 +864,29 @@ class TestLegacyBackupServiceWiring:
         assert "SERVICE_READ_LEGACY_BACKUP" in unload_src
 
 
+class TestEditYamlConfigBackCompat:
+    """Source guard: the strict (PREVENT_EXTRA) edit_yaml_config schema must
+    keep accepting the legacy ``backup`` key. A pre-7.9.0 server still sends
+    it, and the component reaches users via HACS ahead of the server, so
+    dropping the key would reject every ha_config_set_yaml call from an old
+    server ("extra keys not allowed"). Voluptuous is mocked in this suite, so
+    this asserts the shim at the source level rather than by validating the
+    schema object."""
+
+    def test_schema_tolerates_backup_key(self):
+        import inspect
+
+        import custom_components.ha_mcp_tools as comp
+
+        src = inspect.getsource(comp)
+        start = src.index("SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(")
+        block = src[start : src.index("\n)\n", start)]
+        assert 'vol.Optional("backup")' in block, (
+            "edit_yaml_config dropped the back-compat 'backup' shim; "
+            "pre-7.9.0 servers still send it and would be rejected"
+        )
+
+
 class TestDenyFloor:
     """The non-overridable deny floor (issue #1567): a user-configured extra
     directory can NEVER reach .storage or an unmasked secrets file, even when

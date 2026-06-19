@@ -94,6 +94,14 @@ SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
         vol.Required("action"): vol.In(["add", "replace", "remove", "replace_file"]),
         vol.Required("yaml_path"): cv.string,
         vol.Optional("content"): cv.string,
+        # Back-compat shim: the component reaches users via HACS ahead of the
+        # server, so a 0.10.0 component runs against the prior stable server
+        # until that server's next release. Pre-7.9.0 servers still send
+        # "backup": true on every edit_yaml_config call; this strict
+        # (PREVENT_EXTRA) schema would reject it ("extra keys not allowed")
+        # and break ha_config_set_yaml for everyone in that window. Accept and
+        # ignore it. Removable once the minimum supported server is >= 7.9.0.
+        vol.Optional("backup"): cv.boolean,
         # Caller-provided list of PACKAGES_ONLY_YAML_KEYS that the
         # caller wants the component to reject. Empty list (the
         # default) means no extra restrictions on top of the
