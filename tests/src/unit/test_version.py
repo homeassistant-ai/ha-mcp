@@ -100,6 +100,29 @@ class TestIsDevVersion:
         assert is_dev_version(version) is False
 
 
+class TestAddonStartLogsVersionBanner:
+    """The add-on must log the ha-mcp version + update banner at startup."""
+
+    def test_addon_start_invokes_log_startup_version(self) -> None:
+        """``homeassistant-addon/start.py`` runs its own startup (it does NOT go
+        through ``__main__.main_web``), so it must call ``_log_startup_version()``
+        itself — otherwise the ha-mcp version + self-update banner never reach the
+        add-on logs (only FastMCP's banner does, via ``run_async``). Regression
+        guard for that wiring."""
+        from pathlib import Path
+
+        start_py = (
+            Path(__file__).resolve().parents[3] / "homeassistant-addon" / "start.py"
+        )
+        source = start_py.read_text(encoding="utf-8")
+        assert "_log_startup_version" in source, (
+            "start.py must import _log_startup_version"
+        )
+        assert "_log_startup_version()" in source, (
+            "start.py must call _log_startup_version() during add-on startup"
+        )
+
+
 class TestIsRunningInAddon:
     """Tests for HA add-on environment detection."""
 
@@ -143,6 +166,8 @@ class TestLogStartupVersion:
     ) -> None:
         monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.3.0")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        # Disable the self-update check so this dev-banner test stays offline.
+        monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
         self._call(caplog)
         info_messages = [
             r.getMessage() for r in caplog.records if r.levelno == logging.INFO
@@ -180,14 +205,86 @@ class TestLogStartupVersion:
         # Version line still fires — add-on users should still see what they're running.
         assert any("7.3.0.dev42" in msg for msg in info_messages), info_messages
 
-    def test_stable_version_never_emits_banner(
+    def test_stable_version_never_emits_dev_banner(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Guard against an inverted is_dev_version check leaking the banner to stable users."""
+        """Guard against an inverted is_dev_version check leaking the dev-channel
+        banner to stable users. The self-update check is disabled here so this
+        stays focused on the dev banner (the update banner has its own tests)."""
         monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.3.0")
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
         self._call(caplog)
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings == []
+
+    def test_stable_emits_update_banner_when_newer_available(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A standalone stable install with a newer PyPI release gets an
+        update banner (the dev-channel banner stays silent)."""
+        from ha_mcp import update_check
+
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.8.0")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(
+            update_check,
+            "get_update_info",
+            lambda: update_check.UpdateInfo("7.8.0", "7.9.0", True),
+        )
+        self._call(caplog)
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("available: 7.9.0" in m for m in warnings), warnings
+        assert not any("dev channel" in m for m in warnings), warnings
+
+    def test_stable_no_update_banner_when_current(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """No banner when already on the latest stable."""
+        from ha_mcp import update_check
+
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.9.0")
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        monkeypatch.setattr(
+            update_check,
+            "get_update_info",
+            lambda: update_check.UpdateInfo("7.9.0", "7.9.0", False),
+        )
+        self._call(caplog)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == []
+
+    def test_update_banner_fires_under_supervisor_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The update banner fires in the add-on too (copying FastMCP, which
+        announces on every startup regardless of deployment) — an add-on user who
+        ignored the Supervisor prompt still sees it in the logs. The add-on
+        upgrade hint points at the Supervisor UI, not pip/docker."""
+        from ha_mcp import update_check
+
+        monkeypatch.setenv("HA_MCP_BUILD_VERSION", "7.8.0")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "hassio-abc")
+        monkeypatch.setattr(
+            update_check,
+            "get_update_info",
+            lambda: update_check.UpdateInfo("7.8.0", "7.9.0", True),
+        )
+        self._call(caplog)
+        warnings = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any("available: 7.9.0" in m for m in warnings), warnings
+        # add-on upgrade hint, not the dev-channel banner (suppressed in add-on)
+        assert any("Settings -> Add-ons" in m for m in warnings), warnings
+        assert not any("dev channel" in m for m in warnings), warnings

@@ -46,6 +46,48 @@ def _make_client_that_fails_on_restart(exception):
     return mock_client
 
 
+class TestGetSystemHealthHaMcpUpdate:
+    """ha_get_system_health surfaces the MCP server's own update status."""
+
+    @pytest.mark.asyncio
+    async def test_ha_mcp_update_present_when_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from ha_mcp import update_check
+
+        monkeypatch.setattr(
+            update_check,
+            "get_update_field",
+            AsyncMock(
+                return_value={
+                    "current": "7.8.0",
+                    "latest": "7.9.0",
+                    "update_available": True,
+                }
+            ),
+        )
+        with _patch_health_info_baseline():
+            result = await SystemTools(AsyncMock()).ha_get_system_health()
+        assert result["ha_mcp_update"] == {
+            "current": "7.8.0",
+            "latest": "7.9.0",
+            "update_available": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_ha_mcp_update_absent_when_not_applicable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from ha_mcp import update_check
+
+        monkeypatch.setattr(
+            update_check, "get_update_field", AsyncMock(return_value=None)
+        )
+        with _patch_health_info_baseline():
+            result = await SystemTools(AsyncMock()).ha_get_system_health()
+        assert "ha_mcp_update" not in result
+
+
 class TestHaRestartErrorHandling:
     """Tests for ha_restart handling of expected errors during restart."""
 

@@ -50,3 +50,43 @@ def _unit_test_default_auto_backup_off():
         os.environ.pop("ENABLE_AUTO_BACKUP", None)
     else:
         os.environ["ENABLE_AUTO_BACKUP"] = previous
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _unit_test_disable_update_check():
+    """Disable the PyPI self-update check for the unit-test process.
+
+    The status tools and ``_log_startup_version`` call
+    ``update_check.get_update_info``, which would otherwise reach out to
+    pypi.org during unrelated unit tests (flaky, slow, and network-coupled).
+    Set ``HA_MCP_DISABLE_UPDATE_CHECK`` once at session start; the dedicated
+    ``test_update_check.py`` / banner tests opt back in via ``monkeypatch``
+    (``delenv`` or by patching ``get_update_info``/``get_update_field``
+    directly), which reverts on teardown.
+    """
+    previous = os.environ.get("HA_MCP_DISABLE_UPDATE_CHECK")
+    os.environ["HA_MCP_DISABLE_UPDATE_CHECK"] = "1"
+    yield
+    if previous is None:
+        os.environ.pop("HA_MCP_DISABLE_UPDATE_CHECK", None)
+    else:
+        os.environ["HA_MCP_DISABLE_UPDATE_CHECK"] = previous
+
+
+@pytest.fixture(autouse=True)
+def _clear_update_check_memo():
+    """Clear ``get_update_info``'s in-memory ``lru_cache`` before each test.
+
+    ``get_update_info`` memoizes its result process-wide (the check runs once per
+    process, no disk). Without clearing, a result memoized by ``test_update_check``
+    (which opts back into the check) would leak into unrelated tests in the same
+    process. Cleared before each test so every test starts from a cold memo.
+    """
+    try:
+        from ha_mcp.update_check import get_update_info
+
+        get_update_info.cache_clear()
+    except ImportError:
+        # ha_mcp not importable in this test run; nothing to clear.
+        pass
+    yield

@@ -671,10 +671,20 @@ def main() -> int:
         StatelessSessionLogFilter,
         _get_server,
         _get_timestamped_uvicorn_log_config,
+        _log_startup_version,
         mcp,
         register_browser_landing,
     )
     from ha_mcp.settings_ui import register_settings_routes
+
+    # Log the ha-mcp version + a self-update banner when a newer release is
+    # available. In the add-on that comes from the Supervisor add-on store, not
+    # PyPI (see update_check._resolve_update_info's is_running_in_addon branch).
+    # The addon runs its own startup here (it doesn't go through
+    # __main__.main_web), so without this the ha-mcp banner never reaches the
+    # addon logs — only FastMCP's own banner does (via run_async). Mirrors how
+    # FastMCP surfaces its update notice in these same startup logs.
+    _log_startup_version()
 
     if advanced_debug_logging:
         # Defers SA_SIGINFO install until uvicorn's capture_signals has
