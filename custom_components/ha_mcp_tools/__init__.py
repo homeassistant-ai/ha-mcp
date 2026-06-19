@@ -22,6 +22,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import persistent_notification
+from homeassistant.config import async_check_ha_config_file
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import (
     HomeAssistant,
@@ -967,27 +968,27 @@ def _read_legacy_backup_sync(target_file: Path) -> dict[str, Any]:
 
 
 async def _run_config_check(hass: HomeAssistant, rel_path: str) -> dict[str, Any]:
-    """Run ``homeassistant.check_config`` and return fields to merge into a
-    write response.
+    """Validate the whole HA config after a write and return fields to merge
+    into the write response.
 
-    Never raises: a check failure surfaces as ``config_check: "unavailable"``
-    rather than failing an already-completed write. A non-dict service response
-    yields no ``config_check`` key (the check simply didn't report).
+    Uses ``async_check_ha_config_file``, which returns an error string when the
+    resulting config is invalid (and ``None`` when it is valid). The
+    ``homeassistant.check_config`` *service* is deliberately not used: it is
+    registered with ``SupportsResponse.NONE`` and signals errors only by
+    raising, so a response-returning call to it always failed and the check
+    never actually ran (#1660).
+
+    Never raises: a check that cannot run surfaces as
+    ``config_check: "unavailable"`` rather than failing an already-completed
+    write.
     """
     try:
-        check_result = await hass.services.async_call(
-            "homeassistant",
-            "check_config",
-            {},
-            blocking=True,
-            return_response=True,
-        )
+        errors = await async_check_ha_config_file(hass)
     except Exception as check_err:
-        _LOGGER.debug("Config check unavailable: %s", check_err)
+        _LOGGER.warning(
+            "Config check unavailable after editing %s: %s", rel_path, check_err
+        )
         return {"config_check": "unavailable", "config_check_error": str(check_err)}
-    if not isinstance(check_result, dict):
-        return {}
-    errors = check_result.get("errors")
     if errors:
         _LOGGER.warning(
             "Config check found errors after editing %s: %s", rel_path, errors

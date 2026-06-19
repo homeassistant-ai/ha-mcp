@@ -10,6 +10,7 @@ sys.modules["voluptuous"] = MagicMock()
 sys.modules["homeassistant"] = MagicMock()
 sys.modules["homeassistant.components"] = MagicMock()
 sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
+sys.modules["homeassistant.config"] = MagicMock()
 sys.modules["homeassistant.config_entries"] = MagicMock()
 sys.modules["homeassistant.core"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
@@ -21,6 +22,20 @@ from custom_components.ha_mcp_tools import CALLER_TOKEN_FIELD  # noqa: E402
 from custom_components.ha_mcp_tools.const import DOMAIN  # noqa: E402
 
 _TEST_CALLER_TOKEN = "test-caller-token-yaml-themes"
+
+
+@pytest.fixture(autouse=True)
+def _stub_config_check(monkeypatch):
+    """Default: the post-write config check passes (valid config).
+
+    Theme edits route through ``_run_config_check``; without a stub the handler
+    would await a bare mock. Tests that need a failing check override locally.
+    """
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.async_check_ha_config_file",
+        AsyncMock(return_value=None),
+        raising=False,
+    )
 
 
 class TestParseYamlPathThemes:

@@ -14,6 +14,7 @@ sys.modules["voluptuous"] = MagicMock()
 homeassistant = MagicMock()
 sys.modules["homeassistant"] = homeassistant
 sys.modules["homeassistant.components"] = homeassistant.components
+sys.modules["homeassistant.config"] = homeassistant.config
 sys.modules["homeassistant.config_entries"] = homeassistant.config_entries
 sys.modules["homeassistant.core"] = homeassistant.core
 sys.modules["homeassistant.helpers"] = homeassistant.helpers

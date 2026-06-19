@@ -19,6 +19,7 @@ sys.modules["voluptuous"] = MagicMock()
 sys.modules["homeassistant"] = MagicMock()
 sys.modules["homeassistant.components"] = MagicMock()
 sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
+sys.modules["homeassistant.config"] = MagicMock()
 sys.modules["homeassistant.config_entries"] = MagicMock()
 sys.modules["homeassistant.core"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
@@ -33,6 +34,21 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
 from custom_components.ha_mcp_tools.const import DOMAIN  # noqa: E402
 
 _TEST_CALLER_TOKEN = "test-caller-token-whole-file-replace"
+
+
+@pytest.fixture(autouse=True)
+def _stub_config_check(monkeypatch):
+    """Default: the post-write config check passes (valid config).
+
+    The component validates via ``async_check_ha_config_file``; stub it so the
+    handler's config-check step is deterministic in unit tests. Tests that need
+    a failing check override this locally.
+    """
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.async_check_ha_config_file",
+        AsyncMock(return_value=None),
+        raising=False,
+    )
 
 
 class TestReplaceFileAction:
@@ -51,7 +67,7 @@ class TestReplaceFileAction:
 
         h.async_add_executor_job = AsyncMock(side_effect=_run)
         h.services = MM()
-        h.services.async_call = AsyncMock(return_value={"errors": None})
+        h.services.async_call = AsyncMock(return_value=None)
         return h
 
     @pytest.fixture
@@ -256,10 +272,13 @@ class TestReplaceFileAction:
         # File untouched.
         assert cfg.read_text() == "default_config:\n"
 
-    def test_surfaces_config_check_errors(self, tmp_path, hass, call_factory):
-        """A failing check_config is reported but the (already atomic) write stands."""
-        hass.services.async_call = AsyncMock(
-            return_value={"errors": "boom: bad config"}
+    def test_surfaces_config_check_errors(
+        self, tmp_path, hass, call_factory, monkeypatch
+    ):
+        """A failing config check is reported but the (already atomic) write stands."""
+        monkeypatch.setattr(
+            "custom_components.ha_mcp_tools.async_check_ha_config_file",
+            AsyncMock(return_value="boom: bad config"),
         )
         cfg = Path(tmp_path) / "configuration.yaml"
         cfg.write_text("default_config:\n")
@@ -281,3 +300,19 @@ class TestReplaceFileAction:
         assert result["success"] is True
         assert result["config_check"] == "errors"
         assert result["config_check_errors"] == "boom: bad config"
+
+
+def test_run_config_check_does_not_misuse_return_response():
+    """Regression for #1660: the post-write config check must validate via
+    ``async_check_ha_config_file``, not the ``homeassistant.check_config``
+    service called with ``return_response=True`` (that service is
+    ``SupportsResponse.NONE`` and signals errors by raising, so the
+    response-based call always failed and the check never ran).
+    """
+    import inspect
+
+    from custom_components.ha_mcp_tools import _run_config_check
+
+    src = inspect.getsource(_run_config_check)
+    assert "return_response" not in src, src
+    assert "async_check_ha_config_file" in src, src

@@ -14,6 +14,7 @@ sys.modules["voluptuous"] = MagicMock()
 sys.modules["homeassistant"] = MagicMock()
 sys.modules["homeassistant.components"] = MagicMock()
 sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
+sys.modules["homeassistant.config"] = MagicMock()
 sys.modules["homeassistant.config_entries"] = MagicMock()
 sys.modules["homeassistant.core"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
@@ -33,6 +34,21 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
 # auth PR is transparent to these dashboard tests (which exercise the
 # yaml-editing logic, not the auth boundary).
 _TEST_CALLER_TOKEN = "test-caller-token-yaml-dashboards"
+
+
+@pytest.fixture(autouse=True)
+def _stub_config_check(monkeypatch):
+    """Stub the post-write config check (``async_check_ha_config_file``) to pass.
+
+    Dashboard edits route through ``_run_config_check``; without a stub the
+    handler would await a bare mock. Tests that need a failing check override
+    this locally.
+    """
+    monkeypatch.setattr(
+        "custom_components.ha_mcp_tools.async_check_ha_config_file",
+        AsyncMock(return_value=None),
+        raising=False,
+    )
 
 
 class TestDashboardUrlPathPattern:

@@ -45,6 +45,7 @@ for _mod in [
     "homeassistant",
     "homeassistant.components",
     "homeassistant.components.persistent_notification",
+    "homeassistant.config",
     "homeassistant.helpers",
     "homeassistant.helpers.config_validation",
     "homeassistant.helpers.storage",
