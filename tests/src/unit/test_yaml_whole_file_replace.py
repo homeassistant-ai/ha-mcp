@@ -120,6 +120,35 @@ class TestReplaceFileAction:
         assert result["success"] is True, result
         assert pkg.read_text() == "switch: []\n"
 
+    def test_accepts_include_dir_merge_named_tag(self, tmp_path, hass, call_factory):
+        """The documented ``!include_dir_merge_named`` tag must validate and
+        restore through replace_file. Regression guard for the tag missing
+        from the YAML loader registry, which made ``make_yaml().load()`` raise
+        ``ConstructorError`` (surfaced as "Invalid YAML content")."""
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text("default_config:\n")
+
+        new_content = (
+            "default_config:\nfrontend:\n  themes: !include_dir_merge_named themes/\n"
+        )
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "configuration.yaml",
+                        "action": "replace_file",
+                        "yaml_path": "",
+                        "content": new_content,
+                    }
+                )
+            )
+        )
+
+        assert result["success"] is True, result
+        # The tag survived verbatim in the restored file.
+        assert "!include_dir_merge_named themes/" in cfg.read_text()
+
     def test_requires_content(self, hass, call_factory):
         handler = _build_edit_yaml_config_handler(hass)
         result = self._run(
