@@ -1406,6 +1406,7 @@ class SearchTools:
                     },
                 )
             )
+            return None  # unreachable: raise_tool_error always raises
         except Exception as e:
             exception_to_structured_error(
                 e,
@@ -1799,7 +1800,6 @@ class SearchTools:
                 include_hidden=include_hidden_bool,
                 state_filter=state_filter,
             )
-            search_type = "exact_match"
         else:
             # Fuzzy mode: BM25 → substring fallback on exception only.
             try:
@@ -2547,6 +2547,7 @@ class SearchTools:
                     "Use ha_search() to find correct entity IDs",
                 ],
             )
+            return None  # unreachable: exception_to_structured_error always raises
 
     async def _get_bulk_entity_states(
         self,

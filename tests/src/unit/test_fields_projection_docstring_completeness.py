@@ -560,6 +560,8 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
         "_search_area_with_query",
         "_search_area_only_populated",
         "_search_area_only",
+        "_exact_match_search",
+        "_normalize_regular_search_result",
     ):
         emitted |= _harvest_marker_dicts("tools/tools_search.py", fn, markers)
     assert emitted, (
