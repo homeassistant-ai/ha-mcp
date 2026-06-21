@@ -595,7 +595,7 @@ jobs:
 
             const jsonSchema = '{"completeness":"complete|incomplete","classification":"bug|enhancement|question|invalid",'
               + '"missing_info":[],"duplicate_of":null,"duplicate_confidence":"high|medium|low","related":[],'
-              + '"priority":"Urgent|High|Medium|Low|null","effort":"Low|Medium|High|null","good_first_issue":false,"regression_likely":false,"reasoning":"one sentence summary"}';
+              + '"priority":"Urgent|High|Medium|Low|null","effort":"Low|Medium|High|null","regression_likely":false,"reasoning":"one sentence summary"}';
 
             const assemble = (o = {}) => [
               'You are triaging a GitHub issue for ha-mcp.',
@@ -677,9 +677,6 @@ jobs:
               'Low: one tool/parameter/setting, ~1 file',
               'Medium: new tool or significant change to existing tool, multiple files',
               'High: new subsystem, new integration pattern, architectural change',
-              '',
-              '### 7. good_first_issue',
-              'true if Low or Medium priority bug OR Low effort enhancement (well-scoped, good for new contributors)',
               '',
               'Respond with ONLY this JSON (fill all fields; use null where not applicable):',
               jsonSchema,
@@ -938,11 +935,10 @@ jobs:
             if (result.priority && !priority) core.warning(`Unrecognised priority value: "${result.priority}" — skipping field`);
             const effort = VALID_EFFORTS.has(result.effort) ? result.effort : null;
             if (result.effort && !effort) core.warning(`Unrecognised effort value: "${result.effort}" — skipping field`);
-            const goodFirstIssue = result.good_first_issue || false;
 
             core.info('Triage result: ' + JSON.stringify({
               completeness, classification, isDuplicate,
-              duplicateNumber, priority, effort, goodFirstIssue
+              duplicateNumber, priority, effort
             }));
 
             // === FLOW DECISION ===
@@ -966,7 +962,6 @@ jobs:
             // (B) Complete — issue has enough info
             if (completeness === 'complete') {
               const labels = ['triaged', ...(classification ? [classification] : [])];
-              if (goodFirstIssue) labels.push('good first issue');
               core.info('Issue is complete; adding labels: ' + labels.join(', '));
               try { await addLabels(labels); } catch (err) { core.warning('addLabels failed: ' + err.message); }
               await removeLabel('triage-failed');
