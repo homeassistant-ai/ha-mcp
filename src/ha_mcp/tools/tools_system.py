@@ -197,7 +197,16 @@ class SystemTools:
             # Connection errors after restart initiated are expected
             # (HA closes connections during restart)
             if restart_initiated and any(
-                pattern in error_msg.lower() for pattern in ("connect", "closed", "504")
+                pattern in error_msg.lower()
+                for pattern in (
+                    "connect",
+                    "closed",
+                    "502",
+                    "503",
+                    "504",
+                    "gateway",
+                    "unavailable",
+                )
             ):
                 return {
                     "success": True,

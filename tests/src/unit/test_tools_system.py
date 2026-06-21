@@ -1,7 +1,6 @@
 """Unit tests for tools_system module.
 
-Regression tests for https://github.com/homeassistant-ai/ha-mcp/issues/612
-ha_restart reports failure when a reverse proxy returns 504 during restart.
+Regression tests for ha_restart handling reverse proxy errors during restart.
 """
 
 import asyncio
@@ -91,18 +90,34 @@ class TestGetSystemHealthHaMcpUpdate:
 class TestHaRestartErrorHandling:
     """Tests for ha_restart handling of expected errors during restart."""
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            HomeAssistantAPIError("API error: 504 - ", status_code=504),
+            HomeAssistantAPIError("API error: 502 - Bad Gateway", status_code=502),
+            HomeAssistantAPIError(
+                "API error: 503 - Service Unavailable", status_code=503
+            ),
+            Exception("Bad Gateway"),
+            Exception("Service unavailable"),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_504_gateway_timeout_treated_as_success(self):
-        """A 504 from a reverse proxy after restart initiated should be success.
+    async def test_proxy_errors_after_restart_treated_as_success(
+        self, error: Exception
+    ):
+        """Reverse proxy errors after restart initiated should be success.
 
         Reproduces issue #612: user behind a reverse proxy gets 504 when HA
         shuts down, but HA actually restarted successfully.
+
+        Also covers issue #1666: some proxies return 502/503 or textual
+        gateway/unavailable errors for the same post-restart shutdown window.
 
         Also pins the post-#1332 warnings-list contract on the
         restart-initiated-but-connection-dropped branch
         (``tools_system.py`` ~L208-214).
         """
-        error = HomeAssistantAPIError("API error: 504 - ", status_code=504)
         client = _make_client_that_fails_on_restart(error)
         tools = SystemTools(client)
 
