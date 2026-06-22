@@ -24,7 +24,7 @@ jobs:
       release_tag: ${{ steps.version.outputs.release_tag }}
       should_publish: ${{ steps.version.outputs.should_publish }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 0
@@ -125,7 +125,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
@@ -160,7 +160,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.release_tag }}
           fetch-depth: 0
@@ -225,7 +225,7 @@ jobs:
           echo "PyPI publish conclusion: ${{ needs.publish_pypi.result }}"
           echo "Docker publish conclusion: ${{ needs.publish_docker.result }}"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: ${{ needs.publish_pypi.result == 'success' && needs.publish_docker.result == 'success' }}
         with:
           ref: ${{ needs.prepare.outputs.release_tag }}
