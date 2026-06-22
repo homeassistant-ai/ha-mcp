@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # The default GITHUB_TOKEN cannot push commits that modify any file
       # under .github/workflows/ — GitHub blocks workflow-file mutations
@@ -43,7 +43,7 @@ jobs:
           private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
 
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@v46.1.15
+        uses: renovatebot/github-action@v46.1.16
         with:
           configurationFile: renovate.json
           token: ${{ steps.app-token.outputs.token }}

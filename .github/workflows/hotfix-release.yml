@@ -29,7 +29,7 @@ jobs:
 
     steps:
     - name: Checkout merged hotfix on master
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         # Check out the merge commit so the workspace matches master's history;
         # then attach to a local master branch below. python-semantic-release

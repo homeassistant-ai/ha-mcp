@@ -44,7 +44,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Cache HA Docker image
       id: cache-ha-image
