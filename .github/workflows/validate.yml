@@ -28,4 +28,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      # Drop vendored third-party fixtures (e.g. the upstream HACS integration
+      # used as an e2e fixture) so hassfest only validates integrations this repo
+      # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
+      - name: Remove vendored test fixtures
+        run: rm -rf tests/initial_test_state
       - uses: home-assistant/actions/hassfest@master
