@@ -13,7 +13,17 @@ Regression coverage for #1681:
 2. **Missing decryption key** — `restore_params` omitted `password`, so a
    `protected: true` backup could not be decrypted on restore even though the
    default password was already fetched for the safety backup. The fix forwards
-   that password into the `backup/restore` call when one is available.
+   that password into the `backup/restore` call — but only for a *protected*
+   target, since HA rejects a password on an unprotected backup.
+
+3. **Param reconciliation** — `password` and `restore_database` are forwarded
+   based on the target backup's own metadata (`protected`, `database_included`)
+   rather than ambient config / caller default, so an unprotected or
+   DB-inclusive target restores cleanly instead of hitting an opaque HA error.
+
+4. **Safety-backup poll budget + late-completion warnings** — the full safety
+   backup polls with its own (larger) timeout and its late-completion warnings
+   surface in the restore response.
 """
 
 from typing import Any
@@ -22,7 +32,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.backup import _create_safety_backup, restore_backup
+from ha_mcp.tools.backup import (
+    _SAFETY_BACKUP_MAX_WAIT_S,
+    _create_safety_backup,
+    restore_backup,
+)
 
 
 def _scripted_ws(responses: dict[str, Any], call_log: list[str]) -> AsyncMock:
@@ -45,14 +59,26 @@ def _scripted_ws(responses: dict[str, Any], call_log: list[str]) -> AsyncMock:
     return ws
 
 
-def _restore_responses(*, with_password: bool = True) -> dict[str, Any]:
-    """Canned WS responses for a full restore_backup run."""
+def _restore_responses(
+    *,
+    with_password: bool = True,
+    protected: bool = True,
+    database_included: bool | None = None,
+) -> dict[str, Any]:
+    """Canned WS responses for a full restore_backup run.
+
+    ``protected`` / ``database_included`` populate the target backup/info entry
+    so the param-reconciliation logic can be exercised.
+    """
     config_block = {"create_backup": {"password": "pw"}} if with_password else {}
+    target_entry: dict[str, Any] = {"backup_id": "target-slug", "protected": protected}
+    if database_included is not None:
+        target_entry["database_included"] = database_included
     return {
-        # backup/info — backup-exists verification
+        # backup/info — backup-exists verification + target metadata
         "backup/info": {
             "success": True,
-            "result": {"backups": [{"backup_id": "target-slug"}]},
+            "result": {"backups": [target_entry]},
         },
         # backup/agents/info — local agent discovery
         "backup/agents/info": {
@@ -74,6 +100,13 @@ def _restore_responses(*, with_password: bool = True) -> dict[str, Any]:
     }
 
 
+def _restore_call(ws: AsyncMock) -> Any:
+    """Return the recorded ``backup/restore`` call."""
+    return next(
+        c for c in ws.send_command.call_args_list if c.args[0] == "backup/restore"
+    )
+
+
 class TestRestoreAwaitsSafetyBackup:
     @pytest.mark.asyncio
     async def test_restore_issued_only_after_safety_backup_completes(self) -> None:
@@ -83,9 +116,11 @@ class TestRestoreAwaitsSafetyBackup:
         ws = _scripted_ws(_restore_responses(), call_log)
         client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
 
-        poll_order_marker = AsyncMock(
-            side_effect=lambda *a, **k: call_log.append("poll-completed")
-        )
+        def _marker(*_a: Any, **_k: Any) -> dict[str, Any]:
+            call_log.append("poll-completed")
+            return {}
+
+        poll_order_marker = AsyncMock(side_effect=_marker)
 
         with (
             patch(
@@ -134,10 +169,12 @@ class TestRestoreAwaitsSafetyBackup:
 
 class TestRestoreForwardsPassword:
     @pytest.mark.asyncio
-    async def test_password_forwarded_into_restore_params(self) -> None:
+    async def test_password_forwarded_for_protected_target(self) -> None:
         """A `protected: true` backup needs the default password on restore."""
         call_log: list[str] = []
-        ws = _scripted_ws(_restore_responses(with_password=True), call_log)
+        ws = _scripted_ws(
+            _restore_responses(with_password=True, protected=True), call_log
+        )
         client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
 
         with (
@@ -152,10 +189,35 @@ class TestRestoreForwardsPassword:
         ):
             await restore_backup(client, "target-slug", restore_database=False)
 
-        restore_call = next(
-            c for c in ws.send_command.call_args_list if c.args[0] == "backup/restore"
+        assert _restore_call(ws).kwargs["password"] == "pw"
+
+    @pytest.mark.asyncio
+    async def test_password_omitted_for_unprotected_target(self) -> None:
+        """An unprotected target must NOT receive the password even when a
+        default password is configured — HA validates it against the target and
+        rejects a password on an unprotected backup (#1681 reconciliation)."""
+        call_log: list[str] = []
+        ws = _scripted_ws(
+            _restore_responses(with_password=True, protected=False), call_log
         )
-        assert restore_call.kwargs["password"] == "pw"
+        client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True}),
+            ),
+        ):
+            result = await restore_backup(client, "target-slug", restore_database=False)
+
+        assert result["success"] is True
+        # A safety backup is still created (the default password drives that),
+        # but it must not leak into the restore of an unprotected target.
+        assert "password" not in _restore_call(ws).kwargs
 
     @pytest.mark.asyncio
     async def test_password_omitted_when_unavailable(self) -> None:
@@ -183,12 +245,118 @@ class TestRestoreForwardsPassword:
 
         assert result["success"] is True
         assert result["safety_backup_id"] is None
-        restore_call = next(
-            c for c in ws.send_command.call_args_list if c.args[0] == "backup/restore"
-        )
-        assert "password" not in restore_call.kwargs
+        assert "password" not in _restore_call(ws).kwargs
         # No safety backup means no generate call at all.
         assert "backup/generate" not in call_log
+
+
+class TestRestoreReconcilesDatabase:
+    @pytest.mark.asyncio
+    async def test_restore_database_derived_from_target(self) -> None:
+        """A `database_included: true` target forces `restore_database=True`
+        even when the caller defaulted it to False — HA requires the flag to
+        match the backup when restoring Home Assistant, otherwise Supervisor
+        raises "Restore database must match backup"."""
+        call_log: list[str] = []
+        ws = _scripted_ws(_restore_responses(database_included=True), call_log)
+        client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True}),
+            ),
+        ):
+            result = await restore_backup(client, "target-slug", restore_database=False)
+
+        assert _restore_call(ws).kwargs["restore_database"] is True
+        assert result["restore_database"] is True
+        # The silent override is surfaced as a warning.
+        assert any("restore_database was adjusted" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_restore_database_overridden_to_false(self) -> None:
+        """A `database_included: false` target forces `restore_database=False`
+        even when the caller requested True — the symmetric override of the
+        True case, since HA requires the flag to match either way."""
+        call_log: list[str] = []
+        ws = _scripted_ws(_restore_responses(database_included=False), call_log)
+        client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True}),
+            ),
+        ):
+            result = await restore_backup(client, "target-slug", restore_database=True)
+
+        assert _restore_call(ws).kwargs["restore_database"] is False
+        assert result["restore_database"] is False
+        assert any("restore_database was adjusted" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_restore_database_falls_back_when_field_absent(self) -> None:
+        """When the target omits `database_included`, the caller's value is
+        honoured unchanged and no override warning is emitted."""
+        call_log: list[str] = []
+        ws = _scripted_ws(_restore_responses(), call_log)
+        client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True}),
+            ),
+        ):
+            result = await restore_backup(client, "target-slug", restore_database=True)
+
+        assert _restore_call(ws).kwargs["restore_database"] is True
+        assert not any("restore_database was adjusted" in w for w in result["warnings"])
+
+
+class TestRestoreSurfacesSafetyBackupWarnings:
+    @pytest.mark.asyncio
+    async def test_late_completion_warning_folded_into_response(self) -> None:
+        """A late-completion warning from the safety-backup poll must reach the
+        restore response — it is the signal that the backup subsystem is slow,
+        right before a destructive restore."""
+        call_log: list[str] = []
+        ws = _scripted_ws(_restore_responses(), call_log)
+        client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(
+                    return_value={
+                        "success": True,
+                        "warnings": ["Backup completion observed only after ..."],
+                    }
+                ),
+            ),
+        ):
+            result = await restore_backup(client, "target-slug", restore_database=True)
+
+        assert any(
+            "Backup completion observed only after" in w for w in result["warnings"]
+        )
 
 
 class TestCreateSafetyBackup:
@@ -196,24 +364,28 @@ class TestCreateSafetyBackup:
     async def test_polls_to_completion_before_returning(self) -> None:
         """`_create_safety_backup` must await the backup it starts — passing
         the generated job id, the safety-backup name, and the local agent into
-        the completion poll."""
+        the completion poll — and use the dedicated safety-backup timeout."""
         ws = AsyncMock()
         ws.send_command = AsyncMock(
             return_value={"success": True, "result": {"backup_job_id": "safety-job-1"}}
         )
 
         with patch(
-            "ha_mcp.tools.backup._poll_backup_completion", new=AsyncMock()
+            "ha_mcp.tools.backup._poll_backup_completion",
+            new=AsyncMock(return_value={"warnings": ["late"]}),
         ) as poll:
-            result = await _create_safety_backup(ws, "pw", "backup.local")
+            job_id, warnings = await _create_safety_backup(ws, "pw", "backup.local")
 
-        assert result == "safety-job-1"
+        assert job_id == "safety-job-1"
+        assert warnings == ["late"]
         poll.assert_awaited_once()
         # job id is forwarded positionally; agent id is forwarded by keyword.
         assert poll.await_args.args[2] == "safety-job-1"
         assert poll.await_args.kwargs["agent_id"] == "backup.local"
         # the polled name is the PreRestore_Safety_* backup just created.
         assert poll.await_args.args[1].startswith("PreRestore_Safety_")
+        # the full safety backup gets the larger timeout, not the fast-backup one.
+        assert poll.await_args.kwargs["max_wait_seconds"] == _SAFETY_BACKUP_MAX_WAIT_S
 
     @pytest.mark.asyncio
     async def test_skips_creation_and_poll_when_password_none(self) -> None:
@@ -223,8 +395,9 @@ class TestCreateSafetyBackup:
         with patch(
             "ha_mcp.tools.backup._poll_backup_completion", new=AsyncMock()
         ) as poll:
-            result = await _create_safety_backup(ws, None, "backup.local")
+            job_id, warnings = await _create_safety_backup(ws, None, "backup.local")
 
-        assert result is None
+        assert job_id is None
+        assert warnings == []
         ws.send_command.assert_not_awaited()
         poll.assert_not_awaited()

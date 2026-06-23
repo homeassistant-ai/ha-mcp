@@ -52,6 +52,12 @@ logger = logging.getLogger(__name__)
 # happy-path wait noticeable.
 _BACKUP_MAX_WAIT_S = 300
 _BACKUP_POLL_INTERVAL_S = 2
+# The pre-restore safety backup is a *full* backup (include_database=True, plus
+# all add-ons on Supervised), unlike the fast create_backup path. A multi-GB
+# full backup on constrained hardware (~2.1 GB on a Pi 5, #1681) can run well
+# past the fast-backup window, so its completion poll gets a larger budget —
+# timing out here aborts the restore and the retry spawns another full backup.
+_SAFETY_BACKUP_MAX_WAIT_S = 1800
 # Clock-skew tolerance when filtering backup entries by date vs job-start.
 _BACKUP_DATE_FILTER_TOLERANCE_S = 5
 
@@ -540,7 +546,7 @@ async def _create_safety_backup(
     ws_client: HomeAssistantWebSocketClient,
     password: str | None,
     agent_id: str,
-) -> str | None:
+) -> tuple[str | None, list[str]]:
     """Create a pre-restore safety backup and wait for it to complete.
 
     ``agent_id`` is the local backup agent (Supervisor's ``hassio.local`` or
@@ -549,12 +555,14 @@ async def _create_safety_backup(
     Blocks until the safety backup finishes. HA's ``backup/generate`` returns
     on job initiation, not completion, so waiting here lets the caller issue
     ``backup/restore`` afterwards without colliding with a still-running
-    backup. Returns the safety backup job ID, or None when password is None
-    (backup intentionally skipped). Raises ToolError if the backup fails to
-    start or does not complete in time.
+    backup. Returns ``(job_id, warnings)`` — ``job_id`` is None when password
+    is None (backup intentionally skipped); ``warnings`` carries any late-
+    completion notice from the poll so the caller can surface it before the
+    destructive restore. Raises ToolError if the backup fails to start or does
+    not complete in time.
     """
     if password is None:
-        return None
+        return None, []
 
     now = datetime.now()
     safety_backup_name = f"PreRestore_Safety_{now.strftime('%Y-%m-%d_%H:%M:%S')}"
@@ -593,16 +601,16 @@ async def _create_safety_backup(
     # with the safety backup this same call just started – a self-induced
     # deadlock (#1681). Reuse the same completion poll create_backup already
     # uses rather than adding a second wait mechanism.
-    await _poll_backup_completion(
+    poll_result = await _poll_backup_completion(
         ws_client,
         safety_backup_name,
         cast(str, safety_backup_id),
-        max_wait_seconds=_BACKUP_MAX_WAIT_S,
+        max_wait_seconds=_SAFETY_BACKUP_MAX_WAIT_S,
         poll_interval=_BACKUP_POLL_INTERVAL_S,
         agent_id=agent_id,
     )
     logger.info(f"Safety backup completed: {safety_backup_id}")
-    return cast(str, safety_backup_id)
+    return cast(str, safety_backup_id), poll_result.get("warnings", [])
 
 
 async def restore_backup(
@@ -616,7 +624,10 @@ async def restore_backup(
     Args:
         client: Home Assistant REST client
         backup_id: Backup ID to restore
-        restore_database: Whether to restore database (historical data)
+        restore_database: Whether to restore database (historical data).
+            Reconciled against the target backup's ``database_included`` flag,
+            which HA requires to match when restoring Home Assistant; a warning
+            is returned if the value is overridden.
 
     Returns:
         Dictionary with restore result including safety_backup_id, status, etc.
@@ -649,9 +660,9 @@ async def restore_backup(
             )
 
         backups = backup_info.get("result", {}).get("backups", [])
-        backup_exists = any(b.get("backup_id") == backup_id for b in backups)
+        matched = next((b for b in backups if b.get("backup_id") == backup_id), None)
 
-        if not backup_exists:
+        if matched is None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
@@ -677,25 +688,45 @@ async def restore_backup(
             logger.warning("No default password - proceeding without safety backup")
             password = None
 
-        safety_backup_id = await _create_safety_backup(ws_client, password, local_agent)
+        safety_backup_id, safety_warnings = await _create_safety_backup(
+            ws_client, password, local_agent
+        )
+
+        # When restoring Home Assistant, HA requires restore_database to match
+        # the target backup's database_included flag, otherwise Supervisor
+        # raises "Restore database must match backup". Derive the effective
+        # value from the target (database_included is in the same backup/info
+        # entry); fall back to the caller's request only when the field is
+        # absent. Surface a warning when the derived value overrides what the
+        # caller asked for so the override isn't silent on a destructive op.
+        target_database_included = matched.get("database_included")
+        if target_database_included is None:
+            effective_restore_database = restore_database
+        else:
+            effective_restore_database = target_database_included
 
         # Perform restore
         restore_params: dict[str, Any] = {
             "backup_id": backup_id,
             "agent_id": local_agent,
-            "restore_database": restore_database,
+            "restore_database": effective_restore_database,
             "restore_homeassistant": True,
             "restore_addons": [],  # Restore all addons from backup
             "restore_folders": [],  # Restore all folders from backup
         }
-        # Forward the default backup password so protected (encrypted) backups
-        # decrypt on restore – this is the same password already fetched above
-        # for the safety backup. HA's backup/restore schema types `password` as
-        # `str` (not `str | None`), so only include the key when we actually
-        # have one; passing None would fail voluptuous validation. Without this,
-        # a `protected: true` backup cannot be restored even though the HA UI –
-        # which applies the stored key – succeeds (#1681).
-        if password is not None:
+        # Forward the default backup password ONLY for a protected (encrypted)
+        # target. `password` here is HA's default create_backup.password, which
+        # is independent of whether *this* backup is encrypted: HA validates the
+        # password against the target unconditionally and rejects a password on
+        # an unprotected backup ("Invalid password for backup" →
+        # IncorrectPasswordError). Gate on the target's `protected` flag (from
+        # the same backup/info entry) so an unprotected snapshot still restores
+        # on a default-password instance. HA's backup/restore schema types
+        # `password` as `str` (not `str | None`), so only include the key when
+        # we actually forward one — passing None would fail voluptuous
+        # validation. Without this a `protected: true` backup cannot be restored
+        # even though the HA UI, which applies the stored key, succeeds (#1681).
+        if password is not None and matched.get("protected"):
             restore_params["password"] = password
 
         result = await ws_client.send_command("backup/restore", **restore_params)
@@ -709,6 +740,17 @@ async def restore_backup(
             warnings = [
                 "Home Assistant is restarting. Connection will be temporarily lost."
             ]
+            # Surface any late-completion notice from the safety-backup poll —
+            # a slow backup subsystem right before a destructive restore is
+            # exactly the signal a caller wants to see.
+            warnings.extend(safety_warnings)
+            if effective_restore_database != restore_database:
+                warnings.append(
+                    "restore_database was adjusted to "
+                    f"{effective_restore_database} to match the target backup "
+                    "(Home Assistant requires it to match the backup's "
+                    "database_included flag when restoring Home Assistant)."
+                )
             if safety_backup_id is None:
                 warnings.append(
                     "No safety backup was created (the default backup "
@@ -728,7 +770,7 @@ async def restore_backup(
                 "backup_id": backup_id,
                 "status": "Restore initiated - Home Assistant will restart",
                 "safety_backup_id": safety_backup_id,
-                "restore_database": restore_database,
+                "restore_database": effective_restore_database,
                 "warnings": warnings,
                 "note": note,
             }
