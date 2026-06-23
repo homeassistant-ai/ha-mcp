@@ -1003,6 +1003,8 @@ def register_browser_landing(
         "infrastructure, so if you block US IP addresses (or only allow your own\n"
         "country), that is why your client cannot connect. Allow your provider's\n"
         "IP ranges (or your client's egress IPs). For example, Claude.ai connects\n"
+        # Anthropic's documented outbound range; re-verify at
+        # https://platform.claude.com/docs/en/api/ip-addresses if it ever changes.
         "from Anthropic's network, 160.79.104.0/21.\n"
         "\n"
         "Your proxy's access logs will show the blocked attempt -- look for the\n"
