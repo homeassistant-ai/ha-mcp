@@ -157,15 +157,6 @@ class TestRestoreBackupWarnings:
             },
             # _create_safety_backup → backup/generate
             {"success": True, "result": {"backup_job_id": "safety_job_1"}},
-            # _create_safety_backup polling → backup/info loop
-            {
-                "success": True,
-                "result": {
-                    "backups": [
-                        {"name": "Pre_Restore_Safety", "backup_id": "safety_xyz"}
-                    ]
-                },
-            },
             # backup/restore — the actual restore call
             {"success": True},
         ]
@@ -175,9 +166,17 @@ class TestRestoreBackupWarnings:
         client.token = "token"
         client.verify_ssl = False
 
-        with patch(
-            "ha_mcp.tools.backup.get_connected_ws_client",
-            new=AsyncMock(return_value=(ws, None)),
+        # The safety-backup completion poll is exercised by test_backup_restore;
+        # stub it here so this test stays focused on the warnings contract.
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True}),
+            ),
         ):
             result = await restore_backup(client, "abc123")
 

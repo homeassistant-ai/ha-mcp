@@ -541,13 +541,17 @@ async def _create_safety_backup(
     password: str | None,
     agent_id: str,
 ) -> str | None:
-    """Create a pre-restore safety backup.
+    """Create a pre-restore safety backup and wait for it to complete.
 
     ``agent_id`` is the local backup agent (Supervisor's ``hassio.local`` or
     Core's ``backup.local``) discovered by the caller.
 
-    Returns the safety backup ID, or None when password is None (backup intentionally
-    skipped). Raises ToolError if backup creation fails.
+    Blocks until the safety backup finishes. HA's ``backup/generate`` returns
+    on job initiation, not completion, so waiting here lets the caller issue
+    ``backup/restore`` afterwards without colliding with a still-running
+    backup. Returns the safety backup job ID, or None when password is None
+    (backup intentionally skipped). Raises ToolError if the backup fails to
+    start or does not complete in time.
     """
     if password is None:
         return None
@@ -579,7 +583,25 @@ async def _create_safety_backup(
         )
 
     safety_backup_id = safety_backup.get("result", {}).get("backup_job_id")
-    logger.info(f"Safety backup created: {safety_backup_id}")
+    logger.info(f"Safety backup started: {safety_backup_id}, waiting for completion...")
+
+    # Wait for the safety backup to finish before returning. HA's
+    # backup/generate WS command returns as soon as the job is *initiated*,
+    # not when it completes, and the backup manager rejects any new operation
+    # while a backup is running ("Backup manager busy: create_backup"). If the
+    # caller issued backup/restore right after this returned, it would collide
+    # with the safety backup this same call just started – a self-induced
+    # deadlock (#1681). Reuse the same completion poll create_backup already
+    # uses rather than adding a second wait mechanism.
+    await _poll_backup_completion(
+        ws_client,
+        safety_backup_name,
+        cast(str, safety_backup_id),
+        max_wait_seconds=_BACKUP_MAX_WAIT_S,
+        poll_interval=_BACKUP_POLL_INTERVAL_S,
+        agent_id=agent_id,
+    )
+    logger.info(f"Safety backup completed: {safety_backup_id}")
     return cast(str, safety_backup_id)
 
 
@@ -658,7 +680,7 @@ async def restore_backup(
         safety_backup_id = await _create_safety_backup(ws_client, password, local_agent)
 
         # Perform restore
-        restore_params = {
+        restore_params: dict[str, Any] = {
             "backup_id": backup_id,
             "agent_id": local_agent,
             "restore_database": restore_database,
@@ -666,6 +688,15 @@ async def restore_backup(
             "restore_addons": [],  # Restore all addons from backup
             "restore_folders": [],  # Restore all folders from backup
         }
+        # Forward the default backup password so protected (encrypted) backups
+        # decrypt on restore – this is the same password already fetched above
+        # for the safety backup. HA's backup/restore schema types `password` as
+        # `str` (not `str | None`), so only include the key when we actually
+        # have one; passing None would fail voluptuous validation. Without this,
+        # a `protected: true` backup cannot be restored even though the HA UI –
+        # which applies the stored key – succeeds (#1681).
+        if password is not None:
+            restore_params["password"] = password
 
         result = await ws_client.send_command("backup/restore", **restore_params)
 
