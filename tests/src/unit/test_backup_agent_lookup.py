@@ -11,11 +11,39 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools.backup import (
+    _backup_protected,
     _get_local_backup_agent_id,
     _summarize_backup,
     list_backups,
     restore_backup,
 )
+
+
+class TestBackupProtected:
+    """`_backup_protected` derives the encrypted flag from the per-agent map."""
+
+    def test_any_agent_protected_makes_it_protected(self):
+        entry = {
+            "agents": {
+                "backup.local": {"protected": False},
+                "google_drive.cloud": {"protected": True},
+            }
+        }
+        assert _backup_protected(entry) is True
+
+    def test_all_agents_unprotected(self):
+        entry = {"agents": {"backup.local": {"protected": False}}}
+        assert _backup_protected(entry) is False
+
+    def test_missing_agents_is_unknown(self):
+        assert _backup_protected({}) is None
+
+    def test_no_agent_reports_protected_is_unknown(self):
+        # agents present but none carry the field → unknown, not "unprotected".
+        assert _backup_protected({"agents": {"backup.local": {"size": 1}}}) is None
+
+    def test_non_dict_agents_is_unknown(self):
+        assert _backup_protected({"agents": ["unexpected"]}) is None
 
 
 def _ws_client(agents_payload: dict) -> AsyncMock:
@@ -199,14 +227,14 @@ class TestSummarizeBackup:
             "backup_id": "abc",
             "name": "Nightly",
             "date": "2026-06-14T02:00:00+00:00",
-            "protected": True,
             "database_included": False,
             "homeassistant_included": True,
             "homeassistant_version": "2026.6.0",
             "with_automatic_settings": True,
+            # `protected` is a per-agent field (AgentBackupStatus), not top-level.
             "agents": {
-                "backup.local": {"size": 100},
-                "google_drive.cloud": {"size": 250},
+                "backup.local": {"size": 100, "protected": True},
+                "google_drive.cloud": {"size": 250, "protected": True},
             },
         }
         out = _summarize_backup(entry)

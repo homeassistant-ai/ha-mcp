@@ -64,16 +64,31 @@ def _restore_responses(
     with_password: bool = True,
     protected: bool = True,
     database_included: bool | None = None,
+    agent_id: str = "backup.local",
+    restore_success: bool = True,
 ) -> dict[str, Any]:
     """Canned WS responses for a full restore_backup run.
 
     ``protected`` / ``database_included`` populate the target backup/info entry
-    so the param-reconciliation logic can be exercised.
+    so the param-reconciliation logic can be exercised. ``protected`` is nested
+    under the target's ``agents`` map (keyed by ``agent_id``) to mirror HA's real
+    ``backup/info`` shape — AgentBackupStatus carries ``protected`` per agent,
+    not at the top level. ``agent_id`` selects the local backup agent
+    (``backup.local`` = Core, ``hassio.local`` = Supervised). ``restore_success``
+    toggles the ``backup/restore`` outcome for failure-path coverage.
     """
     config_block = {"create_backup": {"password": "pw"}} if with_password else {}
-    target_entry: dict[str, Any] = {"backup_id": "target-slug", "protected": protected}
+    target_entry: dict[str, Any] = {
+        "backup_id": "target-slug",
+        "agents": {agent_id: {"size": 1024, "protected": protected}},
+    }
     if database_included is not None:
         target_entry["database_included"] = database_included
+    restore_response: dict[str, Any] = (
+        {"success": True}
+        if restore_success
+        else {"success": False, "error": "restore exploded"}
+    )
     return {
         # backup/info — backup-exists verification + target metadata
         "backup/info": {
@@ -83,7 +98,7 @@ def _restore_responses(
         # backup/agents/info — local agent discovery
         "backup/agents/info": {
             "success": True,
-            "result": {"agents": [{"agent_id": "backup.local", "name": "local"}]},
+            "result": {"agents": [{"agent_id": agent_id, "name": "local"}]},
         },
         # backup/config/info — default-password lookup
         "backup/config/info": {
@@ -96,7 +111,7 @@ def _restore_responses(
             "result": {"backup_job_id": "safety-job-1"},
         },
         # backup/restore — the actual restore
-        "backup/restore": {"success": True},
+        "backup/restore": restore_response,
     }
 
 
@@ -192,6 +207,35 @@ class TestRestoreForwardsPassword:
         assert _restore_call(ws).kwargs["password"] == "pw"
 
     @pytest.mark.asyncio
+    async def test_password_forwarded_when_only_remote_agent_protected(self) -> None:
+        """A backup is encrypted as a whole, so `protected` reported by *any*
+        agent forwards the password — not only the local restore agent. Guards
+        the case where the local agent's entry omits/clears the flag."""
+        call_log: list[str] = []
+        responses = _restore_responses(with_password=True, protected=False)
+        # Local agent reports unprotected, a cloud agent reports protected.
+        responses["backup/info"]["result"]["backups"][0]["agents"] = {
+            "backup.local": {"size": 1024, "protected": False},
+            "google_drive.cloud": {"size": 2048, "protected": True},
+        }
+        ws = _scripted_ws(responses, call_log)
+        client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True}),
+            ),
+        ):
+            await restore_backup(client, "target-slug", restore_database=False)
+
+        assert _restore_call(ws).kwargs["password"] == "pw"
+
+    @pytest.mark.asyncio
     async def test_password_omitted_for_unprotected_target(self) -> None:
         """An unprotected target must NOT receive the password even when a
         default password is configured — HA validates it against the target and
@@ -217,6 +261,8 @@ class TestRestoreForwardsPassword:
         assert result["success"] is True
         # A safety backup is still created (the default password drives that),
         # but it must not leak into the restore of an unprotected target.
+        assert result["safety_backup_id"] is not None
+        assert "backup/generate" in call_log
         assert "password" not in _restore_call(ws).kwargs
 
     @pytest.mark.asyncio
@@ -253,12 +299,14 @@ class TestRestoreForwardsPassword:
 class TestRestoreReconcilesDatabase:
     @pytest.mark.asyncio
     async def test_restore_database_derived_from_target(self) -> None:
-        """A `database_included: true` target forces `restore_database=True`
-        even when the caller defaulted it to False — HA requires the flag to
-        match the backup when restoring Home Assistant, otherwise Supervisor
-        raises "Restore database must match backup"."""
+        """On Supervised, a `database_included: true` target forces
+        `restore_database=True` even when the caller defaulted it to False —
+        Supervisor raises "Restore database must match backup" otherwise."""
         call_log: list[str] = []
-        ws = _scripted_ws(_restore_responses(database_included=True), call_log)
+        ws = _scripted_ws(
+            _restore_responses(database_included=True, agent_id="hassio.local"),
+            call_log,
+        )
         client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
 
         with (
@@ -280,11 +328,15 @@ class TestRestoreReconcilesDatabase:
 
     @pytest.mark.asyncio
     async def test_restore_database_overridden_to_false(self) -> None:
-        """A `database_included: false` target forces `restore_database=False`
-        even when the caller requested True — the symmetric override of the
-        True case, since HA requires the flag to match either way."""
+        """On Supervised, a `database_included: false` target forces
+        `restore_database=False` even when the caller requested True — the
+        symmetric override of the True case, since Supervisor requires the flag
+        to match either way."""
         call_log: list[str] = []
-        ws = _scripted_ws(_restore_responses(database_included=False), call_log)
+        ws = _scripted_ws(
+            _restore_responses(database_included=False, agent_id="hassio.local"),
+            call_log,
+        )
         client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
 
         with (
@@ -325,6 +377,62 @@ class TestRestoreReconcilesDatabase:
 
         assert _restore_call(ws).kwargs["restore_database"] is True
         assert not any("restore_database was adjusted" in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_restore_database_not_overridden_on_core(self) -> None:
+        """On Core (`backup.local`), the caller's `restore_database` is honoured
+        even when it differs from the target's `database_included` — Core's
+        restore path enforces no match (only Supervisor does), so overriding it
+        would silently discard an explicit request."""
+        call_log: list[str] = []
+        ws = _scripted_ws(
+            _restore_responses(database_included=True, agent_id="backup.local"),
+            call_log,
+        )
+        client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True}),
+            ),
+        ):
+            result = await restore_backup(client, "target-slug", restore_database=False)
+
+        assert _restore_call(ws).kwargs["restore_database"] is False
+        assert result["restore_database"] is False
+        assert not any("restore_database was adjusted" in w for w in result["warnings"])
+
+
+class TestRestoreFailurePath:
+    @pytest.mark.asyncio
+    async def test_restore_failure_raises_with_backup_id_context(self) -> None:
+        """A `backup/restore` that returns `success: False` must raise ToolError
+        carrying the backup_id, not return a partial success."""
+        call_log: list[str] = []
+        ws = _scripted_ws(_restore_responses(restore_success=False), call_log)
+        client = MagicMock(base_url="http://ha", token="tok", verify_ssl=True)
+
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True}),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await restore_backup(client, "target-slug", restore_database=False)
+
+        # The safety backup ran; only the restore itself failed.
+        assert "backup/restore" in call_log
+        assert "target-slug" in str(exc_info.value)
 
 
 class TestRestoreSurfacesSafetyBackupWarnings:

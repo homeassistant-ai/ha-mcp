@@ -613,6 +613,25 @@ async def _create_safety_backup(
     return cast(str, safety_backup_id), poll_result.get("warnings", [])
 
 
+def _backup_protected(entry: dict[str, Any]) -> bool | None:
+    """Whether a ``backup/info`` entry is encrypted.
+
+    ``protected`` is a per-agent field (AgentBackupStatus), not top-level. A
+    backup is encrypted as a whole, so any agent reporting it makes the backup
+    protected; returns None when the ``agents`` map is absent/malformed or no
+    agent reports the flag (unknown rather than "unprotected").
+    """
+    agents = entry.get("agents")
+    if not isinstance(agents, dict):
+        return None
+    flags = [
+        a.get("protected")
+        for a in agents.values()
+        if isinstance(a, dict) and a.get("protected") is not None
+    ]
+    return any(flags) if flags else None
+
+
 async def restore_backup(
     client: HomeAssistantClient, backup_id: str, restore_database: bool = False
 ) -> dict[str, Any]:
@@ -625,9 +644,11 @@ async def restore_backup(
         client: Home Assistant REST client
         backup_id: Backup ID to restore
         restore_database: Whether to restore database (historical data).
-            Reconciled against the target backup's ``database_included`` flag,
-            which HA requires to match when restoring Home Assistant; a warning
-            is returned if the value is overridden.
+            On Supervised installs this is reconciled against the target
+            backup's ``database_included`` flag, which Supervisor requires to
+            match when restoring Home Assistant; a warning is returned if the
+            value is overridden. On Core installs the caller's value is honoured
+            as-is (Core enforces no such match).
 
     Returns:
         Dictionary with restore result including safety_backup_id, status, etc.
@@ -692,18 +713,29 @@ async def restore_backup(
             ws_client, password, local_agent
         )
 
-        # When restoring Home Assistant, HA requires restore_database to match
-        # the target backup's database_included flag, otherwise Supervisor
-        # raises "Restore database must match backup". Derive the effective
-        # value from the target (database_included is in the same backup/info
-        # entry); fall back to the caller's request only when the field is
-        # absent. Surface a warning when the derived value overrides what the
-        # caller asked for so the override isn't silent on a destructive op.
+        # `backup/info` returns ManagerBackup entries: `database_included` is a
+        # top-level field (inherited from BaseBackup), but `protected` is NOT —
+        # it lives per-agent under the entry's `agents` map (AgentBackupStatus),
+        # so a top-level `matched.get("protected")` is always None against real
+        # HA. Derive it from the agents map (shared with _summarize_backup).
+        target_protected = _backup_protected(matched)
+
+        # Reconcile restore_database with the target only on Supervised. HA's
+        # Supervisor raises "Restore database must match backup" when
+        # restore_homeassistant is set and restore_database != the backup's
+        # database_included flag (hassio/backup.py). HA Core's restore path
+        # (CoreBackupReaderWriter) has no such constraint and writes the caller's
+        # value verbatim, so overriding it there would silently discard an
+        # explicit request for no HA-side reason. Fall back to the caller's
+        # request when not Supervised or when the field is absent. Surface a
+        # warning when the derived value overrides what the caller asked for so
+        # the override isn't silent on a destructive op.
+        is_supervised = local_agent == "hassio.local"
         target_database_included = matched.get("database_included")
-        if target_database_included is None:
-            effective_restore_database = restore_database
-        else:
+        if is_supervised and target_database_included is not None:
             effective_restore_database = target_database_included
+        else:
+            effective_restore_database = restore_database
 
         # Perform restore
         restore_params: dict[str, Any] = {
@@ -719,14 +751,14 @@ async def restore_backup(
         # is independent of whether *this* backup is encrypted: HA validates the
         # password against the target unconditionally and rejects a password on
         # an unprotected backup ("Invalid password for backup" →
-        # IncorrectPasswordError). Gate on the target's `protected` flag (from
-        # the same backup/info entry) so an unprotected snapshot still restores
-        # on a default-password instance. HA's backup/restore schema types
-        # `password` as `str` (not `str | None`), so only include the key when
-        # we actually forward one — passing None would fail voluptuous
-        # validation. Without this a `protected: true` backup cannot be restored
-        # even though the HA UI, which applies the stored key, succeeds (#1681).
-        if password is not None and matched.get("protected"):
+        # IncorrectPasswordError). Gate on the target's per-agent `protected`
+        # flag (read above) so an unprotected snapshot still restores on a
+        # default-password instance. HA's backup/restore schema types `password`
+        # as `str` (not `str | None`), so only include the key when we actually
+        # forward one — passing None would fail voluptuous validation. Without
+        # this a protected backup cannot be restored even though the HA UI,
+        # which applies the stored key, succeeds (#1681).
+        if password is not None and target_protected:
             restore_params["password"] = password
 
         result = await ws_client.send_command("backup/restore", **restore_params)
@@ -748,8 +780,9 @@ async def restore_backup(
                 warnings.append(
                     "restore_database was adjusted to "
                     f"{effective_restore_database} to match the target backup "
-                    "(Home Assistant requires it to match the backup's "
-                    "database_included flag when restoring Home Assistant)."
+                    "(Home Assistant's Supervisor requires it to match the "
+                    "backup's database_included flag when restoring Home "
+                    "Assistant)."
                 )
             if safety_backup_id is None:
                 warnings.append(
@@ -834,7 +867,8 @@ def _summarize_backup(entry: dict[str, Any]) -> dict[str, Any]:
         "name": entry.get("name"),
         "date": entry.get("date"),
         "size_bytes": size_bytes,
-        "protected": entry.get("protected"),
+        # per-agent field, derived from the agents map (see _backup_protected)
+        "protected": _backup_protected(entry),
         "database_included": entry.get("database_included"),
         "homeassistant_included": entry.get("homeassistant_included"),
         "homeassistant_version": entry.get("homeassistant_version"),
