@@ -36,14 +36,15 @@ class TestDeepSearchErrorHandling:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            name = (
+                method.__fastmcp__.name
+                if hasattr(method, "__fastmcp__")
+                else method.__name__
+            )
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture
