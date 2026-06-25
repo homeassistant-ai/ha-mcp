@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import aiohttp
+import voluptuous as vol
 from aiohttp import web
 from homeassistant.components.webhook import (
     async_register,
@@ -49,6 +50,16 @@ CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
 # as a sanity floor — a truncated/corrupted ha-mcp config yields a shorter
 # token, which is the failure mode this length check exists to catch.
 _SECRET_PATH_RE = re.compile(r"^/private_[A-Za-z0-9_-]{16,}$")
+
+# Permissive whole-config schema: satisfies hassfest's [CONFIG_SCHEMA] check
+# (any integration with async_setup must declare one) while preserving the
+# YAML-migration path below. cv.config_entry_only_config_schema is wrong here:
+# it raises an ERROR-severity repair issue on any `mcp_proxy:` key, which would
+# collide with the legacy `mcp_proxy:` line async_setup imports from.
+CONFIG_SCHEMA = vol.Schema(
+    {vol.Optional(DOMAIN): vol.Any(None, dict)},
+    extra=vol.ALLOW_EXTRA,
+)
 
 
 def _validate_target_url(target_url: str) -> tuple[bool, str]:

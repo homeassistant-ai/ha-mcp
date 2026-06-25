@@ -1117,21 +1117,23 @@ class TestSweepWarningsShape:
                 "result": {"config": {"create_backup": {"password": "pw"}}},
             },
             {"success": True, "result": {"backup_job_id": "job"}},
-            {
-                "success": True,
-                "result": {
-                    "backups": [{"name": "Pre_Restore_Safety", "backup_id": "sxyz"}]
-                },
-            },
             {"success": True},
         ]
         client = MagicMock()
         client.base_url = "http://test"
         client.token = "t"
         client.verify_ssl = False
-        with patch(
-            "ha_mcp.tools.backup.get_connected_ws_client",
-            new=AsyncMock(return_value=(ws, None)),
+        # Stub the safety-backup completion poll (exercised by test_backup_restore)
+        # so this test stays focused on the warnings-list shape contract.
+        with (
+            patch(
+                "ha_mcp.tools.backup.get_connected_ws_client",
+                new=AsyncMock(return_value=(ws, None)),
+            ),
+            patch(
+                "ha_mcp.tools.backup._poll_backup_completion",
+                new=AsyncMock(return_value={"success": True}),
+            ),
         ):
             result = await restore_backup(client, "abc")
         _assert_warnings_list_shape(result)

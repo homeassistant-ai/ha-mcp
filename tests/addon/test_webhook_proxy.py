@@ -132,6 +132,11 @@ def _install_runtime_stubs():
 
     voluptuous_mod = types.ModuleType("voluptuous")
     voluptuous_mod.Schema = MagicMock(name="Schema")
+    # __init__.py builds CONFIG_SCHEMA at import time with these, so the stub
+    # must expose them or the module import raises AttributeError.
+    voluptuous_mod.Optional = MagicMock(name="Optional")
+    voluptuous_mod.Any = MagicMock(name="Any")
+    voluptuous_mod.ALLOW_EXTRA = MagicMock(name="ALLOW_EXTRA")
 
     sys.modules.update(
         {

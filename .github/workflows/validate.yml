@@ -1,0 +1,36 @@
+name: Validate
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Drop vendored third-party fixtures (e.g. the upstream HACS integration
+      # used as an e2e fixture) so hassfest only validates integrations this repo
+      # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
+      - name: Remove vendored test fixtures
+        run: rm -rf tests/initial_test_state
+      - uses: home-assistant/actions/hassfest@master
