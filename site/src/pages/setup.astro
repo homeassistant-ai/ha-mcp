@@ -2046,16 +2046,17 @@ mcpServers:
         // Gemini CLI
         if (isStdio) {
           if (isDocker) {
-                        config = `gemini mcp add --scope user homeassistant docker -- \\
-              run --rm -i \\
-              -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-              -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-              ghcr.io/homeassistant-ai/ha-mcp:latest`;
-                        } else {
-                        config = `gemini mcp add --scope user homeassistant \\
-              -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-              -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-              uvx -- ha-mcp@latest`;          }
+            config = `gemini mcp add --scope user home-assistant docker -- \\
+  run --rm -i \\
+  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+  ghcr.io/homeassistant-ai/ha-mcp:latest`;
+          } else {
+            config = `gemini mcp add --scope user home-assistant \\
+  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+  uvx -- ha-mcp@latest`;
+          }
         } else {
           config = `gemini mcp add --transport http home-assistant ${mcpUrl}`;
         }
@@ -2091,9 +2092,9 @@ mcpServers:
         // Codex CLI
         if (isStdio) {
           if (isDocker) {
-            config = `codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- docker run --rm -i ghcr.io/homeassistant-ai/ha-mcp:latest`;
+            config = `codex mcp add home-assistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- docker run --rm -i ghcr.io/homeassistant-ai/ha-mcp:latest`;
           } else {
-            config = `codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx ha-mcp@latest`;
+            config = `codex mcp add home-assistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx ha-mcp@latest`;
           }
         } else {
           config = `codex mcp add home-assistant --url ${mcpUrl}`;
