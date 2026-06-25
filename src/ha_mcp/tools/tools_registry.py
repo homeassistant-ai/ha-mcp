@@ -63,15 +63,16 @@ def _extract_zigbee_info(
     for identifier in identifiers:
         if isinstance(identifier, (list, tuple)) and len(identifier) >= 2:
             domain = identifier[0]
-            if domain not in integration_sources:
-                integration_sources.append(domain)
-            ieee_address, is_z2m, zwave_node_id = _process_device_domain(
-                domain,
-                str(identifier[1]),
-                ieee_address,
-                is_z2m,
-                zwave_node_id,
-            )
+            if isinstance(domain, str):
+                if domain not in integration_sources:
+                    integration_sources.append(domain)
+                ieee_address, is_z2m, zwave_node_id = _process_device_domain(
+                    domain,
+                    str(identifier[1]),
+                    ieee_address,
+                    is_z2m,
+                    zwave_node_id,
+                )
 
     return integration_sources, ieee_address, is_z2m, zwave_node_id
 
@@ -80,12 +81,13 @@ def _first_ieee_from_connections(
     connections: list[Any], existing_ieee: str | None
 ) -> str | None:
     """Return the first IEEE address found in connections, or existing_ieee if none."""
+    if existing_ieee:
+        return existing_ieee
     for connection in connections:
         if (
             isinstance(connection, (list, tuple))
             and len(connection) >= 2
             and connection[0] == "ieee"
-            and not existing_ieee
         ):
             return str(connection[1])
     return existing_ieee
@@ -443,14 +445,16 @@ async def _remove_device_config_entries(
             for config_entry_id in config_entries
         )
     )
-    return [
-        {
-            "config_entry_id": config_entry_id,
-            "success": r.get("success", False),
-            "error": r.get("error") if not r.get("success") else None,
-        }
-        for config_entry_id, r in zip(config_entries, raw, strict=True)
-    ]
+    results: list[dict[str, Any]] = []
+    for config_entry_id, r in zip(config_entries, raw, strict=True):
+        results.append(
+            {
+                "config_entry_id": config_entry_id,
+                "success": r.get("success", False),
+                "error": r.get("error") if not r.get("success") else None,
+            }
+        )
+    return results
 
 
 class RegistryTools:
