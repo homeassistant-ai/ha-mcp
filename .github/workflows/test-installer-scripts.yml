@@ -26,7 +26,7 @@ jobs:
   test-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Run macOS installer script (first run)
         run: sh scripts/install.sh
@@ -56,7 +56,7 @@ jobs:
   test-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Run Linux installer script (first run)
         run: sh scripts/install.sh
@@ -95,7 +95,7 @@ jobs:
   test-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Run Windows installer script (first run)
         shell: pwsh
@@ -152,7 +152,7 @@ jobs:
   test-claude-code-args:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: --claude-code must not write a Claude Desktop config
         run: |
@@ -176,7 +176,7 @@ jobs:
   test-wsl-guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: WSL is detected and the Desktop path is refused (no config written)
         run: |
@@ -205,7 +205,7 @@ jobs:
   test-stale-uv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Stale uv without uvx falls through to the upgrade path (issue #1593)
         run: |

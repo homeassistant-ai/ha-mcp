@@ -11,7 +11,7 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.6.3"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.6.4"
   # Disable Testcontainers' Ryuk reaper: it has been reported to leave
   # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
   # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
@@ -34,7 +34,7 @@ jobs:
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Classify changed files
         id: filter
         env:
@@ -106,11 +106,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.23-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Verify uv.lock is in sync with pyproject.toml
       run: uv lock --check
@@ -121,7 +121,7 @@ jobs:
     timeout-minutes: 1
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Check AGENTS.md size
       run: |
@@ -142,7 +142,7 @@ jobs:
       run:
         working-directory: site
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Setup Node
       uses: actions/setup-node@v6
@@ -173,14 +173,14 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.23-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
     - name: Install git for changed-files diff
       run: apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
 
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install dependencies
       run: uv sync --dev
@@ -190,7 +190,7 @@ jobs:
 
     - name: Run ruff format check on changed Python files
       run: |
-        # actions/checkout@v6 sets safe.directory in a temp HOME that this
+        # actions/checkout@v7 sets safe.directory in a temp HOME that this
         # step doesn't inherit; re-add it here so git operations succeed
         # when the checkout dir is owned by a different UID than the
         # container's root.
@@ -220,11 +220,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.23-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install dependencies
       run: uv sync --dev
@@ -237,11 +237,11 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.23-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install dependencies
       run: uv sync --dev
@@ -257,7 +257,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.23-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -286,7 +286,7 @@ jobs:
         apt-get update -qq
         apt-get install -y -qq git nodejs npm >/dev/null 2>&1
 
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         submodules: true
 
@@ -333,7 +333,7 @@ jobs:
             pytest_workers: 4
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         submodules: true
 
@@ -404,7 +404,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         submodules: true
 

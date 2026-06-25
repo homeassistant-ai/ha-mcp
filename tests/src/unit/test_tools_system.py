@@ -46,6 +46,59 @@ def _make_client_that_fails_on_restart(exception):
     return mock_client
 
 
+def _make_client_that_fails_on_check_config(exception):
+    """Create a mock client where check_config itself raises.
+
+    Used to exercise the pre-dispatch path: the failure happens before the
+    restart service is ever called, so ``restart_initiated`` stays False.
+    """
+    mock_client = AsyncMock()
+    mock_client.check_config.side_effect = exception
+    return mock_client
+
+
+class TestGetSystemHealthHaMcpUpdate:
+    """ha_get_system_health surfaces the MCP server's own update status."""
+
+    @pytest.mark.asyncio
+    async def test_ha_mcp_update_present_when_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from ha_mcp import update_check
+
+        monkeypatch.setattr(
+            update_check,
+            "get_update_field",
+            AsyncMock(
+                return_value={
+                    "current": "7.8.0",
+                    "latest": "7.9.0",
+                    "update_available": True,
+                }
+            ),
+        )
+        with _patch_health_info_baseline():
+            result = await SystemTools(AsyncMock()).ha_get_system_health()
+        assert result["ha_mcp_update"] == {
+            "current": "7.8.0",
+            "latest": "7.9.0",
+            "update_available": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_ha_mcp_update_absent_when_not_applicable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from ha_mcp import update_check
+
+        monkeypatch.setattr(
+            update_check, "get_update_field", AsyncMock(return_value=None)
+        )
+        with _patch_health_info_baseline():
+            result = await SystemTools(AsyncMock()).ha_get_system_health()
+        assert "ha_mcp_update" not in result
+
+
 class TestHaRestartErrorHandling:
     """Tests for ha_restart handling of expected errors during restart."""
 
@@ -74,6 +127,81 @@ class TestHaRestartErrorHandling:
         assert any("Wait 1-5 minutes" in w for w in warnings), (
             f"Expected wait-for-restart warning content; got: {warnings!r}"
         )
+
+    @pytest.mark.parametrize(
+        ("error", "pattern"),
+        [
+            (
+                HomeAssistantAPIError("API error: 502 - ", status_code=502),
+                "502",
+            ),
+            (
+                HomeAssistantAPIError("API error: 503 - ", status_code=503),
+                "503",
+            ),
+            (
+                HomeAssistantConnectionError("Proxy returned: Bad Gateway"),
+                "gateway",
+            ),
+            (
+                HomeAssistantConnectionError("Upstream Service Unavailable"),
+                "unavailable",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_proxy_5xx_during_restart_treated_as_success(self, error, pattern):
+        """Reverse-proxy 502/503/'gateway'/'unavailable' responses after the
+        restart was initiated should be treated as the expected connection drop,
+        not a failure.
+
+        Reproduces issue #1666: behind nginx/Traefik/Cloudflare the proxy often
+        returns a 502/503 (or a 'Bad Gateway'/'Service Unavailable' body) while
+        HA is shutting down, even though the restart succeeded. Extends the #612
+        (504) fix to the broader set of known-good patterns in
+        ``tools_system.py`` (~L199-211).
+
+        Each case isolates a single newly added pattern so a future narrowing of
+        the match list fails loudly here.
+        """
+        client = _make_client_that_fails_on_restart(error)
+        tools = SystemTools(client)
+
+        result = await tools.ha_restart(confirm=True)
+
+        assert result["success"] is True, (
+            f"Proxy '{pattern}' error should be treated as the expected restart "
+            f"connection drop; got: {result!r}"
+        )
+        warnings = result.get("warnings")
+        assert isinstance(warnings, list) and warnings, (
+            f"Expected non-empty warnings list, got: {result!r}"
+        )
+        assert any("Wait 1-5 minutes" in w for w in warnings), (
+            f"Expected wait-for-restart warning content; got: {warnings!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_proxy_error_before_restart_dispatch_still_fails(self):
+        """A matching proxy error raised *before* the restart is dispatched must
+        still fail loudly.
+
+        The known-good branch is gated on ``restart_initiated and any(pattern ...)``.
+        The other tests all run with ``restart_initiated`` already True (the
+        failure comes from ``call_service``); this pins the ``restart_initiated
+        is False`` half of that guard. Here ``check_config`` raises a
+        ``Bad Gateway`` (which would otherwise match the ``gateway`` pattern),
+        but since the restart was never sent it must raise a ``ToolError`` rather
+        than be reported as a successful restart. Guards against a future change
+        that weakens the guard and lets a pre-restart proxy error masquerade as
+        success.
+        """
+        error = HomeAssistantConnectionError("Bad Gateway")
+        client = _make_client_that_fails_on_check_config(error)
+        tools = SystemTools(client)
+
+        with pytest.raises(ToolError):
+            await tools.ha_restart(confirm=True)
 
     @pytest.mark.asyncio
     async def test_unrelated_error_still_fails(self):

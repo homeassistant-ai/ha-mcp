@@ -18,6 +18,48 @@ from ha_mcp.tools.tools_updates import (
 )
 
 
+class TestListUpdatesHaMcpUpdate:
+    """ha_get_updates (list mode) surfaces the MCP server's own update status."""
+
+    @pytest.mark.asyncio
+    async def test_ha_mcp_update_present_when_available(self, monkeypatch):
+        from ha_mcp import update_check
+        from ha_mcp.tools.tools_updates import UpdateTools
+
+        monkeypatch.setattr(
+            update_check,
+            "get_update_field",
+            AsyncMock(
+                return_value={
+                    "current": "7.8.0",
+                    "latest": "7.9.0",
+                    "update_available": True,
+                }
+            ),
+        )
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        result = await UpdateTools(client).ha_get_updates()
+        assert result["ha_mcp_update"] == {
+            "current": "7.8.0",
+            "latest": "7.9.0",
+            "update_available": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_ha_mcp_update_absent_when_not_applicable(self, monkeypatch):
+        from ha_mcp import update_check
+        from ha_mcp.tools.tools_updates import UpdateTools
+
+        monkeypatch.setattr(
+            update_check, "get_update_field", AsyncMock(return_value=None)
+        )
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        result = await UpdateTools(client).ha_get_updates()
+        assert "ha_mcp_update" not in result
+
+
 class TestCategorizeUpdate:
     """Test _categorize_update function."""
 

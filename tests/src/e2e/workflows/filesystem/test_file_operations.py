@@ -24,6 +24,7 @@ Tests are designed for the Docker Home Assistant test environment.
 import logging
 import os
 import uuid
+from typing import Any
 
 import pytest
 
@@ -32,6 +33,7 @@ from ...utilities.assertions import (
     extract_error_message,
     safe_call_tool,
 )
+from ...utilities.wait_helpers import wait_for_tool_result
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -955,3 +957,153 @@ class TestMcpToolsComponentNotInstalled:
             logger.info(
                 "ha_mcp_tools service is available, component is installed - test passes"
             )
+
+
+# ---------------------------------------------------------------------------
+# #1579 PR2 — ha_write_file / ha_delete_file fold into the edits auto-backup
+# ---------------------------------------------------------------------------
+
+
+async def _wait_file_backup_name(
+    mcp_client: Any, *, marker: str, timeout: int = 20
+) -> str:
+    """Poll the edits-backup list for a ``file`` snapshot whose entity_id
+    contains ``marker`` (a unique token in the path); return its name."""
+
+    def _entries(d: dict[str, Any]) -> list[Any]:
+        return d.get("backups") or d.get("data", {}).get("backups", []) or []
+
+    data = await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_manage_backup",
+        arguments={"scope": "edits", "action": "list", "domain": "file"},
+        predicate=lambda d: any(marker in e["entity_id"] for e in _entries(d)),
+        description=f"file auto-backup containing {marker!r}",
+        timeout=timeout,
+    )
+    matches = [e for e in _entries(data) if marker in e["entity_id"]]
+    # Capture is pre-write and synchronous, so by the time the overwrite has
+    # returned both captures (if any) have landed. The create is supposed to be
+    # skipped (file didn't exist → nothing to snapshot), so exactly one snapshot
+    # — the overwrite — must match the marker; a spurious create-time capture
+    # would surface as a second entry and is caught here rather than passing
+    # silently via matches[0].
+    assert len(matches) == 1, f"expected exactly one file snapshot, got {matches}"
+    return matches[0]["name"]
+
+
+@pytest.mark.filesystem
+class TestFileWriteAutoBackup:
+    """ha_write_file / ha_delete_file capture prior file content into the
+    shared edits store (#1579), so file edits are list/diff/restore-able and
+    deletes are recoverable."""
+
+    async def test_overwrite_captures_and_restores(self, mcp_client_with_filesystem):
+        mcp = mcp_client_with_filesystem
+        marker = uuid.uuid4().hex[:8]
+        path = f"www/_e2e_backup_{marker}.css"
+
+        # Create — file did not exist, so capture is skipped.
+        create = await safe_call_tool(
+            mcp,
+            "ha_write_file",
+            {"path": path, "content": ".a { color: red; }", "overwrite": True},
+        )
+        assert create.get("success") is True, create
+
+        try:
+            # Overwrite — captures the prior content as a text snapshot.
+            overwrite = await safe_call_tool(
+                mcp,
+                "ha_write_file",
+                {"path": path, "content": ".a { color: blue; }", "overwrite": True},
+            )
+            assert overwrite.get("success") is True, overwrite
+
+            name = await _wait_file_backup_name(mcp, marker=marker)
+
+            diff = await safe_call_tool(
+                mcp,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "diff", "backup_name": name},
+            )
+            assert diff.get("success") is True, diff
+            assert diff["data"]["kind"] == "text", diff
+
+            restore = await safe_call_tool(
+                mcp,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": name},
+            )
+            assert restore.get("success") is True, restore
+
+            read = await safe_call_tool(mcp, "ha_read_file", {"path": path})
+            assert read.get("success") is True, read
+            assert "color: red" in read["content"], read["content"]
+        finally:
+            await safe_call_tool(mcp, "ha_delete_file", {"path": path, "confirm": True})
+
+
+@pytest.fixture
+def _auto_backup_disabled():
+    """Disable auto-backup for one test, then restore the env AND re-read the
+    settings singleton.
+
+    The settings singleton is cached, so flipping the env back (or letting
+    monkeypatch undo it) is not enough on its own — without a re-read the
+    disabled state leaks into later tests on the same xdist worker and makes
+    their mandatory writes refuse. Restoring + re-resetting in ``finally``
+    keeps the toggle scoped to this test.
+    """
+    import os
+
+    from ha_mcp.config import _reset_global_settings
+
+    prev = os.environ.get("ENABLE_AUTO_BACKUP")
+    os.environ["ENABLE_AUTO_BACKUP"] = "false"
+    _reset_global_settings()
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("ENABLE_AUTO_BACKUP", None)
+        else:
+            os.environ["ENABLE_AUTO_BACKUP"] = prev
+        _reset_global_settings()
+
+
+@pytest.mark.filesystem
+@pytest.mark.external_only
+class TestMandatoryBackupRefusal:
+    """With auto-backup disabled, the mandatory file/YAML writes (#1579) must
+    REFUSE with a structured error instead of writing un-backed-up content.
+
+    This exercises the refusal path live (the in-process server reads the env
+    toggle, so the test is external_only). All three mandatory tools share the
+    one ``@with_auto_backup(mandatory=True)`` gate — covered per-tool by the
+    source-guard unit test — so one live file-write refusal validates the gate
+    end-to-end.
+    """
+
+    async def test_write_refused_when_autobackup_disabled(
+        self, mcp_client_with_filesystem, _auto_backup_disabled
+    ):
+        marker = uuid.uuid4().hex[:8]
+        path = f"www/_e2e_refuse_{marker}.css"
+        result = await safe_call_tool(
+            mcp_client_with_filesystem,
+            "ha_write_file",
+            {"path": path, "content": ".x { color: red; }", "overwrite": True},
+        )
+        # Refused with the structured toggle-off error, not written.
+        assert result.get("success") is False, result
+        assert result.get("error", {}).get("code") == "CONFIG_VALIDATION_FAILED", result
+        assert "auto-backup" in result.get("error", {}).get("message", "").lower()
+
+        # The write was blocked — the file must not exist.
+        read_back = await safe_call_tool(
+            mcp_client_with_filesystem, "ha_read_file", {"path": path}
+        )
+        assert read_back.get("success") is False, (
+            f"file was written despite the refusal: {read_back}"
+        )

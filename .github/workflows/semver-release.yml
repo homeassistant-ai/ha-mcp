@@ -54,7 +54,7 @@ jobs:
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -89,7 +89,7 @@ jobs:
     name: Validate Docker Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true
 
@@ -130,7 +130,7 @@ jobs:
       # Fallback to RELEASE_TOKEN (PAT) or GITHUB_TOKEN if app credentials not configured
       continue-on-error: true
 
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
         # Priority: GitHub App token > RELEASE_TOKEN (PAT) > GITHUB_TOKEN

@@ -46,6 +46,9 @@ async def test_get_returns_405_with_helpful_message(mcp_app):
     assert "Block AI training bots" in resp.text
     assert '"do not block (allow crawlers)"' in resp.text
     assert "dash.cloudflare.com" in resp.text
+    # Reverse-proxy / geo-blocking guidance (issue #1669)
+    assert "Your URL is set up correctly" in resp.text
+    assert "160.79.104.0/21" in resp.text
     assert resp.headers["allow"] == "POST, DELETE"
 
 

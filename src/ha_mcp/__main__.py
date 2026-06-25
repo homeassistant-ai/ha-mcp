@@ -479,21 +479,40 @@ def _setup_logging(log_level_str: str, force: bool = False) -> None:
 
 
 def _log_startup_version() -> None:
-    """Log ha-mcp version at startup, plus a dev-channel banner when relevant.
+    """Log ha-mcp version at startup, plus dev-channel / update banners.
 
     The dev banner only fires for standalone dev installs (Docker ``:dev`` /
     ``:latest``, or ``pip install ha-mcp-dev``). It is suppressed under the HA
     Supervisor because add-on users already pick dev vs stable in the HAOS UI.
+
+    The update banner fires on every startup when a newer release is available,
+    on every deployment — pip/Docker/stdio compare against PyPI, the HA add-on
+    (stable AND dev) against the Supervisor add-on store — mirroring FastMCP's
+    ``log_server_banner``. ``get_update_info`` is a no-op for the ``unknown``
+    version (PyPI path) and the ``HA_MCP_DISABLE_UPDATE_CHECK`` opt-out, and
+    never raises.
     """
     from ha_mcp._version import get_version, is_dev_version, is_running_in_addon
 
     version = get_version()
     logger.info(f"ha-mcp {version}")
+
     if is_dev_version(version) and not is_running_in_addon():
         logger.warning(
             "This is the dev channel. For the stable release use the "
             "'ghcr.io/homeassistant-ai/ha-mcp:stable' Docker tag "
             "(or 'pip install ha-mcp' on PyPI)."
+        )
+
+    from ha_mcp.update_check import get_update_info, update_command_hint
+
+    info = get_update_info()
+    if info is not None and info.update_available:
+        logger.warning(
+            "A newer ha-mcp release is available: %s (you have %s). %s",
+            info.latest,
+            info.current,
+            update_command_hint(info.current),
         )
 
 
@@ -973,6 +992,31 @@ def register_browser_landing(
         "To connect, paste the full URL (including the /private_... key) into the\n"
         "connector or MCP settings of your AI/LLM client. No username or password required.\n"
         "Setup instructions: https://homeassistant-ai.github.io/ha-mcp/\n"
+        "\n"
+        "--- Seeing this page? Your URL is set up correctly ---\n"
+        "\n"
+        "If this page loads in your browser, the MCP server is reachable and the\n"
+        "URL is correct. If your AI client still cannot connect, the problem is\n"
+        "not on HA-MCP's side. Common causes:\n"
+        "\n"
+        "- Geo / country blocking in your reverse proxy / CDN (Cloudflare, NGINX,\n"
+        "  Traefik, Zoraxy, etc.). Most AI/LLM services connect from US-based\n"
+        "  cloud infrastructure, so if you block US IP addresses (or only allow\n"
+        "  your own country), that is why your client cannot connect. Allow your\n"
+        "  provider's IP ranges (or your client's egress IPs). For example,\n"
+        # Anthropic's documented outbound range; re-verify at
+        # https://platform.claude.com/docs/en/api/ip-addresses if it ever changes.
+        "  Claude.ai connects from Anthropic's network, 160.79.104.0/21.\n"
+        "- WAF, bot-blocking, or rate-limiting rules on the proxy that drop or\n"
+        "  challenge the request.\n"
+        "- The AI client's network can sometimes be spotty -- you may just need\n"
+        "  to try connecting again.\n"
+        "- The AI client itself refusing certain domains or proxy providers on\n"
+        "  its end. This is rare and outside your control; try a different\n"
+        "  hostname or proxy if you suspect it.\n"
+        "\n"
+        "Your proxy's access logs will show the blocked attempt -- look for the\n"
+        "request from your AI provider's IP (e.g. an Anthropic 160.79.x.x address).\n"
         "\n"
         "--- Cloudflare Users ---\n"
         "\n"

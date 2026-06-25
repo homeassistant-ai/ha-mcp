@@ -958,7 +958,7 @@ async def _call_addon_ws(
     Args:
         client: Home Assistant REST client
         slug: Add-on slug (e.g., "<prefix>_esphome")
-        path: WebSocket endpoint path (e.g., "/compile", "/validate")
+        path: WebSocket endpoint path (e.g., "/ws" for the ESPHome dashboard's command channel)
         body: Message to send after connecting (JSON-encoded if dict, raw if string)
         timeout: Max seconds to wait for messages (default 60)
         debug: Include diagnostic info
@@ -2622,7 +2622,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         body: Annotated[
             dict[str, Any] | str | None,
             Field(
-                description="Proxy mode only. Request body for POST/PUT/PATCH. Pass a JSON object or JSON string.",
+                description="Proxy mode only. Request body for POST/PUT/PATCH — or, with websocket=True, the initial WebSocket message. Pass a JSON object or JSON string.",
                 default=None,
             ),
         ] = None,
@@ -2658,17 +2658,20 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         websocket: Annotated[
             bool,
             Field(
-                description="Proxy mode only. Use WebSocket instead of HTTP. For streaming endpoints "
-                "(e.g., ESPHome /compile, /validate). Sends 'body' as initial message, "
-                "collects responses. Default: false.",
+                description="Proxy mode only. Use WebSocket instead of HTTP — for an add-on's "
+                "WebSocket API (e.g. the ESPHome dashboard's '/ws' command channel; see the "
+                "docstring's ESPHome section). Sends 'body' as the initial message, collects "
+                "responses. Default: false.",
                 default=False,
             ),
         ] = False,
         wait_for_close: Annotated[
             bool,
             Field(
-                description="Proxy mode only. WebSocket: True: wait for server to close (for compile/validate). "
-                "False: return after first response batch (for quick commands). Default: true.",
+                description="Proxy mode only. WebSocket: True: wait for the server to close the stream "
+                "(run-to-completion ops like an ESPHome compile/validate). False: return after the first "
+                "response batch — use for a one-shot command/response or a bounded log capture on a channel "
+                "that stays open (e.g. ESPHome '/ws'). Default: true.",
                 default=True,
             ),
         ] = True,
@@ -2839,6 +2842,29 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         share Home Assistant's container network (i.e. only the HAOS addon).
         Use ha_get_addon(slug="...") to discover available ports and endpoints.
 
+        **ESPHome Device Builder dashboard (current rewrite):** config and log
+        access is a WebSocket JSON-command API, NOT REST. The legacy endpoints
+        are gone — `GET /edit?configuration=` now returns the dashboard SPA, and
+        the old `/compile` `/validate` `/logs` WebSocket paths (which took
+        `{"type": "spawn", ...}` bodies) reject the upgrade (HTTP 200). Use
+        instead:
+        - HTTP `GET /devices` → JSON list of configured devices; each entry's
+          `configuration` field is the YAML filename to pass below.
+        - WebSocket `path="/ws"` with body
+          `{"command": "<cmd>", "message_id": "1", "args": {...}}`. The server
+          sends a `server_info` message first, then one reply per `message_id`.
+          Wire-confirmed commands: `devices/get_config` `{configuration}` → raw
+          YAML (in the reply's `result`); `devices/logs` (stream)
+          `{configuration, port: "OTA"}` → live device logs. Also exposed by the
+          dashboard frontend (command/arg names not wire-tested here):
+          `devices/update_config` `{configuration, content}` → save,
+          `devices/validate`, `firmware/compile`.
+        - The `/ws` channel stays open, so for a one-shot read or a bounded log
+          capture pass `wait_for_close=False` with `message_limit` (and
+          `message_offset` to skip the server_info / config-banner preamble).
+          Reach the dashboard through Ingress — omit `port`; direct `port=` does
+          not route to it.
+
         **Array-patch mode** (when path AND array_patch are provided):
         Atomic "GET array, mutate, POST array" workflow for addon APIs whose write
         contract is "send the whole resource collection back". Operations are applied
@@ -2847,8 +2873,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         full array. Designed for Node-RED /flows and similar endpoints.
 
         **Response shaping (proxy mode):**
-        - WebSocket streams can be noisy (ESPHome /validate often emits hundreds of
-          config-dump lines). By default, `summarize=True` collapses long runs of
+        - WebSocket streams can be noisy (e.g. the ESPHome dashboard's devices/logs
+          dumps the device's full config banner on connect). By default, `summarize=True` collapses long runs of
           non-signal messages into short elision markers; INFO/WARNING/ERROR/exit
           lines always pass through. Pagination via `message_offset` / `message_limit`
           works on the raw collected list before summarize runs.
@@ -2881,9 +2907,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         - Set boot mode: ha_manage_addon(slug="...", boot="manual")
         - Call HTTP API: ha_manage_addon(slug="...", path="/api/events")
         - Direct port: ha_manage_addon(slug="...", path="/flows", port=1880)
-        - WebSocket: ha_manage_addon(slug="...", path="/validate", port=6052, websocket=True, body={"type": "spawn", "configuration": "device.yaml"})
-        - Quick WS health check (50 msgs, raw): ha_manage_addon(slug="...", path="/logs", websocket=True, message_limit=50, summarize=False)
-        - Filter WS errors only: ha_manage_addon(slug="...", path="/validate", websocket=True, python_transform="response = [m for m in response if 'ERROR' in str(m) or 'WARN' in str(m)]")
+        - ESPHome list devices (HTTP): ha_manage_addon(slug="<prefix>_esphome", path="/devices")
+        - ESPHome read a device's YAML (WS one-shot): ha_manage_addon(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=2, body={"command": "devices/get_config", "message_id": "1", "args": {"configuration": "device.yaml"}})
+        - ESPHome live logs (WS, bounded): ha_manage_addon(slug="<prefix>_esphome", path="/ws", websocket=True, wait_for_close=False, message_limit=60, body={"command": "devices/logs", "message_id": "1", "args": {"configuration": "device.yaml", "port": "OTA"}})
+        - Filter WS errors only: ha_manage_addon(slug="...", path="/ws", websocket=True, python_transform="response = [m for m in response if 'ERROR' in str(m) or 'WARN' in str(m)]")
         - HTTP subset: ha_manage_addon(slug="...", path="/flows", python_transform="response = [f['id'] for f in response]")
         - Array-patch (Node-RED, rename a node):
             ha_manage_addon(

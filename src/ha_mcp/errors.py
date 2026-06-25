@@ -100,6 +100,12 @@ class ErrorCode(StrEnum):
     # because the server-wide Read Only Mode toggle is on.
     READ_ONLY_MODE = "READ_ONLY_MODE"
 
+    # Mandatory auto-backup (#1579). A write that requires a pre-write
+    # snapshot was blocked because the snapshot could not be captured
+    # (fetch failed, the snapshot write failed — e.g. disk full — or the
+    # backup directory is unusable). Fail-closed: nothing was changed.
+    BACKUP_CAPTURE_FAILED = "BACKUP_CAPTURE_FAILED"
+
 
 # Default suggestions for common error codes
 DEFAULT_SUGGESTIONS: dict[ErrorCode, list[str]] = {

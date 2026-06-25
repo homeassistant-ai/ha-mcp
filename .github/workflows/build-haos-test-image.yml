@@ -57,7 +57,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Required for the skills bundle submodule at
           # src/ha_mcp/resources/skills-vendor (test_skills_resources.py).

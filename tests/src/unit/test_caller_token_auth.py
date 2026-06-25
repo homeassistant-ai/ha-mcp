@@ -16,7 +16,9 @@ the real HA package available.
 
 from __future__ import annotations
 
+import json
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -28,6 +30,7 @@ sys.modules.setdefault("voluptuous", MagicMock())
 sys.modules.setdefault("homeassistant", MagicMock())
 sys.modules.setdefault("homeassistant.components", MagicMock())
 sys.modules.setdefault("homeassistant.components.persistent_notification", MagicMock())
+sys.modules.setdefault("homeassistant.config", MagicMock())
 sys.modules.setdefault("homeassistant.config_entries", MagicMock())
 sys.modules.setdefault("homeassistant.core", MagicMock())
 sys.modules.setdefault("homeassistant.helpers", MagicMock())
@@ -47,7 +50,9 @@ from custom_components.ha_mcp_tools.const import DOMAIN  # noqa: E402
 from ha_mcp.tools.tools_filesystem import (  # noqa: E402
     CALLER_TOKEN_BOOTSTRAP_SERVICE,
     MCP_TOOLS_DOMAIN,
+    MIN_COMPONENT_VERSION,
     _reset_caller_token_cache,
+    _version_tuple,
     call_mcp_tools_service,
 )
 
@@ -174,6 +179,36 @@ class TestUnauthorizedResponse:
         resp = _unauthorized_response("list_files", files=[])
         assert resp["files"] == []
         assert resp["error_code"] == "unauthorized"
+
+
+class TestManifestVersionCoupling:
+    """The shipped component's manifest version must satisfy the server's
+    own ``MIN_COMPONENT_VERSION`` floor.
+
+    If the manifest ever falls behind the floor, a freshly-updated
+    component would report a version below the gate and lock every caller
+    out with a "too old" error that no further HACS update can clear.
+    Whenever a PR adds a new component service or schema field it must
+    bump both in lockstep (see the comment block at the
+    ``MIN_COMPONENT_VERSION`` definition); this test pins that invariant.
+    """
+
+    def _manifest_version(self) -> str:
+        import custom_components.ha_mcp_tools as component
+
+        manifest_path = Path(component.__file__).parent / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return manifest["version"]
+
+    def test_manifest_version_meets_minimum(self):
+        manifest_version = self._manifest_version()
+        assert _version_tuple(manifest_version) >= _version_tuple(
+            MIN_COMPONENT_VERSION
+        ), (
+            f"manifest.json version {manifest_version!r} is below the server's "
+            f"MIN_COMPONENT_VERSION {MIN_COMPONENT_VERSION!r}; a fresh component "
+            "would fail its own version gate. Bump manifest.json in lockstep."
+        )
 
 
 # =============================================================================

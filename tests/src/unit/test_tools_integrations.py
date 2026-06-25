@@ -1588,3 +1588,182 @@ class TestOptionsProbeFailureWarnings:
         assert "options_schema" not in resp
         assert resp.get("warnings"), f"expected a schema-probe warning: {resp}"
         assert "entry_s" in resp["warnings"][0]
+
+
+def _sample_knxproject() -> dict[str, Any]:
+    """A realistic ``knx/get_knx_project`` result payload.
+
+    Keys mirror ``xknxproject.models.KNXProject``; group-address entries mirror
+    ``GroupAddress`` (address, name, dpt, description, ...). DPTs are varied:
+    switch (1.001), dimming step (3.007), scaling (5.001), 2-byte float /
+    temperature (9.001), and one address with no DPT assigned.
+    """
+    return {
+        "info": {
+            "name": "Demo Project",
+            "last_modified": "2026-01-15T10:00:00",
+            "tool_version": "6.1.0",
+            "xknxproject_version": "3.8.1",
+        },
+        "group_addresses": {
+            "1/0/1": {
+                "name": "Living Room Light Switch",
+                "address": "1/0/1",
+                "dpt": {"main": 1, "sub": 1},
+                "description": "On/Off",
+            },
+            "1/0/2": {
+                "name": "Living Room Light Dim Step",
+                "address": "1/0/2",
+                "dpt": {"main": 3, "sub": 7},
+                "description": "Relative dimming",
+            },
+            "1/0/3": {
+                "name": "Living Room Light Brightness",
+                "address": "1/0/3",
+                "dpt": {"main": 5, "sub": 1},
+                "description": "Brightness %",
+            },
+            "2/1/0": {
+                "name": "Living Room Temperature",
+                "address": "2/1/0",
+                "dpt": {"main": 9, "sub": 1},
+                "description": "Actual temperature",
+            },
+            "3/3/3": {
+                "name": "Unassigned DPT Address",
+                "address": "3/3/3",
+                "dpt": None,
+                "description": "",
+            },
+        },
+        "group_ranges": {
+            "1/-/-": {
+                "name": "Lighting",
+                "address_start": 2048,
+                "address_end": 4095,
+                "group_addresses": [],
+                "group_ranges": {},
+            }
+        },
+        "devices": {},
+    }
+
+
+class TestIncludeKnxProject:
+    """Wire-up tests for ha_get_integration's include_knx_project branch."""
+
+    @pytest.mark.asyncio
+    async def test_attaches_parsed_project_for_knx_entry(self) -> None:
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": _sample_knxproject()}
+        )
+        tools = IntegrationTools(client)
+        single = {
+            "success": True,
+            "entry_id": "knx1",
+            "entry": {"domain": "knx", "title": "KNX"},
+        }
+        with patch.object(
+            IntegrationTools, "_get_single_entry", new=AsyncMock(return_value=single)
+        ):
+            result = await tools.ha_get_integration(
+                entry_id="knx1", include_knx_project=True
+            )
+
+        project = result["knx_project"]
+        assert project["count"] == 5
+        assert set(project["group_addresses"]) == {
+            "1/0/1",
+            "1/0/2",
+            "1/0/3",
+            "2/1/0",
+            "3/3/3",
+        }
+        # DPTs preserved verbatim, including the null-DPT entry.
+        assert project["group_addresses"]["2/1/0"]["dpt"] == {"main": 9, "sub": 1}
+        assert project["group_addresses"]["3/3/3"]["dpt"] is None
+        assert project["group_ranges"]["1/-/-"]["name"] == "Lighting"
+        assert project["info"]["name"] == "Demo Project"
+        assert "warnings" not in result
+        client.send_websocket_message.assert_awaited_once_with(
+            {"type": "knx/get_knx_project"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_project_uploaded_attaches_empty_with_note(self) -> None:
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": None}
+        )
+        tools = IntegrationTools(client)
+        single = {"success": True, "entry_id": "knx1", "entry": {"domain": "knx"}}
+        with patch.object(
+            IntegrationTools, "_get_single_entry", new=AsyncMock(return_value=single)
+        ):
+            result = await tools.ha_get_integration(
+                entry_id="knx1", include_knx_project=True
+            )
+
+        project = result["knx_project"]
+        assert project["count"] == 0
+        assert project["group_addresses"] == {}
+        assert "note" in project
+
+    @pytest.mark.asyncio
+    async def test_ws_failure_surfaces_warning_not_raise(self) -> None:
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "Command failed: KNX integration not loaded.",
+            }
+        )
+        tools = IntegrationTools(client)
+        single = {"success": True, "entry_id": "knx1", "entry": {"domain": "knx"}}
+        with patch.object(
+            IntegrationTools, "_get_single_entry", new=AsyncMock(return_value=single)
+        ):
+            result = await tools.ha_get_integration(
+                entry_id="knx1", include_knx_project=True
+            )
+
+        # Primary entry read still succeeds; the project failure is a warning.
+        assert result["success"] is True
+        assert "knx_project" not in result
+        assert result.get("warnings")
+        assert "KNX project" in result["warnings"][0]
+
+    @pytest.mark.asyncio
+    async def test_non_knx_entry_skips_with_warning(self) -> None:
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        tools = IntegrationTools(client)
+        single = {"success": True, "entry_id": "hue1", "entry": {"domain": "hue"}}
+        with patch.object(
+            IntegrationTools, "_get_single_entry", new=AsyncMock(return_value=single)
+        ):
+            result = await tools.ha_get_integration(
+                entry_id="hue1", include_knx_project=True
+            )
+
+        assert "knx_project" not in result
+        assert result.get("warnings")
+        assert "not a KNX integration" in result["warnings"][0]
+        # No project fetch attempted for a non-KNX entry.
+        client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_list_mode_ignores_flag_with_warning(self) -> None:
+        client = MagicMock()
+        tools = IntegrationTools(client)
+        with patch.object(
+            IntegrationTools,
+            "_list_entries",
+            new=AsyncMock(return_value={"success": True, "entries": []}),
+        ):
+            result = await tools.ha_get_integration(include_knx_project=True)
+
+        assert result.get("warnings")
+        assert any("include_knx_project" in w for w in result["warnings"])

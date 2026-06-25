@@ -13,6 +13,7 @@ sys.modules["voluptuous"] = MagicMock()
 homeassistant = MagicMock()
 sys.modules["homeassistant"] = homeassistant
 sys.modules["homeassistant.components"] = homeassistant.components
+sys.modules["homeassistant.config"] = homeassistant.config
 sys.modules["homeassistant.config_entries"] = homeassistant.config_entries
 sys.modules["homeassistant.core"] = homeassistant.core
 sys.modules["homeassistant.helpers"] = homeassistant.helpers
@@ -114,6 +115,7 @@ class TestIncludeDirTags:
             "!include_dir_list",
             "!include_dir_merge_list",
             "!include_dir_named",
+            "!include_dir_merge_named",
         ],
     )
     def test_include_dir_tag_preserved(self, tag):
