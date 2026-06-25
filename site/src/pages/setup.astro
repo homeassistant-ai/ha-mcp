@@ -2046,16 +2046,17 @@ mcpServers:
         // Gemini CLI
         if (isStdio) {
           if (isDocker) {
-                        config = `gemini mcp add --scope user homeassistant docker -- \\
-              run --rm -i \\
-              -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-              -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-              ghcr.io/homeassistant-ai/ha-mcp:latest`;
-                        } else {
-                        config = `gemini mcp add --scope user homeassistant \\
-              -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
-              -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
-              uvx -- ha-mcp@latest`;          }
+            config = `gemini mcp add --scope user home-assistant docker -- \\
+  run --rm -i \\
+  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+  ghcr.io/homeassistant-ai/ha-mcp:latest`;
+          } else {
+            config = `gemini mcp add --scope user home-assistant \\
+  -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
+  -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
+  uvx -- ha-mcp@latest`;
+          }
         } else {
           config = `gemini mcp add --transport http home-assistant ${mcpUrl}`;
         }
@@ -2091,20 +2092,20 @@ mcpServers:
         // Codex CLI
         if (isStdio) {
           if (isDocker) {
-            config = `codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- docker run --rm -i ghcr.io/homeassistant-ai/ha-mcp:latest`;
+            config = `codex mcp add home-assistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- docker run --rm -i ghcr.io/homeassistant-ai/ha-mcp:latest`;
           } else {
-            config = `codex mcp add homeassistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx ha-mcp@latest`;
+            config = `codex mcp add home-assistant --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} -- uvx ha-mcp@latest`;
           }
         } else {
-          config = `codex mcp add homeassistant --url ${mcpUrl}`;
+          config = `codex mcp add home-assistant --url ${mcpUrl}`;
         }
         // Codex CLI management commands
         instructions.push(`<div class="instruction-block">
           <h4 class="instruction-title">Management Commands</h4>
           <div class="text-sm text-slate-300 space-y-2">
             <div><code class="bg-slate-800 px-1 rounded">codex mcp list</code> <span class="text-slate-400">— list configured servers</span></div>
-            <div><code class="bg-slate-800 px-1 rounded">codex mcp get homeassistant</code> <span class="text-slate-400">— show server config</span></div>
-            <div><code class="bg-slate-800 px-1 rounded">codex mcp remove homeassistant</code> <span class="text-slate-400">— remove this server</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">codex mcp get home-assistant</code> <span class="text-slate-400">— show server config</span></div>
+            <div><code class="bg-slate-800 px-1 rounded">codex mcp remove home-assistant</code> <span class="text-slate-400">— remove this server</span></div>
             <div class="mt-2 text-slate-400">Codex stores config in TOML at <code class="bg-slate-800 px-1 rounded">~/.codex/config.toml</code> — shared between the CLI and the Codex Desktop app.</div>
             <div class="mt-2 text-slate-400"><strong class="text-slate-300">Codex Desktop UI:</strong> Go to <strong>Settings</strong> → <strong>MCP</strong> → <strong>Add Server</strong>, then choose type <strong>STDIO</strong> for local setup (or <strong>HTTP</strong> for remote). Fill in Name (<code class="bg-slate-800 px-1 rounded">home-assistant</code>), Command (<code class="bg-slate-800 px-1 rounded">uvx</code>), Args (<code class="bg-slate-800 px-1 rounded">ha-mcp@latest</code>), and Env vars (<code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>) — or paste the URL for HTTP. The desktop UI writes the same TOML as the CLI.</div>
             ${!isStdio ? `<div class="mt-2 text-slate-400">OAuth 2.0 authentication is available for remote (HTTP) servers.</div>` : ''}
@@ -2127,19 +2128,19 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
         // Claude Code
         if (isStdio) {
           if (isDocker) {
-            config = `claude mcp add homeassistant \\
+            config = `claude mcp add home-assistant \\
   -- docker run --rm -i \\
   -e HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
   -e HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
   ghcr.io/homeassistant-ai/ha-mcp:latest`;
           } else {
-            config = `claude mcp add homeassistant \\
+            config = `claude mcp add home-assistant \\
   --env HOMEASSISTANT_URL={{HOMEASSISTANT_URL}} \\
   --env HOMEASSISTANT_TOKEN={{HOMEASSISTANT_TOKEN}} \\
   -- uvx ha-mcp@latest`;
           }
         } else {
-          config = `claude mcp add --transport http homeassistant ${mcpUrl}`;
+          config = `claude mcp add --transport http home-assistant ${mcpUrl}`;
         }
         // Claude Code management commands
         instructions.push(`<div class="instruction-block">
