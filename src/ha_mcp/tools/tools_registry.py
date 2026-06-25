@@ -81,7 +81,7 @@ def _first_ieee_from_connections(
     connections: list[Any], existing_ieee: str | None
 ) -> str | None:
     """Return the first IEEE address found in connections, or existing_ieee if none."""
-    if existing_ieee:
+    if not isinstance(connections, list) or existing_ieee:
         return existing_ieee
     for connection in connections:
         if (
