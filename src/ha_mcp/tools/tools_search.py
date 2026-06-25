@@ -596,6 +596,11 @@ def _validate_entity_search_params(
             )
 
     query = query or ""
+    # HA domains are canonically lowercase, no whitespace; agents that capitalize
+    # ("Lights") or pad ("  light  ") would hit a silent zero-result against the
+    # prefix match downstream. Strip-then-lowercase before validation so a
+    # whitespace-only filter ("   ") collapses to "" and fails the at-least-one-set
+    # check rather than passing it and falling through to a no-op fuzzy search.
     if domain_filter:
         domain_filter = domain_filter.strip().lower()
     if area_filter:
@@ -1472,8 +1477,8 @@ class SearchTools:
     ) -> dict[str, Any]:
         """Search within area entities using fuzzy matching against a query string."""
         # Collect entities from all matched areas, applying domain_filter if present.
-        # get_entities_by_area is called with group_by_domain=True above, so
-        # entities is always a dict keyed by domain.
+        # _ha_search_entities calls get_entities_by_area with group_by_domain=True,
+        # so area_result["areas"][id]["entities"] is always a dict keyed by domain.
         all_area_entities = []
         for area_id in sorted(area_result.get("areas", {})):
             area_data = area_result["areas"][area_id]
@@ -1617,8 +1622,8 @@ class SearchTools:
             area_search_data["domain_filter"] = domain_filter
         if state_filter is not None:
             area_search_data["state_filter"] = state_filter
-        # Mirror the empty-area branch's message when the area resolved but a
-        # domain_filter wiped out every entity in it.
+        # Match _search_area_only's no-results message pattern when the area
+        # resolved but a domain_filter wiped out every entity in it.
         if not all_results and domain_filter:
             area_search_data["message"] = (
                 f"No {domain_filter} entities found in area: {area_filter}"
@@ -2092,7 +2097,8 @@ class SearchTools:
             }
 
         # Surface the stdio settings UI sidecar URL when a URL file is present.
-        # Added *after* ``project_fields`` so it survives every ``fields=`` projection.
+        # Added *after* ``project_fields`` so it survives every ``fields=`` projection
+        # (issue #863).
         from ..stdio_settings_sidecar import read_sidecar_url
 
         projected = project_fields(result, parsed_fields)
@@ -2101,7 +2107,8 @@ class SearchTools:
             projected["settings_url"] = sidecar_url
         else:
             # No stdio sidecar URL file. In HTTP / Docker / OAuth modes hint at
-            # the page (and startup-log URL) instead of guessing a wrong absolute URL.
+            # the page (and startup-log URL) instead of guessing a wrong absolute URL
+            # when bound to 0.0.0.0 (issue #1458).
             from ..settings_ui import get_http_settings_prefix
 
             http_prefix = get_http_settings_prefix()
