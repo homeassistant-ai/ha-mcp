@@ -86,6 +86,20 @@ SIMPLE_HELPER_TYPES: frozenset[str] = frozenset(
     }
 )
 
+# Stateful HA input helpers skip last-state restore when `initial` is stored in config
+# (including false/0). See input_boolean/input_number async_added_to_hass in HA core.
+_INITIAL_DISABLES_RESTORE_DESCRIPTION = (
+    "When set, disables last-state restore and forces this value on every "
+    "HA restart. Omit unless fixed reset-on-restart is intended."
+)
+_INITIAL_PARAM_DESCRIPTION = (
+    "Initial value for applicable helper types. For "
+    "input_boolean, input_select, input_number, input_text, and input_datetime: "
+    "setting `initial` disables last-state restore and forces that value on every "
+    "HA restart; omit unless reset-on-restart is intended. For counter, use with "
+    "`restore` (default True)."
+)
+
 
 # Bug 4b/7c/10/14 (issue #1150): per-helper-type allowlists of typed
 # parameters. Inapplicable params are rejected at the top of the tool
@@ -233,7 +247,9 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "required": False,
             "selector": {"boolean": {}},
             "description": (
-                "Initial state. Accepts 'true'/'false'/'on'/'off'/'yes'/'no'/'1'/'0'."
+                "Initial state. "
+                f"{_INITIAL_DISABLES_RESTORE_DESCRIPTION} "
+                "Accepts 'true'/'false'/'on'/'off'/'yes'/'no'/'1'/'0'."
             ),
         },
     ],
@@ -257,7 +273,10 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "name": "initial",
             "required": False,
             "selector": {"text": {}},
-            "description": "Initial value — must be one of `options`.",
+            "description": (
+                "Initial value — must be one of `options`. "
+                f"{_INITIAL_DISABLES_RESTORE_DESCRIPTION}"
+            ),
         },
     ],
     "input_number": [
@@ -302,7 +321,12 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "selector": {"select": {"options": ["box", "slider"]}},
             "description": "Default 'slider'.",
         },
-        {"name": "initial", "required": False, "selector": {"number": {}}},
+        {
+            "name": "initial",
+            "required": False,
+            "selector": {"number": {}},
+            "description": _INITIAL_DISABLES_RESTORE_DESCRIPTION,
+        },
         {"name": "icon", "required": False, "selector": {"text": {}}},
     ],
     "input_text": [
@@ -330,7 +354,12 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "selector": {"select": {"options": ["text", "password"]}},
             "description": "Default 'text'.",
         },
-        {"name": "initial", "required": False, "selector": {"text": {}}},
+        {
+            "name": "initial",
+            "required": False,
+            "selector": {"text": {}},
+            "description": _INITIAL_DISABLES_RESTORE_DESCRIPTION,
+        },
         {"name": "icon", "required": False, "selector": {"text": {}}},
     ],
     "input_datetime": [
@@ -362,7 +391,10 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "name": "initial",
             "required": False,
             "selector": {"text": {}},
-            "description": "Initial value (datetime string).",
+            "description": (
+                "Initial value (datetime string). "
+                f"{_INITIAL_DISABLES_RESTORE_DESCRIPTION}"
+            ),
         },
         {"name": "icon", "required": False, "selector": {"text": {}}},
     ],
@@ -3583,7 +3615,7 @@ class HelperConfigTools:
         initial: Annotated[
             str | int | None,
             Field(
-                description="Initial value for the helper (input_select, input_text, input_boolean, input_datetime, counter)",
+                description=_INITIAL_PARAM_DESCRIPTION,
                 default=None,
             ),
         ] = None,
