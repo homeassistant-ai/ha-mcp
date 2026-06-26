@@ -151,7 +151,6 @@ ignore = [
 # Remove lines as individual methods are simplified below threshold.
 "src/ha_mcp/tools/tools_config_dashboards.py" = ["C901"]
 "src/ha_mcp/tools/tools_entities.py" = ["C901"]
-"src/ha_mcp/tools/tools_registry.py" = ["C901"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
