@@ -41,11 +41,14 @@ def _process_device_domain(
     zwave_node_id: str | None,
 ) -> tuple[str | None, bool, str | None]:
     """Return updated (ieee_address, is_z2m, zwave_node_id) for a single identifier domain."""
+    # ZHA: identifier is ["zha", "IEEE_ADDRESS"]
     if domain == "zha":
         return value, is_z2m, zwave_node_id
+    # Z2M: identifier is ["mqtt", "zigbee2mqtt_0xIEEE"] or "zigbee2mqtt_bridge_0xIEEE"
     if domain == "mqtt" and "zigbee2mqtt" in value.lower():
         extracted = "0x" + value.split("_0x")[-1] if "_0x" in value else ieee_address
         return extracted, True, zwave_node_id
+    # Z-Wave JS: identifier is ["zwave_js", "{home_id}-{node_id}"]
     if domain == "zwave_js" and "-" in value:
         return ieee_address, is_z2m, value.split("-")[1]
     return ieee_address, is_z2m, zwave_node_id
@@ -80,7 +83,7 @@ def _extract_zigbee_info(
 def _first_ieee_from_connections(
     connections: list[Any], existing_ieee: str | None
 ) -> str | None:
-    """Return the first IEEE address found in connections, or existing_ieee if none."""
+    """Return existing_ieee if already set; otherwise the first 'ieee' connection value, or None."""
     if not isinstance(connections, list) or existing_ieee:
         return existing_ieee
     for connection in connections:
@@ -320,7 +323,7 @@ def _filter_devices(
     manufacturer_lower: str | None,
     integration_lower: str | None,
     device_to_entities: dict[str, list[dict[str, Any]]],
-    detail_level: str,
+    detail_level: Literal["summary", "full"],
 ) -> list[dict[str, Any]]:
     """Filter devices for list mode and optionally attach entity lists."""
     named_types = ["zigbee2mqtt", "zha", "zwave_js"]
@@ -385,7 +388,7 @@ def _list_devices_result(
     manufacturer: str | None,
     limit: int,
     offset: int,
-    detail_level: str,
+    detail_level: Literal["summary", "full"],
 ) -> dict[str, Any]:
     """Build the paginated device list response."""
     integration_lower = integration.lower() if integration else None
@@ -443,17 +446,23 @@ async def _remove_device_config_entries(
                 }
             )
             for config_entry_id in config_entries
-        )
+        ),
+        return_exceptions=True,
     )
     results: list[dict[str, Any]] = []
     for config_entry_id, r in zip(config_entries, raw, strict=True):
-        results.append(
-            {
-                "config_entry_id": config_entry_id,
-                "success": r.get("success", False),
-                "error": r.get("error") if not r.get("success") else None,
-            }
-        )
+        if isinstance(r, BaseException):
+            results.append(
+                {"config_entry_id": config_entry_id, "success": False, "error": str(r)}
+            )
+        else:
+            results.append(
+                {
+                    "config_entry_id": config_entry_id,
+                    "success": r.get("success", False),
+                    "error": r.get("error") if not r.get("success") else None,
+                }
+            )
     return results
 
 
@@ -861,7 +870,11 @@ class RegistryTools:
                         suggestions=["Use ha_get_device() to find valid device IDs"],
                         context={
                             "device_id": device_id,
-                            "available_device_ids": list(device_by_id.keys())[:10],
+                            "available_device_ids": [
+                                d.get("id")
+                                for d in list_result.get("result", [])[:10]
+                                if d.get("id")
+                            ],
                         },
                     )
                 )
