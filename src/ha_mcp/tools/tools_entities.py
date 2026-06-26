@@ -385,7 +385,7 @@ class EntityTools:
         result = await self._client.send_websocket_message(get_msg)
         if not result.get("success"):
             return None, _extract_ws_error(result)
-        return result.get("result", {}).get("labels") or [], None
+        return (result.get("result") or {}).get("labels") or [], None
 
     async def _resolve_final_labels(
         self,
@@ -565,7 +565,7 @@ class EntityTools:
             # HA returns the cumulative entity_entry on each per-domain
             # call, so last-call-wins reassignment leaves the final loop
             # iteration carrying the full state.
-            entity_entry = opts_result.get("result", {}).get(
+            entity_entry = (opts_result.get("result") or {}).get(
                 "entity_entry", entity_entry
             )
             options_succeeded[opts_domain] = opts_sub
@@ -598,7 +598,7 @@ class EntityTools:
             }
             get_result = await self._client.send_websocket_message(device_lookup_msg)
             if get_result.get("success"):
-                entity_entry = get_result.get("result", {})
+                entity_entry = get_result.get("result") or {}
             else:
                 logger.warning(
                     "Entity registry lookup failed for %s: %s",
@@ -745,15 +745,15 @@ class EntityTools:
 
         exposure_result: dict[str, bool] | None = succeeded if succeeded else None
 
-        # If only expose_to was set (no registry updates), fetch current entity state
-        if not has_registry_updates:
+        # If no prior phase populated entity_entry, fetch current entity state
+        if not entity_entry:
             get_msg: dict[str, Any] = {
                 "type": "config/entity_registry/get",
                 "entity_id": entity_id,
             }
             get_result = await self._client.send_websocket_message(get_msg)
             if get_result.get("success"):
-                entity_entry = get_result.get("result", {})
+                entity_entry = get_result.get("result") or {}
             else:
                 raise_tool_error(
                     create_error_response(
@@ -938,7 +938,7 @@ class EntityTools:
         if not result.get("success"):
             raise ValueError(_extract_ws_error(result))
 
-        entry = result.get("result", {})
+        entry = result.get("result") or {}
         return {
             "entity_id": entry.get("entity_id"),
             "name": entry.get("name"),
