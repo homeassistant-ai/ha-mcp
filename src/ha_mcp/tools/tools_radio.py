@@ -168,7 +168,8 @@ class RadioTools:
             if spec.destructive and not confirm:
                 confirm_required(radio, action)
 
-            return await handler.handle(self._client, action, args)
+            result: dict[str, Any] = await handler.handle(self._client, action, args)
+            return result
 
         except ToolError:
             raise

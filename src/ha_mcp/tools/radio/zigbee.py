@@ -109,7 +109,7 @@ SUPPORTED: dict[str, ActionSpec] = {
 }
 
 
-async def _resolve_ieee(client: Any, device_id: str) -> str:
+async def _resolve_ieee(client: Any, device_id: Any) -> str:
     """Resolve a ``device_id`` to its ZHA IEEE address via the device registry.
 
     Parses the ``["zha", "<ieee>"]`` registry identifier (falling back to an
@@ -147,7 +147,7 @@ async def _resolve_ieee(client: Any, device_id: str) -> str:
     raise AssertionError  # unreachable: raise_tool_error always raises
 
 
-async def _resolve_update_entity(client: Any, device_id: str) -> str:
+async def _resolve_update_entity(client: Any, device_id: Any) -> str:
     """Find the device's ``update.*`` firmware entity via the entity registry."""
     entities = await ws_call(
         client, "config/entity_registry/list", context={"device_id": device_id}
@@ -202,10 +202,11 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         if not entry_id:
             return integration_not_found("zigbee", "zha")
         network = await ws_call(client, "zha/network/settings")
-        # Best-effort topology refresh; never fail network_status if it errors.
         try:
             await ws_call(client, "zha/topology/update")
         except Exception:
+            # Topology refresh is best-effort: stale routes are acceptable and
+            # must not fail an otherwise-successful network_status read.
             pass
         return ok("zigbee", "network_status", config_entry_id=entry_id, network=network)
 
@@ -227,15 +228,17 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
     # --- node management --------------------------------------------------- #
     if action == "permit_join":
         duration = args.get("duration", 60)
-        ieee = await _resolve_ieee(client, device_id) if device_id else None
+        permit_ieee = await _resolve_ieee(client, device_id) if device_id else None
         result = await ws_call(
             client,
             "zha/devices/permit",
             duration=duration,
-            ieee=ieee,
-            context={"duration": duration, "ieee": ieee},
+            ieee=permit_ieee,
+            context={"duration": duration, "ieee": permit_ieee},
         )
-        return ok("zigbee", "permit_join", duration=duration, ieee=ieee, result=result)
+        return ok(
+            "zigbee", "permit_join", duration=duration, ieee=permit_ieee, result=result
+        )
 
     if action == "reconfigure":
         ieee = await _resolve_ieee(client, device_id)

@@ -67,7 +67,7 @@ SUPPORTED: dict[str, ActionSpec] = {
 }
 
 
-async def _update_entity_for_device(client: Any, device_id: str) -> str:
+async def _update_entity_for_device(client: Any, device_id: Any) -> str:
     """Return the device's Matter firmware ``update.*`` entity_id."""
     entities = await ws_call(client, "config/entity_registry/list")
     candidates = [

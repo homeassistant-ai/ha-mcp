@@ -97,7 +97,8 @@ async def resolve_entry_id(client: Any, domain: str) -> str | None:
     entries = await ws_call(client, "config_entries/get", context={"domain": domain})
     for entry in entries or []:
         if entry.get("domain") == domain:
-            return entry.get("entry_id")
+            entry_id = entry.get("entry_id")
+            return str(entry_id) if entry_id is not None else None
     return None
 
 
@@ -111,9 +112,9 @@ def integration_not_found(radio: str, domain: str) -> dict[str, Any]:
     }
 
 
-def confirm_required(radio: str, action: str) -> ToolError:
-    """Build the ToolError raised when a destructive action lacks confirm=True."""
-    return raise_tool_error(  # type: ignore[return-value]  # NoReturn
+def confirm_required(radio: str, action: str) -> None:
+    """Raise the ToolError for a destructive action lacking confirm=True."""
+    raise_tool_error(
         create_error_response(
             ErrorCode.VALIDATION_INVALID_PARAMETER,
             f"{radio}/{action} is destructive; pass confirm=True to proceed",
