@@ -366,10 +366,10 @@ class TestHaSetEntityCombined:
 
     @pytest.mark.asyncio
     async def test_combined_name_labels_expose(self, mock_mcp, mock_client):
-        """Combined name + labels + expose_to should update registry then expose."""
+        """Combined name + labels + expose_to updates registry, exposes, then refetches."""
         mock_client.send_websocket_message = AsyncMock(
             side_effect=[
-                # First call: entity registry update (name + labels)
+                # First call: entity registry update (name + labels), pre-exposure options
                 {
                     "success": True,
                     "result": {
@@ -383,11 +383,28 @@ class TestHaSetEntityCombined:
                             "hidden_by": None,
                             "aliases": [],
                             "labels": ["outdoor"],
+                            "options": {},
                         }
                     },
                 },
                 # Second call: expose entity
                 {"success": True},
+                # Third call: post-exposure refetch reflects the new exposure state
+                {
+                    "success": True,
+                    "result": {
+                        "entity_id": "light.test",
+                        "name": "My Light",
+                        "original_name": "Test",
+                        "icon": None,
+                        "area_id": None,
+                        "disabled_by": None,
+                        "hidden_by": None,
+                        "aliases": [],
+                        "labels": ["outdoor"],
+                        "options": {"conversation": {"should_expose": True}},
+                    },
+                },
             ]
         )
         register_entity_tools(mock_mcp, mock_client)
@@ -404,6 +421,10 @@ class TestHaSetEntityCombined:
         assert result["entity_entry"]["name"] == "My Light"
         assert result["entity_entry"]["labels"] == ["outdoor"]
         assert result["exposure"] == {"conversation": True}
+        # Returned entity reflects the post-exposure refetch, not the pre-exposure snapshot
+        assert result["entity_entry"]["options"] == {
+            "conversation": {"should_expose": True}
+        }
 
         # Verify first call was registry update with name + labels
         first_call = mock_client.send_websocket_message.call_args_list[0][0][0]
@@ -414,6 +435,65 @@ class TestHaSetEntityCombined:
         # Verify second call was expose
         second_call = mock_client.send_websocket_message.call_args_list[1][0][0]
         assert second_call["type"] == "homeassistant/expose_entity"
+
+        # Verify third call refetched current registry state after exposure
+        third_call = mock_client.send_websocket_message.call_args_list[2][0][0]
+        assert third_call["type"] == "config/entity_registry/get"
+        assert mock_client.send_websocket_message.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_expose_after_prior_phase_refetches_fresh_state(
+        self, mock_mcp, mock_client
+    ):
+        """Regression: when a prior phase already populated entity_entry, exposure
+        must still refetch so the returned entity reflects the new should_expose
+        values instead of the stale pre-exposure snapshot.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # Registry name update populates entity_entry pre-exposure
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.test",
+                            "name": "Porch",
+                            "options": {"conversation": {"should_expose": False}},
+                        }
+                    },
+                },
+                # Exposure call succeeds
+                {"success": True},
+                # Post-exposure refetch shows the updated exposure
+                {
+                    "success": True,
+                    "result": {
+                        "entity_id": "light.test",
+                        "name": "Porch",
+                        "options": {"conversation": {"should_expose": True}},
+                    },
+                },
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            name="Porch",
+            expose_to={"conversation": True},
+        )
+
+        # Without the post-exposure refetch this would carry the stale
+        # should_expose=False from the registry-update phase.
+        assert result["entity_entry"]["options"] == {
+            "conversation": {"should_expose": True}
+        }
+        assert mock_client.send_websocket_message.call_count == 3
+        assert (
+            mock_client.send_websocket_message.call_args_list[2][0][0]["type"]
+            == "config/entity_registry/get"
+        )
 
     @pytest.mark.asyncio
     async def test_no_updates_returns_error(self, mock_mcp, mock_client):

@@ -745,8 +745,9 @@ class EntityTools:
 
         exposure_result: dict[str, bool] | None = succeeded if succeeded else None
 
-        # If no prior phase populated entity_entry, fetch current entity state
-        if not entity_entry:
+        # Refetch when exposure was applied (so the returned entity reflects the
+        # new should_expose values) or when no prior phase populated entity_entry.
+        if exposure_result is not None or not entity_entry:
             get_msg: dict[str, Any] = {
                 "type": "config/entity_registry/get",
                 "entity_id": entity_id,
