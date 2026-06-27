@@ -290,6 +290,42 @@ class TestHaSetEntityExposeTo:
         assert mock_client.send_websocket_message.call_count == 3
 
     @pytest.mark.asyncio
+    async def test_expose_hide_only_still_refetches(self, mock_mcp, mock_client):
+        """Hiding an entity (all should_expose=False) still refetches fresh state.
+
+        `succeeded` becomes a non-empty {assistant: False} dict — truthy, so
+        exposure_result is non-None — which is exactly why the post-exposure
+        refetch is unconditional. Guards against a future "only refetch if
+        something was exposed True" regression.
+        """
+        entity_entry = {
+            "entity_id": "light.test",
+            "options": {"conversation": {"should_expose": False}},
+        }
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                {"success": True},  # expose=false call
+                {"success": True, "result": entity_entry},  # refetch
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            expose_to={"conversation": False},
+        )
+
+        assert result["success"] is True
+        assert result["exposure"] == {"conversation": False}
+        # Refetch fired even though nothing was exposed True.
+        assert mock_client.send_websocket_message.call_count == 2
+        assert (
+            mock_client.send_websocket_message.call_args_list[1][0][0]["type"]
+            == "config/entity_registry/get"
+        )
+
+    @pytest.mark.asyncio
     async def test_expose_to_invalid_assistant_rejected(self, set_entity_tool):
         """Invalid assistant name in expose_to should raise ToolError."""
         with pytest.raises(ToolError) as exc_info:
