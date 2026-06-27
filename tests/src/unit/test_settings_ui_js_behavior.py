@@ -81,20 +81,12 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # Read Only Mode toggle (#1569) — Tools tab, above the search box.
     # Same save-then-verify flow as the policy master toggle.
     "read-only-mode-toggle",
-    # Advanced settings panel — Save button + status text +
-    # the 5 section containers that loadAdvancedSettings() writes to
-    # via innerHTML. Without container divs in MIN_DOM, renderSection
-    # silently no-ops (getElementById returns null) and the
-    # behavioural tests find an empty body.
-    "advSaveBtn",
-    "advSaveStatus",
-    "advSaveRow",
-    # Top-of-panel duplicate Save row — same handler
-    # as the bottom row; status text mirrors between both so the user
-    # sees the latest outcome whichever button they used.
-    "advSaveBtnTop",
-    "advSaveStatusTop",
-    "advSaveRowTop",
+    # Advanced settings panel — the 5 section containers that
+    # loadAdvancedSettings() writes to via innerHTML. Without container
+    # divs in MIN_DOM, renderSection silently no-ops (getElementById
+    # returns null) and the behavioural tests find an empty body.
+    # (The advanced fields auto-save on change, so there is no Save
+    # button/status row here anymore.)
     # Connection section was removed from the panel;
     # advSearch is now the first rendered advanced section.
     "advSearch",
@@ -2161,13 +2153,11 @@ class TestBetaBlockRendersAtBottom:
             "beta section title class missing in production HTML"
         )
 
-    def test_top_save_button_posts_same_payload_as_bottom(
-        self, settings_script: str
-    ) -> None:
-        """Clicking either Save button posts to the same endpoint with
-        the same dirty-fields payload, and the disabled+status mirrors
-        to both rows so the user sees state on whichever they used.
-        """
+    def test_advanced_field_autosaves_with_value(self, settings_script: str) -> None:
+        """Editing an advanced field auto-saves (no Save button): on the
+        native ``change`` event, after the debounce, exactly one POST goes
+        to /api/settings/advanced carrying the edited value, and a success
+        toast appears. Covers the file-origin routing path."""
         adv_field = {
             "field": "log_level",
             "env_var": "LOG_LEVEL",
@@ -2190,23 +2180,25 @@ class TestBetaBlockRendersAtBottom:
                 ],
             },
         }
-        # Mutate the field then click the TOP button. Assert a POST went
-        # out and that both status els carry the same final text.
         result = run_script(
             settings_script,
             initial_html=MIN_DOM,
             fetch_map=fetches,
             invoke="""
               await new Promise(r => setTimeout(r, 200));
-              const sel = document.querySelector(
-                'select[data-adv-field="log_level"]'
-              );
-              if (sel) {
-                sel.value = 'DEBUG';
-                sel.dispatchEvent(new Event('change'));
-              }
-              document.getElementById('advSaveBtnTop').click();
-              await new Promise(r => setTimeout(r, 200));
+              const sel = document.querySelector('select[data-adv-field="log_level"]');
+              sel.value = 'DEBUG';
+              sel.dispatchEvent(new Event('change'));
+              // Past the 800ms debounce + the in-flight POST. Stamp the
+              // toast into a data attribute now: the fake clock advances
+              // past the toast's auto-dismiss before result.dom is
+              // captured, so reading it live is the only reliable check.
+              await new Promise(r => setTimeout(r, 1500));
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              document.body.setAttribute('data-toast',
+                t ? (t.className + '::' + (t.querySelector('.ha-toast-msg')?.textContent || '')) : 'NONE');
+              document.body.setAttribute('data-restart',
+                String(document.getElementById('restartNotice').classList.contains('show')));
             """,
         )
         _assert_clean_init(result)
@@ -2215,19 +2207,31 @@ class TestBetaBlockRendersAtBottom:
             for f in result.fetches
             if "/api/settings/advanced" in f["url"] and f["method"] == "POST"
         ]
-        assert len(posts) >= 1, (
-            f"top save button did not POST; fetches: {result.fetches}"
+        assert len(posts) == 1, (
+            f"expected exactly one auto-save POST, got {len(posts)}: {result.fetches}"
+        )
+        body = json.loads(posts[0]["body"])
+        assert body.get("log_level") == "DEBUG", (
+            f"auto-save POST body missing the edited value: {body}"
+        )
+        # log_level IS in ADVANCED_RESTART_REQUIRED, so this pins the
+        # restart branch: exact toast text + banner shown + cross-tab broadcast.
+        m = re.search(r'data-toast="([^"]*)"', result.dom)
+        assert m and "Saved. Restart required." in m.group(1), (
+            f"expected restart-required success toast; got {m.group(1) if m else None}"
+        )
+        assert 'data-restart="true"' in result.dom, (
+            "restart banner not shown for a restart-required field"
+        )
+        assert result.broadcasts_of_type("restart-required"), (
+            "no restart-required cross-tab broadcast"
         )
 
-    def test_dual_save_buttons_mirror_disabled_and_status_state(
+    def test_advanced_field_autosave_error_shows_error_toast(
         self, settings_script: str
     ) -> None:
-        """F.42 — clicking either save button must disable both
-        buttons during the in-flight POST and mirror the success
-        status text to both `advSaveStatus` and `advSaveStatusTop`.
-        Without this, the user sees stale state on whichever button
-        they're looking at after clicking the other.
-        """
+        """A failed advanced auto-save surfaces an error toast (the
+        ha-toast-error variant), not a silent failure."""
         adv_field = {
             "field": "log_level",
             "env_var": "LOG_LEVEL",
@@ -2244,18 +2248,8 @@ class TestBetaBlockRendersAtBottom:
                 "status": 200,
                 "json": {"fields": [adv_field], "is_addon": False},
                 "responses": [
-                    {
-                        "status": 200,
-                        "json": {"fields": [adv_field], "is_addon": False},
-                    },
-                    {
-                        "status": 200,
-                        "json": {"applied": {"log_level": "DEBUG"}},
-                    },
-                    {
-                        "status": 200,
-                        "json": {"fields": [adv_field], "is_addon": False},
-                    },
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                    {"status": 400, "json": {"error": {"message": "bad log level"}}},
                 ],
             },
         }
@@ -2265,83 +2259,38 @@ class TestBetaBlockRendersAtBottom:
             fetch_map=fetches,
             invoke="""
               await new Promise(r => setTimeout(r, 200));
-              const sel = document.querySelector(
-                'select[data-adv-field="log_level"]'
-              );
-              if (sel) {
-                sel.value = 'DEBUG';
-                sel.dispatchEvent(new Event('change'));
-              }
-              // Synchronously probe the mid-save state. ``click()``
-              // begins running saveAdvancedSettings up to its first
-              // await: the helpers ``_setAdvSaveDisabled(true)`` and
-              // ``_setAdvSaveStatus('Saving…')`` both run BEFORE that
-              // await, so right after click() returns the DOM should
-              // show both buttons disabled + both status els reading
-              // "Saving…". Probing post-completion would catch the
-              // post-reload state where loadAdvancedSettings() blanks
-              // the status text — not the mirror property we want to
-              // lock here.
-              document.getElementById('advSaveBtn').click();
-              const probe = document.createElement('div');
-              probe.id = '__dual_save_probe';
-              probe.dataset.bottomStatus =
-                document.getElementById('advSaveStatus').textContent;
-              probe.dataset.topStatus =
-                document.getElementById('advSaveStatusTop').textContent;
-              probe.dataset.bottomDisabled =
-                String(document.getElementById('advSaveBtn').disabled);
-              probe.dataset.topDisabled =
-                String(document.getElementById('advSaveBtnTop').disabled);
-              document.body.appendChild(probe);
-              // Drain pending microtasks so other in-flight work
-              // doesn't leak into the next test's state.
-              await new Promise(r => setTimeout(r, 250));
+              const sel = document.querySelector('select[data-adv-field="log_level"]');
+              sel.value = 'DEBUG';
+              sel.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 1500));
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              document.body.setAttribute('data-toast',
+                t ? (t.className + '::' + (t.querySelector('.ha-toast-msg')?.textContent || '')) : 'NONE');
             """,
         )
         _assert_clean_init(result)
-        probe_match = re.search(
-            r'<div[^>]*id="__dual_save_probe"[^>]*>',
-            result.dom,
+        m = re.search(r'data-toast="([^"]*)"', result.dom)
+        assert m and "ha-toast-error" in m.group(1), (
+            f"expected an error toast on failed auto-save; got {m.group(1) if m else None}"
         )
-        assert probe_match, (
-            f"dual-save probe div missing from dom; dom tail: {result.dom[-2000:]}"
-        )
-        probe_attrs = probe_match.group(0)
-        # Mid-save state: both status els show "Saving…", both
-        # buttons disabled. The mirror invariant is locked even
-        # before the POST resolves.
-        assert (
-            "Saving" in probe_attrs and 'data-bottom-status="Saving' in probe_attrs
-        ), f"bottom status didn't mirror Saving…; probe: {probe_attrs}"
-        assert 'data-top-status="Saving' in probe_attrs, (
-            f"top status didn't mirror Saving…; probe: {probe_attrs}"
-        )
-        assert 'data-bottom-disabled="true"' in probe_attrs, (
-            f"bottom button not disabled mid-save; probe: {probe_attrs}"
-        )
-        assert 'data-top-disabled="true"' in probe_attrs, (
-            f"top button not disabled mid-save; probe: {probe_attrs}"
+        assert m and "bad log level" in m.group(1), (
+            f"error toast missing server message; got {m.group(1) if m else None}"
         )
 
-    def test_dual_save_buttons_mirror_disabled_and_status_on_post_failure(
+    def test_advanced_autosave_no_restart_field_plain_saved(
         self, settings_script: str
     ) -> None:
-        """F.6 — failed-POST branch of the dual-save mirror. After a
-        500 response, both buttons must be re-enabled and both
-        status els must carry the error message — a regression that
-        broke either helper for the error path would still pass the
-        existing success-path mirror test.
-        """
+        """A field NOT in ADVANCED_RESTART_REQUIRED saves with a plain
+        "Saved." toast and does NOT raise the restart banner — pins the
+        no-restart branch (dashboard_screenshot_engine_url is resolved live)."""
         adv_field = {
-            "field": "log_level",
-            "env_var": "LOG_LEVEL",
-            "value": "INFO",
+            "field": "dashboard_screenshot_engine_url",
+            "env_var": "HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL",
+            "value": "",
             "type": "str",
-            "section": "diagnostics",
+            "section": "tools_surface",
             "origin": "default",
             "editable": True,
-            "choices": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         }
         fetches = {
             **DEFAULT_FETCHES,
@@ -2349,21 +2298,173 @@ class TestBetaBlockRendersAtBottom:
                 "status": 200,
                 "json": {"fields": [adv_field], "is_addon": False},
                 "responses": [
-                    # Initial GET load.
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                    {"status": 200, "json": {"applied": {}}},
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                ],
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const inp = document.querySelector('[data-adv-field="dashboard_screenshot_engine_url"]');
+              inp.value = 'http://engine.local';
+              inp.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 1500));
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              document.body.setAttribute('data-toast',
+                t ? (t.querySelector('.ha-toast-msg')?.textContent || '') : 'NONE');
+              document.body.setAttribute('data-restart',
+                String(document.getElementById('restartNotice').classList.contains('show')));
+            """,
+        )
+        _assert_clean_init(result)
+        m = re.search(r'data-toast="([^"]*)"', result.dom)
+        assert m and m.group(1) == "Saved.", (
+            f"expected plain 'Saved.' for a non-restart field; got {m.group(1) if m else None}"
+        )
+        assert 'data-restart="false"' in result.dom, (
+            "restart banner should NOT show for a non-restart field"
+        )
+        assert not result.broadcasts_of_type("restart-required"), (
+            "no restart broadcast expected for a non-restart field"
+        )
+
+    def test_advanced_autosave_preserves_edit_made_during_reload(
+        self, settings_script: str
+    ) -> None:
+        """Regression (data loss): a pending edit must survive the post-save
+        reload. loadAdvancedSettings() must NOT reset _advancedDirty or revert
+        the input to the server value, or an edit made to another field while
+        a save was in flight is silently lost."""
+        adv_field = {
+            "field": "fuzzy_threshold",
+            "env_var": "FUZZY_THRESHOLD",
+            "value": 60,
+            "type": "int",
+            "section": "search",
+            "origin": "default",
+            "editable": True,
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              // Simulate an edit pending when a reload fires (the server still
+              // reports the old value 60).
+              _advancedDirty['fuzzy_threshold'] = 999;
+              await loadAdvancedSettings();
+              const input = document.querySelector('[data-adv-field="fuzzy_threshold"]');
+              document.body.setAttribute('data-test',
+                `dirty=${_advancedDirty['fuzzy_threshold']} input=${input ? input.value : 'none'}`);
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-test="dirty=999 input=999"' in result.dom, (
+            "pending edit was not preserved + re-stamped across reload; "
+            f"dom tail: {result.dom[-400:]}"
+        )
+
+    def test_advanced_autosave_nan_drops_pending_and_skips_save(
+        self, settings_script: str
+    ) -> None:
+        """Clearing a number field after a valid edit drops the pending value
+        (no stale save) and triggers no POST."""
+        adv_field = {
+            "field": "fuzzy_threshold",
+            "env_var": "FUZZY_THRESHOLD",
+            "value": 60,
+            "type": "int",
+            "section": "search",
+            "origin": "default",
+            "editable": True,
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const input = document.querySelector('[data-adv-field="fuzzy_threshold"]');
+              input.value = '5';
+              input.dispatchEvent(new Event('change'));   // pending=5, debounce armed
+              input.value = '';
+              input.dispatchEvent(new Event('change'));    // NaN -> drop pending
+              const pending = ('fuzzy_threshold' in _advancedDirty)
+                ? String(_advancedDirty['fuzzy_threshold']) : 'gone';
+              await new Promise(r => setTimeout(r, 1500));  // past debounce
+              document.body.setAttribute('data-test', `pending=${pending}`);
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-test="pending=gone"' in result.dom, (
+            f"NaN edit should drop the pending value; dom tail: {result.dom[-300:]}"
+        )
+        posts = [
+            f
+            for f in result.fetches
+            if "/api/settings/advanced" in f["url"] and f["method"] == "POST"
+        ]
+        assert len(posts) == 0, f"a NaN/empty number field must not POST; got {posts}"
+
+    def test_advanced_autosave_partitions_addon_and_file_batches(
+        self, settings_script: str
+    ) -> None:
+        """Editing an addon-origin and a file-origin field in one debounce
+        window posts TWO separate batches; no batch mixes origins (the server
+        500s on a mixed batch)."""
+        file_field = {
+            "field": "fuzzy_threshold",
+            "env_var": "FUZZY_THRESHOLD",
+            "value": 60,
+            "type": "int",
+            "section": "search",
+            "origin": "default",
+            "editable": True,
+        }
+        addon_field = {
+            "field": "timeout",
+            "env_var": "HOMEASSISTANT_TIMEOUT",
+            "value": 30,
+            "type": "int",
+            "section": "operations",
+            "origin": "addon",
+            "editable": True,
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [file_field, addon_field], "is_addon": True},
+                "responses": [
                     {
                         "status": 200,
-                        "json": {"fields": [adv_field], "is_addon": False},
+                        "json": {"fields": [file_field, addon_field], "is_addon": True},
                     },
-                    # POST → 500 with structured error.
+                    {"status": 200, "json": {"applied": {}}},
+                    {"status": 200, "json": {"applied": {}}},
                     {
-                        "status": 500,
-                        "json": {
-                            "success": False,
-                            "error": {
-                                "code": "INTERNAL_ERROR",
-                                "message": "save failed for test",
-                            },
-                        },
+                        "status": 200,
+                        "json": {"fields": [file_field, addon_field], "is_addon": True},
                     },
                 ],
             },
@@ -2374,174 +2475,31 @@ class TestBetaBlockRendersAtBottom:
             fetch_map=fetches,
             invoke="""
               await new Promise(r => setTimeout(r, 200));
-              const sel = document.querySelector(
-                'select[data-adv-field="log_level"]'
-              );
-              if (sel) {
-                sel.value = 'DEBUG';
-                sel.dispatchEvent(new Event('change'));
-              }
-              document.getElementById('advSaveBtn').click();
-              // Wait for the POST + error-handling to settle.
-              await new Promise(r => setTimeout(r, 250));
-              const probe = document.createElement('div');
-              probe.id = '__failed_save_probe';
-              probe.dataset.bottomStatus =
-                document.getElementById('advSaveStatus').textContent;
-              probe.dataset.topStatus =
-                document.getElementById('advSaveStatusTop').textContent;
-              probe.dataset.bottomDisabled =
-                String(document.getElementById('advSaveBtn').disabled);
-              probe.dataset.topDisabled =
-                String(document.getElementById('advSaveBtnTop').disabled);
-              document.body.appendChild(probe);
+              const f1 = document.querySelector('[data-adv-field="fuzzy_threshold"]');
+              const f2 = document.querySelector('[data-adv-field="timeout"]');
+              f1.value = '10'; f1.dispatchEvent(new Event('change'));
+              f2.value = '20'; f2.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 1500));
             """,
         )
         _assert_clean_init(result)
-        probe_match = re.search(
-            r'<div[^>]*id="__failed_save_probe"[^>]*>',
-            result.dom,
+        posts = [
+            f
+            for f in result.fetches
+            if "/api/settings/advanced" in f["url"] and f["method"] == "POST"
+        ]
+        assert len(posts) == 2, (
+            f"expected two batches (file + addon); got {len(posts)}: {posts}"
         )
-        assert probe_match, (
-            f"failed-save probe div missing; dom tail: {result.dom[-2000:]}"
+        bodies = [json.loads(p["body"]) for p in posts]
+        for b in bodies:
+            assert not ("fuzzy_threshold" in b and "timeout" in b), (
+                f"a batch mixed addon + file origins (server would 500): {b}"
+            )
+        assert any("fuzzy_threshold" in b for b in bodies), (
+            "file field missing from any batch"
         )
-        probe_attrs = probe_match.group(0)
-        # Both buttons must be re-enabled after the error response.
-        assert 'data-bottom-disabled="false"' in probe_attrs, (
-            f"bottom button stuck disabled after failed save; probe: {probe_attrs}"
-        )
-        assert 'data-top-disabled="false"' in probe_attrs, (
-            f"top button stuck disabled after failed save; probe: {probe_attrs}"
-        )
-        # Both status els must carry the server's error message.
-        assert "save failed for test" in probe_attrs, (
-            f"error message did not reach both status els; probe: {probe_attrs}"
-        )
-        # Match on both data-* attrs explicitly.
-        assert 'data-bottom-status="save failed for test"' in probe_attrs, (
-            f"bottom status missing error; probe: {probe_attrs}"
-        )
-        assert 'data-top-status="save failed for test"' in probe_attrs, (
-            f"top status missing error; probe: {probe_attrs}"
-        )
-
-    def test_save_button_nothing_to_save_when_no_dirty_and_no_restart(
-        self, settings_script: str
-    ) -> None:
-        """F.8 — fall-through branch: nothing dirty, no restart pending.
-        Status text reads exactly "Nothing to save."
-        """
-        fetches = {
-            **DEFAULT_FETCHES,
-            "/api/settings/advanced": {
-                "status": 200,
-                "json": {"fields": [], "is_addon": False},
-            },
-        }
-        result = run_script(
-            settings_script,
-            initial_html=MIN_DOM,
-            fetch_map=fetches,
-            invoke="""
-              await new Promise(r => setTimeout(r, 200));
-              document.getElementById('advSaveBtn').click();
-              await new Promise(r => setTimeout(r, 50));
-              const probe = document.createElement('div');
-              probe.id = '__nothing_save_probe';
-              probe.dataset.bottomStatus =
-                document.getElementById('advSaveStatus').textContent;
-              probe.dataset.topStatus =
-                document.getElementById('advSaveStatusTop').textContent;
-              document.body.appendChild(probe);
-            """,
-        )
-        _assert_clean_init(result)
-        probe_match = re.search(r'<div[^>]*id="__nothing_save_probe"[^>]*>', result.dom)
-        assert probe_match, (
-            f"nothing-save probe missing; dom tail: {result.dom[-2000:]}"
-        )
-        probe_attrs = probe_match.group(0)
-        assert 'data-bottom-status="Nothing to save."' in probe_attrs, (
-            f"expected 'Nothing to save.' on bottom status; probe: {probe_attrs}"
-        )
-        assert 'data-top-status="Nothing to save."' in probe_attrs, (
-            f"expected 'Nothing to save.' on top status; probe: {probe_attrs}"
-        )
-
-    def test_save_button_restart_pending_hint_when_dirty_empty_but_restart_showing(
-        self, settings_script: str
-    ) -> None:
-        """F.8 — restart-pending branch: nothing dirty, restartNotice
-        showing. Status hints the user at the Restart button rather
-        than saying nothing changed. Copy is source-blind (doesn't
-        claim a specific source for the pending restart) per the
-        review pass — same banner can be raised by any save in the
-        UI or by a cross-tab broadcast.
-        """
-        fetches = {
-            **DEFAULT_FETCHES,
-            "/api/settings/advanced": {
-                "status": 200,
-                "json": {"fields": [], "is_addon": False},
-            },
-        }
-        result = run_script(
-            settings_script,
-            initial_html=MIN_DOM,
-            fetch_map=fetches,
-            invoke="""
-              await new Promise(r => setTimeout(r, 200));
-              // Simulate a prior save raising the restart banner.
-              document.getElementById('restartNotice').classList.add('show');
-              document.getElementById('advSaveBtn').click();
-              await new Promise(r => setTimeout(r, 50));
-              const probe = document.createElement('div');
-              probe.id = '__restart_pending_probe';
-              probe.dataset.bottomStatus =
-                document.getElementById('advSaveStatus').textContent;
-              probe.dataset.topStatus =
-                document.getElementById('advSaveStatusTop').textContent;
-              document.body.appendChild(probe);
-            """,
-        )
-        _assert_clean_init(result)
-        probe_match = re.search(
-            r'<div[^>]*id="__restart_pending_probe"[^>]*>', result.dom
-        )
-        assert probe_match, (
-            f"restart-pending probe missing; dom tail: {result.dom[-2000:]}"
-        )
-        probe_attrs = probe_match.group(0)
-        # Hint must mention restart, must NOT use the plain
-        # "Nothing to save." fall-through.
-        assert "restart is pending" in probe_attrs, (
-            f"hint did not call out the pending restart; probe: {probe_attrs}"
-        )
-        assert 'data-bottom-status="Nothing to save."' not in probe_attrs, (
-            f"fell through to plain 'Nothing to save.'; probe: {probe_attrs}"
-        )
-        # Hint must be source-blind: NOT claim feature-flag toggles
-        # specifically (could have been a tool-pin or backup save).
-        assert "feature-flag toggles already saved" not in probe_attrs, (
-            f"hint hardcoded the source; should be source-blind: {probe_attrs}"
-        )
-
-    def test_two_step_save_note_present(self) -> None:
-        """The two-step save → restart note must render at the top of
-        the Server Settings panel so users know one click is not enough.
-        Asserted against production HTML (static markup in panel-server,
-        not a JS-rendered container).
-        """
-        from ha_mcp.settings_ui import _SETTINGS_HTML
-
-        assert "Two-step save" in _SETTINGS_HTML, (
-            "two-step save note copy missing or changed in production HTML"
-        )
-        # The note must call out both steps.
-        assert "Save advanced settings" in _SETTINGS_HTML, "save step missing"
-        assert "Restart" in _SETTINGS_HTML, "restart step missing"
-        # The CSS class hook the integration relies on.
-        assert "adv-save-note" in _SETTINGS_HTML, "save-note class hook missing"
+        assert any("timeout" in b for b in bodies), "addon field missing from any batch"
 
     def test_beta_master_help_text_contains_danger_warning(
         self, settings_script: str
@@ -3513,3 +3471,87 @@ class TestTablistAndStatusBehavior:
             'data-test="right=accessibility wrap=accessibility'
             ' end=accessibility home=server"' in result.dom
         ), f"tablist keyboard nav wrong; dom tail: {result.dom[-800:]}"
+
+
+class TestToastFeedback:
+    """Save/load feedback surfaces as an HA-style bottom toast (showToast),
+    not the old persistent grey status pill. Terminal outcomes (saved / error)
+    toast; transient progress states ("Saving…", "Loading…") do not; only one
+    toast shows at a time (replace-on-new, so rapid toggles don't stack); and
+    errors carry role=alert plus a dismiss button while successes don't."""
+
+    def test_saved_outcome_shows_toast_without_dismiss(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              updateStatus('Saved.', true, false);
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              document.body.setAttribute('data-test',
+                `present=${!!t} role=${t ? t.getAttribute('role') : ''} `
+                + `msg=${t ? t.querySelector('.ha-toast-msg').textContent : ''} `
+                + `dismiss=${!!(t && t.querySelector('.ha-toast-dismiss'))}`);
+            """,
+        )
+        _assert_clean_init(result)
+        assert "present=true" in result.dom, result.dom[-600:]
+        assert "role=status" in result.dom
+        assert "msg=Saved." in result.dom
+        assert "dismiss=false" in result.dom
+
+    def test_progress_state_suppresses_toast(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              updateStatus('Saving...', false, false);
+              const n = document.querySelectorAll('#ha-toast-region .ha-toast').length;
+              document.body.setAttribute('data-test', `count=${n}`);
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-test="count=0"' in result.dom, result.dom[-600:]
+
+    def test_error_outcome_toasts_with_alert_role_and_dismiss(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              updateStatus('Save failed!', false, true);
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              document.body.setAttribute('data-test',
+                `err=${t ? t.classList.contains('ha-toast-error') : false} `
+                + `role=${t ? t.getAttribute('role') : ''} `
+                + `dismiss=${!!(t && t.querySelector('.ha-toast-dismiss'))}`);
+            """,
+        )
+        _assert_clean_init(result)
+        assert "err=true" in result.dom, result.dom[-600:]
+        assert "role=alert" in result.dom
+        assert "dismiss=true" in result.dom
+
+    def test_rapid_toasts_replace_and_do_not_stack(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              showToast('first');
+              showToast('second');
+              showToast('third');
+              const toasts = document.querySelectorAll('#ha-toast-region .ha-toast');
+              const last = toasts.length
+                ? toasts[toasts.length - 1].querySelector('.ha-toast-msg').textContent
+                : '';
+              document.body.setAttribute('data-test', `count=${toasts.length} last=${last}`);
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-test="count=1 last=third"' in result.dom, result.dom[-600:]

@@ -153,19 +153,33 @@ def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
     }
 
 
-def _categorize_tool(tool: Tool) -> str:
-    """Categorize a tool as read, write, or delete based on annotations and name."""
-    annotations = tool.annotations
-    if annotations and annotations.readOnlyHint:
+def categorize_capability(name: str, *, read_only: bool, destructive: bool) -> str:
+    """Categorize a tool as ``read``, ``write``, or ``delete``.
+
+    Derived from the MCP annotations (``readOnlyHint``/``destructiveHint``):
+    read-only tools are ``read``; destructive tools whose name matches
+    ``_remove_``/``_delete_`` are ``delete``; everything else (including
+    non-destructive, non-read-only tools) is ``write`` — ``write`` is the
+    fallback bucket, not a subset of the destructive set. Shared by the
+    categorized-search call proxies and the settings-UI capability badges so
+    the two surfaces always agree on a tool's category.
+    """
+    if read_only:
         return "read"
     # A tool is 'delete' only if it's destructive AND its name suggests deletion
-    if (
-        annotations
-        and annotations.destructiveHint
-        and any(pattern in tool.name for pattern in _DELETE_PATTERNS)
-    ):
+    if destructive and any(pattern in name for pattern in _DELETE_PATTERNS):
         return "delete"
     return "write"
+
+
+def _categorize_tool(tool: Tool) -> str:
+    """Categorize a Tool as read, write, or delete based on annotations and name."""
+    annotations = tool.annotations
+    return categorize_capability(
+        tool.name,
+        read_only=bool(annotations and annotations.readOnlyHint),
+        destructive=bool(annotations and annotations.destructiveHint),
+    )
 
 
 class CategorizedSearchTransform(BM25SearchTransform):
