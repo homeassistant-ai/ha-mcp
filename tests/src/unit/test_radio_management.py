@@ -142,7 +142,9 @@ class TestMatterEnrichment:
 class TestManageRadioDispatcher:
     @pytest.mark.asyncio
     async def test_matter_diagnostics(self):
-        client = _client({"matter/node_diagnostics": {"success": True, "result": _DIAG}})
+        client = _client(
+            {"matter/node_diagnostics": {"success": True, "result": _DIAG}}
+        )
         radio = _capture(register_radio_tools, client)["ha_manage_radio"]
         out = await radio(radio="matter", action="diagnostics", device_id="m1")
         assert out["success"] is True
@@ -232,3 +234,32 @@ class TestManageRadioDispatcher:
         assert out["diagnostics"]["network_type"] == "THREAD"
         diag = [m for m in record if m["type"] == "matter/node_diagnostics"]
         assert diag and diag[0]["device_id"] == "m1"
+
+    @pytest.mark.asyncio
+    async def test_firmware_update_installs_update_entity(self):
+        svc: list = []
+        client = _client(
+            {
+                "config/entity_registry/list": {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "update.bulb_fw",
+                            "device_id": "m1",
+                            "platform": "matter",
+                        }
+                    ],
+                }
+            }
+        )
+
+        async def fake_call_service(domain, service, data=None, return_response=False):
+            svc.append((domain, service, data))
+            return {"success": True}
+
+        client.call_service = AsyncMock(side_effect=fake_call_service)
+        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
+        out = await radio(radio="matter", action="firmware_update", device_id="m1")
+
+        assert out["entity_id"] == "update.bulb_fw"
+        assert svc == [("update", "install", {"entity_id": "update.bulb_fw"})]

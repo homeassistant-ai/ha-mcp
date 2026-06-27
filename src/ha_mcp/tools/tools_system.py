@@ -356,7 +356,7 @@ class SystemTools:
 
     @tool(
         name="ha_get_system_health",
-        tags={"System", "Zigbee", "Z-Wave", "Integrations"},
+        tags={"System", "Zigbee", "Z-Wave", "Thread", "Matter", "Integrations"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
@@ -399,6 +399,8 @@ class SystemTools:
           - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
           - "zha_network_full": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer "zha_network" for summary)
           - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)
+          - "thread_network": Thread/OpenThread Border Router (OTBR) summary — per border-router channel, extended_pan_id, and border_agent_id (integration-presence + radio-network view, not per-node Thread health)
+          - "matter_network": Matter integration presence summary — config_entry_id, state, and title (per-node health is exposed separately via Matter node diagnostics, not here)
           - "themes": Installed theme names and defaults (sorted list of theme names, count, default_theme, default_dark_theme)
           - "diagnostics": Per-integration diagnostics dump — integration-defined JSON
             (commonly includes redacted config, device list, state snapshots; exact
@@ -467,6 +469,8 @@ class SystemTools:
             "zha_network",
             "zha_network_full",
             "zwave_network",
+            "thread_network",
+            "matter_network",
             "themes",
         }
 
@@ -517,6 +521,8 @@ class SystemTools:
                 "zha_network",
                 "zha_network_full",
                 "zwave_network",
+                "thread_network",
+                "matter_network",
                 "diagnostics",
                 "config_check",
                 "themes",
@@ -542,6 +548,8 @@ class SystemTools:
             want_repairs = "repairs" in includes
             want_zha = zha_full or zha_summary
             want_zwave = "zwave_network" in includes
+            want_thread = "thread_network" in includes
+            want_matter = "matter_network" in includes
             want_themes = "themes" in includes
 
             if ws_client is None:
@@ -557,6 +565,10 @@ class SystemTools:
                     result["zha_network"] = {"error": ws_error}
                 if want_zwave:
                     result["zwave_network"] = {"error": ws_error}
+                if want_thread:
+                    result["thread_network"] = {"error": ws_error}
+                if want_matter:
+                    result["matter_network"] = {"error": ws_error}
                 if want_themes:
                     result["themes"] = {"error": ws_error}
                 unavailable = sorted(includes & ws_backed)
@@ -565,7 +577,9 @@ class SystemTools:
                         "These sections require the system_health WebSocket, "
                         f"which is unavailable: {', '.join(unavailable)}"
                     )
-                want_repairs = want_zha = want_zwave = want_themes = False
+                want_repairs = want_zha = want_zwave = want_thread = want_matter = (
+                    want_themes
+                ) = False
 
             sections: list[tuple[str, Coroutine[Any, Any, dict[str, Any]]]] = []
             if want_repairs:
@@ -584,6 +598,14 @@ class SystemTools:
                 )
             if want_zwave:
                 sections.append(("zwave_network", self._fetch_zwave_network(ws_client)))
+            if want_thread:
+                sections.append(
+                    ("thread_network", self._fetch_thread_network(ws_client))
+                )
+            if want_matter:
+                sections.append(
+                    ("matter_network", self._fetch_matter_network(ws_client))
+                )
             if want_themes:
                 sections.append(("themes", self._fetch_themes(ws_client)))
 
@@ -971,6 +993,95 @@ class SystemTools:
                 f"Z-Wave JS integration not available or error: {e}"
             )
         return zwave_network
+
+    @staticmethod
+    async def _fetch_thread_network(ws_client: Any) -> dict[str, Any]:
+        """Fetch a Thread/OpenThread Border Router (OTBR) summary.
+
+        Calls the ``otbr/info`` WebSocket command (HA's Thread/OTBR
+        integration) and returns a lightweight per-border-router summary —
+        ``channel``, ``extended_pan_id`` and ``border_agent_id`` keyed by the
+        OTBR's ``extended_address``. Per-node Thread health is not exposed by
+        this command, so this section is an integration-presence + radio-network
+        view rather than a per-device dump. ``otbr/info`` responds
+        ``success=false`` (code ``not_loaded``) when no OTBR is configured;
+        that surfaces as an ``error`` sub-dict like the other sections.
+        """
+        thread_network: dict[str, Any] = {"border_routers": [], "count": 0}
+        try:
+            info_result = await ws_client.send_command("otbr/info")
+            if info_result.get("success"):
+                # ``otbr/info`` returns a dict keyed by each border router's
+                # extended address; the value carries the per-OTBR fields.
+                routers_raw = info_result.get("result") or {}
+                border_routers = [
+                    {
+                        "extended_address": ext_addr,
+                        "channel": (info or {}).get("channel"),
+                        "extended_pan_id": (info or {}).get("extended_pan_id"),
+                        "border_agent_id": (info or {}).get("border_agent_id"),
+                    }
+                    for ext_addr, info in routers_raw.items()
+                ]
+                thread_network = {
+                    "border_routers": border_routers,
+                    "count": len(border_routers),
+                }
+            else:
+                err = info_result.get("error") or {}
+                err_msg = (
+                    err.get("message") if isinstance(err, dict) else str(err)
+                ) or "unknown error"
+                thread_network["error"] = (
+                    f"Thread/OTBR integration not available: {err_msg}"
+                )
+        except Exception as e:
+            _reraise_if_fatal(e)
+            logger.warning("Failed to fetch Thread network data: %s", e)
+            thread_network["error"] = (
+                f"Thread/OTBR integration not available or error: {e}"
+            )
+        return thread_network
+
+    @staticmethod
+    async def _fetch_matter_network(ws_client: Any) -> dict[str, Any]:
+        """Fetch a lightweight Matter integration-presence summary.
+
+        Resolves the Matter config entry via ``config_entries/get`` (filtering
+        ``domain == "matter"``) and returns its ``config_entry_id``, ``state``
+        and ``title``. Matter exposes health *per node* via the
+        ``matter/node_diagnostics`` command, so this section is deliberately an
+        integration presence/state summary, not a per-device dump. Returns
+        ``{"error": "Matter integration not found"}`` when no Matter entry
+        exists.
+        """
+        matter_network: dict[str, Any] = {}
+        try:
+            # ``config_entries/get`` (underscore) is the canonical command —
+            # the slash form is rejected as "Unknown command" (same caveat the
+            # zwave helper documents above).
+            entries_result = await ws_client.send_command("config_entries/get")
+            matter_entry = None
+            if entries_result.get("success"):
+                for entry in entries_result.get("result", []):
+                    if entry.get("domain") == "matter":
+                        matter_entry = entry
+                        break
+
+            if matter_entry is None:
+                matter_network["error"] = "Matter integration not found"
+                return matter_network
+
+            matter_network = {
+                "config_entry_id": matter_entry.get("entry_id"),
+                "state": matter_entry.get("state"),
+                "title": matter_entry.get("title"),
+            }
+        except Exception as e:
+            _reraise_if_fatal(e)
+            logger.warning("Failed to fetch Matter network data: %s", e)
+            matter_network["error"] = f"Matter integration not available or error: {e}"
+        return matter_network
 
     @staticmethod
     async def _fetch_themes(ws_client: Any) -> dict[str, Any]:

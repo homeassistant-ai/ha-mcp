@@ -21,7 +21,7 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 
-from ..errors import ErrorCode, create_error_response
+from ...errors import ErrorCode, create_error_response
 from ..helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)

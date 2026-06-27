@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...errors import ErrorCode, create_error_response
+from ..helpers import raise_tool_error
 from .base import ActionSpec, integration_not_found, ok, resolve_entry_id, ws_call
 
 SUPPORTED: dict[str, ActionSpec] = {
@@ -57,7 +59,37 @@ SUPPORTED: dict[str, ActionSpec] = {
         "Provide WiFi credentials used for the next commissioning.",
         required=("network_name", "password"),
     ),
+    "firmware_update": ActionSpec(
+        "Install an available OTA firmware update for this Matter node.",
+        long_running=True,
+        required=("device_id",),
+    ),
 }
+
+
+async def _update_entity_for_device(client: Any, device_id: str) -> str:
+    """Return the device's Matter firmware ``update.*`` entity_id."""
+    entities = await ws_call(client, "config/entity_registry/list")
+    candidates = [
+        e
+        for e in (entities or [])
+        if e.get("device_id") == device_id
+        and str(e.get("entity_id", "")).startswith("update.")
+    ]
+    for e in candidates:
+        if e.get("platform") == "matter":
+            return str(e["entity_id"])
+    if candidates:
+        return str(candidates[0]["entity_id"])
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.RESOURCE_NOT_FOUND,
+            f"No firmware update entity found for device {device_id}",
+            context={"device_id": device_id},
+            suggestions=["The node may not expose an OTA firmware update entity"],
+        )
+    )
+    raise AssertionError  # unreachable: raise_tool_error always raises
 
 
 async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -170,6 +202,11 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
             password=args.get("password"),
         )
         return ok("matter", "set_wifi_credentials", result=result)
+
+    if action == "firmware_update":
+        entity_id = await _update_entity_for_device(client, device_id)
+        await client.call_service("update", "install", {"entity_id": entity_id})
+        return ok("matter", "firmware_update", entity_id=entity_id, long_running=True)
 
     # Unreachable: dispatcher validates action against SUPPORTED first.
     raise AssertionError(f"unhandled matter action: {action}")
