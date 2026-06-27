@@ -18,14 +18,12 @@ class TestHaSetEntityLabels:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            name = (fmcp.name if fmcp else None) or method.__name__
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture
@@ -189,14 +187,12 @@ class TestHaSetEntityExposeTo:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            name = (fmcp.name if fmcp else None) or method.__name__
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture
@@ -353,14 +349,12 @@ class TestHaSetEntityCombined:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            name = (fmcp.name if fmcp else None) or method.__name__
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture
@@ -723,14 +717,12 @@ class TestHaSetEntityLabelOperations:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            name = (fmcp.name if fmcp else None) or method.__name__
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture
@@ -890,14 +882,12 @@ class TestHaSetEntityBulkOperations:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            name = (fmcp.name if fmcp else None) or method.__name__
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture
@@ -1109,6 +1099,42 @@ class TestHaSetEntityBulkOperations:
         assert result["success"] is True
         assert result["succeeded_count"] == 2
 
+    @pytest.mark.asyncio
+    async def test_bulk_categories_set(self, mock_mcp, mock_client):
+        """Bulk operation should include categories in each per-entity registry update."""
+        entity_entry = {
+            "entity_id": "light.test",
+            "name": None,
+            "original_name": "Test",
+            "icon": None,
+            "area_id": None,
+            "disabled_by": None,
+            "hidden_by": None,
+            "aliases": [],
+            "labels": [],
+            "categories": {"automation": "cat_id"},
+        }
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {"entity_entry": entity_entry},
+            }
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id=["light.a", "light.b"],
+            categories={"automation": "cat_id"},
+        )
+
+        assert result["success"] is True
+        assert result["succeeded_count"] == 2
+        # Verify each per-entity WS message included categories
+        for call in mock_client.send_websocket_message.call_args_list:
+            ws_msg = call[0][0]
+            assert ws_msg.get("categories") == {"automation": "cat_id"}
+
 
 class TestHaSetEntityRegistryDisableGuardrail:
     """Test that registry-disable (enabled=False) is blocked for automations and scripts."""
@@ -1119,14 +1145,12 @@ class TestHaSetEntityRegistryDisableGuardrail:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            name = (fmcp.name if fmcp else None) or method.__name__
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture
@@ -1238,14 +1262,12 @@ class TestHaRemoveEntity:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            name = (fmcp.name if fmcp else None) or method.__name__
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture
@@ -1331,14 +1353,12 @@ class TestHaSetEntityShowAs:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            name = (fmcp.name if fmcp else None) or method.__name__
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture
@@ -1686,14 +1706,12 @@ class TestHaGetEntityRegistryOptions:
         mcp = MagicMock()
         self.registered_tools = {}
 
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            name = (fmcp.name if fmcp else None) or method.__name__
+            self.registered_tools[name] = method
 
-            return wrapper
-
-        mcp.tool = tool_decorator
+        mcp.add_tool = capture_add_tool
         return mcp
 
     @pytest.fixture

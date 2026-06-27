@@ -11,6 +11,7 @@ import re
 from typing import Annotated, Any, Literal
 
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import tool
 from pydantic import Field
 
 from ..errors import ErrorCode, create_error_response
@@ -19,6 +20,7 @@ from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
+    register_tool_methods,
     validate_identifier_not_empty,
 )
 from .tools_voice_assistant import KNOWN_ASSISTANTS
@@ -68,192 +70,405 @@ def _extract_ws_error(result: dict[str, Any]) -> str:
     return "no error detail returned by Home Assistant"
 
 
-def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
-    """Register entity management tools with the MCP server."""
+def _build_name_visibility_fields(
+    message: dict[str, Any],
+    updates_made: list[str],
+    area_id: str | None,
+    name: str | None,
+    icon: str | None,
+    device_class: str | None,
+) -> None:
+    """Add basic positioning/appearance fields to the update message."""
+    if area_id is not None:
+        message["area_id"] = area_id if area_id else None
+        updates_made.append(f"area_id='{area_id}'" if area_id else "area cleared")
+    if name is not None:
+        message["name"] = name if name else None
+        updates_made.append(f"name='{name}'" if name else "name cleared")
+    if icon is not None:
+        message["icon"] = icon if icon else None
+        updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
+    if device_class is not None:
+        # Treat whitespace-only as the documented "clear" sentinel so
+        # accidental spaces don't reach HA as a literal validation error.
+        normalized_device_class = device_class.strip() or None
+        message["device_class"] = normalized_device_class
+        updates_made.append(
+            f"device_class='{normalized_device_class}'"
+            if normalized_device_class
+            else "device_class cleared"
+        )
 
-    async def _get_entity_labels(entity_id: str) -> tuple[list[str] | None, str | None]:
+
+def _build_state_tag_fields(
+    message: dict[str, Any],
+    updates_made: list[str],
+    enabled: bool | None,
+    hidden: bool | None,
+    parsed_aliases: list[str] | None,
+    parsed_categories: dict[str, str | None] | None,
+    final_labels: list[str] | None,
+    label_operation: str,
+    parsed_labels: list[str] | None,
+) -> None:
+    """Add enabled/hidden/alias/category/label fields to the update message."""
+    if enabled is not None:
+        message["disabled_by"] = None if enabled else "user"
+        updates_made.append("enabled" if enabled else "disabled")
+    if hidden is not None:
+        message["hidden_by"] = "user" if hidden else None
+        updates_made.append("hidden" if hidden else "visible")
+    if parsed_aliases is not None:
+        message["aliases"] = parsed_aliases
+        updates_made.append(f"aliases={parsed_aliases}")
+    if parsed_categories is not None:
+        message["categories"] = parsed_categories
+        updates_made.append(f"categories={parsed_categories}")
+    if final_labels is not None:
+        message["labels"] = final_labels
+        if label_operation == "set":
+            updates_made.append(f"labels={final_labels}")
+        elif label_operation == "add":
+            updates_made.append(f"labels added: {parsed_labels} -> {final_labels}")
+        else:  # remove
+            updates_made.append(f"labels removed: {parsed_labels} -> {final_labels}")
+
+
+def _parse_set_entity_ids(
+    entity_id: str | list[str],
+) -> tuple[list[str], bool]:
+    """Parse entity_id into (entity_ids, is_bulk). Raises on invalid input."""
+    if isinstance(entity_id, str):
+        return [entity_id], False
+    elif isinstance(entity_id, list):
+        if not entity_id:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "entity_id list cannot be empty",
+                )
+            )
+        if not all(isinstance(e, str) for e in entity_id):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "All entity_id values must be strings",
+                )
+            )
+        return entity_id, len(entity_id) > 1
+    else:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
+            )
+        )
+
+
+def _parse_get_entity_ids(
+    entity_id: str | list[str],
+) -> tuple[list[str], bool, dict[str, Any] | None]:
+    """Parse entity_id into (entity_ids, is_bulk, early_response). early_response is non-None for empty list."""
+    if isinstance(entity_id, str):
+        return [entity_id], False, None
+    elif isinstance(entity_id, list):
+        if not entity_id:
+            return (
+                [],
+                False,
+                {
+                    "success": True,
+                    "entity_entries": [],
+                    "count": 0,
+                    "message": "No entities requested",
+                },
+            )
+        if not all(isinstance(e, str) for e in entity_id):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "All entity_id values must be strings",
+                )
+            )
+        return entity_id, True, None
+    else:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
+            )
+        )
+
+
+def _validate_enabled_constraint(
+    enabled: bool | None,
+    entity_ids: list[str],
+) -> None:
+    """Block registry-disable on automation and script entities.
+
+    Registry-disabling (enabled=False) removes the entity from the HA
+    state machine entirely, making it invisible in the UI and
+    unqueryable via state APIs until re-enabled AND the integration is
+    reloaded.  For automations and scripts the correct way to
+    "disable" them is via their domain services (automation.turn_off /
+    script.turn_off) which simply prevent them from running while
+    keeping them visible and manageable.
+    """
+    if enabled is False:
+        blocked = [
+            eid for eid in entity_ids if eid.split(".")[0] in ("automation", "script")
+        ]
+        if blocked:
+            _domain = blocked[0].split(".")[0]
+            _service_hint = f"{_domain}.turn_off"
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Cannot registry-disable {_domain} entities with ha_set_entity(enabled=False). "
+                    f"This removes the entity from the state machine and hides it from the UI "
+                    f"until it is re-enabled AND the {_domain}s are reloaded. "
+                    f"Use ha_call_service('{_domain}', 'turn_off', entity_id='{blocked[0]}') instead "
+                    f"to disable it without removing it.",
+                    suggestions=[
+                        f"Use {_service_hint} to disable the {_domain} (keeps it visible and manageable)",
+                        f"Use {_domain}.turn_on to re-enable it later",
+                        "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
+                    ],
+                )
+            )
+
+
+def _parse_string_list_field(
+    value: str | list[str] | None,
+    field_name: str,
+) -> list[str] | None:
+    """Parse and validate a string-list field (aliases, labels, etc.)."""
+    if value is not None:
+        try:
+            return parse_string_list_param(value, field_name)
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid {field_name} parameter: {e}",
+                )
+            )
+    return None
+
+
+def _parse_categories_param(
+    categories: dict[str, str | None] | None,
+) -> dict[str, str | None] | None:
+    """Parse and validate the categories parameter."""
+    if categories is not None:
+        try:
+            parsed_cats = parse_json_param(categories, "categories")
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid categories parameter: {e}",
+                )
+            )
+        if not isinstance(parsed_cats, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "categories must be a dict mapping scope to category_id, "
+                    'e.g. {"automation": "my_category_id"}',
+                )
+            )
+        return parsed_cats
+    return None
+
+
+def _parse_options_param(
+    options: dict[str, dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]] | None:
+    """Parse and validate the options parameter."""
+    if options is not None:
+        try:
+            parsed_opts = parse_json_param(options, "options")
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid options parameter: {e}",
+                )
+            )
+        if not isinstance(parsed_opts, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"options must be a dict mapping domain to a sub-dict "
+                    f"(got {type(parsed_opts).__name__}), "
+                    'e.g. {"sensor": {"display_precision": 2}}',
+                )
+            )
+        if not parsed_opts:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "options cannot be an empty dict — pass at least one "
+                    'domain entry, e.g. {"sensor": {"display_precision": 2}}, '
+                    "or omit the parameter entirely.",
+                )
+            )
+        bad_subs = [
+            f"{k!r}: {type(v).__name__}"
+            for k, v in parsed_opts.items()
+            if not isinstance(v, dict)
+        ]
+        if bad_subs:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "options sub-values must be dicts, got non-dict for: "
+                    f"{', '.join(bad_subs)}",
+                )
+            )
+        return parsed_opts
+    return None
+
+
+def _parse_expose_to_param(
+    expose_to: dict[str, bool] | None,
+) -> dict[str, bool] | None:
+    """Parse and validate the expose_to parameter."""
+    if expose_to is not None:
+        try:
+            parsed = parse_json_param(expose_to, "expose_to")
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(e),
+                )
+            )
+        if not isinstance(parsed, dict):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "expose_to must be a dict mapping assistant IDs to booleans, "
+                    'e.g. {"conversation": true, "cloud.alexa": false}',
+                )
+            )
+        # Validate assistant names
+        invalid_assistants = [a for a in parsed if a not in KNOWN_ASSISTANTS]
+        if invalid_assistants:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid assistant(s) in expose_to: {invalid_assistants}. "
+                    f"Valid: {KNOWN_ASSISTANTS}",
+                )
+            )
+        # Values are already bool (enforced by the dict[str, bool] annotation)
+        return parsed
+    return None
+
+
+class EntityTools:
+    """Entity registry tools: get, update, and remove entities."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    async def _get_entity_labels(
+        self, entity_id: str
+    ) -> tuple[list[str] | None, str | None]:
         """Fetch current labels for an entity. Returns (labels, error_msg)."""
         get_msg: dict[str, Any] = {
             "type": "config/entity_registry/get",
             "entity_id": entity_id,
         }
-        result = await client.send_websocket_message(get_msg)
+        result = await self._client.send_websocket_message(get_msg)
         if not result.get("success"):
             return None, _extract_ws_error(result)
-        return result.get("result", {}).get("labels", []), None
+        return (result.get("result") or {}).get("labels") or [], None
 
-    async def _update_single_entity(
+    async def _resolve_final_labels(
+        self,
         entity_id: str,
-        area_id: str | None,
-        name: str | None,
-        icon: str | None,
-        enabled: bool | None,
-        hidden: bool | None,
-        parsed_aliases: list[str] | None,
-        parsed_categories: dict[str, str | None] | None,
         parsed_labels: list[str] | None,
         label_operation: str,
-        parsed_expose_to: dict[str, bool] | None,
-        new_entity_id: str | None = None,
-        new_device_name: str | None = None,
-        device_class: str | None = None,
-        parsed_options: dict[str, dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        """Update a single entity. Returns the response dict."""
-        # For add/remove operations, we need to fetch current labels first
-        final_labels = parsed_labels
-        if parsed_labels is not None and label_operation in ("add", "remove"):
-            current_labels, error_msg = await _get_entity_labels(entity_id)
-            if current_labels is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to get current labels for {entity_id}: {error_msg}",
-                        context={"entity_id": entity_id},
-                    )
+    ) -> list[str] | None:
+        """Merge or filter labels using the current registry state for add/remove ops."""
+        if parsed_labels is None or label_operation not in ("add", "remove"):
+            return parsed_labels
+        current_labels, error_msg = await self._get_entity_labels(entity_id)
+        if current_labels is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to get current labels for {entity_id}: {error_msg}",
+                    context={"entity_id": entity_id},
                 )
-
-            if label_operation == "add":
-                # Add new labels without duplicates
-                final_labels = list(set(current_labels) | set(parsed_labels))
-            else:  # remove
-                # Remove specified labels - use set for O(1) membership check
-                labels_to_remove = set(parsed_labels)
-                final_labels = [
-                    lbl for lbl in current_labels if lbl not in labels_to_remove
-                ]
-
-        # Build update message for entity registry
-        message: dict[str, Any] = {
-            "type": "config/entity_registry/update",
-            "entity_id": entity_id,
-        }
-
-        updates_made = []
-
-        if area_id is not None:
-            message["area_id"] = area_id if area_id else None
-            updates_made.append(f"area_id='{area_id}'" if area_id else "area cleared")
-
-        if name is not None:
-            message["name"] = name if name else None
-            updates_made.append(f"name='{name}'" if name else "name cleared")
-
-        if icon is not None:
-            message["icon"] = icon if icon else None
-            updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
-
-        if device_class is not None:
-            # Treat whitespace-only as the documented "clear" sentinel so
-            # accidental spaces don't reach HA as a literal validation error.
-            normalized_device_class = device_class.strip() or None
-            message["device_class"] = normalized_device_class
-            updates_made.append(
-                f"device_class='{normalized_device_class}'"
-                if normalized_device_class
-                else "device_class cleared"
             )
+        if label_operation == "add":
+            # Add new labels without duplicates
+            return list(set(current_labels) | set(parsed_labels))
+        # remove: use set for O(1) membership check
+        labels_to_remove = set(parsed_labels)
+        return [lbl for lbl in current_labels if lbl not in labels_to_remove]
 
-        if enabled is not None:
-            message["disabled_by"] = None if enabled else "user"
-            updates_made.append("enabled" if enabled else "disabled")
-
-        if hidden is not None:
-            message["hidden_by"] = "user" if hidden else None
-            updates_made.append("hidden" if hidden else "visible")
-
-        if parsed_aliases is not None:
-            message["aliases"] = parsed_aliases
-            updates_made.append(f"aliases={parsed_aliases}")
-
-        if parsed_categories is not None:
-            message["categories"] = parsed_categories
-            updates_made.append(f"categories={parsed_categories}")
-
-        if final_labels is not None:
-            message["labels"] = final_labels
-            if label_operation == "set":
-                updates_made.append(f"labels={final_labels}")
-            elif label_operation == "add":
-                updates_made.append(f"labels added: {parsed_labels} -> {final_labels}")
-            else:  # remove
-                updates_made.append(
-                    f"labels removed: {parsed_labels} -> {final_labels}"
-                )
-
-        if new_entity_id is not None:
-            entity_pattern = r"^[a-z_]+\.[a-z0-9_]+$"
-            if not re.match(entity_pattern, new_entity_id):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Invalid new_entity_id format: {new_entity_id}",
-                        suggestions=[
-                            "Use format: domain.object_id (lowercase letters, numbers, underscores only)"
-                        ],
-                        context={"new_entity_id": new_entity_id},
-                    )
-                )
-            current_domain = entity_id.split(".")[0]
-            new_domain = new_entity_id.split(".")[0]
-            if current_domain != new_domain:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"Domain mismatch: cannot change from '{current_domain}' to '{new_domain}'",
-                        suggestions=[
-                            f"New entity_id must start with '{current_domain}.'"
-                        ],
-                        context={
-                            "entity_id": entity_id,
-                            "new_entity_id": new_entity_id,
-                        },
-                    )
-                )
-            message["new_entity_id"] = new_entity_id
-            updates_made.append(f"entity_id -> {new_entity_id}")
-
-        if parsed_expose_to is not None:
-            updates_made.append(f"expose_to={parsed_expose_to}")
-
-        if new_device_name is not None:
-            updates_made.append(f"device_name -> {new_device_name}")
-
-        # parsed_options entries are appended to updates_made AFTER each per-domain
-        # WS call succeeds, so the response never falsely claims an unwritten domain
-        # was updated. Empty-input check below treats them as "pending" updates.
-        if not updates_made and not parsed_options:
+    def _validate_entity_rename(
+        self,
+        entity_id: str,
+        new_entity_id: str,
+        message: dict[str, Any],
+        updates_made: list[str],
+    ) -> None:
+        """Validate and apply a rename to the update message. Raises on invalid input."""
+        entity_pattern = r"^[a-z_]+\.[a-z0-9_]+$"
+        if not re.match(entity_pattern, new_entity_id):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "No updates specified",
+                    f"Invalid new_entity_id format: {new_entity_id}",
                     suggestions=[
-                        "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, categories, labels, options, expose_to, new_entity_id, or new_device_name"
+                        "Use format: domain.object_id (lowercase letters, numbers, underscores only)"
                     ],
+                    context={"new_entity_id": new_entity_id},
                 )
             )
+        current_domain = entity_id.split(".")[0]
+        new_domain = new_entity_id.split(".")[0]
+        if current_domain != new_domain:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Domain mismatch: cannot change from '{current_domain}' to '{new_domain}'",
+                    suggestions=[f"New entity_id must start with '{current_domain}.'"],
+                    context={
+                        "entity_id": entity_id,
+                        "new_entity_id": new_entity_id,
+                    },
+                )
+            )
+        message["new_entity_id"] = new_entity_id
+        updates_made.append(f"entity_id -> {new_entity_id}")
 
-        # Save original entity_id before potential rename
-        original_entity_id = entity_id
-
-        # Send entity registry update (covers all fields except expose_to)
+    async def _execute_registry_update(
+        self,
+        entity_id: str,
+        message: dict[str, Any],
+        updates_made: list[str],
+        new_entity_id: str | None,
+    ) -> tuple[str, dict[str, Any], bool]:
+        """Send entity registry update. Returns (effective_entity_id, entity_entry, has_registry_updates)."""
         has_registry_updates = len(message) > 2  # more than just type + entity_id
         entity_entry: dict[str, Any] = {}
 
         if has_registry_updates:
-            registry_update_fields = [
-                u for u in updates_made if not u.startswith("expose_to=")
-            ]
             logger.info(
-                f"Updating entity registry for {entity_id}: {', '.join(registry_update_fields)}"
+                f"Updating entity registry for {entity_id}: {', '.join(updates_made)}"
             )
-            result = await client.send_websocket_message(message)
+            result = await self._client.send_websocket_message(message)
 
             if not result.get("success"):
                 error_msg = _extract_ws_error(result)
-                suggestions = [
-                    "Verify the entity_id exists using ha_search()",
-                ]
+                suggestions = ["Verify the entity_id exists using ha_search()"]
                 if new_entity_id is not None:
                     suggestions.extend(
                         [
@@ -283,207 +498,262 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if new_entity_id:
                 entity_id = new_entity_id
 
-        # Per-domain options updates: HA's WS schema requires `options_domain`
-        # and `options` to be sent paired one domain per call (the API takes a
-        # single domain's sub-dict). An agent-supplied {domain: {...}, ...} is
-        # therefore split into one registry update per domain.
+        return entity_id, entity_entry, has_registry_updates
+
+    async def _apply_options_updates(
+        self,
+        entity_id: str,
+        parsed_options: dict[str, dict[str, Any]] | None,
+        entity_entry: dict[str, Any],
+        has_registry_updates: bool,
+        updates_made: list[str],
+    ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+        """Apply per-domain options updates. Returns (entity_entry, options_succeeded).
+
+        Per-domain options updates: HA's WS schema requires `options_domain`
+        and `options` to be sent paired one domain per call (the API takes a
+        single domain's sub-dict). An agent-supplied {domain: {...}, ...} is
+        therefore split into one registry update per domain.
+        """
         options_succeeded: dict[str, dict[str, Any]] = {}
-        if parsed_options:
-            for opts_domain, opts_sub in parsed_options.items():
-                opts_msg: dict[str, Any] = {
-                    "type": "config/entity_registry/update",
+        if not parsed_options:
+            return entity_entry, options_succeeded
+
+        for opts_domain, opts_sub in parsed_options.items():
+            opts_msg: dict[str, Any] = {
+                "type": "config/entity_registry/update",
+                "entity_id": entity_id,
+                "options_domain": opts_domain,
+                "options": opts_sub,
+            }
+            opts_result = await self._client.send_websocket_message(opts_msg)
+            if not opts_result.get("success"):
+                err_msg = _extract_ws_error(opts_result)
+                partial = bool(options_succeeded) or has_registry_updates
+                msg_prefix = (
+                    "Partially updated entity; failed updating options for"
+                    if partial
+                    else "Failed to update options for"
+                )
+                # `options_succeeded` is the structured retriable form
+                # (agent can re-feed it minus the failing domain).
+                # `updates_applied` is the human-readable prose list
+                # including non-options updates (name=, icon=, etc.).
+                # Both are surfaced — they serve different consumers.
+                options_failure_context: dict[str, Any] = {
                     "entity_id": entity_id,
                     "options_domain": opts_domain,
-                    "options": opts_sub,
+                    "partial": partial,
+                    "options_succeeded": options_succeeded,
+                    "updates_applied": list(updates_made),
                 }
-                opts_result = await client.send_websocket_message(opts_msg)
-                if not opts_result.get("success"):
-                    err_msg = _extract_ws_error(opts_result)
-                    partial = bool(options_succeeded) or has_registry_updates
-                    msg_prefix = (
-                        "Partially updated entity; failed updating options for"
-                        if partial
-                        else "Failed to update options for"
+                # Only include entity_entry when something actually mutated;
+                # _format_entity_entry({}) returns an all-None stub that's
+                # indistinguishable from "entity has nothing set". Mirrors
+                # the partial-context logic in _build_expose_failure_context.
+                if partial:
+                    options_failure_context["entity_entry"] = _format_entity_entry(
+                        entity_entry
                     )
-                    # `options_succeeded` is the structured retriable form
-                    # (agent can re-feed it minus the failing domain).
-                    # `updates_applied` is the human-readable prose list
-                    # including non-options updates (name=, icon=, etc.).
-                    # Both are surfaced — they serve different consumers.
-                    options_failure_context: dict[str, Any] = {
-                        "entity_id": entity_id,
-                        "options_domain": opts_domain,
-                        "partial": partial,
-                        "options_succeeded": options_succeeded,
-                        "updates_applied": list(updates_made),
-                    }
-                    # Only include entity_entry when something actually mutated;
-                    # _format_entity_entry({}) returns an all-None stub that's
-                    # indistinguishable from "entity has nothing set". Mirrors
-                    # the expose_to failure path below.
-                    if partial:
-                        options_failure_context["entity_entry"] = _format_entity_entry(
-                            entity_entry
-                        )
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            f"{msg_prefix} domain '{opts_domain}': {err_msg}",
-                            context=options_failure_context,
-                        )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"{msg_prefix} domain '{opts_domain}': {err_msg}",
+                        context=options_failure_context,
                     )
-                # HA returns the cumulative entity_entry on each per-domain
-                # call, so last-call-wins reassignment leaves the final loop
-                # iteration carrying the full state.
-                entity_entry = opts_result.get("result", {}).get(
-                    "entity_entry", entity_entry
                 )
-                options_succeeded[opts_domain] = opts_sub
-                updates_made.append(f"options[{opts_domain}]={opts_sub}")
+            # HA returns the cumulative entity_entry on each per-domain
+            # call, so last-call-wins reassignment leaves the final loop
+            # iteration carrying the full state.
+            entity_entry = (opts_result.get("result") or {}).get(
+                "entity_entry", entity_entry
+            )
+            options_succeeded[opts_domain] = opts_sub
+            updates_made.append(f"options[{opts_domain}]={opts_sub}")
 
-        # Handle new_device_name — rename the associated device
-        # Normalize empty string to None (no-op, don't clear device name)
+        return entity_entry, options_succeeded
+
+    async def _apply_device_rename(
+        self,
+        entity_id: str,
+        entity_entry: dict[str, Any],
+        new_device_name: str | None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Rename the associated device. Returns (device_rename_result, entity_entry).
+
+        Handle new_device_name — rename the associated device.
+        Normalize empty string to None (no-op, don't clear device name).
+        """
         if new_device_name is not None and not new_device_name.strip():
             new_device_name = None
         device_rename_result: dict[str, Any] | None = None
-        if new_device_name is not None:
-            # If no registry update was sent, fetch entity_entry to get device_id
-            if not entity_entry:
-                device_lookup_msg: dict[str, Any] = {
-                    "type": "config/entity_registry/get",
-                    "entity_id": entity_id,
-                }
-                get_result = await client.send_websocket_message(device_lookup_msg)
-                if get_result.get("success"):
-                    entity_entry = get_result.get("result", {})
-                else:
-                    logger.warning(
-                        "Entity registry lookup failed for %s: %s",
-                        entity_id,
-                        _extract_ws_error(get_result),
-                    )
-                    device_rename_result = {
-                        "warnings": [
-                            "Entity registry lookup failed — could not determine device. Retry may succeed."
-                        ],
-                        "lookup_failed": True,
-                    }
+        if new_device_name is None:
+            return device_rename_result, entity_entry
 
-            device_id = (
-                entity_entry.get("device_id") if not device_rename_result else None
-            )
-            if not device_id:
-                # Only fire the "no device" warning when the registry lookup
-                # succeeded — otherwise the L378 "lookup failed" warning
-                # already carries the more accurate signal, and a second
-                # "no associated device" claim would be unverified (we don't
-                # actually know what the registry says when the lookup failed).
-                if device_rename_result is None:
-                    device_rename_result = {
-                        "warnings": [
-                            "Entity has no associated device — device rename skipped"
-                        ],
-                    }
+        # If no registry update was sent, fetch entity_entry to get device_id
+        if not entity_entry:
+            device_lookup_msg: dict[str, Any] = {
+                "type": "config/entity_registry/get",
+                "entity_id": entity_id,
+            }
+            get_result = await self._client.send_websocket_message(device_lookup_msg)
+            if get_result.get("success"):
+                entity_entry = get_result.get("result") or {}
             else:
-                device_msg: dict[str, Any] = {
-                    "type": "config/device_registry/update",
-                    "device_id": device_id,
-                    "name_by_user": new_device_name if new_device_name else None,
-                }
-                device_result = await client.send_websocket_message(device_msg)
-                if device_result.get("success"):
-                    device_rename_result = {"success": True, "device_id": device_id}
-                else:
-                    device_rename_result = {
-                        "warnings": [
-                            f"Entity updated but device rename failed: {_extract_ws_error(device_result)}"
-                        ],
-                        "device_id": device_id,
-                    }
-
-        # Handle expose_to via separate WebSocket API
-        exposure_result: dict[str, bool] | None = None
-        if parsed_expose_to is not None:
-            # Group by should_expose value for efficient API calls
-            expose_true = [a for a, v in parsed_expose_to.items() if v]
-            expose_false = [a for a, v in parsed_expose_to.items() if not v]
-
-            succeeded: dict[str, bool] = {}
-
-            for assistants, should_expose in [
-                (expose_true, True),
-                (expose_false, False),
-            ]:
-                if not assistants:
-                    continue
-
-                expose_msg: dict[str, Any] = {
-                    "type": "homeassistant/expose_entity",
-                    "assistants": assistants,
-                    "entity_ids": [entity_id],
-                    "should_expose": should_expose,
-                }
-
-                logger.info(
-                    f"{'Exposing' if should_expose else 'Hiding'} {entity_id} "
-                    f"{'to' if should_expose else 'from'} {assistants}"
+                logger.warning(
+                    "Entity registry lookup failed for %s: %s",
+                    entity_id,
+                    _extract_ws_error(get_result),
                 )
-                expose_result = await client.send_websocket_message(expose_msg)
+                device_rename_result = {
+                    "warnings": [
+                        "Entity registry lookup failed — could not determine device. Retry may succeed."
+                    ],
+                    "lookup_failed": True,
+                }
 
-                if not expose_result.get("success"):
-                    error_msg = _extract_ws_error(expose_result)
-                    failed = dict.fromkeys(assistants, should_expose)
-                    # `partial` must reflect every prior mutation in the function:
-                    # main registry update, per-domain options, device rename, and
-                    # any expose_to batch (e.g. expose_true) that ran before this
-                    # one (expose_false) failed. Anything truthy in those means
-                    # the registry already moved.
-                    prior_mutation = (
-                        has_registry_updates
-                        or bool(options_succeeded)
-                        or bool(succeeded)
-                        or bool(
-                            device_rename_result and device_rename_result.get("success")
-                        )
+        device_id = entity_entry.get("device_id") if not device_rename_result else None
+        if not device_id:
+            # Only fire the "no device" warning when the registry lookup
+            # succeeded — otherwise the "lookup failed" warning set above
+            # already carries the more accurate signal, and a second
+            # "no associated device" claim would be unverified (we don't
+            # actually know what the registry says when the lookup failed).
+            if device_rename_result is None:
+                device_rename_result = {
+                    "warnings": [
+                        "Entity has no associated device — device rename skipped"
+                    ],
+                }
+            return device_rename_result, entity_entry
+
+        device_msg: dict[str, Any] = {
+            "type": "config/device_registry/update",
+            "device_id": device_id,
+            "name_by_user": new_device_name if new_device_name else None,
+        }
+        device_result = await self._client.send_websocket_message(device_msg)
+        if device_result.get("success"):
+            device_rename_result = {"success": True, "device_id": device_id}
+        else:
+            device_rename_result = {
+                "warnings": [
+                    f"Entity updated but device rename failed: {_extract_ws_error(device_result)}"
+                ],
+                "device_id": device_id,
+            }
+        return device_rename_result, entity_entry
+
+    def _build_expose_failure_context(
+        self,
+        entity_id: str,
+        entity_entry: dict[str, Any],
+        succeeded: dict[str, bool],
+        failed: dict[str, bool],
+        options_succeeded: dict[str, dict[str, Any]],
+        device_rename_result: dict[str, Any] | None,
+        has_registry_updates: bool,
+    ) -> dict[str, Any]:
+        """Build error context for an expose_to failure.
+
+        `partial` must reflect every prior mutation across the ha_set_entity
+        pipeline: main registry update, per-domain options, device rename, and
+        any expose_to batch (e.g. expose_true) that ran before this
+        one (expose_false) failed. Anything truthy in those means
+        the registry already moved.
+        """
+        prior_mutation = (
+            has_registry_updates
+            or bool(options_succeeded)
+            or bool(succeeded)
+            or bool(device_rename_result and device_rename_result.get("success"))
+        )
+        context: dict[str, Any] = {
+            "entity_id": entity_id,
+            "exposure_succeeded": succeeded,
+            "exposure_failed": failed,
+        }
+        if prior_mutation:
+            context["partial"] = True
+            context["entity_entry"] = _format_entity_entry(entity_entry)
+            if options_succeeded:
+                context["options_succeeded"] = options_succeeded
+            if device_rename_result and device_rename_result.get("success"):
+                context["device_rename_succeeded"] = True
+        return context
+
+    async def _apply_expose_to(
+        self,
+        entity_id: str,
+        parsed_expose_to: dict[str, bool] | None,
+        entity_entry: dict[str, Any],
+        has_registry_updates: bool,
+        options_succeeded: dict[str, dict[str, Any]],
+        device_rename_result: dict[str, Any] | None,
+    ) -> tuple[dict[str, bool] | None, dict[str, Any]]:
+        """Apply expose_to changes via separate WebSocket API. Returns (exposure_result, entity_entry)."""
+        if not parsed_expose_to:
+            return None, entity_entry
+
+        # Group by should_expose value for efficient API calls
+        expose_true = [a for a, v in parsed_expose_to.items() if v]
+        expose_false = [a for a, v in parsed_expose_to.items() if not v]
+        succeeded: dict[str, bool] = {}
+
+        for assistants, should_expose in [(expose_true, True), (expose_false, False)]:
+            if not assistants:
+                continue
+
+            expose_msg: dict[str, Any] = {
+                "type": "homeassistant/expose_entity",
+                "assistants": assistants,
+                "entity_ids": [entity_id],
+                "should_expose": should_expose,
+            }
+            logger.info(
+                f"{'Exposing' if should_expose else 'Hiding'} {entity_id} "
+                f"{'to' if should_expose else 'from'} {assistants}"
+            )
+            expose_result = await self._client.send_websocket_message(expose_msg)
+
+            if not expose_result.get("success"):
+                error_msg = _extract_ws_error(expose_result)
+                failed = dict.fromkeys(assistants, should_expose)
+                context = self._build_expose_failure_context(
+                    entity_id,
+                    entity_entry,
+                    succeeded,
+                    failed,
+                    options_succeeded,
+                    device_rename_result,
+                    has_registry_updates,
+                )
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        f"Exposure failed: {error_msg}",
+                        context=context,
+                        suggestions=[
+                            "Check Home Assistant connection and entity availability"
+                        ],
                     )
-                    context: dict[str, Any] = {
-                        "entity_id": entity_id,
-                        "exposure_succeeded": succeeded,
-                        "exposure_failed": failed,
-                    }
-                    if prior_mutation:
-                        context["partial"] = True
-                        context["entity_entry"] = _format_entity_entry(entity_entry)
-                        if options_succeeded:
-                            context["options_succeeded"] = options_succeeded
-                        if device_rename_result and device_rename_result.get("success"):
-                            context["device_rename_succeeded"] = True
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.SERVICE_CALL_FAILED,
-                            f"Exposure failed: {error_msg}",
-                            context=context,
-                            suggestions=[
-                                "Check Home Assistant connection and entity availability"
-                            ],
-                        )
-                    )
+                )
 
-                # Track successful exposures
-                for a in assistants:
-                    succeeded[a] = should_expose
+            # Track successful exposures
+            for a in assistants:
+                succeeded[a] = should_expose
 
-            exposure_result = succeeded
+        exposure_result: dict[str, bool] | None = succeeded if succeeded else None
 
-        # If only expose_to was set (no registry updates), fetch current entity state
-        if not has_registry_updates and parsed_expose_to is not None:
+        # If no prior phase populated entity_entry, fetch current entity state
+        if not entity_entry:
             get_msg: dict[str, Any] = {
                 "type": "config/entity_registry/get",
                 "entity_id": entity_id,
             }
-            get_result = await client.send_websocket_message(get_msg)
+            get_result = await self._client.send_websocket_message(get_msg)
             if get_result.get("success"):
-                entity_entry = get_result.get("result", {})
+                entity_entry = get_result.get("result") or {}
             else:
                 raise_tool_error(
                     create_error_response(
@@ -500,6 +770,19 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
+        return exposure_result, entity_entry
+
+    def _build_entity_response(
+        self,
+        entity_id: str,
+        original_entity_id: str,
+        entity_entry: dict[str, Any],
+        updates_made: list[str],
+        new_entity_id: str | None,
+        exposure_result: dict[str, bool] | None,
+        device_rename_result: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Build the final response dict for a single-entity update."""
         response_data: dict[str, Any] = {
             "success": True,
             "entity_id": entity_id,
@@ -534,7 +817,152 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
         return response_data
 
-    @mcp.tool(
+    async def _update_single_entity(
+        self,
+        entity_id: str,
+        area_id: str | None,
+        name: str | None,
+        icon: str | None,
+        enabled: bool | None,
+        hidden: bool | None,
+        parsed_aliases: list[str] | None,
+        parsed_categories: dict[str, str | None] | None,
+        parsed_labels: list[str] | None,
+        label_operation: str,
+        parsed_expose_to: dict[str, bool] | None,
+        new_entity_id: str | None = None,
+        new_device_name: str | None = None,
+        device_class: str | None = None,
+        parsed_options: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Update a single entity. Orchestrates the phase pipeline."""
+        # Phase 1: For add/remove label operations, fetch current labels first
+        final_labels = await self._resolve_final_labels(
+            entity_id, parsed_labels, label_operation
+        )
+
+        # Phase 2: Build update message for entity registry
+        message: dict[str, Any] = {
+            "type": "config/entity_registry/update",
+            "entity_id": entity_id,
+        }
+        updates_made: list[str] = []
+        _build_name_visibility_fields(
+            message, updates_made, area_id, name, icon, device_class
+        )
+        _build_state_tag_fields(
+            message,
+            updates_made,
+            enabled,
+            hidden,
+            parsed_aliases,
+            parsed_categories,
+            final_labels,
+            label_operation,
+            parsed_labels,
+        )
+        if new_entity_id is not None:
+            self._validate_entity_rename(
+                entity_id, new_entity_id, message, updates_made
+            )
+        # expose_to and device_name are appended to updates_made only after their
+        # WS phases run (Phases 5-6), so the Phase-4 error context never claims
+        # they were applied before they ran.
+        has_deferred_work = parsed_expose_to is not None or new_device_name is not None
+        if not updates_made and not parsed_options and not has_deferred_work:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "No updates specified",
+                    suggestions=[
+                        "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, categories, labels, options, expose_to, new_entity_id, or new_device_name"
+                    ],
+                )
+            )
+
+        # Save original entity_id before potential rename
+        original_entity_id = entity_id
+
+        # Phase 3: Send entity registry update (covers all fields except expose_to)
+        (
+            entity_id,
+            entity_entry,
+            has_registry_updates,
+        ) = await self._execute_registry_update(
+            entity_id, message, updates_made, new_entity_id
+        )
+
+        # Phase 4: Per-domain options
+        entity_entry, options_succeeded = await self._apply_options_updates(
+            entity_id, parsed_options, entity_entry, has_registry_updates, updates_made
+        )
+
+        # Phase 5: Device rename
+        device_rename_result, entity_entry = await self._apply_device_rename(
+            entity_id, entity_entry, new_device_name
+        )
+        if new_device_name is not None:
+            updates_made.append(f"device_name -> {new_device_name}")
+
+        # Phase 6: Expose to assistants
+        exposure_result, entity_entry = await self._apply_expose_to(
+            entity_id,
+            parsed_expose_to,
+            entity_entry,
+            has_registry_updates,
+            options_succeeded,
+            device_rename_result,
+        )
+        if parsed_expose_to is not None:
+            updates_made.append(f"expose_to={parsed_expose_to}")
+
+        # Phase 7: Build response
+        return self._build_entity_response(
+            entity_id,
+            original_entity_id,
+            entity_entry,
+            updates_made,
+            new_entity_id,
+            exposure_result,
+            device_rename_result,
+        )
+
+    async def _fetch_entity(self, eid: str) -> dict[str, Any]:
+        """Fetch a single entity from the registry."""
+        message: dict[str, Any] = {
+            "type": "config/entity_registry/get",
+            "entity_id": eid,
+        }
+        result = await self._client.send_websocket_message(message)
+
+        if not result.get("success"):
+            raise ValueError(_extract_ws_error(result))
+
+        entry = result.get("result") or {}
+        return {
+            "entity_id": entry.get("entity_id"),
+            "name": entry.get("name"),
+            "original_name": entry.get("original_name"),
+            "icon": entry.get("icon"),
+            "area_id": entry.get("area_id"),
+            "disabled_by": entry.get("disabled_by"),
+            "hidden_by": entry.get("hidden_by"),
+            "enabled": entry.get("disabled_by") is None,
+            "hidden": entry.get("hidden_by") is not None,
+            "aliases": entry.get("aliases", []),
+            "labels": entry.get("labels", []),
+            "categories": entry.get("categories", {}),
+            "device_class": entry.get("device_class"),
+            "original_device_class": entry.get("original_device_class"),
+            "options": entry.get("options", {}),
+            "platform": entry.get("platform"),
+            "device_id": entry.get("device_id"),
+            "config_entry_id": entry.get("config_entry_id"),
+            "unique_id": entry.get("unique_id"),
+        }
+
+    @tool(
+        name="ha_set_entity",
         tags={"Entity Registry"},
         annotations={
             "destructiveHint": True,
@@ -553,10 +981,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             if isinstance(kw.get("entity_id"), list)
             else str(kw.get("entity_id") or "")
         ),
-        client=client,
     )
     @log_tool_usage
     async def ha_set_entity(
+        self,
         entity_id: Annotated[
             str | list[str],
             JSON_STRING_COERCION,
@@ -786,37 +1214,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - ha_call_service("script", "turn_off", entity_id="script.xxx")
         """
         try:
-            # Parse entity_id - determine if bulk operation
-            entity_ids: list[str]
-            is_bulk: bool
-
-            if isinstance(entity_id, str):
-                entity_ids = [entity_id]
-                is_bulk = False
-            elif isinstance(entity_id, list):
-                if not entity_id:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "entity_id list cannot be empty",
-                        )
-                    )
-                if not all(isinstance(e, str) for e in entity_id):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "All entity_id values must be strings",
-                        )
-                    )
-                entity_ids = entity_id
-                is_bulk = len(entity_ids) > 1
-            else:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
-                    )
-                )
+            entity_ids, is_bulk = _parse_set_entity_ids(entity_id)
 
             # Per-element empty/whitespace check — the list-empty check above
             # rejects ``[]`` but not ``[""]``; without this guard, an empty
@@ -841,7 +1239,6 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             non_null_single_params = [
                 k for k, v in single_entity_params.items() if v is not None
             ]
-
             if is_bulk and non_null_single_params:
                 raise_tool_error(
                     create_error_response(
@@ -855,173 +1252,17 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     )
                 )
 
-            # Block registry-disable on automation and script entities.
-            # Registry-disabling (enabled=False) removes the entity from the HA
-            # state machine entirely, making it invisible in the UI and
-            # unqueryable via state APIs until re-enabled AND the integration is
-            # reloaded.  For automations and scripts the correct way to
-            # "disable" them is via their domain services (automation.turn_off /
-            # script.turn_off) which simply prevent them from running while
-            # keeping them visible and manageable.
-            if enabled is not None:
-                if enabled is False:
-                    blocked = [
-                        eid
-                        for eid in entity_ids
-                        if eid.split(".")[0] in ("automation", "script")
-                    ]
-                    if blocked:
-                        _domain = blocked[0].split(".")[0]
-                        _service_hint = f"{_domain}.turn_off"
-                        raise_tool_error(
-                            create_error_response(
-                                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                                f"Cannot registry-disable {_domain} entities with ha_set_entity(enabled=False). "
-                                f"This removes the entity from the state machine and hides it from the UI "
-                                f"until it is re-enabled AND the {_domain}s are reloaded. "
-                                f"Use ha_call_service('{_domain}', 'turn_off', entity_id='{blocked[0]}') instead "
-                                f"to disable it without removing it.",
-                                suggestions=[
-                                    f"Use {_service_hint} to disable the {_domain} (keeps it visible and manageable)",
-                                    f"Use {_domain}.turn_on to re-enable it later",
-                                    "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
-                                ],
-                            )
-                        )
+            _validate_enabled_constraint(enabled, entity_ids)
 
-            # Parse list parameters if provided as strings
-            parsed_aliases = None
-            if aliases is not None:
-                try:
-                    parsed_aliases = parse_string_list_param(aliases, "aliases")
-                except ValueError as e:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"Invalid aliases parameter: {e}",
-                        )
-                    )
+            parsed_aliases = _parse_string_list_field(aliases, "aliases")
+            parsed_categories = _parse_categories_param(categories)
+            parsed_labels = _parse_string_list_field(labels, "labels")
+            parsed_options = _parse_options_param(options)
+            parsed_expose_to = _parse_expose_to_param(expose_to)
 
-            parsed_categories: dict[str, str | None] | None = None
-            if categories is not None:
-                try:
-                    parsed_cats = parse_json_param(categories, "categories")
-                except ValueError as e:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"Invalid categories parameter: {e}",
-                        )
-                    )
-
-                if not isinstance(parsed_cats, dict):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "categories must be a dict mapping scope to category_id, "
-                            'e.g. {"automation": "my_category_id"}',
-                        )
-                    )
-                parsed_categories = parsed_cats
-
-            parsed_labels = None
-            if labels is not None:
-                try:
-                    parsed_labels = parse_string_list_param(labels, "labels")
-                except ValueError as e:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"Invalid labels parameter: {e}",
-                        )
-                    )
-
-            parsed_options: dict[str, dict[str, Any]] | None = None
-            if options is not None:
-                try:
-                    parsed_opts = parse_json_param(options, "options")
-                except ValueError as e:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"Invalid options parameter: {e}",
-                        )
-                    )
-
-                if not isinstance(parsed_opts, dict):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"options must be a dict mapping domain to a sub-dict "
-                            f"(got {type(parsed_opts).__name__}), "
-                            'e.g. {"sensor": {"display_precision": 2}}',
-                        )
-                    )
-                if not parsed_opts:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "options cannot be an empty dict — pass at least one "
-                            'domain entry, e.g. {"sensor": {"display_precision": 2}}, '
-                            "or omit the parameter entirely.",
-                        )
-                    )
-                bad_subs = [
-                    f"{k!r}: {type(v).__name__}"
-                    for k, v in parsed_opts.items()
-                    if not isinstance(v, dict)
-                ]
-                if bad_subs:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "options sub-values must be dicts, got non-dict for: "
-                            f"{', '.join(bad_subs)}",
-                        )
-                    )
-                parsed_options = parsed_opts
-
-            # Parse and validate expose_to parameter
-            parsed_expose_to: dict[str, bool] | None = None
-            if expose_to is not None:
-                try:
-                    parsed = parse_json_param(expose_to, "expose_to")
-                except ValueError as e:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            str(e),
-                        )
-                    )
-
-                if not isinstance(parsed, dict):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "expose_to must be a dict mapping assistant IDs to booleans, "
-                            'e.g. {"conversation": true, "cloud.alexa": false}',
-                        )
-                    )
-                parsed_expose_to = parsed
-
-                # Validate assistant names
-                invalid_assistants = [
-                    a for a in parsed_expose_to if a not in KNOWN_ASSISTANTS
-                ]
-                if invalid_assistants:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            f"Invalid assistant(s) in expose_to: {invalid_assistants}. "
-                            f"Valid: {KNOWN_ASSISTANTS}",
-                        )
-                    )
-
-                # Values are already bool (enforced by the dict[str, bool] annotation)
-
-            # Single entity case - use existing logic
+            # Single entity case
             if not is_bulk:
-                return await _update_single_entity(
+                return await self._update_single_entity(
                     entity_ids[0],
                     area_id,
                     name,
@@ -1041,10 +1282,9 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
 
             # Bulk case - process each entity
             logger.info(f"Bulk updating {len(entity_ids)} entities")
-
             results = await asyncio.gather(
                 *[
-                    _update_single_entity(
+                    self._update_single_entity(
                         eid,
                         None,  # area_id not supported in bulk
                         None,  # name not supported in bulk
@@ -1052,7 +1292,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                         None,  # enabled not supported in bulk
                         None,  # hidden not supported in bulk
                         None,  # aliases not supported in bulk
-                        None,  # categories not supported in bulk
+                        parsed_categories,
                         parsed_labels,
                         label_operation,
                         parsed_expose_to,
@@ -1063,22 +1303,16 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             )
 
             # Aggregate results
-            succeeded: list[dict[str, Any]] = []
+            succeeded_list: list[dict[str, Any]] = []
             failed: list[dict[str, Any]] = []
-
             for eid, result in zip(entity_ids, results, strict=True):
                 if isinstance(result, BaseException):
-                    failed.append(
-                        {
-                            "entity_id": eid,
-                            "error": str(result),
-                        }
-                    )
+                    failed.append({"entity_id": eid, "error": str(result)})
                 else:
                     # _update_single_entity always returns success-shape or
                     # raises ToolError (caught above as BaseException), so the
                     # `result.get("success") is False` branch is unreachable.
-                    succeeded.append(
+                    succeeded_list.append(
                         {
                             "entity_id": eid,
                             "entity_entry": result.get("entity_entry"),
@@ -1089,26 +1323,24 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             response: dict[str, Any] = {
                 "success": len(failed) == 0,
                 "total": len(entity_ids),
-                "succeeded_count": len(succeeded),
+                "succeeded_count": len(succeeded_list),
                 "failed_count": len(failed),
-                "succeeded": succeeded,
+                "succeeded": succeeded_list,
             }
-
             if failed:
                 response["failed"] = failed
-                response["partial"] = len(succeeded) > 0
-
+                response["partial"] = len(succeeded_list) > 0
             return response
 
         except ToolError:
             raise
         except Exception as e:
             logger.error(f"Error updating entity: {e}")
-            eid_context = entity_id if isinstance(entity_id, str) else entity_ids
-            exception_to_structured_error(e, context={"entity_id": eid_context})
+            exception_to_structured_error(e, context={"entity_id": entity_id})
             return None  # unreachable: exception_to_structured_error always raises
 
-    @mcp.tool(
+    @tool(
+        name="ha_get_entity",
         tags={"Entity Registry"},
         annotations={
             "readOnlyHint": True,
@@ -1118,6 +1350,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_entity(
+        self,
         entity_id: Annotated[
             str | list[str],
             JSON_STRING_COERCION,
@@ -1169,78 +1402,16 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - unique_id: Integration's unique identifier
         """
         try:
-            # Validate and parse entity_id parameter
-            entity_ids: list[str]
-            is_bulk: bool
-
-            if isinstance(entity_id, str):
-                entity_ids = [entity_id]
-                is_bulk = False
-            elif isinstance(entity_id, list):
-                if not entity_id:
-                    return {
-                        "success": True,
-                        "entity_entries": [],
-                        "count": 0,
-                        "message": "No entities requested",
-                    }
-                if not all(isinstance(e, str) for e in entity_id):
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "All entity_id values must be strings",
-                        )
-                    )
-                entity_ids = entity_id
-                is_bulk = True
-            else:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"entity_id must be string or list of strings, got {type(entity_id).__name__}",
-                    )
-                )
-
-            async def _fetch_entity(eid: str) -> dict[str, Any]:
-                """Fetch a single entity from the registry."""
-                message: dict[str, Any] = {
-                    "type": "config/entity_registry/get",
-                    "entity_id": eid,
-                }
-                result = await client.send_websocket_message(message)
-
-                if not result.get("success"):
-                    raise ValueError(_extract_ws_error(result))
-
-                entry = result.get("result", {})
-                return {
-                    "entity_id": entry.get("entity_id"),
-                    "name": entry.get("name"),
-                    "original_name": entry.get("original_name"),
-                    "icon": entry.get("icon"),
-                    "area_id": entry.get("area_id"),
-                    "disabled_by": entry.get("disabled_by"),
-                    "hidden_by": entry.get("hidden_by"),
-                    "enabled": entry.get("disabled_by") is None,
-                    "hidden": entry.get("hidden_by") is not None,
-                    "aliases": entry.get("aliases", []),
-                    "labels": entry.get("labels", []),
-                    "categories": entry.get("categories", {}),
-                    "device_class": entry.get("device_class"),
-                    "original_device_class": entry.get("original_device_class"),
-                    "options": entry.get("options", {}),
-                    "platform": entry.get("platform"),
-                    "device_id": entry.get("device_id"),
-                    "config_entry_id": entry.get("config_entry_id"),
-                    "unique_id": entry.get("unique_id"),
-                }
+            entity_ids, is_bulk, early_response = _parse_get_entity_ids(entity_id)
+            if early_response is not None:
+                return early_response
 
             # Single entity case
             if not is_bulk:
                 eid = entity_ids[0]
                 logger.info(f"Getting entity registry entry for {eid}")
                 try:
-                    result = await _fetch_entity(eid)
+                    result = await self._fetch_entity(eid)
                 except ValueError as e:
                     raise_tool_error(
                         create_error_response(
@@ -1264,21 +1435,15 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 f"Getting entity registry entries for {len(entity_ids)} entities"
             )
             results = await asyncio.gather(
-                *[_fetch_entity(eid) for eid in entity_ids],
+                *[self._fetch_entity(eid) for eid in entity_ids],
                 return_exceptions=True,
             )
 
             entity_entries: list[dict[str, Any]] = []
             errors: list[dict[str, Any]] = []
-
             for eid, fetch_result in zip(entity_ids, results, strict=True):
                 if isinstance(fetch_result, BaseException):
-                    errors.append(
-                        {
-                            "entity_id": eid,
-                            "error": str(fetch_result),
-                        }
-                    )
+                    errors.append({"entity_id": eid, "error": str(fetch_result)})
                 else:
                     entity_entries.append(fetch_result)
 
@@ -1287,13 +1452,11 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 "count": len(entity_entries),
                 "entity_entries": entity_entries,
             }
-
             if errors:
                 response["errors"] = errors
                 response["suggestions"] = [
                     "Use ha_search() to find valid entity IDs for failed lookups"
                 ]
-
             return response
 
         except ToolError:
@@ -1302,13 +1465,12 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             logger.error(f"Error getting entity: {e}")
             exception_to_structured_error(
                 e,
-                context={
-                    "entity_id": entity_id if isinstance(entity_id, str) else entity_ids
-                },
+                context={"entity_id": entity_id},
             )
             return None  # unreachable: exception_to_structured_error always raises
 
-    @mcp.tool(
+    @tool(
+        name="ha_remove_entity",
         tags={"Entity Registry"},
         annotations={
             "destructiveHint": True,
@@ -1316,9 +1478,10 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "title": "Remove Entity",
         },
     )
-    @with_auto_backup(domain="entity", id_param="entity_id", client=client)
+    @with_auto_backup(domain="entity", id_param="entity_id")
     @log_tool_usage
     async def ha_remove_entity(
+        self,
         entity_id: Annotated[
             str,
             Field(
@@ -1362,7 +1525,7 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Use ha_search() to find valid entity IDs",
                 ],
             )
-            result = await client.send_websocket_message(
+            result = await self._client.send_websocket_message(
                 {"type": "config/entity_registry/remove", "entity_id": entity_id}
             )
 
@@ -1402,3 +1565,8 @@ def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 context={"entity_id": entity_id},
             )
             return None  # unreachable: exception_to_structured_error always raises
+
+
+def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
+    """Register entity management tools with the MCP server."""
+    register_tool_methods(mcp, EntityTools(client))
