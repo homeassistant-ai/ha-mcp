@@ -5,15 +5,23 @@ and its border router rather than an individual node. Border-router writes use
 the ``otbr/*`` WebSocket API and take an OTBR ``extended_address`` — resolved
 from ``otbr/info`` when the caller omits it, which covers the common
 single-OTBR setup. Dataset listing and router discovery use the
-integration-wide ``thread/*`` API. When no OTBR is configured the handler
-degrades to an ``available: False`` payload instead of erroring.
+integration-wide ``thread/*`` API. When no OTBR is configured the read-only
+``network_status`` degrades to an ``available: False`` payload; the write
+actions raise instead so an unconfigured integration is not a silent no-op.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from .base import ActionSpec, integration_not_found, ok, resolve_entry_id, ws_call
+from .base import (
+    ActionSpec,
+    integration_not_found,
+    integration_required,
+    ok,
+    resolve_entry_id,
+    ws_call,
+)
 
 SUPPORTED: dict[str, ActionSpec] = {
     "network_status": ActionSpec(
@@ -106,10 +114,12 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         )
         return ok("thread", "add_dataset", result=result)
 
-    # Remaining actions target a specific OTBR border router.
+    # Remaining actions (create_network / set_network / set_channel) are writes
+    # targeting a specific OTBR border router; an absent OTBR must error, not
+    # degrade to a no-op success.
     extended_address = await _resolve_extended_address(client, args)
     if not extended_address:
-        return integration_not_found("thread", "otbr")
+        integration_required("thread", "otbr")
     ctx = {"extended_address": extended_address}
 
     if action == "create_network":

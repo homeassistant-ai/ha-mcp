@@ -209,6 +209,31 @@ class TestZwaveRadio:
         assert out["mode"] == "smart_start"
         assert any(m["type"] == "zwave_js/provision_smart_start_node" for m in record)
 
+    @pytest.mark.asyncio
+    async def test_add_rejects_multiple_credentials(self):
+        # HA's add_node schema marks the inclusion credentials as vol.Exclusive;
+        # passing more than one must raise (the single-credential path is fine).
+        record: list = []
+        client = _client(
+            {
+                "config_entries/get": _entries(),
+                "zwave_js/add_node": {"success": True, "result": {}},
+            },
+            record=record,
+        )
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(
+                radio="zwave",
+                action="add",
+                params={"qr_code_string": "90010...", "dsk": "11111-22222"},
+            )
+        msg = str(exc.value)
+        assert "qr_code_string" in msg
+        assert "dsk" in msg
+        assert "mutually exclusive" in msg.lower()
+        # The conflicting call must never reach add_node.
+        assert not any(m["type"] == "zwave_js/add_node" for m in record)
+
     # ---- remove_device ------------------------------------------------------ #
     @pytest.mark.asyncio
     async def test_remove_device_requires_confirm(self):

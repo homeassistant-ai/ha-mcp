@@ -99,14 +99,75 @@ async def resolve_entry_id(client: Any, domain: str) -> str | None:
     return None
 
 
+async def resolve_update_entity(
+    client: Any, device_id: Any, *, platform: str | None = None
+) -> str:
+    """Return the device's ``update.*`` firmware entity_id from the registry.
+
+    Filters the ``update.*`` entities tied to ``device_id``, preferring the given
+    ``platform`` (e.g. "matter", "zha", "zwave_js") when a device exposes more
+    than one. Raises ENTITY_NOT_FOUND when the device exposes no update entity.
+    """
+    entities = await ws_call(
+        client, "config/entity_registry/list", context={"device_id": device_id}
+    )
+    candidates = [
+        e
+        for e in (entities or [])
+        if e.get("device_id") == device_id
+        and str(e.get("entity_id", "")).startswith("update.")
+    ]
+    if platform is not None:
+        for entity in candidates:
+            if entity.get("platform") == platform:
+                return str(entity["entity_id"])
+    if candidates:
+        return str(candidates[0]["entity_id"])
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.ENTITY_NOT_FOUND,
+            f"No update entity found for device {device_id}; no firmware update is available",
+            context={"device_id": device_id},
+            suggestions=[
+                "Firmware updates appear only when the device exposes an update.* entity",
+                "Check ha_get_device for an 'update.' entity on this device",
+            ],
+        )
+    )
+
+
 def integration_not_found(radio: str, domain: str) -> dict[str, Any]:
-    """Standard degraded payload when an integration/config-entry is absent."""
+    """Standard degraded payload when an integration/config-entry is absent.
+
+    For read-only actions (``network_status``) only — reporting the absent
+    integration as a graceful ``success: True`` degradation is correct there.
+    Write/management actions must call ``integration_required`` instead so an
+    unconfigured integration surfaces as an error rather than a silent no-op.
+    """
     return {
         "success": True,
         "radio": radio,
         "available": False,
         "warnings": [f"{domain} integration is not configured on this Home Assistant"],
     }
+
+
+def integration_required(radio: str, domain: str) -> None:
+    """Raise a ToolError when a write action's integration/config-entry is absent.
+
+    The write-action counterpart to ``integration_not_found``: management actions
+    must not report a no-op as ``success: True``, so this raises instead of
+    degrading to an ``available: False`` payload.
+    """
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            f"{domain} integration is not configured on this Home Assistant; "
+            f"cannot run this {radio} management action.",
+            context={"radio": radio, "domain": domain, "available": False},
+            suggestions=[f"Install/configure the {domain} integration first"],
+        )
+    )
 
 
 def confirm_required(radio: str, action: str) -> None:

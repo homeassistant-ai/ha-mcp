@@ -21,9 +21,11 @@ from ..helpers import raise_tool_error
 from .base import (
     ActionSpec,
     integration_not_found,
+    integration_required,
     ok,
     require,
     resolve_entry_id,
+    resolve_update_entity,
     ws_call,
 )
 
@@ -97,25 +99,6 @@ SUPPORTED: dict[str, ActionSpec] = {
 async def _zwave_entry_id(client: Any) -> str | None:
     """Resolve the single ``zwave_js`` config entry_id (None if not configured)."""
     return await resolve_entry_id(client, "zwave_js")
-
-
-async def _find_update_entity(client: Any, device_id: str | None) -> str | None:
-    """Return the device's ``update.*`` entity_id from the entity registry.
-
-    Z-Wave JS exposes one firmware ``update`` entity per updatable node, tied to
-    the node's device. We resolve it here so firmware_update only needs a
-    device_id (the same id every other node-scoped action uses).
-    """
-    entities = await ws_call(client, "config/entity_registry/list")
-    return next(
-        (
-            e.get("entity_id")
-            for e in entities or []
-            if e.get("device_id") == device_id
-            and str(e.get("entity_id", "")).startswith("update.")
-        ),
-        None,
-    )
 
 
 async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -194,7 +177,7 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
     if action == "add":
         entry_id = await _zwave_entry_id(client)
         if not entry_id:
-            return integration_not_found("zwave", "zwave_js")
+            integration_required("zwave", "zwave_js")
 
         if args.get("smart_start"):
             # SmartStart: add the provisioning info to the controller's list; the
@@ -218,9 +201,10 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
                 "zwave", "add", mode="smart_start", result=result, long_running=True
             )
 
-        # Active inclusion. Non-interactive only: require a pre-shared credential
-        # so no S2 read-the-PIN handshake is needed.
-        if not any(args.get(c) for c in _ADD_CREDENTIALS):
+        # Active inclusion. Non-interactive only: require exactly one pre-shared
+        # credential so no S2 read-the-PIN handshake is needed.
+        provided = [c for c in _ADD_CREDENTIALS if args.get(c)]
+        if not provided:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -234,6 +218,25 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
                         "Pass qr_provisioning_information for a scanned device",
                         "Set params.smart_start=True to add to the SmartStart list",
                         "Use the Home Assistant UI for interactive S2 PIN pairing",
+                    ],
+                )
+            )
+        if len(provided) > 1:
+            # HA's add_node schema marks these as vol.Exclusive — passing more
+            # than one is rejected upstream, so fail fast with a clear conflict.
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "zwave/add accepts only one inclusion credential, but "
+                    + str(len(provided))
+                    + " were provided: "
+                    + ", ".join(provided)
+                    + ". "
+                    + ", ".join(_ADD_CREDENTIALS)
+                    + " are mutually exclusive.",
+                    context={"radio": "zwave", "action": "add", "conflict": provided},
+                    suggestions=[
+                        "Pass exactly one of " + ", ".join(_ADD_CREDENTIALS),
                     ],
                 )
             )
@@ -271,7 +274,7 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         # user triggers exclusion on the physical device to complete it).
         entry_id = await _zwave_entry_id(client)
         if not entry_id:
-            return integration_not_found("zwave", "zwave_js")
+            integration_required("zwave", "zwave_js")
         result = await ws_call(
             client,
             "zwave_js/remove_node",
@@ -299,7 +302,7 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         if args.get("scope") == "network":
             entry_id = await _zwave_entry_id(client)
             if not entry_id:
-                return integration_not_found("zwave", "zwave_js")
+                integration_required("zwave", "zwave_js")
             result = await ws_call(
                 client,
                 "zwave_js/begin_rebuilding_routes",
@@ -347,23 +350,9 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         return ok("zwave", "set_config_param", result=result)
 
     if action == "firmware_update":
-        update_entity = await _find_update_entity(client, device_id)
-        if not update_entity:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"No update entity found for device {device_id}",
-                    context={
-                        "radio": "zwave",
-                        "action": "firmware_update",
-                        "device_id": device_id,
-                    },
-                    suggestions=[
-                        "Confirm the device has a firmware update available",
-                        "Use ha_get_device() to inspect the device's entities",
-                    ],
-                )
-            )
+        update_entity = await resolve_update_entity(
+            client, device_id, platform="zwave_js"
+        )
         result = await client.call_service(
             "update", "install", {"entity_id": update_entity}
         )
@@ -378,7 +367,7 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
     if action == "hard_reset":
         entry_id = await _zwave_entry_id(client)
         if not entry_id:
-            return integration_not_found("zwave", "zwave_js")
+            integration_required("zwave", "zwave_js")
         result = await ws_call(
             client,
             "zwave_js/hard_reset_controller",

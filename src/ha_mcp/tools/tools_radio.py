@@ -66,7 +66,6 @@ class RadioTools:
                 suggestions=["Use ha_search() to find a valid entity_id"],
             )
         )
-        raise AssertionError  # unreachable: raise_tool_error always raises
 
     @tool(
         name="ha_manage_radio",

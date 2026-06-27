@@ -154,15 +154,18 @@ class TestThreadHandler:
         assert sent[0]["dataset_id"] == "d1"
 
     @pytest.mark.asyncio
-    async def test_set_network_no_otbr_degrades(self):
+    async def test_set_network_no_otbr_raises(self):
+        # set_network is a write action: an absent OTBR must raise (not degrade
+        # to a no-op success the way the read-only network_status does).
         client = _client({"otbr/info": {"success": True, "result": {}}})
-        out = await _radio(client)(
-            radio="thread",
-            action="set_network",
-            params={"dataset_id": "d1"},
-            confirm=True,
-        )
-        assert out["available"] is False
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(
+                radio="thread",
+                action="set_network",
+                params={"dataset_id": "d1"},
+                confirm=True,
+            )
+        assert "otbr" in str(exc.value).lower()
 
     @pytest.mark.asyncio
     async def test_set_network_requires_confirm(self):

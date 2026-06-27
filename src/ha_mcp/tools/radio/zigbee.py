@@ -20,7 +20,14 @@ from fastmcp.exceptions import ToolError
 
 from ...errors import ErrorCode, create_error_response
 from ..helpers import raise_tool_error
-from .base import ActionSpec, integration_not_found, ok, resolve_entry_id, ws_call
+from .base import (
+    ActionSpec,
+    integration_not_found,
+    ok,
+    resolve_entry_id,
+    resolve_update_entity,
+    ws_call,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -149,38 +156,6 @@ async def _resolve_ieee(client: Any, device_id: Any) -> str:
             ],
         )
     )
-    raise AssertionError  # unreachable: raise_tool_error always raises
-
-
-async def _resolve_update_entity(client: Any, device_id: Any) -> str:
-    """Find the device's ``update.*`` firmware entity via the entity registry."""
-    entities = await ws_call(
-        client, "config/entity_registry/list", context={"device_id": device_id}
-    )
-    candidates = [
-        e
-        for e in (entities or [])
-        if e.get("device_id") == device_id
-        and str(e.get("entity_id", "")).startswith("update.")
-    ]
-    # Prefer the ZHA-platform update entity when a device exposes several.
-    for entity in candidates:
-        if entity.get("platform") == "zha":
-            return str(entity["entity_id"])
-    if candidates:
-        return str(candidates[0]["entity_id"])
-    raise_tool_error(
-        create_error_response(
-            ErrorCode.ENTITY_NOT_FOUND,
-            f"No update entity found for device '{device_id}'; no firmware update is available",
-            context={"device_id": device_id, "radio": "zigbee"},
-            suggestions=[
-                "Firmware updates appear only when the device exposes an update.* entity",
-                "Check ha_get_device for an 'update.' entity on this device",
-            ],
-        )
-    )
-    raise AssertionError  # unreachable: raise_tool_error always raises
 
 
 async def _call_service(client: Any, domain: str, service: str, **data: Any) -> Any:
@@ -261,7 +236,7 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         return ok("zigbee", "remove_device", ieee=ieee, result=result)
 
     if action == "firmware_update":
-        entity_id = await _resolve_update_entity(client, device_id)
+        entity_id = await resolve_update_entity(client, device_id, platform="zha")
         result = await _call_service(client, "update", "install", entity_id=entity_id)
         return ok(
             "zigbee",
