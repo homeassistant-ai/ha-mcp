@@ -999,9 +999,10 @@ class SystemTools:
         """Fetch a Thread/OpenThread Border Router (OTBR) summary.
 
         Calls the ``otbr/info`` WebSocket command (HA's Thread/OTBR
-        integration) and returns a lightweight per-border-router summary —
-        ``channel``, ``extended_pan_id`` and ``border_agent_id`` keyed by the
-        OTBR's ``extended_address``. Per-node Thread health is not exposed by
+        integration) and returns a lightweight list of per-border-router
+        summaries — each with its ``extended_address``, ``channel``,
+        ``extended_pan_id`` and ``border_agent_id``. Per-node Thread health is
+        not exposed by
         this command, so this section is an integration-presence + radio-network
         view rather than a per-device dump. ``otbr/info`` responds
         ``success=false`` (code ``not_loaded``) when no OTBR is configured;

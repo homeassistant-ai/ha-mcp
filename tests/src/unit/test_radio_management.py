@@ -80,7 +80,9 @@ _DIAG = {
     "network_type": "THREAD",
     "node_type": "END_DEVICE",
     "network_name": "my-thread",
-    "ip_addresses": ["fe80::1"],
+    # Upstream NodeDiagnostics misspells this field (single 'd'); the mock must
+    # match reality so the enricher's corrected lookup is actually exercised.
+    "ip_adresses": ["fe80::1"],
     "mac_address": "aa:bb",
     "available": True,
     "active_fabrics": [{"fabric_index": 2, "fabric_id": 99}],
@@ -112,6 +114,8 @@ class TestMatterEnrichment:
         assert dev["node_diagnostics"]["network_type"] == "THREAD"
         assert dev["node_diagnostics"]["available"] is True
         assert dev["node_diagnostics"]["active_fabric_index"] == 2
+        # Regression: IPs come through despite the upstream 'ip_adresses' typo.
+        assert dev["node_diagnostics"]["ip_addresses"] == ["fe80::1"]
 
     @pytest.mark.asyncio
     async def test_matter_enrichment_oserror_still_returns_device(self):

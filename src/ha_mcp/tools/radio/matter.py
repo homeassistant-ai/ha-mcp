@@ -83,7 +83,7 @@ async def _update_entity_for_device(client: Any, device_id: Any) -> str:
         return str(candidates[0]["entity_id"])
     raise_tool_error(
         create_error_response(
-            ErrorCode.RESOURCE_NOT_FOUND,
+            ErrorCode.ENTITY_NOT_FOUND,
             f"No firmware update entity found for device {device_id}",
             context={"device_id": device_id},
             suggestions=["The node may not expose an OTA firmware update entity"],

@@ -35,7 +35,9 @@ SUPPORTED: dict[str, ActionSpec] = {
         destructive=True,
     ),
     "set_network": ActionSpec(
-        "Apply a stored dataset as the OTBR's active Thread network.",
+        "Apply a stored dataset as the OTBR's active Thread network. Replaces "
+        "the current network, which can drop existing Thread devices.",
+        destructive=True,
         required=("dataset_id",),
     ),
     "set_channel": ActionSpec(

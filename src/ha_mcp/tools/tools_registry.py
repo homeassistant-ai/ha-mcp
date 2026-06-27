@@ -274,7 +274,9 @@ async def _enrich_matter_diagnostics(
                 "node_type": data.get("node_type"),
                 "available": data.get("available"),
                 "network_name": data.get("network_name"),
-                "ip_addresses": data.get("ip_addresses"),
+                # Upstream NodeDiagnostics misspells the field "ip_adresses"
+                # (single d); read that key but surface it correctly.
+                "ip_addresses": data.get("ip_adresses"),
                 "mac_address": data.get("mac_address"),
                 "active_fabrics": data.get("active_fabrics"),
                 "active_fabric_index": data.get("active_fabric_index"),

@@ -13,11 +13,14 @@ network- and group-scoped actions act on the coordinator.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ...errors import ErrorCode, create_error_response
 from ..helpers import raise_tool_error
 from .base import ActionSpec, integration_not_found, ok, resolve_entry_id, ws_call
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED: dict[str, ActionSpec] = {
     "diagnostics": ActionSpec(
@@ -166,7 +169,7 @@ async def _resolve_update_entity(client: Any, device_id: Any) -> str:
         return str(candidates[0]["entity_id"])
     raise_tool_error(
         create_error_response(
-            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            ErrorCode.ENTITY_NOT_FOUND,
             f"No update entity found for device '{device_id}'; no firmware update is available",
             context={"device_id": device_id, "radio": "zigbee"},
             suggestions=[
@@ -204,10 +207,10 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         network = await ws_call(client, "zha/network/settings")
         try:
             await ws_call(client, "zha/topology/update")
-        except Exception:
+        except Exception as exc:
             # Topology refresh is best-effort: stale routes are acceptable and
             # must not fail an otherwise-successful network_status read.
-            pass
+            logger.debug("zha/topology/update refresh failed (non-fatal): %s", exc)
         return ok("zigbee", "network_status", config_entry_id=entry_id, network=network)
 
     if action == "cluster_read":

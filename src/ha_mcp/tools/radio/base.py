@@ -9,8 +9,9 @@ A handler module exposes:
 
 Handlers send raw WebSocket commands through the REST client's
 ``send_websocket_message`` bridge (same path the ``ha_get_device`` enrichers
-use), or call services via ``call_service`` for the few ZHA operations that are
-service-only.
+use), or call services via ``call_service`` for the operations that are
+service-only (most ZHA writes, plus ``zwave_js.ping`` and ``update.install``
+firmware installs).
 """
 
 from __future__ import annotations
@@ -23,8 +24,6 @@ from ...errors import ErrorCode, create_error_response
 from ..helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
-
-RADIOS = ("zwave", "zigbee", "matter", "thread")
 
 
 @dataclass(frozen=True)

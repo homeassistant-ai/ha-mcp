@@ -115,7 +115,8 @@ class RadioTools:
             Field(
                 description=(
                     "Action-specific parameters (e.g. code, pin, channel, "
-                    "config_param). See ha_get_skill_guide for per-action schemas."
+                    "property, value). An unknown action returns that radio's "
+                    "supported action list with one-line summaries."
                 ),
                 default=None,
             ),
@@ -129,22 +130,28 @@ class RadioTools:
     ) -> dict[str, Any]:
         """Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.
 
-        Read actions ('diagnostics', 'network_status', 'ping') are also available
-        via ha_get_device and ha_get_system_health. Write actions perform
-        inclusion/commissioning, removal, healing, reconfiguration, firmware
-        updates and credential provisioning.
+        For read-only inspection prefer ha_get_device / ha_get_system_health,
+        which mirror the 'diagnostics' and 'network_status' actions; use this
+        tool for writes and the active 'ping' probe (unique to this tool). Write
+        actions perform inclusion/commissioning, removal, healing,
+        reconfiguration, firmware updates and credential provisioning.
 
-        Caveats: destructive actions (remove_device, network restore,
-        change_channel, hard_reset) require confirm=True. Long-running actions
-        (inclusion, rebuild routes, firmware) start the operation and return its
-        handle. Interactive Z-Wave S2 secure inclusion (read-the-PIN pairing) is
-        not scriptable — use SmartStart/QR provisioning here or the HA UI.
+        Caveats: destructive actions (e.g. remove_device, network restore,
+        change_channel, hard_reset, remove_fabric) require confirm=True.
+        Long-running actions (inclusion, rebuild routes, firmware) start the
+        operation and return immediately with long_running=true; completion
+        happens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-
+        PIN pairing) is not scriptable — use SmartStart/QR provisioning here or
+        the HA UI.
         """
         try:
             handler = HANDLERS[radio]
             spec = handler.SUPPORTED.get(action)
             if spec is None:
-                supported = sorted(handler.SUPPORTED)
+                supported = {
+                    name: handler.SUPPORTED[name].summary
+                    for name in sorted(handler.SUPPORTED)
+                }
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -169,12 +176,18 @@ class RadioTools:
                 confirm_required(radio, action)
 
             result: dict[str, Any] = await handler.handle(self._client, action, args)
+            # ActionSpec is the single source of truth for long-running; fill it
+            # in even on branches that did not set it (e.g. force-remove paths).
+            if spec.long_running:
+                result.setdefault("long_running", True)
             return result
 
         except ToolError:
             raise
         except Exception as e:
-            logger.error("ha_manage_radio %s/%s failed: %s", radio, action, e)
+            # exception_to_structured_error owns logging (it stays quiet for
+            # classified errors and logs unclassified ones with a traceback);
+            # a manual log here would double-log. Let the helper own it.
             exception_to_structured_error(e, context={"radio": radio, "action": action})
             return None  # unreachable: exception_to_structured_error always raises
 
