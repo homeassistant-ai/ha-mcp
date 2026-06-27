@@ -46,8 +46,9 @@ SUPPORTED: dict[str, ActionSpec] = {
         required=("device_id",),
     ),
     "remove_fabric": ActionSpec(
-        "Remove a controller fabric from a Matter node (defaults to this HA's "
-        "own fabric). The device stays paired to its other controllers.",
+        "Remove ANOTHER controller's fabric from a Matter node (pass "
+        "params.fabric_index; see active_fabrics in diagnostics). To detach the "
+        "device from Home Assistant itself, delete it with ha_remove_device.",
         destructive=True,
         required=("device_id",),
     ),
@@ -172,17 +173,39 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         return ok("matter", "interview", result=result, long_running=True)
 
     if action == "remove_fabric":
+        diag = await ws_call(
+            client,
+            "matter/node_diagnostics",
+            device_id=device_id,
+            context={"device_id": device_id},
+        )
+        active = (diag or {}).get("active_fabric_index")
         fabric_index = args.get("fabric_index")
-        if fabric_index is None:
-            # Default to THIS HA's fabric so the common "detach from HA" case
-            # needs only device_id.
-            diag = await ws_call(
-                client,
-                "matter/node_diagnostics",
-                device_id=device_id,
-                context={"device_id": device_id},
+        # remove_fabric removes ANOTHER controller's fabric. Removing HA's OWN
+        # active fabric over that fabric makes the node drop the session, so the
+        # Matter server aborts the confirmation (the removal still happens, but
+        # reports as an error). The clean "detach from HA" path is deleting the
+        # device, so refuse the own-fabric case with that guidance.
+        if fabric_index is None or fabric_index == active:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "remove_fabric removes ANOTHER controller's fabric from a "
+                    "node; pass params.fabric_index (see active_fabrics). To "
+                    "detach this device from Home Assistant itself, delete the "
+                    "device with ha_remove_device — removing HA's own active "
+                    "fabric here is aborted by the Matter server.",
+                    context={
+                        "device_id": device_id,
+                        "active_fabric_index": active,
+                        "active_fabrics": (diag or {}).get("active_fabrics", []),
+                    },
+                    suggestions=[
+                        "Pass params.fabric_index = the other controller's index",
+                        "To remove Home Assistant, use ha_remove_device",
+                    ],
+                )
             )
-            fabric_index = (diag or {}).get("active_fabric_index")
         result = await ws_call(
             client,
             "matter/remove_matter_fabric",

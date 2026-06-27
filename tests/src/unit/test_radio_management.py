@@ -192,7 +192,21 @@ class TestManageRadioDispatcher:
         assert "confirm" in str(exc.value).lower()
 
     @pytest.mark.asyncio
-    async def test_remove_fabric_autoresolves_fabric_index(self):
+    async def test_remove_fabric_own_or_missing_index_errors(self):
+        # _DIAG.active_fabric_index == 2; removing HA's own fabric (or omitting
+        # fabric_index) must be refused with guidance toward ha_remove_device.
+        client = _client(
+            {"matter/node_diagnostics": {"success": True, "result": _DIAG}}
+        )
+        radio = _capture(register_radio_tools, client)["ha_manage_radio"]
+        with pytest.raises(ToolError) as exc:
+            await radio(
+                radio="matter", action="remove_fabric", device_id="m1", confirm=True
+            )
+        assert "ha_remove_device" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_remove_fabric_other_index_removed(self):
         record: list = []
         client = _client(
             {
@@ -203,11 +217,15 @@ class TestManageRadioDispatcher:
         )
         radio = _capture(register_radio_tools, client)["ha_manage_radio"]
         out = await radio(
-            radio="matter", action="remove_fabric", device_id="m1", confirm=True
+            radio="matter",
+            action="remove_fabric",
+            device_id="m1",
+            params={"fabric_index": 1},  # a DIFFERENT controller's fabric
+            confirm=True,
         )
-        assert out["fabric_index"] == 2  # resolved from node diagnostics
+        assert out["fabric_index"] == 1
         removed = [m for m in record if m["type"] == "matter/remove_matter_fabric"]
-        assert removed and removed[0]["fabric_index"] == 2
+        assert removed and removed[0]["fabric_index"] == 1
 
     @pytest.mark.asyncio
     async def test_share_out_returns_codes(self):
