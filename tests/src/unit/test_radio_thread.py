@@ -143,7 +143,10 @@ class TestThreadHandler:
             record=record,
         )
         out = await _radio(client)(
-            radio="thread", action="set_network", params={"dataset_id": "d1"}
+            radio="thread",
+            action="set_network",
+            params={"dataset_id": "d1"},
+            confirm=True,
         )
         assert out["extended_address"] == "f00dcafe"
         sent = [m for m in record if m["type"] == "otbr/set_network"]
@@ -154,9 +157,21 @@ class TestThreadHandler:
     async def test_set_network_no_otbr_degrades(self):
         client = _client({"otbr/info": {"success": True, "result": {}}})
         out = await _radio(client)(
-            radio="thread", action="set_network", params={"dataset_id": "d1"}
+            radio="thread",
+            action="set_network",
+            params={"dataset_id": "d1"},
+            confirm=True,
         )
         assert out["available"] is False
+
+    @pytest.mark.asyncio
+    async def test_set_network_requires_confirm(self):
+        client = _client({"otbr/info": _INFO})
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(
+                radio="thread", action="set_network", params={"dataset_id": "d1"}
+            )
+        assert "confirm" in str(exc.value).lower()
 
     @pytest.mark.asyncio
     async def test_create_network_requires_confirm(self):
