@@ -1,6 +1,7 @@
 """Unit tests for entity management tools module."""
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -492,6 +493,168 @@ class TestHaSetEntityCombined:
         assert mock_client.send_websocket_message.call_count == 3
         assert (
             mock_client.send_websocket_message.call_args_list[2][0][0]["type"]
+            == "config/entity_registry/get"
+        )
+
+    @pytest.mark.asyncio
+    async def test_expose_refetch_failure_keeps_snapshot_and_succeeds(
+        self, mock_mcp, mock_client, caplog
+    ):
+        """A failed cosmetic post-exposure refetch must NOT fail the whole call when a
+        prior phase already produced a snapshot. The exposure committed, so the tool
+        returns the (pre-exposure) entity and warns instead of raising ENTITY_NOT_FOUND.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # Registry name update -> pre-exposure snapshot
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.test",
+                            "name": "Porch",
+                            "options": {"conversation": {"should_expose": False}},
+                        }
+                    },
+                },
+                # Exposure succeeds
+                {"success": True},
+                # Post-exposure refetch FAILS (transient WS error)
+                {"success": False, "error": {"message": "connection lost"}},
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        with caplog.at_level(logging.WARNING):
+            result = await tool(
+                entity_id="light.test",
+                name="Porch",
+                expose_to={"conversation": True},
+            )
+
+        # Operation succeeded; exposure reported; entity falls back to the
+        # pre-exposure snapshot rather than raising.
+        assert result["success"] is True
+        assert result["exposure"] == {"conversation": True}
+        assert result["entity_entry"]["name"] == "Porch"
+        assert mock_client.send_websocket_message.call_count == 3
+        # The real WS error is surfaced in the warning, not swallowed.
+        assert "connection lost" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_expose_with_options_only_refetches_fresh_state(
+        self, mock_mcp, mock_client
+    ):
+        """options + expose_to (no registry field): the options phase populates
+        entity_entry pre-exposure, so exposure must still refetch fresh state.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # Options update (config/entity_registry/update with options_domain)
+                {
+                    "success": True,
+                    "result": {
+                        "entity_entry": {
+                            "entity_id": "light.test",
+                            "options": {
+                                "sensor": {"display_precision": 2},
+                                "conversation": {"should_expose": False},
+                            },
+                        }
+                    },
+                },
+                # Exposure succeeds
+                {"success": True},
+                # Post-exposure refetch reflects the new exposure
+                {
+                    "success": True,
+                    "result": {
+                        "entity_id": "light.test",
+                        "options": {
+                            "sensor": {"display_precision": 2},
+                            "conversation": {"should_expose": True},
+                        },
+                    },
+                },
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            options={"sensor": {"display_precision": 2}},
+            expose_to={"conversation": True},
+        )
+
+        assert result["success"] is True
+        assert result["exposure"] == {"conversation": True}
+        assert (
+            result["entity_entry"]["options"]["conversation"]["should_expose"] is True
+        )
+        # No Phase-3 registry call (no main field): options-update, expose, refetch.
+        assert mock_client.send_websocket_message.call_count == 3
+        assert (
+            mock_client.send_websocket_message.call_args_list[0][0][0]["options_domain"]
+            == "sensor"
+        )
+        assert (
+            mock_client.send_websocket_message.call_args_list[2][0][0]["type"]
+            == "config/entity_registry/get"
+        )
+
+    @pytest.mark.asyncio
+    async def test_expose_with_device_rename_refetches_fresh_state(
+        self, mock_mcp, mock_client
+    ):
+        """new_device_name + expose_to (no registry field): the device-rename phase
+        fetches entity_entry (for the device_id) pre-exposure, so exposure must refetch.
+        """
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=[
+                # Device-id lookup (config/entity_registry/get) -> pre-exposure
+                {
+                    "success": True,
+                    "result": {
+                        "entity_id": "light.test",
+                        "device_id": "dev123",
+                        "options": {"conversation": {"should_expose": False}},
+                    },
+                },
+                # Device registry update succeeds
+                {"success": True},
+                # Exposure succeeds
+                {"success": True},
+                # Post-exposure refetch reflects the new exposure
+                {
+                    "success": True,
+                    "result": {
+                        "entity_id": "light.test",
+                        "device_id": "dev123",
+                        "options": {"conversation": {"should_expose": True}},
+                    },
+                },
+            ]
+        )
+        register_entity_tools(mock_mcp, mock_client)
+        tool = self.registered_tools["ha_set_entity"]
+
+        result = await tool(
+            entity_id="light.test",
+            new_device_name="Living Room Lamp",
+            expose_to={"conversation": True},
+        )
+
+        assert result["success"] is True
+        assert result["exposure"] == {"conversation": True}
+        assert (
+            result["entity_entry"]["options"]["conversation"]["should_expose"] is True
+        )
+        # lookup-get, device-update, expose, refetch
+        assert mock_client.send_websocket_message.call_count == 4
+        assert (
+            mock_client.send_websocket_message.call_args_list[3][0][0]["type"]
             == "config/entity_registry/get"
         )
 

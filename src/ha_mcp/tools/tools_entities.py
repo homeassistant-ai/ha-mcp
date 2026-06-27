@@ -745,9 +745,10 @@ class EntityTools:
 
         exposure_result: dict[str, bool] | None = succeeded if succeeded else None
 
-        # Refetch when exposure was applied (so the returned entity reflects the
-        # new should_expose values) or when no prior phase populated entity_entry.
-        if exposure_result is not None or not entity_entry:
+        # Exposure mutates the registry entry's options, so refetch to return the
+        # post-exposure state. (exposure_result is always set here: the method
+        # returns early on empty expose_to and any exposure failure raises above.)
+        if exposure_result is not None:
             get_msg: dict[str, Any] = {
                 "type": "config/entity_registry/get",
                 "entity_id": entity_id,
@@ -755,14 +756,27 @@ class EntityTools:
             get_result = await self._client.send_websocket_message(get_msg)
             if get_result.get("success"):
                 entity_entry = get_result.get("result") or {}
+            elif entity_entry:
+                # The exposure already committed; only the cosmetic post-exposure
+                # refresh failed. Keep the pre-exposure snapshot and warn rather
+                # than reporting the whole (successful) operation as a failure.
+                logger.warning(
+                    f"Exposure applied to {entity_id} but its registry state could "
+                    f"not be refreshed: {_extract_ws_error(get_result)}"
+                )
             else:
+                # No prior-phase snapshot to fall back on -- surface the read
+                # failure with the actual WebSocket error.
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.ENTITY_NOT_FOUND,
-                        f"Entity '{entity_id}' not found in registry after applying exposure changes",
+                        f"Entity '{entity_id}' could not be read after applying "
+                        f"exposure changes: {_extract_ws_error(get_result)}",
                         context={
                             "entity_id": entity_id,
                             "exposure_succeeded": exposure_result,
+                            "has_registry_updates": has_registry_updates,
+                            "options_succeeded": options_succeeded,
                         },
                         suggestions=[
                             "Verify the entity_id exists using ha_search()",
