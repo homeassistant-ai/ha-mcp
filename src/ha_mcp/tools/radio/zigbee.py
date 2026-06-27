@@ -16,6 +16,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+
 from ...errors import ErrorCode, create_error_response
 from ..helpers import raise_tool_error
 from .base import ActionSpec, integration_not_found, ok, resolve_entry_id, ws_call
@@ -207,9 +209,12 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         network = await ws_call(client, "zha/network/settings")
         try:
             await ws_call(client, "zha/topology/update")
-        except Exception as exc:
-            # Topology refresh is best-effort: stale routes are acceptable and
-            # must not fail an otherwise-successful network_status read.
+        except ToolError as exc:
+            # Topology refresh is best-effort: a command-level failure (the
+            # ToolError ws_call raises on success=False) leaves routes stale but
+            # must not fail an otherwise-successful network_status read. Transport
+            # errors are normalized to that ToolError by send_websocket_message;
+            # anything unexpected (a real bug) still propagates.
             logger.debug("zha/topology/update refresh failed (non-fatal): %s", exc)
         return ok("zigbee", "network_status", config_entry_id=entry_id, network=network)
 
