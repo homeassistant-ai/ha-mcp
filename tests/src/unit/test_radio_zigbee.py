@@ -317,6 +317,31 @@ class TestZigbeeNodeManagement:
             }
         ]
 
+    @pytest.mark.asyncio
+    async def test_firmware_update_no_update_entity(self):
+        client = _client(
+            {
+                "config/entity_registry/list": {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "sensor.z1_lqi",
+                            "device_id": "z1",
+                            "platform": "zha",
+                        }
+                    ],
+                }
+            }
+        )
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(
+                radio="zigbee",
+                action="firmware_update",
+                device_id="z1",
+                confirm=True,
+            )
+        assert "update entity" in str(exc.value).lower()
+
 
 # --------------------------------------------------------------------------- #
 # Groups / bindings
@@ -377,6 +402,73 @@ class TestZigbeeGroupsAndBindings:
             )
         assert "confirm" in str(exc.value).lower()
 
+    @pytest.mark.asyncio
+    async def test_unbind_with_confirm(self):
+        record: list = []
+        client = _client(
+            {"zha/devices/unbind": {"success": True, "result": None}}, record=record
+        )
+        out = await _radio(client)(
+            radio="zigbee",
+            action="unbind",
+            params={"source_ieee": "aa", "target_ieee": "bb"},
+            confirm=True,
+        )
+        assert out["success"] is True
+        sent = next(m for m in record if m["type"] == "zha/devices/unbind")
+        assert sent["source_ieee"] == "aa"
+        assert sent["target_ieee"] == "bb"
+
+    @pytest.mark.asyncio
+    async def test_group_remove_with_confirm(self):
+        record: list = []
+        client = _client(
+            {"zha/group/remove": {"success": True, "result": {"removed": [1]}}},
+            record=record,
+        )
+        out = await _radio(client)(
+            radio="zigbee",
+            action="group_remove",
+            params={"group_ids": [1]},
+            confirm=True,
+        )
+        assert out["success"] is True
+        sent = next(m for m in record if m["type"] == "zha/group/remove")
+        assert sent["group_ids"] == [1]
+
+    @pytest.mark.asyncio
+    async def test_group_members_add(self):
+        record: list = []
+        client = _client(
+            {"zha/group/members/add": {"success": True, "result": {"group_id": 5}}},
+            record=record,
+        )
+        out = await _radio(client)(
+            radio="zigbee",
+            action="group_members_add",
+            params={"group_id": 5, "members": [{"ieee": "aa", "endpoint_id": 1}]},
+        )
+        assert out["group"]["group_id"] == 5
+        sent = next(m for m in record if m["type"] == "zha/group/members/add")
+        assert sent["group_id"] == 5
+        assert sent["members"] == [{"ieee": "aa", "endpoint_id": 1}]
+
+    @pytest.mark.asyncio
+    async def test_group_members_remove(self):
+        record: list = []
+        client = _client(
+            {"zha/group/members/remove": {"success": True, "result": {"group_id": 5}}},
+            record=record,
+        )
+        out = await _radio(client)(
+            radio="zigbee",
+            action="group_members_remove",
+            params={"group_id": 5, "members": [{"ieee": "aa", "endpoint_id": 1}]},
+        )
+        assert out["group"]["group_id"] == 5
+        sent = next(m for m in record if m["type"] == "zha/group/members/remove")
+        assert sent["group_id"] == 5
+
 
 # --------------------------------------------------------------------------- #
 # Cluster writes / network ops (service + destructive WS)
@@ -409,6 +501,41 @@ class TestZigbeeClusterAndNetwork:
         assert data["cluster_type"] == "in"
         assert data["value"] == 0  # falsy value is preserved
         assert data["ieee"] == _IEEE
+
+    @pytest.mark.asyncio
+    async def test_cluster_write_requires_confirm(self):
+        # cluster_write is destructive: all required params present, no confirm.
+        client = _client({})
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(
+                radio="zigbee",
+                action="cluster_write",
+                device_id="z1",
+                params={
+                    "endpoint_id": 1,
+                    "cluster_id": 8,
+                    "attribute": "current_level",
+                    "value": 0,
+                },
+            )
+        assert "confirm" in str(exc.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_cluster_command_requires_confirm(self):
+        client = _client({})
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(
+                radio="zigbee",
+                action="cluster_command",
+                device_id="z1",
+                params={
+                    "endpoint_id": 1,
+                    "cluster_id": 6,
+                    "command": 0,
+                    "command_type": "server",
+                },
+            )
+        assert "confirm" in str(exc.value).lower()
 
     @pytest.mark.asyncio
     async def test_cluster_write_missing_value_raises(self):
@@ -501,3 +628,20 @@ class TestZigbeeClusterAndNetwork:
                 params={"backup": {"some": "backup"}},
             )
         assert "confirm" in str(exc.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_network_restore_with_confirm(self):
+        record: list = []
+        client = _client(
+            {"zha/network/backups/restore": {"success": True, "result": {"ok": True}}},
+            record=record,
+        )
+        out = await _radio(client)(
+            radio="zigbee",
+            action="network_restore",
+            params={"backup": {"some": "backup"}},
+            confirm=True,
+        )
+        assert out["success"] is True
+        sent = next(m for m in record if m["type"] == "zha/network/backups/restore")
+        assert sent["backup"] == {"some": "backup"}
