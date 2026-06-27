@@ -156,6 +156,7 @@ async def _resolve_ieee(client: Any, device_id: Any) -> str:
             ],
         )
     )
+    raise AssertionError  # py/mixed-returns terminal: raise_tool_error is NoReturn
 
 
 async def _call_service(client: Any, domain: str, service: str, **data: Any) -> Any:

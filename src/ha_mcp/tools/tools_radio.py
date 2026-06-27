@@ -66,6 +66,7 @@ class RadioTools:
                 suggestions=["Use ha_search() to find a valid entity_id"],
             )
         )
+        raise AssertionError  # py/mixed-returns terminal: raise_tool_error is NoReturn
 
     @tool(
         name="ha_manage_radio",

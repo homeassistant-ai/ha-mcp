@@ -134,6 +134,7 @@ async def resolve_update_entity(
             ],
         )
     )
+    raise AssertionError  # py/mixed-returns terminal: raise_tool_error is NoReturn
 
 
 def integration_not_found(radio: str, domain: str) -> dict[str, Any]:
