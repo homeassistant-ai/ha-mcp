@@ -148,10 +148,7 @@ class RadioTools:
             handler = HANDLERS[radio]
             spec = handler.SUPPORTED.get(action)
             if spec is None:
-                supported = {
-                    name: handler.SUPPORTED[name].summary
-                    for name in sorted(handler.SUPPORTED)
-                }
+                supported = sorted(handler.SUPPORTED)
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -161,7 +158,12 @@ class RadioTools:
                             "action": action,
                             "supported": supported,
                         },
-                        suggestions=[f"Use one of: {', '.join(supported)}"],
+                        # Surface each action's one-line summary so the caller
+                        # can pick the right one without another round-trip.
+                        suggestions=[
+                            f"{name}: {handler.SUPPORTED[name].summary}"
+                            for name in supported
+                        ],
                     )
                 )
 
