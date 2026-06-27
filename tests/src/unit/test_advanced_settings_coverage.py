@@ -373,7 +373,7 @@ def test_every_advanced_field_has_a_settings_js_label() -> None:
     drift (issue #1538 added three rows that initially lacked entries)."""
     import re
 
-    js = (_package_dir() / "settings.js").read_text(encoding="utf-8")
+    js = (_package_dir() / "settings_ui" / "settings.js").read_text(encoding="utf-8")
     m = re.search(r"const ADVANCED_FIELD_META = \{(.*?)\n\};", js, re.S)
     assert m, "ADVANCED_FIELD_META object not found in settings.js"
     meta_keys = set(

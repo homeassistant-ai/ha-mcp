@@ -135,14 +135,14 @@ def test_javascript_findings_gate_and_vendored_js_is_ignored(tmp_path: Path) -> 
             ),
             _result(
                 "js/useless-assignment",
-                "src/ha_mcp/settings.js",
+                "src/ha_mcp/settings_ui/settings.js",
                 2178,
                 "The value assigned to op here is unused.",
             ),
         ],
     )
     findings, suppressed = gate.classify(path)
-    assert [f[0] for f in findings] == ["src/ha_mcp/settings.js"]
+    assert [f[0] for f in findings] == ["src/ha_mcp/settings_ui/settings.js"]
     assert not suppressed  # no JS entries in the (python-only) ALLOWLIST
     assert gate.main(["prog", str(path)]) == 1
 

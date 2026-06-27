@@ -173,7 +173,11 @@ class TestPyprojectPackageData:
         pyproject = pyproject_path.read_text()
         manifest = manifest_path.read_text()
 
-        for asset in ("settings.js", "settings.css"):
+        for asset in (
+            "settings_ui/settings.html",
+            "settings_ui/settings.js",
+            "settings_ui/settings.css",
+        ):
             assert f'"{asset}"' in pyproject, (
                 f"pyproject.toml package-data must list {asset} (wheel + add-on rely on it)"
             )

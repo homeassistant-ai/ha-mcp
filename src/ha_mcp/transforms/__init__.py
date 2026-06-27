@@ -4,6 +4,7 @@ from .categorized_search import (
     DEFAULT_PINNED_TOOLS,
     CategorizedSearchTransform,
     SearchKeywordsTransform,
+    categorize_capability,
 )
 from .lite_docstrings import LiteDocstringsTransform
 
@@ -12,4 +13,5 @@ __all__ = [
     "DEFAULT_PINNED_TOOLS",
     "LiteDocstringsTransform",
     "SearchKeywordsTransform",
+    "categorize_capability",
 ]

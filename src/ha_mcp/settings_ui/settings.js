@@ -1,10 +1,11 @@
 
-// Catch top-level / async script errors and surface them in the
-// status bar so a perpetually-"Loading" page becomes self-diagnosing
-// (no devtools required). Without this, a script-evaluation error
-// in any of the function definitions below would abort the script
-// before loadTools() is even called, leaving the status stuck at
-// the initial "Loading...".
+// Catch top-level / async script errors and write them into the #status
+// ARIA live region (now visually hidden — see settings.css). This still
+// announces a script-eval failure to screen readers, but is NOT visible to
+// sighted users and does not toast (showToast isn't defined yet this early
+// in script eval). For visible diagnosis, use the browser console. Without
+// this, a script-evaluation error in any of the function definitions below
+// would abort the script before loadTools() is even called.
 window.addEventListener('error', (e) => {
   const el = document.getElementById('status');
   if (!el) return;
@@ -170,8 +171,8 @@ async function loadTools() {
     // parent stdio process couldn't dump the metadata cache. Tell
     // the user where to look instead of leaving them on "Loading".
     updateStatus(
-      'No tools found. The sidecar reads ~/.ha-mcp/tool_metadata.json — ' +
-      'if missing/empty, restart your MCP client. See ~/.ha-mcp/sidecar.log for details.',
+      'No tools found. The sidecar reads ~/.ha-mcp/tool_metadata.json. ' +
+      'If it is missing or empty, restart your MCP client. See ~/.ha-mcp/sidecar.log for details.',
       false, true
     );
     return;
@@ -204,7 +205,7 @@ async function applyInfoChrome() {
       if (noticeEl) {
         noticeEl.textContent =
           '⚠ Changes saved. Click "Restart Add-on" for them to take ' +
-          'effect — disabled tools will be fully removed from the MCP ' +
+          'effect. Disabled tools will be fully removed from the MCP ' +
           'tool list on next startup.';
       }
     } else if (info.is_sidecar) {
@@ -250,7 +251,7 @@ async function stopSidecar() {
   if (!confirm(
     '⚠ PERMANENTLY disable the settings server?\n\n' +
     'This stops the running server AND writes a disable marker so it ' +
-    'will NOT respawn on future ha-mcp launches — every restart of ' +
+    'will NOT respawn on future ha-mcp launches. Every restart of ' +
     'Claude Desktop / Docker / your MCP host will continue to skip it ' +
     'until you manually re-enable.\n\n' +
     'To restore access later you must:\n' +
@@ -264,7 +265,7 @@ async function stopSidecar() {
   try {
     const resp = await fetch('./api/settings/shutdown', {method: 'POST'});
     if (resp.ok) {
-      btn.textContent = 'Stopped — this page will go offline';
+      btn.textContent = 'Stopped. This page will go offline';
     } else {
       let msg = 'Stop failed';
       try {
@@ -303,6 +304,17 @@ const restartChannel =
   typeof BroadcastChannel === 'function'
     ? new BroadcastChannel('ha-mcp-settings')
     : null;
+
+// Surface the cross-tab restart-required banner and tell every other open
+// settings tab to surface it too, so the user can click Restart from
+// whichever tab they are on. Used by every save path that persists a
+// restart-gated change (Tools, backups, feature flags, advanced settings).
+function markRestartRequired() {
+  document.getElementById('restartNotice').classList.add('show');
+  if (typeof restartChannel !== 'undefined' && restartChannel) {
+    restartChannel.postMessage({type: 'restart-required'});
+  }
+}
 
 // Module-level concurrency guard. The button's ``disabled`` attribute
 // blocks normal clicks, but a second invocation via DevTools / a
@@ -374,7 +386,7 @@ async function _runRestartReloadCycle(previousInstanceId) {
     // never actually fired (silent supervisor failure → instance_id
     // never flipped) OR supervisor is genuinely slower than the cap.
     // Surface a clear next-step instead of silently doing nothing.
-    btn.textContent = 'Add-on did not come back online — reload manually';
+    btn.textContent = 'Add-on did not come back online. Reload manually';
     btn.disabled = false;
     restartInProgress = false;
   }
@@ -604,9 +616,11 @@ function render() {
       const isEnvPinned = !!envPinKind;
       const envPinVar = envPinKind === 'disabled' ? 'DISABLED_TOOLS' :
                         envPinKind === 'pinned'   ? 'PINNED_TOOLS'   : '';
-      const ann = t.annotations || {};
-      const isReadOnly = ann.readOnlyHint === true;
-      const isDestructive = ann.destructiveHint === true;
+      // Capability tier from the server (read | write | delete), derived
+      // from the MCP readOnlyHint/destructiveHint annotations by
+      // categorize_capability() — the same classifier the ha_call_*_tool
+      // proxies use, so the badge and the proxy routing never disagree.
+      const category = t.category || '';
       // Read Only Mode force-off wins over every other state source —
       // the server hides these tools from the catalog regardless of
       // saved state or env pins while the mode is on.
@@ -639,19 +653,20 @@ function render() {
 
       let badges = '';
       if (isMandatory) badges += '<span class="badge mandatory">mandatory</span>';
-      if (isReadOnly) badges += '<span class="badge readonly">read-only</span>';
-      if (isDestructive) badges += '<span class="badge destructive">destructive</span>';
+      if (category === 'read') badges += '<span class="badge readonly">read-only</span>';
+      else if (category === 'write') badges += '<span class="badge write">writes</span>';
+      else if (category === 'delete') badges += '<span class="badge destructive">deletes</span>';
 
       const title = t.title || t.name;
       const desc = (t.description || '').split('\n')[0].slice(0, 120);
       const gatedNote = disabledBy
-        ? `<div class="disabled-by-note">Beta — set <code>${escapeHtml(disabledBy)}</code> in the dev add-on config or the matching env var (see docs/beta.md).</div>`
+        ? `<div class="disabled-by-note">Beta. Set <code>${escapeHtml(disabledBy)}</code> in the dev add-on config or the matching env var (see docs/beta.md).</div>`
         : '';
       const envPinnedNote = isEnvPinned
-        ? `<div class="feature-locked-note">env-pinned via <code>${envPinVar}</code> — unset the env var to edit here.</div>`
+        ? `<div class="feature-locked-note">env-pinned via <code>${envPinVar}</code>. Unset the env var to edit here.</div>`
         : '';
       const readOnlyNote = roForcedOff
-        ? '<div class="disabled-by-note">Off — Read Only Mode is on; write tools are disabled.</div>'
+        ? '<div class="disabled-by-note">Off. Read Only Mode is on; write tools are disabled.</div>'
         : (roExemptActive
           ? '<div class="feature-locked-note">Read Only Mode: write operations of this tool are blocked; read operations stay available.</div>'
           : '');
@@ -755,18 +770,23 @@ function scheduleSave() {
 
 async function saveConfig() {
   updateStatus('Saving...');
-  const resp = await fetch('./api/settings/tools', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({states: toolStates}),
-  });
+  let resp;
+  try {
+    resp = await fetch('./api/settings/tools', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({states: toolStates}),
+    });
+  } catch (e) {
+    // Auto-save is fire-and-forget (scheduleSave -> setTimeout); without
+    // this catch a network rejection would be unhandled and only reach the
+    // visually-hidden #status region, leaving a sighted user with no signal.
+    updateStatus('Save failed: ' + e.message, false, true);
+    return;
+  }
   if (resp.ok) {
-    updateStatus('Saved — restart required', true);
-    document.getElementById('restartNotice').classList.add('show');
-    // Cross-tab sync — other open settings tabs surface the same
-    // banner so the user can click Restart from whichever tab they
-    // are on.
-    if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
+    updateStatus('Saved. Restart required.', true);
+    markRestartRequired();
   } else {
     updateStatus('Save failed!', false, true);
   }
@@ -786,6 +806,72 @@ function updateStatus(text, saved, isError) {
   setStatusAlert(el, isError);
   el.className = saved ? 'status saved' : 'status';
   el.textContent = text;
+  // The .status spans are visually-hidden (kept as ARIA live regions); the
+  // visible channel is an HA-style toast. Surface only terminal outcomes —
+  // a successful save or an error — never the transient progress states
+  // ("Saving…", "Unsaved changes…", "Loading…", "Loaded").
+  if (saved || isError) showToast(text, {isError: !!isError});
+}
+
+// HA-style toast (mirrors ha-toast / showToast): one snackbar at a time,
+// bottom-center, auto-dismiss after 4s (errors persist longer and get a
+// dismiss button). Replace-on-new rather than stacking, so flipping several
+// toggles in a row doesn't pile up a column of identical toasts.
+let _toastTimer = null;
+// Tracks the 200ms leave-animation removal so a toast reused inside that
+// window (replace-on-new) isn't yanked from the DOM by the prior removal.
+let _toastRemoveTimer = null;
+function showToast(message, opts) {
+  opts = opts || {};
+  const isError = !!opts.isError;
+  if (!message) return;
+  let region = document.getElementById('ha-toast-region');
+  if (!region) {
+    region = document.createElement('div');
+    region.id = 'ha-toast-region';
+    document.body.appendChild(region);
+  }
+  let toast = region.querySelector('.ha-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.className = 'ha-toast';
+    const msg = document.createElement('span');
+    msg.className = 'ha-toast-msg';
+    toast.appendChild(msg);
+    region.appendChild(toast);
+  }
+  // Cancel a pending leave-removal so reusing this element keeps it onscreen.
+  clearTimeout(_toastRemoveTimer);
+  toast.classList.remove('leaving');
+  toast.classList.toggle('ha-toast-error', isError);
+  // Both role and aria-live so every screen reader announces the update:
+  // assertive interrupts for errors, polite for routine outcomes.
+  toast.setAttribute('role', isError ? 'alert' : 'status');
+  toast.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+  toast.querySelector('.ha-toast-msg').textContent = message;
+  // Dismiss button only on errors/persistent toasts — HA's auto-dismiss
+  // "Saved" snackbar has none.
+  let dismiss = toast.querySelector('.ha-toast-dismiss');
+  if (isError && !dismiss) {
+    dismiss = document.createElement('button');
+    dismiss.className = 'ha-toast-dismiss';
+    dismiss.setAttribute('aria-label', 'Dismiss');
+    dismiss.textContent = '×';
+    dismiss.addEventListener('click', () => _removeToast(toast));
+    toast.appendChild(dismiss);
+  } else if (!isError && dismiss) {
+    dismiss.remove();
+  }
+  clearTimeout(_toastTimer);
+  const duration = opts.duration || (isError ? 8000 : 4000);
+  _toastTimer = setTimeout(() => _removeToast(toast), duration);
+}
+function _removeToast(toast) {
+  if (!toast) return;
+  clearTimeout(_toastTimer);
+  clearTimeout(_toastRemoveTimer);
+  toast.classList.add('leaving');
+  _toastRemoveTimer = setTimeout(() => { if (toast.parentNode) toast.remove(); }, 200);
 }
 
 function applyToolSearch() {
@@ -841,7 +927,7 @@ const BACKUP_FIELD_LABELS = {
 };
 
 const BACKUP_ORIGIN_LABELS = {
-  addon: 'Synced to Supervisor — restart required after save.',
+  addon: 'Synced to Supervisor. Restart required after save.',
   env: null,  // banner generated dynamically with the env var name
   file: 'Persisted locally; takes effect immediately.',
   default: 'Using default; first save creates a local override file.',
@@ -902,7 +988,7 @@ function renderBackupConfig() {
       `<span class="backup-field-label">${escapeHtml(meta.label)}</span>` +
       `<span class="backup-field-control">${controlHtml}</span>` +
       lockedBadge +
-      `<span class="backup-field-help">${escapeHtml(meta.help)}${originMsg ? ' — ' + originMsg : ''}</span>`;
+      `<span class="backup-field-help">${escapeHtml(meta.help)}${originMsg ? '. ' + originMsg : ''}</span>`;
     formEl.appendChild(row);
   });
 }
@@ -947,6 +1033,7 @@ async function saveBackupConfig() {
       }
       setStatusAlert(statusEl, true);
       statusEl.textContent = msg;
+      showToast(msg, {isError: true});
       return;
     }
     btn.disabled = false;
@@ -962,11 +1049,12 @@ async function saveBackupConfig() {
       // would snap the form back to old values, look like the save
       // reverted, and clobber any further edits the user wanted to
       // bundle before clicking Restart.
-      statusEl.textContent = 'Saved — restart required';
-      document.getElementById('restartNotice').classList.add('show');
-      if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
+      statusEl.textContent = 'Saved. Restart required.';
+      showToast('Saved. Restart required.');
+      markRestartRequired();
     } else {
       statusEl.textContent = 'Saved.';
+      showToast('Saved.');
       // Refresh display so origins update (default → file, etc.).
       loadBackupConfig();
       loadBackups();
@@ -975,6 +1063,7 @@ async function saveBackupConfig() {
     btn.disabled = false;
     setStatusAlert(statusEl, true);
     statusEl.textContent = 'Network error: ' + String(err);
+    showToast('Network error: ' + String(err), {isError: true});
   }
 }
 
@@ -1030,7 +1119,7 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
       : '.storage, secrets.yaml';
   info.innerHTML =
     `<div class="feature-name">Custom filesystem directories (advanced)</div>` +
-    `<div class="feature-help">Extra directories (one per line) that the file tools may READ and WRITE — either relative to your config dir (e.g. <code>pyscript</code>, <code>python_scripts</code>) or an absolute HAOS sibling volume <code>/share</code>, <code>/media</code>, <code>/ssl</code>, <code>/backup</code> (or a subdirectory of one). Each entry grants both read and write. Applies immediately; no restart needed.</div>` +
+    `<div class="feature-help">Extra directories (one per line) that the file tools may READ and WRITE, either relative to your config dir (e.g. <code>pyscript</code>, <code>python_scripts</code>) or an absolute HAOS sibling volume <code>/share</code>, <code>/media</code>, <code>/ssl</code>, <code>/backup</code> (or a subdirectory of one). Each entry grants both read and write. Applies immediately; no restart needed.</div>` +
     `<div class="feature-help">Always blocked (cannot be added): <code>${escapeHtml(denyList)}</code>, path traversal (<code>..</code>), and any absolute path outside the HAOS sibling volumes.</div>`;
 
   const control = document.createElement('div');
@@ -1273,7 +1362,7 @@ document.getElementById('stopSidecarBtn').addEventListener('click', stopSidecar)
 const FEATURE_META = {
   enable_tool_search: {
     label: "Enable tool search",
-    help: "Replace the full tool catalog with search-based discovery. Reduces idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you use Claude in Sonnet or Opus modes — those models have their own built-in tool search / deferred tools, which conflicts with ours. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off. Use this only with LLMs that lack native deferred tools (e.g. Claude Haiku, local OpenAI-compatible models) or with smaller context windows. Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete). Requires restart to take effect.",
+    help: "Replace the full tool catalog with search-based discovery. Reduces idle context from ~46K to ~5K tokens. ⚠️ Do NOT enable this if you use Claude in Sonnet or Opus modes. Those models have their own built-in tool search / deferred tools, which conflicts with ours. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off. Use this only with LLMs that lack native deferred tools (e.g. Claude Haiku, local OpenAI-compatible models) or with smaller context windows. Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete). Requires restart to take effect.",
   },
   tool_search_max_results: {
     label: "Tool search max results",
@@ -1285,7 +1374,7 @@ const FEATURE_META = {
   },
   read_only_mode: {
     label: "Read Only Mode",
-    help: "Toggles all write tools off, and removes ability for tools to make any write or destructive calls. Mixed read/write tools (backups, add-ons, energy preferences, voice pipelines, and code mode when enabled) stay listed with their write operations blocked server-side — the AI gets a clear READ_ONLY_MODE error if it tries. Mirrors the toggle at the top of the Tools tab. Off by default. Requires restart to take effect (applies live in standalone HTTP mode).",
+    help: "Turns all write tools off and blocks tools from making any write or destructive calls. Mixed read/write tools (backups, add-ons, energy preferences, voice pipelines, and code mode when enabled) stay listed with their write operations blocked server-side. The AI gets a clear READ_ONLY_MODE error if it tries. Mirrors the toggle at the top of the Tools tab. Off by default. Requires restart to take effect (applies live in standalone HTTP mode).",
   },
   enable_mandatory_bps: {
     label: "Attach best-practice skills on writes",
@@ -1296,11 +1385,11 @@ const FEATURE_META = {
   // dims sub-rows when this is off and re-renders live on flip.
   enable_beta_features: {
     label: "Enable beta features",
-    help: "⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee — you enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master toggle for the 5 experimental tools below; sub-toggles are dimmed and ignored at runtime while this is off (even a sub-flag set via env var is forced off until the master is on). Requires restart to take effect.",
+    help: "⚠ DANGER. These tools can PERMANENTLY DAMAGE your Home Assistant installation. They write to your YAML config, write to your filesystem, install custom components, run arbitrary sandboxed Python, and edit tool docstrings the AI sees. There is no warranty and no support guarantee. You enable them at your OWN RISK. Take a Home Assistant backup before turning this on, and never enable in production without one. Master toggle for the 5 experimental tools below; sub-toggles are dimmed and ignored at runtime while this is off (even a sub-flag set via env var is forced off until the master is on). Requires restart to take effect.",
   },
   enable_yaml_config_editing: {
     label: "Enable YAML config editing (beta)",
-    help: "Beta feature — disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
+    help: "Beta feature, disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
   },
   enable_yaml_packages_automation: {
     label: "Allow automation in packages/*.yaml",
@@ -1324,15 +1413,15 @@ const FEATURE_META = {
   },
   enable_code_mode: {
     label: "Enable code-mode sandbox (beta)",
-    help: "Beta feature — disabled by default. Enables ha_manage_custom_tool, a sandboxed Python interpreter (pydantic-monty) that lets AI assistants write/run/save/delete custom tools when no built-in tool covers the request. Sandbox cannot touch the filesystem or arbitrary network, but CAN call any registered MCP tool, hit the HA REST API, or send HA WebSocket commands — effectively 'do whatever existing tools allow you to do, in any combination'. See docs/beta.md for known limitations. Requires restart to take effect.",
+    help: "Beta feature, disabled by default. Enables ha_manage_custom_tool, a sandboxed Python interpreter (pydantic-monty) that lets AI assistants write/run/save/delete custom tools when no built-in tool covers the request. Sandbox cannot touch the filesystem or arbitrary network, but CAN call any registered MCP tool, hit the HA REST API, or send HA WebSocket commands, effectively 'do whatever existing tools allow you to do, in any combination'. See docs/beta.md for known limitations. Requires restart to take effect.",
   },
   enable_lite_docstrings: {
     label: "Enable lite tool docstrings (beta)",
-    help: "Beta feature — disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
+    help: "Beta feature, disabled by default. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance. The trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect.",
   },
   enable_dashboard_screenshot: {
     label: "Enable dashboard screenshot mode (beta)",
-    help: "Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can see a rendered PNG of a Lovelace dashboard (e.g. to verify one they just created). Rendering runs in a separate, opt-in engine — balloob's \"Puppet\" add-on (headless Chromium) — which you install once (add balloob's add-on repository, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature, disabled by default. Adds the ha_get_dashboard_screenshot tool plus include_screenshot / return_screenshot options on the dashboard get/set tools, so AI assistants can see a rendered PNG of a Lovelace dashboard (e.g. to verify one they just created). Rendering runs in a separate, opt-in engine, balloob's \"Puppet\" add-on (headless Chromium), which you install once (add balloob's add-on repository, then install \"Puppet\") and give a long-lived access token; on Docker/Container deployments you run that engine as a sidecar and set HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL. Nothing heavy is installed unless you both enable this and install the engine. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on. Otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
 };
 
@@ -1360,14 +1449,14 @@ const YAML_PACKAGES_SUB_FLAGS = [
 let IS_ADDON_MODE = false;
 
 const ORIGIN_LOCKED_NOTE = {
-  env: 'Set via environment variable — unset it to edit here.',
+  env: 'Set via environment variable; unset it to edit here.',
   // addon-origin fields are editable: save POSTs through Supervisor
   // /addons/self/options and triggers a restart so both surfaces stay
   // in sync. No locked note needed.
 };
 
 const ORIGIN_INFO_NOTE = {
-  addon: 'Synced to the add-on Configuration tab — restart required after save.',
+  addon: 'Synced to the add-on Configuration tab. Restart required after save.',
 };
 
 // Compose the env-locked banner text for one field. Addon-mode copy
@@ -1383,18 +1472,18 @@ const ORIGIN_INFO_NOTE = {
 function envLockedNoteHtml(envVar, fieldName) {
   const envVarTag = `<code>${escapeHtml(envVar)}</code>`;
   if (!IS_ADDON_MODE) {
-    return `Set via env var ${envVarTag} — unset it to edit here.`;
+    return `Set via env var ${envVarTag}; unset it to edit here.`;
   }
   if (fieldName === 'enable_beta_features') {
     return (
-      `Auto-enabled in addon mode (legacy bridge — your options.json ` +
+      `Auto-enabled in addon mode (legacy bridge; your options.json ` +
       `predates the master toggle schema entry). Set ` +
       `<code>enable_beta_features</code> explicitly in the addon ` +
       `Configuration tab to take direct control. (env: ${envVarTag})`
     );
   }
   return (
-    `Set by the addon runtime environment — managed by Home Assistant ` +
+    `Set by the addon runtime environment, managed by Home Assistant ` +
     `Supervisor; cannot be changed from this web UI. (env: ${envVarTag})`
   );
 }
@@ -1735,24 +1824,7 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
       if (f.type === 'int') v = parseInt(inputEl.value, 10);
       else if (f.type === 'float') v = parseFloat(inputEl.value);
       else v = inputEl.value;
-      if (typeof v === 'number' && Number.isNaN(v)) return;
-      _advancedDirty[f.field] = v;
-      // Surface a hint that there are unsaved code-mode-numeric
-      // changes — they share the Save button(s) under the Advanced
-      // sections. Mirror to both top and bottom rows.
-      const status = document.getElementById('advSaveStatus');
-      if (status) {
-        status.textContent = 'Unsaved changes — click "Save advanced settings".';
-      }
-      const statusTop = document.getElementById('advSaveStatusTop');
-      if (statusTop) {
-        statusTop.textContent =
-          'Unsaved changes — click "Save advanced settings".';
-      }
-      const saveRow = document.getElementById('advSaveRow');
-      if (saveRow) saveRow.style.display = '';
-      const saveRowTop = document.getElementById('advSaveRowTop');
-      if (saveRowTop) saveRowTop.style.display = '';
+      commitAdvancedEdit(f.field, v);
     });
     control.appendChild(inputEl);
 
@@ -1776,7 +1848,7 @@ async function saveFeatureFlag(fieldName, value) {
       body: JSON.stringify({flags: {[fieldName]: value}}),
     });
   } catch (e) {
-    updateStatus('Save failed: ' + e.message);
+    updateStatus('Save failed: ' + e.message, false, true);
     return false;
   }
   let data = null;
@@ -1791,7 +1863,7 @@ async function saveFeatureFlag(fieldName, value) {
   if (!resp.ok) {
     let msg = `Save failed (HTTP ${resp.status})`;
     if (data?.error?.message) msg = 'Save failed: ' + data.error.message;
-    updateStatus(msg);
+    updateStatus(msg, false, true);
     return false;
   }
   // Unified restart flow — save persists the change but does NOT fire
@@ -1800,10 +1872,9 @@ async function saveFeatureFlag(fieldName, value) {
   // banner. Same UX as the Tools tab. In standalone modes the restart
   // button is hidden (no supervisor to drive it) but the banner still
   // surfaces "restart required" as guidance.
-  updateStatus('Saved — restart required', true);
+  updateStatus('Saved. Restart required.', true);
   if (data?.restart_required) {
-    document.getElementById('restartNotice').classList.add('show');
-    if (restartChannel) restartChannel.postMessage({type: 'restart-required'});
+    markRestartRequired();
   }
   return true;
 }
@@ -1931,7 +2002,7 @@ function renderPolicyCard(toolName, rule) {
   )).join('');
   const emptyHint = rule.when.length === 0
     ? '<li class="policy-predicate-row"><em style="color:var(--text-secondary);font-size:0.8rem">' +
-      '(no conditions — rule matches every call to this tool)</em></li>'
+      '(no conditions, rule matches every call to this tool)</em></li>'
     : '';
   card.innerHTML =
     '<div class="policy-rule-header">' +
@@ -2075,7 +2146,7 @@ function renderPolicyCard(toolName, rule) {
         (p.type ? ' (' + escapeHtml(p.type) + ')' : '') +
         '</option>';
     }
-    html += '<option value="' + FREE_TEXT_OPT + '">(other — type a path)</option>';
+    html += '<option value="' + FREE_TEXT_OPT + '">(other, type a path)</option>';
     pathSelectEl.innerHTML = html;
 
     // If the existing condition uses a path the schema doesn't know
@@ -2117,7 +2188,7 @@ function renderPolicyCard(toolName, rule) {
       const r = await fetch('./api/policy/value-source?source=' +
         encodeURIComponent(sourceKey));
       if (!r.ok) {
-        lastValueSourceError = 'value-source fetch failed (HTTP ' + r.status + ') — falling back to free-text';
+        lastValueSourceError = 'value-source fetch failed (HTTP ' + r.status + '); falling back to free-text';
         return null;
       }
       const data = await r.json();
@@ -2126,7 +2197,7 @@ function renderPolicyCard(toolName, rule) {
       lastValueSourceError = null;
       return values;
     } catch (e) {
-      lastValueSourceError = 'value-source fetch failed (' + e.message + ') — falling back to free-text';
+      lastValueSourceError = 'value-source fetch failed (' + e.message + '); falling back to free-text';
       return null;
     }
   };
@@ -2140,7 +2211,7 @@ function renderPolicyCard(toolName, rule) {
 
   const hintForOp = (op) => {
     if (op === 'exists') {
-      return 'Leave blank — this op gates on the argument being present at all, regardless of value.';
+      return 'Leave blank. This op gates on the argument being present at all, regardless of value.';
     }
     if (op === 'in' || op === 'not_in') {
       return 'Pick one or more values, or type a JSON list. Leave blank to gate on any value.';
@@ -2262,7 +2333,7 @@ function renderPolicyCard(toolName, rule) {
     // user knows the typo'd rule they're about to author isn't picking
     // from a populated list.
     if (lastValueSourceError) {
-      text = lastValueSourceError + ' — ' + text;
+      text = lastValueSourceError + '. ' + text;
       hint.style.color = 'var(--danger)';
     }
     hint.textContent = text;
@@ -2350,12 +2421,12 @@ function renderPolicyCard(toolName, rule) {
         // renderHint shows the user why their dropdown is gone.
         toolSchema = {paths: [], value_sources: {}};
         lastValueSourceError = 'tool-schema fetch failed (HTTP ' + r.status +
-          ') — falling back to free-text';
+          '); falling back to free-text';
       }
     } catch (e) {
       toolSchema = {paths: [], value_sources: {}};
       lastValueSourceError = 'tool-schema fetch failed (' + e.message +
-        ') — falling back to free-text';
+        '); falling back to free-text';
     }
     return toolSchema;
   };
@@ -2482,11 +2553,13 @@ async function saveGlobalSettings() {
   } catch (e) {
     setStatusAlert(statusEl, true);
     statusEl.textContent = 'Network error: ' + e.message;
+    showToast('Network error: ' + e.message, {isError: true});
     return;
   }
   if (!resp.ok) {
     setStatusAlert(statusEl, true);
     statusEl.textContent = 'Load failed: ' + resp.status;
+    showToast('Load failed: ' + resp.status, {isError: true});
     return;
   }
   const policy = await resp.json();
@@ -2495,9 +2568,11 @@ async function saveGlobalSettings() {
   try {
     await policyPut(policy, 'Save global settings');
     statusEl.textContent = 'Saved.';
+    showToast('Saved.');
   } catch (e) {
     setStatusAlert(statusEl, true);
     statusEl.textContent = e.message;
+    showToast(e.message, {isError: true});
   }
 }
 
@@ -2509,7 +2584,7 @@ async function policyLoadPending() {
   } catch (e) {
     // Surface the failure inline — silent return leaves the pending
     // list visibly frozen with no signal that polling broke.
-    list.innerHTML = '<em style="color:var(--text-secondary)">Lost contact with server (' + escapeHtml(e.message) + ') — retrying.</em>';
+    list.innerHTML = '<em style="color:var(--text-secondary)">Lost contact with server (' + escapeHtml(e.message) + '). Retrying.</em>';
     return;
   }
   if (resp.status === 503) {
@@ -2576,7 +2651,7 @@ async function policyDecide(token, action) {
     try { body = await resp.json(); } catch (_) { body = {error: 'HTTP ' + resp.status}; }
     if (resp.status === 409 && body.current_decision) {
       alert("This approval was already " + body.current_decision +
-            " — possibly by another tab or session.");
+            ", possibly by another tab or session.");
     } else if (resp.status === 404) {
       alert("This approval token is no longer valid (already consumed or expired).");
     } else {
@@ -2599,7 +2674,7 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
     // Revert the checkbox and surface the failure (set the status AFTER
     // the revert so it isn't clobbered).
     e.target.checked = previous;
-    updateStatus('Tool Security Policies change did not save — the server still has the previous value');
+    updateStatus('Tool Security Policies change did not save. The server still has the previous value', false, true);
     return;
   }
   // Re-read the truth from the server and sync the checkbox back to
@@ -2626,7 +2701,7 @@ document.getElementById('read-only-mode-toggle').addEventListener('change', asyn
     // so the revert's render/sync can't clobber the message.
     e.target.checked = previous;
     render();
-    updateStatus('Read Only Mode change did not save — the server still has the previous value');
+    updateStatus('Read Only Mode change did not save. The server still has the previous value', false, true);
     return;
   }
   // Re-read the truth from the server and sync the checkbox back to it.
@@ -2715,8 +2790,8 @@ document.addEventListener('click', (e) => {
 
 // ===== Advanced settings =====
 const ADVANCED_FIELD_META = {
-  homeassistant_url:   { label: "Home Assistant URL",          help: "Display only — set via HOMEASSISTANT_URL env var or addon-managed (Supervisor)." },
-  homeassistant_token: { label: "Home Assistant token",        help: "Display only — set via HOMEASSISTANT_TOKEN env var. Masked here for security." },
+  homeassistant_url:   { label: "Home Assistant URL",          help: "Display only. Set via HOMEASSISTANT_URL env var or addon-managed (Supervisor)." },
+  homeassistant_token: { label: "Home Assistant token",        help: "Display only. Set via HOMEASSISTANT_TOKEN env var. Masked here for security." },
   timeout:             { label: "HA request timeout (s)",      help: "Per-request HTTP timeout. Range 1–600. Restart required." },
   max_retries:         { label: "HA request max retries",      help: "Retry budget per failed REST call. Range 0–20. Restart required." },
   verify_ssl:          { label: "Verify SSL certificates",     help: "Skip TLS verification only on trusted networks (self-signed certs, hostname mismatch). Restart required." },
@@ -2727,14 +2802,14 @@ const ADVANCED_FIELD_META = {
   scene_config_time_budget:      { label: "Scene config time budget (s)",      help: "Max seconds ha_search/ha_deep_search spends fetching scene configs before returning a partial result. Range 1–600. Restart required." },
   backup_hint:         { label: "Backup-hint level",           help: "Tunes how strongly the LLM is prompted to take a full-HA snapshot before risky writes." },
   dashboard_screenshot_engine_url: { label: "Dashboard screenshot engine URL", help: "Base URL of the screenshot engine (e.g. http://puppet:10000). Leave blank to auto-discover the Puppet add-on via the Supervisor (HA OS / Supervised). Only used when the Dashboard Screenshot beta feature is enabled. Takes effect without a restart." },
-  enable_websocket:    { label: "Enable WebSocket",            help: "WebSocket-based state monitoring. Disabling falls back to polling — many tools degrade. Restart required." },
+  enable_websocket:    { label: "Enable WebSocket",            help: "WebSocket-based state monitoring. Disabling falls back to polling; many tools degrade. Restart required." },
   enabled_tool_modules: { label: "Enabled tool modules",       help: "Comma-separated module names, or 'all'. Restricts which tool registry modules load at startup. Restart required." },
   enable_dashboard_partial_tools: { label: "Dashboard partial-update tools", help: "Token-efficient partial dashboard tools. Disable for clients with programmatic tool use." },
   mcp_server_name:     { label: "MCP server name",             help: "Reported in MCP handshake. Restart required." },
   mcp_server_version:  { label: "MCP server version",          help: "Defaults to the package version. Overriding can confuse clients that key on this string. Restart required." },
   environment:         { label: "Environment",                 help: "'development' or 'production'. Affects logging verbosity. Restart required." },
-  log_level:           { label: "Log level",                   help: "DEBUG/INFO/WARNING/ERROR/CRITICAL. Set once at startup — restart required." },
-  debug:               { label: "Debug mode",                  help: "Verbose request logging. Implies sensitive data in logs — do not enable in production. Restart required." },
+  log_level:           { label: "Log level",                   help: "DEBUG/INFO/WARNING/ERROR/CRITICAL. Set once at startup; restart required." },
+  debug:               { label: "Debug mode",                  help: "Verbose request logging. Logs sensitive data; do not enable in production. Restart required." },
   code_mode_max_duration:    { label: "Code-mode max duration (s)",   help: "Wall-clock budget per sandbox run. Range 1–300. Restart required." },
   code_mode_max_memory:      { label: "Code-mode max memory (bytes)", help: "RSS cap per sandbox run. Range 1 MB–256 MB. Restart required." },
   code_mode_max_recursion:   { label: "Code-mode max recursion",      help: "Recursion-depth cap per sandbox run. Restart required." },
@@ -2813,7 +2888,11 @@ async function loadAdvancedSettings() {
   if (typeof data.is_addon === 'boolean') {
     IS_ADDON_MODE = data.is_addon;
   }
-  _advancedDirty = {};
+  // Do NOT clear _advancedDirty here. This runs on the post-save reload (and
+  // the feature-flag re-render below); clearing it would wipe edits the user
+  // made to OTHER fields while the save was in flight and reset their inputs
+  // to the server value — silent data loss. Pending edits are re-stamped onto
+  // the freshly-rendered inputs at the end of this function.
   const bySection = {};
   _advancedFields.forEach(f => {
     (bySection[f.section] ||= []).push(f);
@@ -2831,12 +2910,6 @@ async function loadAdvancedSettings() {
   renderAdvancedSection('advDiagnostics', bySection.diagnostics || []);
   renderAdvancedSection('advSidecar', bySection.sidecar || []);
   applySidecarAvailability(data.is_stdio !== false);
-  document.getElementById('advSaveRow').style.display = '';
-  const topRow = document.getElementById('advSaveRowTop');
-  if (topRow) topRow.style.display = '';
-  document.getElementById('advSaveStatus').textContent = '';
-  const topStatus = document.getElementById('advSaveStatusTop');
-  if (topStatus) topStatus.textContent = '';
   // Re-render feature flags so the code_mode sub-numerics show up
   // beneath enable_code_mode (race: loadFeatureFlags may have run
   // before _advancedFields was populated). Cheap no-op if feature
@@ -2844,6 +2917,14 @@ async function loadAdvancedSettings() {
   if (Object.keys(_lastFeatureFlags).length > 0) {
     renderFeatureFlags(_lastFeatureFlags);
   }
+  // Re-apply still-pending edits on top of the freshly-rendered (server-valued)
+  // inputs so an edit made during an in-flight save isn't visually reverted.
+  Object.entries(_advancedDirty).forEach(([fname, val]) => {
+    const input = document.querySelector('[data-adv-field="' + fname + '"]');
+    if (!input) return;
+    if (input.type === 'checkbox') input.checked = !!val;
+    else input.value = val;
+  });
 }
 
 function applySidecarAvailability(isStdio) {
@@ -2851,7 +2932,7 @@ function applySidecarAvailability(isStdio) {
   // by the stdio settings-UI sidecar. In HTTP/SSE/OAuth/addon deployments
   // there is no sidecar, so dim + disable the section and explain why, rather
   // than letting a user save a value that does nothing.
-  // Remove any note from a prior load first, so the <h3> title is once again
+  // Remove any note from a prior load first, so the <h2> title is once again
   // the section's previousElementSibling (an injected note would otherwise
   // shadow it on a re-render).
   const prevNote = document.getElementById('advSidecarNote');
@@ -2907,7 +2988,7 @@ function renderAdvancedSection(containerId, fields) {
     if (f.origin === 'env') {
       originMsg = envLockedNoteHtml(f.env_var, f.field);
     } else if (!f.editable) {
-      originMsg = 'Display only — modify via env var or addon settings.';
+      originMsg = 'Display only. Modify via env var or addon settings.';
     }
     row.innerHTML =
       `<div class="adv-info">` +
@@ -2918,7 +2999,10 @@ function renderAdvancedSection(containerId, fields) {
       `<div class="adv-control">${controlHtml}</div>`;
     el.appendChild(row);
   });
-  // Wire change handlers so we can batch unsaved edits.
+  // Auto-save on change: toggles fire immediately, number/text/select
+  // fields fire when the user leaves the field (the native 'change'
+  // event). scheduleAdvancedSave() debounces so editing several fields
+  // in a row coalesces into one save + one toast.
   el.querySelectorAll('[data-adv-field]').forEach(input => {
     input.addEventListener('change', () => {
       const fname = input.dataset.advField;
@@ -2928,61 +3012,44 @@ function renderAdvancedSection(containerId, fields) {
       if (input.type === 'checkbox') v = input.checked;
       else if (input.type === 'number') v = (f.type === 'float') ? parseFloat(input.value) : parseInt(input.value, 10);
       else v = input.value;
-      _advancedDirty[fname] = v;
+      commitAdvancedEdit(fname, v);
     });
   });
 }
 
-// Top + bottom save buttons share state — the user can hit either,
-// status text mirrors to both so the one they're looking at always
-// reflects the latest outcome.
-function _advSaveBtns() {
-  return [
-    document.getElementById('advSaveBtn'),
-    document.getElementById('advSaveBtnTop'),
-  ].filter(Boolean);
+// Stamp a parsed advanced-field value into the pending set and arm the
+// debounced save. Shared by both renderers that wire up advanced inputs
+// (the Server Settings panel and the code-mode sub-rows). A NaN value (an
+// empty/garbage number field committing on blur) is dropped, and any prior
+// pending value for the field is cleared so a stale earlier edit can't be
+// persisted by the already-armed debounce.
+function commitAdvancedEdit(field, value) {
+  if (typeof value === 'number' && Number.isNaN(value)) { delete _advancedDirty[field]; return; }
+  _advancedDirty[field] = value;
+  scheduleAdvancedSave();
 }
-function _advSaveStatusEls() {
-  return [
-    document.getElementById('advSaveStatus'),
-    document.getElementById('advSaveStatusTop'),
-  ].filter(Boolean);
-}
-function _setAdvSaveStatus(text, isError) {
-  _advSaveStatusEls().forEach(el => { setStatusAlert(el, isError); el.textContent = text; });
-}
-function _setAdvSaveDisabled(disabled) {
-  _advSaveBtns().forEach(b => { b.disabled = disabled; });
+
+// Advanced fields auto-save (Server Settings tab). scheduleAdvancedSave()
+// debounces edits the same way the Tools tab debounces toggle saves
+// (scheduleSave), so tabbing through several fields coalesces into one save
+// cycle and one toast. That cycle may be one or two POSTs — file-routed and
+// addon-routed fields go as separate batches (see saveAdvancedSettings).
+let advancedSaveTimer = null;
+let _advSaving = false;
+function scheduleAdvancedSave() {
+  clearTimeout(advancedSaveTimer);
+  advancedSaveTimer = setTimeout(saveAdvancedSettings, 800);
 }
 
 async function saveAdvancedSettings() {
-  const btns = _advSaveBtns();
-  if (!btns.length) {
-    console.error('saveAdvancedSettings: no save buttons in DOM');
-    return;
-  }
-  if (Object.keys(_advancedDirty).length === 0) {
-    // Feature-flag toggles (master beta, Tool Search, etc.) auto-save
-    // on click via ``saveFeatureFlag`` — they don't pass through
-    // ``_advancedDirty``. Tool-config pins and backup-config edits
-    // also auto-save. Any of those raise ``restartNotice``, but this
-    // tab can't tell which one. Keep the hint source-blind: just
-    // point at the Restart button.
-    const restartNotice = document.getElementById('restartNotice');
-    const restartShowing =
-      restartNotice && restartNotice.classList.contains('show');
-    if (restartShowing) {
-      _setAdvSaveStatus(
-        'No advanced changes to save — a restart is pending. Click ' +
-        'Restart above to apply your prior changes.'
-      );
-    } else {
-      _setAdvSaveStatus('Nothing to save.');
-    }
-    return;
-  }
-  _setAdvSaveDisabled(true);
-  _setAdvSaveStatus('Saving…');
+  // Re-entrancy guard: if a save is already in flight, don't run a second
+  // one concurrently (it would race the post-save reload's input refresh).
+  // Re-arm the debounce so any edit made during the in-flight save still
+  // gets saved once it completes.
+  if (_advSaving) { scheduleAdvancedSave(); return; }
+  if (Object.keys(_advancedDirty).length === 0) return;
+  _advSaving = true;
+  try {
   // Partition the dirty fields into addon-routed and file-routed
   // batches. The server rejects mixed batches with
   // 500 so the UI splits them client-side: addon-synced fields go in
@@ -3023,54 +3090,47 @@ async function saveAdvancedSettings() {
         if (resp.ok) {
           data = {restart_required: true};
         } else {
-          _setAdvSaveDisabled(false);
-          _setAdvSaveStatus(`Save failed (HTTP ${resp.status}, non-JSON body)`, true);
+          showToast(`Save failed (HTTP ${resp.status}, non-JSON body)`, {isError: true});
           return;
         }
       }
       if (!resp.ok) {
-        _setAdvSaveDisabled(false);
         let msg = 'Save failed';
         if (data && data.error) {
           if (typeof data.error === 'string') msg = data.error;
           else if (data.error.message) msg = data.error.message;
         }
-        _setAdvSaveStatus(msg, true);
+        showToast(msg, {isError: true});
         return;
       }
     }
-    _setAdvSaveDisabled(false);
-    _setAdvSaveStatus('Saved.');
+    // Confirm the save. When the saved field(s) need a restart, say so in
+    // the toast itself (the restartNotice banner also appears) so the
+    // requirement is never silent.
     const needsRestart = restartFields.some(
       f => ADVANCED_RESTART_REQUIRED.has(f)
     );
+    showToast(needsRestart ? 'Saved. Restart required.' : 'Saved.');
     if (needsRestart) {
-      document.getElementById('restartNotice').classList.add('show');
-      if (typeof restartChannel !== 'undefined' && restartChannel) {
-        restartChannel.postMessage({type: 'restart-required'});
-      }
+      markRestartRequired();
     }
-    _advancedDirty = {};
-    // Refresh display so origins update (default → file, etc.). Await
-    // so a reload failure surfaces in the same status line as the save
-    // — otherwise the user sees "Saved." while the panel silently
-    // reverts to stale data.
+    // Clear only the fields we just saved — an edit that arrived while the
+    // POST was in flight stays pending for the next scheduled save.
+    restartFields.forEach(f => { delete _advancedDirty[f]; });
+    // Refresh display so origins update (default -> file, etc.). Await so a
+    // reload failure surfaces via toast rather than leaving stale data.
     try {
       await loadAdvancedSettings();
     } catch (reloadErr) {
       console.error('post-save reload failed:', reloadErr);
-      _setAdvSaveStatus('Saved (reload failed — refresh to verify).');
+      showToast('Saved (reload failed; refresh to verify).');
     }
   } catch (err) {
-    _setAdvSaveDisabled(false);
-    _setAdvSaveStatus('Network error: ' + String(err), true);
+    showToast('Network error: ' + String(err), {isError: true});
   }
-}
-
-document.getElementById('advSaveBtn').addEventListener('click', saveAdvancedSettings);
-{
-  const topBtn = document.getElementById('advSaveBtnTop');
-  if (topBtn) topBtn.addEventListener('click', saveAdvancedSettings);
+  } finally {
+    _advSaving = false;
+  }
 }
 
 loadFeatureFlags();

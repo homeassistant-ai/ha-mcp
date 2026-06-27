@@ -27,24 +27,24 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
-from ._version import get_version, is_running_in_addon
-from .backup_manager import get_backup_manager
-from .client.supervisor_client import make_supervisor_httpx_client
-from .config import (
+from .._version import get_version, is_running_in_addon
+from ..backup_manager import get_backup_manager
+from ..client.supervisor_client import make_supervisor_httpx_client
+from ..config import (
     BACKUP_OVERRIDE_FIELDS,
     _reset_global_settings,
     get_backup_setting_origin,
     get_global_settings,
 )
-from .errors import ErrorCode, create_error_response
-from .transforms import DEFAULT_PINNED_TOOLS
-from .utils.data_paths import get_data_dir
+from ..errors import ErrorCode, create_error_response
+from ..transforms import DEFAULT_PINNED_TOOLS, categorize_capability
+from ..utils.data_paths import get_data_dir
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
-    from .config import Settings
-    from .server import HomeAssistantSmartMCPServer
+    from ..config import Settings
+    from ..server import HomeAssistantSmartMCPServer
 
 
 class ToolStub(TypedDict):
@@ -432,29 +432,49 @@ def _save_backup_settings_override(data: dict[str, Any]) -> bool:
     return True
 
 
+def _capability_fields(
+    name: str, *, read_only: bool, destructive: bool
+) -> dict[str, Any]:
+    """Build the capability fields (``annotations`` + ``category``) of a tool dict.
+
+    Shared by ``_render_stub`` (stubs) and ``_get_tool_metadata`` (real tools)
+    so the JSON ``annotations`` payload and the badge ``category`` are derived
+    from a single place and can't drift. Hints are dropped from ``annotations``
+    when False so the payload stays small; ``category`` comes from the same
+    classifier that routes the read/write/delete proxies.
+    """
+    annotations: dict[str, bool] = {}
+    if read_only:
+        annotations["readOnlyHint"] = True
+    if destructive:
+        annotations["destructiveHint"] = True
+    return {
+        "annotations": annotations,
+        "category": categorize_capability(
+            name, read_only=read_only, destructive=destructive
+        ),
+    }
+
+
 def _render_stub(name: str, meta: ToolStub) -> dict[str, Any]:
     """Render a ToolStub as the dict shape ``_get_tool_metadata`` returns.
 
     Both transform-generated and feature-gated stubs share the same UI
     representation; the only meaningful difference is whether
     ``disabled_by`` carries the safety-toggle name (which the JS
-    template renders as a "Beta — set X" hint). Annotations come
-    through as bools and are dropped from the final dict when False
-    so the JSON payload stays small.
+    template renders as a "Beta — set X" hint).
     """
-    annotations: dict[str, bool] = {}
-    if meta.get("readOnlyHint"):
-        annotations["readOnlyHint"] = True
-    if meta.get("destructiveHint"):
-        annotations["destructiveHint"] = True
-
     rendered: dict[str, Any] = {
         "name": name,
         "title": meta["title"],
         "description": meta["description"],
         "tags": [meta["primary_tag"]],
         "primary_tag": meta["primary_tag"],
-        "annotations": annotations,
+        **_capability_fields(
+            name,
+            read_only=bool(meta.get("readOnlyHint")),
+            destructive=bool(meta.get("destructiveHint")),
+        ),
     }
     if "disabled_by" in meta:
         rendered["disabled_by"] = meta["disabled_by"]
@@ -484,12 +504,12 @@ async def _get_tool_metadata(
         tags = sorted(tool.tags) if tool.tags else []
         primary_tags = [t for t in tags if t not in secondary_tags]
         primary = primary_tags[0] if primary_tags else (tags[0] if tags else "Other")
-        annotations: dict[str, bool] = {}
-        if tool.annotations:
-            if getattr(tool.annotations, "readOnlyHint", None):
-                annotations["readOnlyHint"] = True
-            if getattr(tool.annotations, "destructiveHint", None):
-                annotations["destructiveHint"] = True
+        read_only = bool(
+            tool.annotations and getattr(tool.annotations, "readOnlyHint", None)
+        )
+        destructive = bool(
+            tool.annotations and getattr(tool.annotations, "destructiveHint", None)
+        )
         title = getattr(tool, "title", None) or tool.name
         if tool.annotations and getattr(tool.annotations, "title", None):
             title = tool.annotations.title
@@ -500,7 +520,9 @@ async def _get_tool_metadata(
                 "description": (tool.description or "")[:200],
                 "tags": tags,
                 "primary_tag": primary,
-                "annotations": annotations,
+                **_capability_fields(
+                    tool.name, read_only=read_only, destructive=destructive
+                ),
             }
         )
 
@@ -654,440 +676,40 @@ except FileNotFoundError as exc:  # pragma: no cover - packaging guard
     ) from exc
 
 
-_SETTINGS_HTML = (
-    """\
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HA-MCP Tool Settings</title>
-<!-- Empty data URI: tells the browser "no favicon" so it never requests
-     /favicon.ico (which would 404 and log a console error, since the
-     settings server serves no such asset in any deployment mode). -->
-<link rel="icon" href="data:,">
-<script data-purpose="server-prefs" data-prefs="__HA_MCP_THEME_PREFS__">
-  // #1574 review: theme/accessibility prefs also persist server-side
-  // (theme_prefs.json) because stdio respawns its settings sidecar on a
-  // random port — a fresh origin whose localStorage starts empty. The page
-  // handler substitutes the data-prefs attribute at request time; this
-  // seeds only MISSING localStorage keys (the browser's own latest choice
-  // wins) before the anti-FOUC resolver below reads them. The docs site is
-  // a static build and stays localStorage-only.
-  (function () {
-    var el = document.currentScript;
-    var raw = el ? el.getAttribute("data-prefs") : "";
-    if (!raw || raw.charAt(0) !== "{") return; // unsubstituted placeholder
-    var KEYS = {
-      theme: "ha-mcp-theme",
-      fontSize: "ha-mcp-font-size",
-      contrast: "ha-mcp-contrast",
-      shade: "ha-mcp-shade",
-      custom: "ha-mcp-custom-colors",
-    };
-    try {
-      var prefs = JSON.parse(raw);
-      for (var p in KEYS) {
-        if (typeof prefs[p] !== "string" || !prefs[p]) continue;
-        try {
-          if (localStorage.getItem(KEYS[p]) === null) {
-            localStorage.setItem(KEYS[p], prefs[p]);
-          }
-        } catch (e) { /* storage blocked — the runtime module shows a note */ }
-      }
-    } catch (e) {
-      // Malformed substitution — defaults apply; warn like the anti-FOUC
-      // resolver does so the breakage is visible in the console.
-      console.warn("ha-mcp: malformed server prefs, using defaults:", e);
-    }
-  })();
-</script>
-<script data-purpose="anti-fouc">
-  // #1572 accessibility-pref resolver — runs before CSS evaluates so
-  // data-theme / data-contrast / data-shade and the root font-size are set
-  // on <html> ahead of paint (no FOUC, no jump). Reads saved choices from
-  // localStorage with safe defaults. Auto is the default (#1574 review:
-  // follow the OS preference out of the box); Dark stays one click away
-  // as a preset.
-  // Same logic as in site/src/layouts/Layout.astro head — both surfaces use
-  // the same localStorage key names interpreted identically, but storage is
-  // per-origin, so each surface keeps its own saved values. Any change here
-  // must be mirrored there (and vice versa) or the surfaces drift apart.
-  // Enforced by tests/src/unit/test_anti_fouc_parity.py.
-  (function () {
-    var root = document.documentElement;
-    function readPref(key, fallback) {
-      try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
-    }
-    try {
-      var themePref = readPref("ha-mcp-theme", "auto");
-      var theme = themePref === "auto"
-        ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
-        : themePref;
-      root.setAttribute("data-theme", theme);
+# The settings page HTML lives in settings.html, extracted the same way as
+# settings.js / settings.css (a real file for editor/HTML tooling). It carries
+# three substitution markers — two filled once at import, one per request:
+#   __HA_MCP_CSS__         -> settings.css contents (inside <style>)
+#   __HA_MCP_JS__          -> settings.js contents (inside <script>)
+#   __HA_MCP_THEME_PREFS__ -> per-request server-seeded theme prefs JSON,
+#                             substituted in _render_settings_html()
+# Same import-time packaging dependency as settings.js/css (wheel package-data
+# + MANIFEST.in); see _SETTINGS_JS_PATH above.
+_SETTINGS_HTML_PATH = Path(__file__).parent / "settings.html"
+try:
+    _settings_html_template = _SETTINGS_HTML_PATH.read_text(encoding="utf-8")
+except OSError as exc:  # pragma: no cover - packaging guard
+    raise RuntimeError(
+        f"settings.html missing at {_SETTINGS_HTML_PATH}. It must ship in "
+        "the wheel (pyproject [tool.setuptools.package-data]) and the sdist "
+        "(MANIFEST.in)."
+    ) from exc
 
-      var contrastPref = readPref("ha-mcp-contrast", "normal");
-      if (contrastPref === "high") root.setAttribute("data-contrast", "high");
+# Fail fast if a marker was renamed in settings.html but not here (or vice
+# versa) — str.replace() silently no-ops on an absent token, which would ship a
+# page missing its CSS or JS. Assert all three markers are present.
+for _sentinel in ("__HA_MCP_CSS__", "__HA_MCP_JS__", "__HA_MCP_THEME_PREFS__"):
+    if _sentinel not in _settings_html_template:
+        raise RuntimeError(
+            f"settings.html is out of sync: sentinel {_sentinel} not found. "
+            "The Python injection and settings.html have drifted."
+        )
 
-      var shadePref = readPref("ha-mcp-shade", "off-white");
-      if (shadePref !== "off-white") root.setAttribute("data-shade", shadePref);
-
-      var sizePref = parseInt(readPref("ha-mcp-font-size", "100"), 10);
-      // Range = the UI's offered values; clamps a hand-edited localStorage
-      // value rather than silently honoring arbitrary input.
-      if (!isNaN(sizePref) && sizePref >= 100 && sizePref <= 150 && sizePref !== 100) {
-        // The browser default is 16px; scale the root so every rem-based
-        // size (the bulk of this stylesheet) cascades proportionally.
-        root.style.fontSize = (16 * sizePref / 100) + "px";
-      }
-
-      // Custom colors layer on top of the preset as inline styles (inline
-      // beats stylesheet rules). Both surfaces' variable names are written;
-      // names a surface does not use are inert. Malformed JSON or non-hex
-      // values are ignored without disturbing the already-applied theme.
-      try {
-        var customRaw = readPref("ha-mcp-custom-colors", "");
-        if (customRaw) {
-          var custom = JSON.parse(customRaw);
-          var hexOk = function (v) { return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v); };
-          var channels = function (v) {
-            return parseInt(v.slice(1, 3), 16) + " " + parseInt(v.slice(3, 5), 16) + " " + parseInt(v.slice(5, 7), 16);
-          };
-          if (hexOk(custom.bg)) {
-            root.style.setProperty("--bg", custom.bg);
-            root.style.setProperty("--surface-0", channels(custom.bg));
-          }
-          if (hexOk(custom.text)) {
-            root.style.setProperty("--text", custom.text);
-            root.style.setProperty("--text-primary", custom.text);
-          }
-          if (hexOk(custom.accent)) {
-            root.style.setProperty("--accent", custom.accent);
-            root.style.setProperty("--accent-text", custom.accent);
-            root.style.setProperty("--brand", channels(custom.accent));
-          }
-        }
-      } catch (e2) {
-        // Corrupted custom-colors JSON would re-fail on every load; drop
-        // it so the next visit starts clean instead of wedged.
-        try { localStorage.removeItem("ha-mcp-custom-colors"); } catch (e3) { /* storage blocked */ }
-      }
-    } catch (e) {
-      // localStorage is already guarded inside readPref — this catch
-      // guards everything else (matchMedia, attribute writes). Warn so a
-      // shipped bug here is visible in the console instead of hiding
-      // behind the silent dark fallback.
-      console.warn("ha-mcp accessibility prefs failed to apply:", e);
-      root.setAttribute("data-theme", "dark");
-    }
-  })();
-</script>
-<style>"""
-    + _SETTINGS_CSS
-    + """</style>
-</head>
-<body>
-<a href="#main-content" class="skip-link">Skip to content</a>
-<div class="header">
-  <h1>HA-MCP Settings</h1>
-  <div style="display:flex;align-items:center;gap:8px">
-    <label class="theme-control">
-      <span class="theme-control-label">Theme</span>
-      <select id="themeToggle" class="theme-toggle" aria-label="Theme: light or dark mode">
-        <option value="auto">Auto (OS)</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
-    <span id="status" class="status" role="status" aria-live="polite">Loading...</span>
-  </div>
-</div>
-<main id="main-content" tabindex="-1" style="outline:none">
-<div class="tabs" role="tablist" aria-label="Settings sections">
-  <button class="tab active" data-panel="tools" role="tab" id="tab-tools" aria-controls="panel-tools" aria-selected="true">Tools</button>
-  <button class="tab" data-panel="server" role="tab" id="tab-server" aria-controls="panel-server" aria-selected="false" tabindex="-1">Server Settings</button>
-  <button class="tab" data-panel="backups" role="tab" id="tab-backups" aria-controls="panel-backups" aria-selected="false" tabindex="-1">Backups</button>
-  <button class="tab" data-panel="tool-security-policies" role="tab" id="tab-tool-security-policies" aria-controls="panel-tool-security-policies" aria-selected="false" tabindex="-1">Tool Security Policies</button>
-  <button class="tab" data-panel="accessibility" role="tab" id="tab-accessibility" aria-controls="panel-accessibility" aria-selected="false" tabindex="-1">Accessibility</button>
-</div>
-<div class="restart-notice" id="restartNotice">
-  <span class="restart-notice-text" id="restartNoticeText">
-    ⚠ Changes saved. Restart ha-mcp for them to take effect — disabled
-    tools will be fully removed from the MCP tool list on next startup.
-    Then reconnect or refresh the MCP server in your AI client (e.g.
-    re-add/refresh the connector in ChatGPT, or close and reopen Claude
-    Desktop) so it reloads the tool list — restarting the add-on or Home
-    Assistant does NOT refresh your client's cached tool list.
-  </span>
-  <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
-</div>
-<div class="panel active" id="panel-tools" role="tabpanel" aria-labelledby="tab-tools" tabindex="0">
-  <div class="readonly-notice">
-    Server-wide features (Tool Search, YAML config editing, filesystem
-    tools, etc.) appear in both the <strong>Server Settings</strong>
-    tab and the add-on Configuration page — they're the same settings
-    either way. Either surface stays in sync with the other after the
-    addon restart. Changes require an MCP-host restart to apply.
-  </div>
-  <div class="pin-notice show" id="pinNotice">
-    Tools listed in the <code>DISABLED_TOOLS</code> or <code>PINNED_TOOLS</code>
-    env vars are locked read-only — unset the env var to edit them here.
-    Pin toggles only take effect when Tool Search is enabled (Server Settings tab
-    or add-on Configuration page).
-  </div>
-  <div class="summary" id="summary"></div>
-  <div class="feature-row" id="readOnlyModeRow">
-    <div class="feature-info">
-      <div class="feature-name">Read Only Mode</div>
-      <div class="feature-help">
-        Toggles all write tools off, and removes ability for tools to
-        make any write or destructive calls. Mixed read/write tools
-        (backups, add-ons, energy preferences, voice pipelines, and code
-        mode when enabled) stay available with their write operations
-        blocked.
-      </div>
-    </div>
-    <div class="feature-control">
-      <label class="switch">
-        <input type="checkbox" id="read-only-mode-toggle">
-        <span class="slider"></span>
-      </label>
-    </div>
-  </div>
-  <div class="pin-notice" id="roUnknownNotice">
-    Could not read server settings — Read Only Mode status unknown; this
-    view may not reflect what the server enforces.
-  </div>
-  <input type="text" class="search" id="search" placeholder="Search tools...">
-  <div id="groups"></div>
-</div>
-<div class="panel" id="panel-server" role="tabpanel" aria-labelledby="tab-server" tabindex="0">
-  <div class="features-sub">
-    Tool Search, advanced settings. Changes take effect only after you
-    restart the add-on (applies the change server-side) AND reconnect or
-    refresh the MCP server in your AI client (reloads the tool list) — e.g.
-    re-add/refresh the connector in ChatGPT, or close + reopen Claude Desktop.
-  </div>
-
-  <!-- Two-step note + top Save button. The Save +
-       Restart workflow is non-obvious — users have hit the page,
-       toggled, and then wondered why nothing took effect because they
-       skipped one of the two steps. Display the note prominently and
-       duplicate the Save button at the top so a user scrolling either
-       end of the panel can hit it. -->
-  <div class="adv-save-note">
-    ⚠ Two-step save: <strong>(1) click "Save advanced settings"</strong>
-    to persist your changes, then <strong>(2) click "Restart"</strong>
-    above to apply them. Neither step alone is enough.
-  </div>
-  <div id="advSaveRowTop" class="adv-save-row" style="display:none;">
-    <button id="advSaveBtnTop" class="adv-save-btn">💾 Save advanced settings</button>
-    <span id="advSaveStatusTop" class="status" role="status" aria-live="polite"></span>
-  </div>
-  <div id="featuresBody"></div>
-
-  <!-- Advanced settings sections. The "Connection
-       (display only)" section was removed per user feedback — it
-       just listed the read-only HOMEASSISTANT_URL / TOKEN /
-       SUPERVISOR_TOKEN fields, which the user can already see in the
-       addon's own logs and configuration. Registry entries for the
-       connection section remain in ADVANCED_SETTINGS_FIELDS so the
-       API still returns them (env-pin debugging, future surfaces),
-       but they are not rendered into a panel here. -->
-  <h3 class="adv-section-title">Search &amp; matching</h3>
-  <div id="advSearch" class="adv-section"></div>
-  <h3 class="adv-section-title">Operations</h3>
-  <div id="advOperations" class="adv-section"></div>
-  <h3 class="adv-section-title">Tool surface</h3>
-  <div id="advToolsSurface" class="adv-section"></div>
-  <h3 class="adv-section-title">Diagnostics</h3>
-  <div id="advDiagnostics" class="adv-section"></div>
-  <h3 class="adv-section-title">Settings UI sidecar</h3>
-  <div id="advSidecar" class="adv-section"></div>
-
-  <!-- Beta features sit at the bottom of the panel — these can damage
-       the HA system, so they come last and the user sees safer
-       settings first. -->
-  <h3 class="adv-section-title beta-section-title">Beta features (dangerous)</h3>
-  <div id="betaBody"></div>
-
-  <!-- Bottom Save row sits AFTER the beta block (and any nested
-       code-mode sub-numerics) so a user editing those doesn't have
-       to scroll back up past their own changes. -->
-  <div class="adv-save-note">
-    ⚠ Two-step save: <strong>(1) click "Save advanced settings"</strong>
-    to persist your changes, then <strong>(2) click "Restart"</strong>
-    above to apply them. Neither step alone is enough.
-  </div>
-  <div id="advSaveRow" class="adv-save-row" style="display:none;">
-    <button id="advSaveBtn" class="adv-save-btn">💾 Save advanced settings</button>
-    <span id="advSaveStatus" class="status" role="status" aria-live="polite"></span>
-  </div>
-
-  <div id="sidecarStopRow" style="display:none; margin: 16px 0; text-align: right;">
-    <button class="danger-btn" id="stopSidecarBtn"
-            title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
-    >Permanently disable settings server</button>
-  </div>
-</div>
-<div class="panel" id="panel-backups" role="tabpanel" aria-labelledby="tab-backups" tabindex="0">
-  <div class="backup-state" id="backupState">Loading backup state…</div>
-  <div class="backup-config" id="backupConfig">
-    <div class="backup-config-form" id="backupConfigForm"></div>
-    <div class="backup-config-actions" id="backupConfigActions" style="display:none">
-      <button id="backupConfigSave">Save settings</button>
-      <span id="backupConfigStatus" class="status" role="status" aria-live="polite"></span>
-    </div>
-  </div>
-  <div class="backup-filters">
-    <input type="text" id="backupDomain" placeholder="Domain (e.g. automation)">
-    <input type="text" id="backupEntity" placeholder="Entity ID">
-    <button id="backupRefresh">Refresh</button>
-    <button id="backupBulkDelete" class="danger">Bulk delete matching…</button>
-  </div>
-  <div id="backupList"></div>
-</div>
-<div class="panel" id="panel-tool-security-policies" role="tabpanel" aria-labelledby="tab-tool-security-policies" tabindex="0">
-  <h2>Tool Security Policies</h2>
-  <p class="features-sub">
-    Per-tool approval gating for high-stakes calls. Use the
-    <strong>Tools</strong> tab to enable gating for a tool, then refine
-    the matching conditions and approval lifetime here. Condition operators:
-    equals, is one of, regex, contains, is present, greater than, less than.
-  </p>
-
-  <section id="policy-global-settings" style="margin-bottom:16px">
-    <h3 style="font-size:1rem;margin-bottom:8px">Global settings</h3>
-    <div class="feature-row">
-      <div class="feature-info">
-        <div class="feature-name">Enable Tool Security Policies</div>
-        <div class="feature-help">
-          Master switch. Mirrors the toggle in Server Settings. Off by
-          default — toggle on and restart the addon to activate the
-          gating middleware. While off, the rules below persist but
-          aren't enforced.
-        </div>
-      </div>
-      <div class="feature-control">
-        <label class="switch">
-          <input type="checkbox" id="policy-master-toggle">
-          <span class="slider"></span>
-        </label>
-      </div>
-    </div>
-    <div class="feature-row">
-      <div class="feature-info">
-        <div class="feature-name">Wait seconds (5-600)</div>
-        <div class="feature-help">How long the middleware waits for an approval before timing out.</div>
-      </div>
-      <div class="feature-control">
-        <input type="number" id="policy-wait-seconds" min="5" max="600">
-      </div>
-    </div>
-    <div class="feature-row">
-      <div class="feature-info">
-        <div class="feature-name">Approval TTL minutes (1-60)</div>
-        <div class="feature-help">How long a pending approval stays in the queue before expiring.</div>
-      </div>
-      <div class="feature-control">
-        <input type="number" id="policy-ttl-minutes" min="1" max="60">
-      </div>
-    </div>
-    <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
-      <button id="policy-save-global-btn" class="restart-btn">Save global settings</button>
-      <span id="policy-global-save-status" class="status" role="status" aria-live="polite"></span>
-    </div>
-  </section>
-
-  <section id="policy-pending" style="margin-bottom:16px">
-    <h3 style="font-size:1rem;margin-bottom:8px">Pending approvals</h3>
-    <div id="policy-pending-list" class="backup-empty">No pending approvals.</div>
-  </section>
-
-  <section id="policy-rules">
-    <h3 style="font-size:1rem;margin-bottom:8px">Gated tools</h3>
-    <div id="policy-load-error" style="display:none;background:var(--danger);color:white;padding:8px 12px;border-radius:6px;margin-bottom:8px;font-size:0.85rem;"></div>
-    <div id="policy-rules-empty" class="backup-empty" style="display:none;">
-      No tools currently security-gated. Enable per-tool gating from the
-      <a href="#" data-panel-link="tools">Tools</a> tab.
-    </div>
-    <div id="policy-rules-list"></div>
-  </section>
-</div>
-<div class="panel" id="panel-accessibility" role="tabpanel" aria-labelledby="tab-accessibility" tabindex="0">
-  <p class="tool-desc" style="margin-bottom:16px">
-    These settings apply immediately and are saved in this browser and on the
-    server, so they survive restarts in every mode (including stdio, where the
-    settings page moves to a fresh port each session). The docs site offers
-    the same controls in its navigation bar; it has no server and saves per
-    browser.
-  </p>
-  <p class="a11y-contrast-warning" id="a11y-storage-note" hidden>
-    Your browser is blocking site storage; choices apply for this session
-    only.</p>
-  <section class="a11y-section">
-    <h3 class="a11y-section-title">Theme</h3>
-    <p class="a11y-section-help">One-click color schemes. Auto is the default &mdash; it follows
-      your OS preference and flips live when it changes.</p>
-    <fieldset class="a11y-options">
-      <legend class="visually-hidden">Theme preset</legend>
-      <label class="a11y-option"><input type="radio" name="a11y-preset" value="dark"> <span class="a11y-preset-chip" data-chip="dark" aria-hidden="true">Aa</span> Dark</label>
-      <label class="a11y-option"><input type="radio" name="a11y-preset" value="light"> <span class="a11y-preset-chip" data-chip="light" aria-hidden="true">Aa</span> Light</label>
-      <label class="a11y-option"><input type="radio" name="a11y-preset" value="auto"> <span class="a11y-preset-chip" data-chip="auto" aria-hidden="true"></span> Auto</label>
-      <label class="a11y-option"><input type="radio" name="a11y-preset" value="paper"> <span class="a11y-preset-chip" data-chip="paper" aria-hidden="true">Aa</span> Paper</label>
-      <label class="a11y-option"><input type="radio" name="a11y-preset" value="gray"> <span class="a11y-preset-chip" data-chip="gray" aria-hidden="true">Aa</span> Gray</label>
-      <label class="a11y-option"><input type="radio" name="a11y-preset" value="contrast"> <span class="a11y-preset-chip" data-chip="contrast" aria-hidden="true">Aa</span> High Contrast</label>
-    </fieldset>
-  </section>
-  <section class="a11y-section">
-    <h3 class="a11y-section-title">Text size</h3>
-    <p class="a11y-section-help">Scales the root font size. Browser zoom (Ctrl/Cmd +) still works on top of this.</p>
-    <fieldset class="a11y-options">
-      <legend class="visually-hidden">Text size</legend>
-      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="100"> 100%</label>
-      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="115"> 115%</label>
-      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="130"> 130%</label>
-      <label class="a11y-option"><input type="radio" name="a11y-font-size" value="150"> 150%</label>
-    </fieldset>
-  </section>
-  <section class="a11y-section">
-    <h3 class="a11y-section-title">Custom colors</h3>
-    <p class="a11y-section-help">Pick your own colors on top of the selected theme. Each swatch
-      opens your system's visual color picker.</p>
-    <div class="a11y-swatches">
-      <label class="a11y-swatch">Background <input type="color" id="a11y-custom-bg" data-custom="bg"></label>
-      <label class="a11y-swatch">Text <input type="color" id="a11y-custom-text" data-custom="text"></label>
-      <label class="a11y-swatch">Accent <input type="color" id="a11y-custom-accent" data-custom="accent"></label>
-    </div>
-    <p class="a11y-contrast-warning" id="a11y-contrast-warning" hidden>
-      Heads-up: the chosen background and text colors fall below a 4.5:1 contrast
-      ratio and may be hard to read together.</p>
-    <button id="a11y-custom-clear" class="a11y-reset" type="button" style="margin-top:12px">Clear custom colors</button>
-  </section>
-  <section class="a11y-section">
-    <button id="a11y-reset" class="restart-btn" type="button">Reset to defaults</button>
-  </section>
-</div>
-</main>
-<div class="modal-backdrop" id="modalBackdrop">
-  <div class="modal">
-    <div class="modal-header">
-      <span class="modal-title" id="modalTitle"></span>
-      <button class="modal-close" id="modalClose">×</button>
-    </div>
-    <div class="modal-body" id="modalBody"></div>
-  </div>
-</div>
-<script>"""
-    + _SETTINGS_JS
-    + """</script>
-<footer id="versionFooter" class="version-footer">
-  <span id="versionFooterText"></span>
-</footer>
-</body>
-</html>
-"""
-)
+# CSS and JS are injected once at import; __HA_MCP_THEME_PREFS__ remains in the
+# string and is substituted per-request in _render_settings_html().
+_SETTINGS_HTML = _settings_html_template.replace(
+    "__HA_MCP_CSS__", _SETTINGS_CSS
+).replace("__HA_MCP_JS__", _SETTINGS_JS)
 
 
 def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
@@ -1100,8 +722,8 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
     """
     from pydantic import ValidationError
 
-    from .policy.model import Policy
-    from .policy.persistence import load_policy, save_policy
+    from ..policy.model import Policy
+    from ..policy.persistence import load_policy, save_policy
 
     async def get_config(_: Request) -> JSONResponse:
         try:
@@ -1125,7 +747,7 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
         if new_policy.version != current.version:
             return JSONResponse(
                 {
-                    "error": "policy version mismatch — reload before saving",
+                    "error": "Policy version mismatch. Reload before saving.",
                     "current_version": current.version,
                     "current_policy": current.model_dump(mode="json"),
                 },
@@ -1689,7 +1311,7 @@ def build_settings_handlers(
         # (their write actions are blocked at call time instead). The JS
         # uses this to keep their toggles live while force-disabling the
         # other write-capable tools' rows when the mode is on.
-        from .read_only import READ_ONLY_EXEMPT_TOOLS
+        from ..read_only import READ_ONLY_EXEMPT_TOOLS
 
         return JSONResponse(
             {
@@ -1983,7 +1605,7 @@ def build_settings_handlers(
         entries) is intentionally generic so other settings surfaces
         can render rows with the same JS code.
         """
-        from .config import (
+        from ..config import (
             _FEATURE_FLAG_INT_BOUNDS,
             FEATURE_FLAG_FIELDS,
             get_feature_flag_origin,
@@ -2007,7 +1629,7 @@ def build_settings_handlers(
                 if bounds is not None:
                     entry["min"], entry["max"] = bounds
             flags[field_name] = entry
-        from .config import BETA_FEATURE_FIELDS
+        from ..config import BETA_FEATURE_FIELDS
 
         return JSONResponse(
             {
@@ -2043,13 +1665,13 @@ def build_settings_handlers(
           flag descriptions advertise "Requires restart to take
           effect" — the UI shows the banner regardless of mode.
         """
-        from .config import (
+        from ..config import (
             _FEATURE_FLAG_INT_BOUNDS,
             _FEATURE_FLAG_OVERRIDE_FILENAME,
             FEATURE_FLAG_FIELDS,
             get_feature_flag_origin,
         )
-        from .utils.data_paths import get_data_dir
+        from ..utils.data_paths import get_data_dir
 
         try:
             body = await request.json()
@@ -2098,7 +1720,7 @@ def build_settings_handlers(
         # web-UI master path remains the gate (the gate read below
         # falls through to the override-file value). Either way the
         # gate is sound to apply uniformly.
-        from .config import (
+        from ..config import (
             BETA_FEATURE_FIELDS as _BETA_SUB,
         )
 
@@ -2172,8 +1794,8 @@ def build_settings_handlers(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         (
-                            f"{field_name!r} is locked by {origin} — "
-                            f"adjust the {env_name} env var "
+                            f"{field_name!r} is locked by {origin}. "
+                            f"Adjust the {env_name} env var "
                             "(or addon configuration) instead."
                         ),
                     ),
@@ -2298,7 +1920,7 @@ def build_settings_handlers(
                                 + "the add-on logs for the underlying failure.",
                                 "Report this at "
                                 + "https://github.com/homeassistant-ai/ha-mcp/issues "
-                                + "if it persists — this indicates an internal bug.",
+                                + "if it persists. This indicates an internal bug.",
                             ],
                         ),
                         status_code=500,
@@ -2375,7 +1997,7 @@ def build_settings_handlers(
                         (
                             f"Could not read existing feature flags "
                             f"({type(exc).__name__}: {exc}); refusing to "
-                            "overwrite to avoid losing prior toggles. "
+                            "overwrite to preserve prior toggles. "
                             "Check filesystem permissions and retry."
                         ),
                     ),
@@ -2394,7 +2016,7 @@ def build_settings_handlers(
                             (
                                 f"Existing override file at {path} is not "
                                 f"valid JSON ({exc}); refusing to overwrite "
-                                "to avoid losing prior toggles. Inspect or "
+                                "to preserve prior toggles. Inspect or "
                                 "delete the file manually and retry."
                             ),
                         ),
@@ -2542,7 +2164,7 @@ def build_settings_handlers(
         # Narrow to transport / HA-API / FS errors so programming bugs
         # propagate to the request handler instead of decorating the diff
         # output with a "_error" sentinel masquerading as entity state.
-        from .backup_manager import _CAPTURE_TRANSIENT_ERRORS
+        from ..backup_manager import _CAPTURE_TRANSIENT_ERRORS
 
         try:
             current = await handler.fetch(client, snapshot["entity_id"])
@@ -2649,7 +2271,7 @@ def build_settings_handlers(
         route through Supervisor ``/addons/self/options`` so the addon
         Configuration tab and the web UI share state.
         """
-        from .config import (
+        from ..config import (
             _ADVANCED_SETTINGS_BOUNDS,
             _ADVANCED_SETTINGS_CHOICES,
             _ADVANCED_SETTINGS_SENTINELS,
@@ -2734,7 +2356,7 @@ def build_settings_handlers(
         pre-read ``overrides`` dict so the override file isn't re-read
         N times per page render.
         """
-        from .config import (
+        from ..config import (
             ADDON_SYNCED_ADVANCED_FIELDS,
             ADVANCED_SETTINGS_FIELDS,
             _read_feature_flag_override_file,
@@ -2785,14 +2407,14 @@ def build_settings_handlers(
         paths (REST client construction, logging setup, MCP handshake
         metadata, tool-module filtering, etc.).
         """
-        from .config import (
+        from ..config import (
             _ADVANCED_SETTINGS_BOUNDS,
             _ADVANCED_SETTINGS_CHOICES,
             _ADVANCED_SETTINGS_SENTINELS,
             _FEATURE_FLAG_OVERRIDE_FILENAME,
             ADVANCED_SETTINGS_FIELDS,
         )
-        from .utils.data_paths import get_data_dir
+        from ..utils.data_paths import get_data_dir
 
         try:
             body = await request.json()
@@ -2813,7 +2435,7 @@ def build_settings_handlers(
                 status_code=400,
             )
 
-        from .config import ADDON_SYNCED_ADVANCED_FIELDS
+        from ..config import ADDON_SYNCED_ADVANCED_FIELDS
 
         registry = {f: (e, t, s, ed) for f, e, t, s, ed in ADVANCED_SETTINGS_FIELDS}
         new_overrides: dict[str, Any] = {}
@@ -2833,7 +2455,7 @@ def build_settings_handlers(
                 return JSONResponse(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"{fname!r} is display-only — modify via env var "
+                        f"{fname!r} is display-only. Modify via env var "
                         "or addon configuration.",
                     ),
                     status_code=409,
@@ -2862,8 +2484,8 @@ def build_settings_handlers(
                     ]
                 else:
                     message = (
-                        f"{fname!r} is set via {env_name} env var — "
-                        "unset it to edit here."
+                        f"{fname!r} is set via {env_name} env var. "
+                        "Unset it to edit here."
                     )
                     suggestions = [
                         f"Unset the {env_name} environment variable (or "
@@ -2921,8 +2543,8 @@ def build_settings_handlers(
                         f"{fname!r} must be between {bounds[0]} and "
                         f"{bounds[1]} (got {coerced}).",
                         suggestions=[
-                            f"Provide a value for {fname} within the range "
-                            f"{bounds[0]}–{bounds[1]}.",
+                            f"Provide a value for {fname} between "
+                            f"{bounds[0]} and {bounds[1]}.",
                         ],
                     ),
                     status_code=400,
@@ -3021,7 +2643,7 @@ def build_settings_handlers(
                                 + "the add-on logs for the underlying failure.",
                                 "Report this at "
                                 + "https://github.com/homeassistant-ai/ha-mcp/issues "
-                                + "if it persists — this indicates an internal bug.",
+                                + "if it persists. This indicates an internal bug.",
                             ],
                         ),
                         status_code=500,
@@ -3071,7 +2693,7 @@ def build_settings_handlers(
                         ErrorCode.INTERNAL_ERROR,
                         f"Could not read existing override file "
                         f"({type(exc).__name__}: {exc}); refusing to "
-                        "overwrite to avoid losing prior toggles.",
+                        "overwrite to preserve prior toggles.",
                     ),
                     status_code=500,
                 )
@@ -3366,14 +2988,14 @@ def build_settings_handlers(
         token (e.g. OAuth mode, where ``server.client`` has no request-scoped
         token) degrades to an "unavailable" envelope rather than a 500.
         """
-        from .tools.tools_filesystem import call_mcp_tools_service
+        from ..tools.tools_filesystem import call_mcp_tools_service
 
         own_client = None
         try:
             if server is not None:
                 client = server.client
             else:
-                from .client.rest_client import HomeAssistantClient
+                from ..client.rest_client import HomeAssistantClient
 
                 client = own_client = HomeAssistantClient()
             return await call_mcp_tools_service(client, service, data)
@@ -3392,8 +3014,8 @@ def build_settings_handlers(
         is False with a human-readable ``reason`` so the UI can show a disabled
         section instead of an error.
         """
-        from .tools.tools_filesystem import is_filesystem_tools_enabled
-        from .tools.util_helpers import unwrap_service_response
+        from ..tools.tools_filesystem import is_filesystem_tools_enabled
+        from ..tools.util_helpers import unwrap_service_response
 
         def _unavailable(reason: str) -> JSONResponse:
             return JSONResponse(
@@ -3443,8 +3065,8 @@ def build_settings_handlers(
         ``rejected``. ``restart_required`` is False — the component applies the
         new allowlist live.
         """
-        from .tools.tools_filesystem import is_filesystem_tools_enabled
-        from .tools.util_helpers import unwrap_service_response
+        from ..tools.tools_filesystem import is_filesystem_tools_enabled
+        from ..tools.util_helpers import unwrap_service_response
 
         if not is_filesystem_tools_enabled():
             return JSONResponse(
@@ -3543,7 +3165,7 @@ def build_settings_handlers(
         getattr(server, "approval_queue", None) if server is not None else None
     )
     if not is_sidecar and approval_queue is not None:
-        from .policy.handlers import build_policy_handlers
+        from ..policy.handlers import build_policy_handlers
 
         handlers.update(
             build_policy_handlers(

@@ -87,7 +87,9 @@ _BINDING_CORE_RE = re.compile(r"const PREFS = \{.*?const APPLY = \{[^}]*\};", re
 
 def test_binding_script_cores_are_logically_identical() -> None:
     repo = Path(__file__).resolve().parents[3]
-    settings_js = (repo / "src" / "ha_mcp" / "settings.js").read_text(encoding="utf-8")
+    settings_js = (repo / "src" / "ha_mcp" / "settings_ui" / "settings.js").read_text(
+        encoding="utf-8"
+    )
     layout = (repo / "site" / "src" / "layouts" / "Layout.astro").read_text(
         encoding="utf-8"
     )
@@ -99,7 +101,7 @@ def test_binding_script_cores_are_logically_identical() -> None:
 
     assert _normalize(settings_core.group(0)) == _normalize(layout_core.group(0)), (
         "The accessibility binding cores (PREFS/PRESETS/apply functions/"
-        "custom-color layering) in src/ha_mcp/settings.js and "
+        "custom-color layering) in src/ha_mcp/settings_ui/settings.js and "
         "site/src/layouts/Layout.astro have diverged. Mirror your change "
         "into both surfaces."
     )

@@ -481,10 +481,11 @@ class TestAccessibilityMarkup:
             assert f'aria-labelledby="tab-{name}"' in _SETTINGS_HTML
 
     def test_status_regions_are_live(self) -> None:
+        # The advanced-settings save-status spans were removed when those
+        # fields moved to auto-save (feedback is now the toast). The
+        # remaining status spans stay as ARIA live regions.
         for span_id in (
             "status",
-            "advSaveStatusTop",
-            "advSaveStatus",
             "backupConfigStatus",
             "policy-global-save-status",
         ):

@@ -344,7 +344,8 @@ On merge, `hotfix-release.yml` runs semantic-release, creates GitHub release, sy
 ### Setup
 ```bash
 uv sync --group dev        # Install with dev dependencies
-uv run ha-mcp              # Run MCP server
+uv run ha-mcp              # Run MCP server (stdio; needs interactive stdin)
+uv run ha-mcp-web          # Run HTTP server; web settings UI at http://localhost:8086/mcp/settings (see src/ha_mcp/settings_ui/AGENTS.md)
 cp .env.example .env       # Configure HA connection
 ```
 
@@ -379,6 +380,8 @@ Test token centralized in `tests/test_constants.py`.
 ### Code Quality
 ```bash
 uv run ruff check src/ tests/ --fix
+# Note: --fix removes unused imports from non-__init__ modules (lefthook runs it on commit with
+# stage_fixed). When adding an import, include its first use in the same change or it gets stripped.
 uv run mypy src/
 ```
 
