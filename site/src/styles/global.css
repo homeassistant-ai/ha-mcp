@@ -323,7 +323,7 @@ fieldset.a11y-options { border: 0; padding: 0; margin: 0; min-inline-size: auto;
 /* Preset chips (#1574 review): one-click theme presets modeled on Firefox
    Reader View's Colors menu. Each chip shows a miniature swatch of its
    actual scheme — fixed preview colors by design. Mirrors the same chip
-   palette in src/ha_mcp/settings.css. */
+   palette in src/ha_mcp/settings_ui/settings.css. */
 .a11y-preset-chip {
   width: 20px; height: 20px; border-radius: 5px; display: inline-flex;
   align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 600;
@@ -355,7 +355,7 @@ fieldset.a11y-options { border: 0; padding: 0; margin: 0; min-inline-size: auto;
 .a11y-reset:hover { background: rgb(var(--surface-2)); color: var(--text-primary); }
 
 /* Light-mode background shade picker (#1572). Mirrors the same selectors
-   used in src/ha_mcp/settings.css so the docs site and the settings UI
+   used in src/ha_mcp/settings_ui/settings.css so the docs site and the settings UI
    honor the same localStorage shade key. Only the page background flips —
    surfaces (cards, glass-card) keep their tuned palette. */
 :root[data-theme="light"][data-shade="paper"] body.body-background { background-color: #f4ede0; }
