@@ -19,8 +19,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastmcp.exceptions import ToolError
-
 from ...errors import ErrorCode, create_error_response
 from ..helpers import raise_tool_error
 
