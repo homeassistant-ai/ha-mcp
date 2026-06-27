@@ -103,6 +103,12 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
             device_id=device_id,
             context={"device_id": device_id},
         )
+        # Upstream NodeDiagnostics misspells the IP field "ip_adresses" (one d);
+        # normalize so callers see the same "ip_addresses" key ha_get_device
+        # surfaces. Copy first so the upstream/result dict is not mutated.
+        if isinstance(diag, dict) and "ip_adresses" in diag:
+            diag = dict(diag)
+            diag["ip_addresses"] = diag.pop("ip_adresses")
         return ok("matter", "diagnostics", diagnostics=diag)
 
     if action == "ping":

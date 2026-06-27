@@ -154,6 +154,9 @@ class TestManageRadioDispatcher:
         assert out["success"] is True
         assert out["radio"] == "matter"
         assert out["diagnostics"]["network_type"] == "THREAD"
+        # Normalized from the upstream "ip_adresses" typo (matches ha_get_device).
+        assert out["diagnostics"]["ip_addresses"] == ["fe80::1"]
+        assert "ip_adresses" not in out["diagnostics"]
 
     @pytest.mark.asyncio
     async def test_matter_ping(self):
