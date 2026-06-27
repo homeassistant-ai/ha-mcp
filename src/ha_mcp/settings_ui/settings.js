@@ -818,6 +818,9 @@ function updateStatus(text, saved, isError) {
 // dismiss button). Replace-on-new rather than stacking, so flipping several
 // toggles in a row doesn't pile up a column of identical toasts.
 let _toastTimer = null;
+// Tracks the 200ms leave-animation removal so a toast reused inside that
+// window (replace-on-new) isn't yanked from the DOM by the prior removal.
+let _toastRemoveTimer = null;
 function showToast(message, opts) {
   opts = opts || {};
   const isError = !!opts.isError;
@@ -837,9 +840,14 @@ function showToast(message, opts) {
     toast.appendChild(msg);
     region.appendChild(toast);
   }
+  // Cancel a pending leave-removal so reusing this element keeps it onscreen.
+  clearTimeout(_toastRemoveTimer);
   toast.classList.remove('leaving');
   toast.classList.toggle('ha-toast-error', isError);
+  // Both role and aria-live so every screen reader announces the update:
+  // assertive interrupts for errors, polite for routine outcomes.
   toast.setAttribute('role', isError ? 'alert' : 'status');
+  toast.setAttribute('aria-live', isError ? 'assertive' : 'polite');
   toast.querySelector('.ha-toast-msg').textContent = message;
   // Dismiss button only on errors/persistent toasts — HA's auto-dismiss
   // "Saved" snackbar has none.
@@ -861,8 +869,9 @@ function showToast(message, opts) {
 function _removeToast(toast) {
   if (!toast) return;
   clearTimeout(_toastTimer);
+  clearTimeout(_toastRemoveTimer);
   toast.classList.add('leaving');
-  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 200);
+  _toastRemoveTimer = setTimeout(() => { if (toast.parentNode) toast.remove(); }, 200);
 }
 
 function applyToolSearch() {
@@ -2923,7 +2932,7 @@ function applySidecarAvailability(isStdio) {
   // by the stdio settings-UI sidecar. In HTTP/SSE/OAuth/addon deployments
   // there is no sidecar, so dim + disable the section and explain why, rather
   // than letting a user save a value that does nothing.
-  // Remove any note from a prior load first, so the <h3> title is once again
+  // Remove any note from a prior load first, so the <h2> title is once again
   // the section's previousElementSibling (an injected note would otherwise
   // shadow it on a re-render).
   const prevNote = document.getElementById('advSidecarNote');

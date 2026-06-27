@@ -141,7 +141,8 @@
   <div class="header-actions">
     <label class="theme-control">
       <span class="theme-control-label">Theme</span>
-      <select id="themeToggle" class="theme-toggle" aria-label="Theme: light or dark mode">
+      <!-- No aria-label: the wrapping <label> with visible "Theme" text is the accessible name. -->
+      <select id="themeToggle" class="theme-toggle">
         <option value="auto">Auto (OS)</option>
         <option value="light">Light</option>
         <option value="dark">Dark</option>
@@ -238,21 +239,21 @@
        connection section remain in ADVANCED_SETTINGS_FIELDS so the
        API still returns them (env-pin debugging, future surfaces),
        but they are not rendered into a panel here. -->
-  <h3 class="adv-section-title">Search &amp; matching</h3>
+  <h2 class="adv-section-title">Search &amp; matching</h2>
   <div id="advSearch" class="adv-section"></div>
-  <h3 class="adv-section-title">Operations</h3>
+  <h2 class="adv-section-title">Operations</h2>
   <div id="advOperations" class="adv-section"></div>
-  <h3 class="adv-section-title">Tool surface</h3>
+  <h2 class="adv-section-title">Tool surface</h2>
   <div id="advToolsSurface" class="adv-section"></div>
-  <h3 class="adv-section-title">Diagnostics</h3>
+  <h2 class="adv-section-title">Diagnostics</h2>
   <div id="advDiagnostics" class="adv-section"></div>
-  <h3 class="adv-section-title">Settings UI sidecar</h3>
+  <h2 class="adv-section-title">Settings UI sidecar</h2>
   <div id="advSidecar" class="adv-section"></div>
 
   <!-- Beta features sit at the bottom of the panel — these can damage
        the HA system, so they come last and the user sees safer
        settings first. -->
-  <h3 class="adv-section-title beta-section-title">Beta features (dangerous)</h3>
+  <h2 class="adv-section-title beta-section-title">Beta features (dangerous)</h2>
   <div id="betaBody"></div>
 
 
@@ -358,7 +359,7 @@
     Your browser is blocking site storage; choices apply for this session
     only.</p>
   <section class="a11y-section">
-    <h3 class="a11y-section-title">Theme</h3>
+    <h2 class="a11y-section-title">Theme</h2>
     <p class="a11y-section-help">One-click color schemes. Auto, the default, follows
       your OS preference and flips live when it changes.</p>
     <fieldset class="a11y-options">
@@ -372,7 +373,7 @@
     </fieldset>
   </section>
   <section class="a11y-section">
-    <h3 class="a11y-section-title">Text size</h3>
+    <h2 class="a11y-section-title">Text size</h2>
     <p class="a11y-section-help">Scales the root font size. Browser zoom (Ctrl/Cmd +) still works on top of this.</p>
     <fieldset class="a11y-options">
       <legend class="visually-hidden">Text size</legend>
@@ -383,7 +384,7 @@
     </fieldset>
   </section>
   <section class="a11y-section">
-    <h3 class="a11y-section-title">Custom colors</h3>
+    <h2 class="a11y-section-title">Custom colors</h2>
     <p class="a11y-section-help">Pick your own colors on top of the selected theme. Each swatch
       opens your system's visual color picker.</p>
     <div class="a11y-swatches">

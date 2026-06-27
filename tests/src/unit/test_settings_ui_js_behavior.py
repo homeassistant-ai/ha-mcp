@@ -3492,6 +3492,7 @@ class TestToastFeedback:
               const t = document.querySelector('#ha-toast-region .ha-toast');
               document.body.setAttribute('data-test',
                 `present=${!!t} role=${t ? t.getAttribute('role') : ''} `
+                + `live=${t ? t.getAttribute('aria-live') : ''} `
                 + `msg=${t ? t.querySelector('.ha-toast-msg').textContent : ''} `
                 + `dismiss=${!!(t && t.querySelector('.ha-toast-dismiss'))}`);
             """,
@@ -3499,6 +3500,7 @@ class TestToastFeedback:
         _assert_clean_init(result)
         assert "present=true" in result.dom, result.dom[-600:]
         assert "role=status" in result.dom
+        assert "live=polite" in result.dom
         assert "msg=Saved." in result.dom
         assert "dismiss=false" in result.dom
 
@@ -3529,12 +3531,14 @@ class TestToastFeedback:
               document.body.setAttribute('data-test',
                 `err=${t ? t.classList.contains('ha-toast-error') : false} `
                 + `role=${t ? t.getAttribute('role') : ''} `
+                + `live=${t ? t.getAttribute('aria-live') : ''} `
                 + `dismiss=${!!(t && t.querySelector('.ha-toast-dismiss'))}`);
             """,
         )
         _assert_clean_init(result)
         assert "err=true" in result.dom, result.dom[-600:]
         assert "role=alert" in result.dom
+        assert "live=assertive" in result.dom
         assert "dismiss=true" in result.dom
 
     def test_rapid_toasts_replace_and_do_not_stack(self, settings_script: str) -> None:
@@ -3555,3 +3559,51 @@ class TestToastFeedback:
         )
         _assert_clean_init(result)
         assert 'data-test="count=1 last=third"' in result.dom, result.dom[-600:]
+
+    def test_reused_toast_survives_pending_leave_removal(
+        self, settings_script: str
+    ) -> None:
+        """A toast reused (replace-on-new) while a prior toast is mid-leave must
+        not be yanked from the DOM by the earlier 200ms removal timer. Settle
+        past the 200ms leave window but before the 4s auto-dismiss: the new
+        toast must still be present, proving the pending removal was cancelled."""
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            # Populated tools so init renders silently (an empty list would fire a
+            # "No tools found" error toast during settle and clobber our toast).
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/tools": {
+                    "status": 200,
+                    "json": {
+                        "tools": [
+                            {
+                                "name": "ha_get_state",
+                                "title": "Get State",
+                                "primary_tag": "Test",
+                                "annotations": {"readOnlyHint": True},
+                            },
+                        ],
+                        "states": {"ha_get_state": "enabled"},
+                        "env_pinned": {},
+                        "read_only_exempt": [],
+                    },
+                },
+            },
+            # 300ms > the 200ms leave-removal, < the 4000ms auto-dismiss.
+            settle_ms=300,
+            invoke="""
+              showToast('first');
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              _removeToast(t);     // start leave: schedules DOM removal in 200ms
+              showToast('second'); // reuse element; must cancel that removal
+            """,
+        )
+        _assert_clean_init(result)
+        # Without the fix the stale 200ms timer removes the reused toast; with it
+        # the toast survives with the new message.
+        assert '<div class="ha-toast' in result.dom, (
+            f"reused toast was removed by stale timer: {result.dom[-600:]}"
+        )
+        assert ">second<" in result.dom, result.dom[-600:]
