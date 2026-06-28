@@ -150,6 +150,40 @@ class TestCreateAuthError:
 
         assert response["error"]["code"] == "AUTH_EXPIRED"
 
+    def test_invalid_token_suggestions_non_addon(self, monkeypatch):
+        """Off the add-on, an invalid token keeps the token-centric defaults
+        (the long-lived-token advice)."""
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+        response = create_auth_error("Invalid token")
+
+        joined = " ".join(response["error"].get("suggestions", []))
+        assert "long-lived access token" in joined
+        assert "Supervisor" not in joined
+
+    def test_invalid_token_suggestions_addon(self, monkeypatch):
+        """On the add-on (Supervisor token), invalid-token guidance switches to
+        Supervisor-aware steps (Core restart, home-assistant.log) and drops the
+        long-lived-token advice that doesn't apply under Supervisor auth (issue
+        #1694). It must NOT assert a root cause."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
+        response = create_auth_error("Invalid token")
+
+        assert response["error"]["code"] == "AUTH_INVALID_TOKEN"
+        joined = " ".join(response["error"].get("suggestions", []))
+        assert "Supervisor" in joined
+        assert "home-assistant.log" in joined
+        assert "long-lived access token" not in joined
+
+    def test_expired_token_unaffected_by_addon(self, monkeypatch):
+        """Expired errors keep their own defaults even on the add-on — the
+        swap targets invalid-token only."""
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake-supervisor-token")
+        response = create_auth_error("Token expired", expired=True)
+
+        assert response["error"]["code"] == "AUTH_EXPIRED"
+        joined = " ".join(response["error"].get("suggestions", []))
+        assert "Supervisor" not in joined
+
 
 class TestCreateEntityNotFoundError:
     """Tests for create_entity_not_found_error function."""

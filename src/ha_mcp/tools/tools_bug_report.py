@@ -47,6 +47,12 @@ AGENT_BEHAVIOR_URL = (
 # while still capturing enough recent output to diagnose most issues.
 _ADDON_LOG_MAX_CHARS = 3000
 
+# Max characters to include from the Home Assistant error log (home-assistant.log).
+# Slightly larger than the addon cap: this log carries the highest-value
+# diagnostic lines (auth failures, integration tracebacks) and the recent tail
+# is where they land. ~5000 chars ≈ 1250 LLM tokens.
+_CORE_LOG_MAX_CHARS = 5000
+
 # IPv4 sanitization: only redact addresses with strong network context so that
 # four-segment version strings (e.g. "ha-mcp version 1.2.3.4") are preserved.
 _IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
@@ -408,6 +414,49 @@ async def _fetch_addon_logs() -> str:
     return ""
 
 
+async def _fetch_core_error_log(client: Any) -> str:
+    """Fetch the Home Assistant error log (home-assistant.log) via the client.
+
+    Works on every install type — ``HomeAssistantClient.get_error_log`` routes
+    add-on installs to the Supervisor, supervised/HAOS to the hassio proxy, and
+    container/pip to ``/api/error_log``. Captured over REST, which stays up even
+    when the WebSocket path is failing; that is exactly the failure mode in
+    issue #1694, where the decisive auth-store lines
+    (``InsecureKeyLengthWarning``, "invalid authentication") only appeared in
+    home-assistant.log, not in the add-on log this tool already captured.
+
+    Best-effort: returns sanitized text (last ``_CORE_LOG_MAX_CHARS`` chars,
+    with a truncation marker prepended) or an empty string on any failure, so a
+    log-fetch problem never breaks the bug-report path.
+    """
+    try:
+        raw = await client.get_error_log()
+    except Exception as e:
+        # Broad by design — the bug-report path must stay robust whatever the
+        # client raises (auth, role, connection, transport). Logged at INFO so
+        # a missing error log is visible without alarming on a routine 403.
+        logger.info(
+            "Could not fetch HA error log for bug report: %s (%s)",
+            e,
+            type(e).__name__,
+        )
+        return ""
+
+    if not raw:
+        return ""
+
+    # Strip ANSI, then sanitize, then truncate — sanitizing before truncating
+    # keeps a secret straddling the cut boundary from leaking through.
+    sanitized = _sanitize_log_text(ANSI_ESCAPE_RE.sub("", raw))
+    if len(sanitized) > _CORE_LOG_MAX_CHARS:
+        marker = (
+            f"[...truncated, showing last {_CORE_LOG_MAX_CHARS} of "
+            f"{len(sanitized)} chars...]\n"
+        )
+        return marker + sanitized[-_CORE_LOG_MAX_CHARS:]
+    return sanitized
+
+
 def _build_formatted_report(
     diagnostic_info: dict[str, Any],
     mcp_transport: str,
@@ -419,6 +468,7 @@ def _build_formatted_report(
     recent_logs: list[dict[str, Any]],
     log_summary: str,
     addon_logs: str,
+    core_error_log: str,
 ) -> str:
     report_lines = [
         "=== ha-mcp Bug Report Info ===",
@@ -459,6 +509,8 @@ def _build_formatted_report(
         )
     if addon_logs:
         report_lines.extend(["", "=== Add-on Container Logs ===", addon_logs])
+    if core_error_log:
+        report_lines.extend(["", "=== Home Assistant Error Log ===", core_error_log])
     return "\n".join(report_lines)
 
 
@@ -530,6 +582,8 @@ class BugReportTools:
         - `recent_logs`, `startup_logs` — captured ha-mcp tool/server log entries
         - `addon_logs` — addon container stdout/stderr (HA add-on installs only;
           empty string otherwise)
+        - `core_error_log` — Home Assistant error log (home-assistant.log) over
+          REST; carries auth / integration errors that don't show in addon_logs
         - `suggested_title`, `duplicate_check_urls`, `anonymization_guide`
         """
         # Detect installation method, platform, and runtime config.
@@ -583,6 +637,12 @@ class BugReportTools:
         if install_method == "addon":
             addon_logs = await _fetch_addon_logs()
 
+        # Fetch the Home Assistant error log (home-assistant.log) on every
+        # install type. It's pulled over REST — which stays up even when the
+        # WebSocket path is failing — so the report captures auth / integration
+        # errors (issue #1694) that never appear in the add-on log above.
+        core_error_log = await _fetch_core_error_log(self._client)
+
         # Format logs for inclusion (sanitized summary)
         log_summary = _format_logs_for_report(recent_logs)
         startup_log_summary = _format_startup_logs(startup_logs)
@@ -599,6 +659,7 @@ class BugReportTools:
             recent_logs,
             log_summary,
             addon_logs,
+            core_error_log,
         )
 
         # Generate suggested title up-front so it can be folded into the
@@ -618,6 +679,7 @@ class BugReportTools:
             recent_logs,
             startup_logs,
             addon_logs=addon_logs,
+            core_error_log=core_error_log,
             submit_url=runtime_bug_submit_url,
         )
 
@@ -655,6 +717,8 @@ class BugReportTools:
                 for entry in startup_logs
             ],
             "addon_logs": addon_logs,
+            # Already sanitized + truncated by _fetch_core_error_log.
+            "core_error_log": core_error_log,
             "log_count": len(recent_logs),
             "startup_log_count": len(startup_logs),
             "formatted_report": formatted_report,
@@ -714,6 +778,7 @@ class BugReportTools:
                 "      - Agent behavior: see agent_behavior_submit_url\n"
                 "   d. Ask them to fill in the description sections\n"
                 "   e. For HA add-on installs, the runtime bug template includes a collapsible '📦 Add-on Container Logs' section auto-filled from addon_logs — keep it as-is\n"
+                "   e2. When present, the template also includes a collapsible 'Home Assistant Error Log' section auto-filled from core_error_log (auth / integration errors) — keep it as-is\n"
                 "   f. Remind them to review for any remaining personal information before submitting\n\n"
                 "CRITICAL: Always ANONYMIZE the report BEFORE presenting it in markdown code blocks!"
             ),
@@ -894,6 +959,7 @@ def _generate_runtime_bug_template(
     startup_logs: list[dict[str, Any]],
     *,
     addon_logs: str = "",
+    core_error_log: str = "",
     submit_url: str = RUNTIME_BUG_URL,
 ) -> str:
     """
@@ -948,6 +1014,26 @@ def _generate_runtime_bug_template(
 
 ```
 {addon_logs}
+```
+
+</details>
+"""
+
+    # Show the Home Assistant error log section when available (all install
+    # types). This carries the auth / integration errors that diagnose issues
+    # like #1694 and don't appear in the add-on container log above.
+    core_log_section = ""
+    if core_error_log:
+        core_log_section = f"""
+---
+
+## Home Assistant Error Log
+
+<details>
+<summary>Click to expand home-assistant.log (auth / integration errors)</summary>
+
+```
+{core_error_log}
 ```
 
 </details>
@@ -1048,7 +1134,7 @@ server:
 ```
 
 </details>
-{startup_section}{addon_section}
+{startup_section}{addon_section}{core_log_section}
 ---
 
 ## 💡 Additional Context

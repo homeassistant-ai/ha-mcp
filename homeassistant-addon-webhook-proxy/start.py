@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import sys
 import time
@@ -66,6 +67,14 @@ def log_error(message: str) -> None:
 MCP_ADDON_SLUG_SUFFIXES = ["_ha_mcp", "_ha_mcp_dev"]
 # Also try exact slugs for official repo installs
 MCP_ADDON_EXACT_SLUGS = ["ha_mcp", "ha_mcp_dev"]
+
+# Inbound-request mirror file. The mcp_proxy integration (which runs inside
+# Home Assistant, where the webhook actually executes) appends each inbound
+# debug line here when "Log inbound requests" is on; this addon tails the file
+# and echoes new lines to its own log so they're visible in the addon log too,
+# not only in Settings -> System -> Logs. Path kept in sync with
+# mcp_proxy/__init__.py:INBOUND_LOG_FILE.
+INBOUND_LOG_FILE = Path("/config/.mcp_proxy_inbound.log")
 
 
 def _supervisor_get(path: str) -> dict | None:
@@ -723,6 +732,42 @@ def _health_check(target_url: str) -> bool:
         return False
 
 
+def _emit_new_inbound_lines(state: dict[str, int]) -> None:
+    """Echo new lines from the integration's inbound-request mirror file to
+    this addon's log.
+
+    The webhook runs inside Home Assistant, so the integration logs inbound
+    requests there, not in this addon. It also appends each line to
+    ``INBOUND_LOG_FILE``; this tails that file so the same lines show up in the
+    addon log. ``state["offset"]`` tracks the byte position consumed so far.
+    Only whole lines are emitted; a trailing partial line is left for the next
+    poll. Best-effort — any error is swallowed so mirroring never disrupts the
+    keep-alive loop.
+    """
+    try:
+        if not INBOUND_LOG_FILE.exists():
+            return
+        offset = state.get("offset", 0)
+        with INBOUND_LOG_FILE.open("rb") as fh:
+            size = fh.seek(0, 2)
+            if offset > size:
+                # File was truncated/rotated by the integration — restart.
+                offset = 0
+            if offset == size:
+                return
+            fh.seek(offset)
+            data = fh.read()
+        last_nl = data.rfind(b"\n")
+        if last_nl == -1:
+            return  # no complete line buffered yet
+        state["offset"] = offset + last_nl + 1
+        for line in data[: last_nl + 1].decode("utf-8", errors="replace").splitlines():
+            if line.strip():
+                log_info(line)
+    except OSError:
+        return
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1166,28 +1211,58 @@ def main() -> int:
     log_info("=" * 70)
     log_info("")
 
-    # Keep-alive loop with periodic health check
-    log_info("Entering keep-alive loop (health check every 60s)...")
-    consecutive_failures = 0
-    while True:
-        try:
-            time.sleep(60)
-        except KeyboardInterrupt:
-            log_info("Shutting down...")
-            break
+    # Install signal handlers so a Supervisor "stop" (SIGTERM) — and Ctrl-C
+    # (SIGINT) in an interactive run — shut down cleanly through the cleanup
+    # below. Previously SIGTERM killed the process mid-loop, so the cleanup
+    # never ran (the webhook was left registered) and nothing logged WHY the
+    # addon exited. The handler raises KeyboardInterrupt so an in-progress
+    # time.sleep() returns immediately (PEP 475 would otherwise resume it).
+    shutdown_reason: dict[str, str | None] = {"reason": None}
 
-        if _health_check(target_url):
-            if consecutive_failures > 0:
-                log_info("MCP server is reachable again")
-            consecutive_failures = 0
-        else:
-            consecutive_failures += 1
-            if consecutive_failures == 1:
-                log_error(f"MCP server unreachable: {target_url}")
-            elif consecutive_failures % 5 == 0:
-                log_error(
-                    f"MCP server still unreachable after {consecutive_failures} checks"
-                )
+    def _on_signal(signum: int, _frame: object) -> None:
+        shutdown_reason["reason"] = signal.Signals(signum).name
+        raise KeyboardInterrupt
+
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(_sig, _on_signal)
+
+    # Keep-alive loop. A short poll interval keeps inbound-log mirroring
+    # responsive when "Log inbound requests" is on; the MCP-server health
+    # check runs on its own ~60s cadence regardless of the poll interval.
+    log_info("Entering keep-alive loop (health check every 60s)...")
+    inbound_tail: dict[str, int] = {
+        "offset": INBOUND_LOG_FILE.stat().st_size if INBOUND_LOG_FILE.exists() else 0
+    }
+    consecutive_failures = 0
+    last_health = 0.0
+    try:
+        while True:
+            if debug_logging:
+                _emit_new_inbound_lines(inbound_tail)
+
+            now = time.monotonic()
+            if now - last_health >= 60:
+                last_health = now
+                if _health_check(target_url):
+                    if consecutive_failures > 0:
+                        log_info("MCP server is reachable again")
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+                    if consecutive_failures == 1:
+                        log_error(f"MCP server unreachable: {target_url}")
+                    elif consecutive_failures % 5 == 0:
+                        log_error(
+                            "MCP server still unreachable after "
+                            f"{consecutive_failures} checks"
+                        )
+
+            time.sleep(3 if debug_logging else 30)
+    except KeyboardInterrupt:
+        # SIGINT in environments where it still raises directly, rather than
+        # going through _on_signal (which already set a reason).
+        if shutdown_reason["reason"] is None:
+            shutdown_reason["reason"] = "KeyboardInterrupt"
 
     # Cleanup on stop: remove config entry to unregister the webhook (stops
     # proxying), but keep the config file and custom component files so the
@@ -1195,9 +1270,14 @@ def main() -> int:
     # /data/webhook_id.txt so the URL stays the same across stop/start.
     #
     # On full uninstall, the user may need to manually remove
-    # /config/custom_components/mcp_proxy/ and
-    # /config/.mcp_proxy_config.json, then restart HA.
+    # /config/custom_components/mcp_proxy/, /config/.mcp_proxy_config.json, and
+    # /config/.mcp_proxy_inbound.log, then restart HA.
+    log_info(f"Shutting down (reason: {shutdown_reason['reason'] or 'unknown'})...")
     _remove_config_entry()
+    try:
+        INBOUND_LOG_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        log_error(f"Could not remove inbound log file ({type(e).__name__}): {e}")
     log_info("Webhook proxy stopped.")
     return 0
 

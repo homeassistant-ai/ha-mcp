@@ -1545,6 +1545,101 @@ class TestDebugLogging:
         assert webhook_id[:6] in caplog.text
 
 
+class TestInboundLogMirror:
+    """Issue #1694: inbound debug lines are mirrored into the addon log.
+
+    The integration appends each inbound line to INBOUND_LOG_FILE; the addon's
+    keep-alive loop tails that file and echoes new lines to its own stdout so
+    they show up in the addon log, not only in Settings -> System -> Logs.
+    """
+
+    def test_append_inbound_log_writes_and_caps(self, tmp_path):
+        mod = _import_mcp_proxy()
+        log_file = tmp_path / "inbound.log"
+        with (
+            patch.object(mod, "INBOUND_LOG_FILE", log_file),
+            patch.object(mod, "_INBOUND_LOG_CAP", 200),
+        ):
+            for i in range(100):
+                mod._append_inbound_log(f"MCP Proxy [inbound]: line number {i}")
+            # Capped to bound growth, and the most recent line survives intact.
+            assert log_file.stat().st_size <= 200
+            assert log_file.read_text().splitlines()[-1].endswith("line number 99")
+
+    def test_append_inbound_log_swallows_oserror(self, tmp_path):
+        """A read-only / missing /config must not turn a debug write into a
+        propagating error (it runs in the executor, fire-and-forget)."""
+        mod = _import_mcp_proxy()
+        bad = tmp_path / "missing-dir" / "inbound.log"  # parent doesn't exist
+        with patch.object(mod, "INBOUND_LOG_FILE", bad):
+            mod._append_inbound_log("x")  # must not raise
+
+    async def test_handle_webhook_mirrors_inbound_line(self, tmp_path):
+        """A debug-on request dispatches the inbound line to the executor, which
+        lands in INBOUND_LOG_FILE for the addon to tail."""
+        mod = _import_mcp_proxy()
+        log_file = tmp_path / "inbound.log"
+
+        def fake_executor(func, *args):
+            func(*args)  # run the append synchronously for the test
+            return MagicMock()
+
+        hass = MagicMock()
+        hass.async_add_executor_job = MagicMock(side_effect=fake_executor)
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+                "debug_logging": True,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.remote = "203.0.113.4"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("stop")
+        )
+        with patch.object(mod, "INBOUND_LOG_FILE", log_file):
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+
+        text = log_file.read_text()
+        assert "[inbound]" in text
+        assert "203.0.113.4" in text
+
+    def test_emit_new_inbound_lines_tails_file(self, tmp_path):
+        """The addon tail emits only whole lines, holds a partial for the next
+        poll, never duplicates, and resets when the file is rotated."""
+        start = _import_start()
+        log_file = tmp_path / "inbound.log"
+        emitted: list[str] = []
+        with (
+            patch.object(start, "INBOUND_LOG_FILE", log_file),
+            patch.object(start, "log_info", side_effect=emitted.append),
+        ):
+            state = {"offset": 0}
+            start._emit_new_inbound_lines(state)  # no file yet
+            assert emitted == []
+
+            log_file.write_bytes(b"line A\nline B\npartial")
+            start._emit_new_inbound_lines(state)
+            assert emitted == ["line A", "line B"]  # partial held back
+
+            with log_file.open("ab") as fh:
+                fh.write(b" done\n")
+            emitted.clear()
+            start._emit_new_inbound_lines(state)
+            assert emitted == ["partial done"]  # completed, not re-emitted
+
+            log_file.write_bytes(b"fresh\n")  # truncation/rotation
+            emitted.clear()
+            start._emit_new_inbound_lines(state)
+            assert emitted == ["fresh"]
+
+
 class TestOAuthProvider:
     """Direct unit tests against the OAuthProvider class."""
 
@@ -2394,6 +2489,55 @@ class TestAuthorizeViewGet:
         assert "&lt;script&gt;" in html
 
 
+class TestRestartHintOnErrors:
+    """Issue #1694: every proxy error appends a 'fully restart Home Assistant'
+    hint — OAuth/webhook registration only refreshes on a full HA restart, so a
+    regenerate / OAuth toggle / reinstall can otherwise leave a stale error."""
+
+    def test_init_and_oauth_hints_stay_in_sync(self, tmp_path):
+        oauth = _import_oauth(tmp_path)
+        mod = _import_mcp_proxy()
+        assert mod.RESTART_HINT == oauth.RESTART_HINT
+        assert "restart Home Assistant" in oauth.RESTART_HINT
+
+    def test_text_error_appends_hint(self, tmp_path):
+        oauth = _import_oauth(tmp_path)
+        with patch.object(oauth.web, "Response") as resp_ctor:
+            oauth._text_error(400, "invalid client_id")
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "invalid client_id" in text
+        assert "restart Home Assistant" in text
+
+    def test_json_error_carries_hint_in_description(self, tmp_path):
+        oauth = _import_oauth(tmp_path)
+        with patch.object(oauth.web, "json_response") as jr:
+            oauth._json_error("invalid_client", 401)
+        payload = jr.call_args.args[0]
+        assert payload["error"] == "invalid_client"
+        assert "restart Home Assistant" in payload["error_description"]
+
+    async def test_invalid_client_id_browser_message_has_hint(self, tmp_path):
+        """The user's exact case: a wrong client_id at /authorize produces a
+        browser 400 whose text tells them to fully restart HA."""
+        oauth, provider = _provider_for_view_tests(tmp_path)
+        view = oauth.AuthorizeView(provider)
+        request = _make_view_request(
+            query={
+                "response_type": "code",
+                "client_id": "not-the-configured-id",
+                "redirect_uri": "https://claude.ai/cb",
+                "code_challenge": "X" * 43,
+                "code_challenge_method": "S256",
+                "state": "s",
+            }
+        )
+        with patch.object(oauth.web, "Response") as resp_ctor:
+            await view.get(request)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "invalid client_id" in text
+        assert "restart Home Assistant" in text
+
+
 class TestAuthorizeViewPost:
     @pytest.fixture
     def setup(self, tmp_path):
@@ -2491,7 +2635,7 @@ class TestTokenView:
 
         kwargs = resp_ctor.call_args.kwargs
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_client"}
+        assert body["error"] == "invalid_client"
         assert kwargs.get("status") == 401
         assert (
             kwargs.get("headers", {}).get("WWW-Authenticate")
@@ -2511,7 +2655,7 @@ class TestTokenView:
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_client"}
+        assert body["error"] == "invalid_client"
 
     async def test_unsupported_grant_type(self, setup):
         oauth, provider, view = setup
@@ -2528,7 +2672,7 @@ class TestTokenView:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
         kwargs = resp_ctor.call_args.kwargs
-        assert body == {"error": "unsupported_grant_type"}
+        assert body["error"] == "unsupported_grant_type"
         assert kwargs.get("status") == 400
 
     async def test_authorization_code_missing_fields(self, setup):
@@ -2545,7 +2689,7 @@ class TestTokenView:
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_request"}
+        assert body["error"] == "invalid_request"
 
     async def test_authorization_code_full_round_trip(self, setup):
         oauth, provider, view = setup
@@ -2622,7 +2766,7 @@ class TestTokenView:
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_grant"}
+        assert body["error"] == "invalid_grant"
 
 
 class TestPkceLengthEnforcement:

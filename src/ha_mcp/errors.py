@@ -298,15 +298,55 @@ def create_connection_error(
     return create_error_response(code, message, details, context=context)
 
 
+# Authentication-error suggestions for Home Assistant add-on installs. On the
+# add-on the token is managed by the Supervisor, not a user-editable
+# HOMEASSISTANT_TOKEN, so the default "verify your token / create a long-lived
+# token" guidance is a dead end. We deliberately do NOT assert a cause — issue
+# #1694's underlying cause was never reproduced or confirmed — so this points at
+# practical first steps and at where an auth problem actually surfaces
+# (home-assistant.log), without claiming to know why it happened.
+_ADDON_AUTH_INVALID_SUGGESTIONS: list[str] = [
+    "On a Home Assistant add-on install the access token is managed by the "
+    + "Supervisor, not a HOMEASSISTANT_TOKEN you can change",
+    "A Home Assistant Core restart (Settings -> System -> Restart) often "
+    + "clears transient WebSocket authentication failures — try that first",
+    "Check home-assistant.log for 'invalid authentication' or "
+    + "'InsecureKeyLengthWarning' around the time of the failure; if those "
+    + "appear, the cause is in Home Assistant's auth store (a Core/Supervisor "
+    + "issue), not ha-mcp",
+]
+
+
 def create_auth_error(
     message: str,
     details: str | None = None,
     expired: bool = False,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create an authentication error response."""
+    """Create an authentication error response.
+
+    On a Home Assistant add-on install (Supervisor-managed) the token is the
+    Supervisor token rather than a user-editable HOMEASSISTANT_TOKEN, so the
+    default token-centric suggestions don't apply. Substitute add-on-specific
+    guidance for an invalid token in that case (see issue #1694). Expired-token
+    errors keep the default guidance — token expiry is not the Supervisor-token
+    failure mode this swap targets.
+    """
     code = ErrorCode.AUTH_EXPIRED if expired else ErrorCode.AUTH_INVALID_TOKEN
-    return create_error_response(code, message, details, context=context)
+
+    suggestions: list[str] | None = None
+    if code is ErrorCode.AUTH_INVALID_TOKEN:
+        # Lazy import keeps this low-level module free of an import-time
+        # dependency on ._version; is_running_in_addon reads SUPERVISOR_TOKEN
+        # live so it reflects the current environment.
+        from ._version import is_running_in_addon
+
+        if is_running_in_addon():
+            suggestions = _ADDON_AUTH_INVALID_SUGGESTIONS
+
+    return create_error_response(
+        code, message, details, suggestions=suggestions, context=context
+    )
 
 
 def create_entity_not_found_error(

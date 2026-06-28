@@ -11,6 +11,7 @@ from ha_mcp.tools.tools_bug_report import (
     _detect_mcp_transport,
     _extract_client_info,
     _fetch_addon_logs,
+    _fetch_core_error_log,
     _format_client_info_for_template,
     _format_config_toggles_for_template,
     _format_logs_for_report,
@@ -52,6 +53,7 @@ class TestBugReportTool:
         client = MagicMock()
         client.get_config = AsyncMock()
         client.get_states = AsyncMock()
+        client.get_error_log = AsyncMock(return_value="")
         return client
 
     @pytest.fixture
@@ -491,6 +493,26 @@ class TestBugReportTool:
         assert "personal information" in instructions.lower()
 
     @pytest.mark.asyncio
+    async def test_bug_report_includes_core_error_log(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Issue #1694: the report surfaces home-assistant.log (the decisive
+        auth/integration errors) in both the structured output and the runtime
+        template — the gap that made #1694 a multi-round diagnosis."""
+        mock_client.get_config.return_value = {"version": "2026.6.4"}
+        mock_client.get_states.return_value = []
+        mock_client.get_error_log.return_value = (
+            "WARNING InsecureKeyLengthWarning: The HMAC key is 0 bytes long"
+        )
+
+        result = await ha_report_issue_func()
+
+        assert "InsecureKeyLengthWarning" in result["core_error_log"]
+        assert "InsecureKeyLengthWarning" in result["formatted_report"]
+        assert "Home Assistant Error Log" in result["runtime_bug_template"]
+        assert "InsecureKeyLengthWarning" in result["runtime_bug_template"]
+
+    @pytest.mark.asyncio
     async def test_bug_report_suggested_title(self, ha_report_issue_func, mock_client):
         """Test that a suggested title is generated."""
         mock_client.get_config.return_value = {"version": "2024.12.0"}
@@ -654,6 +676,68 @@ class TestBugReportTool:
         assert result["addon_logs"] == ""
         assert "Add-on Container Logs" not in result["formatted_report"]
         assert "Add-on Container Logs" not in result["runtime_bug_template"]
+
+
+class TestFetchCoreErrorLog:
+    """`_fetch_core_error_log` captures home-assistant.log over REST, scrubs
+    secrets, truncates to the recent tail, and never raises (issue #1694)."""
+
+    @pytest.mark.asyncio
+    async def test_scrubs_secrets_keeps_diagnostics(self):
+        """Secrets that can appear in home-assistant.log are scrubbed via the
+        same _sanitize_log_text the add-on-log path uses, while the diagnostic
+        lines survive."""
+        client = MagicMock()
+        client.get_error_log = AsyncMock(
+            return_value=(
+                "invalid authentication from localhost\n"
+                "InsecureKeyLengthWarning: The HMAC key is 0 bytes long\n"
+                "Bearer eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJhYmMifQ.sIgNature_xyz123\n"
+                "token=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
+                "client_secret: kX9pQ4mZ2vL8nR3sT6uW1yA5cB7dF0gH\n"
+                "http://user:hunter2@ha:8123/private_axAloe89imJfMt8RgkwuVA\n"
+            )
+        )
+        out = await _fetch_core_error_log(client)
+        # Diagnostic lines kept.
+        assert "invalid authentication" in out
+        assert "InsecureKeyLengthWarning" in out
+        # Every secret shape scrubbed.
+        for secret in (
+            "eyJhbGciOiJIUzI1NiJ9",
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            "kX9pQ4mZ2vL8nR3sT6uW1yA5cB7dF0gH",
+            "hunter2",
+            "axAloe89imJfMt8RgkwuVA",
+        ):
+            assert secret not in out, f"leaked: {secret}"
+
+    @pytest.mark.asyncio
+    async def test_truncates_to_recent_tail(self):
+        from ha_mcp.tools.tools_bug_report import _CORE_LOG_MAX_CHARS
+
+        client = MagicMock()
+        client.get_error_log = AsyncMock(
+            return_value="x" * (_CORE_LOG_MAX_CHARS + 4000) + "TAIL_MARKER\n"
+        )
+        out = await _fetch_core_error_log(client)
+        assert "TAIL_MARKER" in out  # keeps the most recent lines
+        assert "truncated" in out
+        assert len(out) <= _CORE_LOG_MAX_CHARS + 200  # only the marker overhead
+
+    @pytest.mark.asyncio
+    async def test_empty_when_log_empty(self):
+        client = MagicMock()
+        client.get_error_log = AsyncMock(return_value="")
+        assert await _fetch_core_error_log(client) == ""
+
+    @pytest.mark.asyncio
+    async def test_best_effort_on_exception(self):
+        """A 403 (role too low), auth, or transport error must yield "" rather
+        than break the bug-report path."""
+        client = MagicMock()
+        client.get_error_log = AsyncMock(side_effect=RuntimeError("boom"))
+        assert await _fetch_core_error_log(client) == ""
 
 
 class TestSanitizeLogText:
