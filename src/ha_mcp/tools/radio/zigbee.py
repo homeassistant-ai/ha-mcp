@@ -95,7 +95,9 @@ SUPPORTED: dict[str, ActionSpec] = {
     ),
     "cluster_command": ActionSpec(
         "Issue a Zigbee cluster command (endpoint_id, cluster_id, command, "
-        "command_type; optional params/args; cluster_type defaults to 'in').",
+        "command_type; cluster_type defaults to 'in'). Pass command arguments "
+        "via params — HA deprecated 'args' in favor of 'params' (both are still "
+        "accepted), so prefer params.",
         destructive=True,
         required=("device_id", "endpoint_id", "cluster_id", "command", "command_type"),
     ),
@@ -238,12 +240,11 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
 
     if action == "firmware_update":
         entity_id = await resolve_update_entity(client, device_id, platform="zha")
-        result = await _call_service(client, "update", "install", entity_id=entity_id)
+        await _call_service(client, "update", "install", entity_id=entity_id)
         return ok(
             "zigbee",
             "firmware_update",
             entity_id=entity_id,
-            result=result,
             long_running=True,
         )
 
@@ -344,6 +345,8 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
             cluster_type=cluster_type,
             command=args.get("command"),
             command_type=args.get("command_type"),
+            # HA deprecated 'args' in favor of 'params' (both still accepted);
+            # forward both for back-compat — callers should prefer params.
             params=args.get("params"),
             args=args.get("args"),
             manufacturer=args.get("manufacturer"),

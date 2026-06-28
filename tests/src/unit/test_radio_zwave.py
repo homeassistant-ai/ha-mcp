@@ -234,6 +234,15 @@ class TestZwaveRadio:
         # The conflicting call must never reach add_node.
         assert not any(m["type"] == "zwave_js/add_node" for m in record)
 
+    @pytest.mark.asyncio
+    async def test_add_integration_absent_raises(self):
+        # add is a write action: an absent zwave_js config entry must raise
+        # (integration_required) before the credential check is reached.
+        client = _client({"config_entries/get": _entries(present=False)})
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(radio="zwave", action="add")
+        assert "zwave_js" in str(exc.value)
+
     # ---- remove_device ------------------------------------------------------ #
     @pytest.mark.asyncio
     async def test_remove_device_requires_confirm(self):
@@ -288,6 +297,15 @@ class TestZwaveRadio:
         sent = next(m for m in record if m["type"] == "zwave_js/remove_node")
         assert sent["entry_id"] == "e1"
 
+    @pytest.mark.asyncio
+    async def test_remove_device_exclusion_integration_absent_raises(self):
+        # The exclusion path (no params.failed) opens a controller window, so an
+        # absent zwave_js config entry must raise rather than no-op.
+        client = _client({"config_entries/get": _entries(present=False)})
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(radio="zwave", action="remove_device", confirm=True)
+        assert "zwave_js" in str(exc.value)
+
     # ---- reinterview -------------------------------------------------------- #
     @pytest.mark.asyncio
     async def test_reinterview(self):
@@ -338,6 +356,19 @@ class TestZwaveRadio:
         with pytest.raises(ToolError) as exc:
             await _radio(_client({}))(radio="zwave", action="rebuild_routes")
         assert "device_id" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_rebuild_routes_network_integration_absent_raises(self):
+        # The network scope rebuilds via the controller, so an absent zwave_js
+        # config entry must raise (integration_required), not silently no-op.
+        client = _client({"config_entries/get": _entries(present=False)})
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(
+                radio="zwave",
+                action="rebuild_routes",
+                params={"scope": "network"},
+            )
+        assert "zwave_js" in str(exc.value)
 
     # ---- set_config_param --------------------------------------------------- #
     @pytest.mark.asyncio
@@ -423,6 +454,15 @@ class TestZwaveRadio:
         assert out["success"] is True
         sent = next(m for m in record if m["type"] == "zwave_js/hard_reset_controller")
         assert sent["entry_id"] == "e1"
+
+    @pytest.mark.asyncio
+    async def test_hard_reset_integration_absent_raises(self):
+        # hard_reset wipes the controller, so an absent zwave_js config entry
+        # must raise (integration_required) rather than no-op.
+        client = _client({"config_entries/get": _entries(present=False)})
+        with pytest.raises(ToolError) as exc:
+            await _radio(client)(radio="zwave", action="hard_reset", confirm=True)
+        assert "zwave_js" in str(exc.value)
 
     # ---- unknown action ----------------------------------------------------- #
     @pytest.mark.asyncio

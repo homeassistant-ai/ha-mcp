@@ -353,15 +353,9 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         update_entity = await resolve_update_entity(
             client, device_id, platform="zwave_js"
         )
-        result = await client.call_service(
-            "update", "install", {"entity_id": update_entity}
-        )
+        await client.call_service("update", "install", {"entity_id": update_entity})
         return ok(
-            "zwave",
-            "firmware_update",
-            entity_id=update_entity,
-            result=result,
-            long_running=True,
+            "zwave", "firmware_update", entity_id=update_entity, long_running=True
         )
 
     if action == "hard_reset":
