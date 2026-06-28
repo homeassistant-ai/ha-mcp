@@ -1653,16 +1653,22 @@ def build_settings_handlers(
         )
 
         settings = get_global_settings()
-        # Read-consistency with the add-on Configuration tab: addon-origin
-        # flags are sourced from /data/options.json at boot, so the boot-env
-        # value goes stale after a config edit without a restart. Surface the
-        # latest SAVED options value for those (see _live_addon_options).
+        # Read-consistency with the add-on Configuration tab: a flag the user
+        # saved in the Config tab is already in Supervisor's live options, but
+        # the boot-env value goes stale until a restart. Surface the latest
+        # SAVED value for any flag present in live_options (see
+        # _live_addon_options) — not just origin=="addon" rows. On a dev add-on
+        # a flag saved before restart has origin "default"/"file" (its env var
+        # wasn't written at this boot), yet the fresh value is the one to show.
+        # Only origin=="env" stays pinned (an explicit env var the user must
+        # unset to change), and live_options is {} outside add-on mode so this
+        # is a no-op standalone.
         live_options = await _live_addon_options()
         flags: dict[str, Any] = {}
         for field_name, env_name, ftype in FEATURE_FLAG_FIELDS:
             origin = get_feature_flag_origin(env_name)
             value = getattr(settings, field_name)
-            if origin == "addon" and field_name in live_options:
+            if field_name in live_options and origin != "env":
                 value = live_options[field_name]
             entry: dict[str, Any] = {
                 "value": value,

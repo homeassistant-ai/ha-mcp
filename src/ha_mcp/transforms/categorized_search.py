@@ -413,7 +413,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 # so no initial sentinel value is needed.
                 correct_proxy = ""
                 if name in transform._read_tools:
-                    actual_category = "read"
+                    actual_category: Capability = "read"
                     correct_proxy = transform._call_read_name
                 elif name in transform._write_tools:
                     actual_category = "write"

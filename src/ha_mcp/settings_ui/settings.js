@@ -163,7 +163,7 @@ async function loadTools() {
   READ_ONLY_EXEMPT = new Set(data.read_only_exempt || []);
   // Load policy state before the first render so the "security gated"
   // toggle reflects current policy.rules. loadPolicyState() never throws
-  // — it leaves gatedTools empty on failure.
+  // — it keeps the prior gatedTools on failure.
   await loadPolicyState();
   syncReadOnlyToggle();
   // /api/settings/info drives the restart-button mode, restart-notice
@@ -837,7 +837,8 @@ function setStatusAlert(el, isError) {
 function updateStatus(text, saved, isError) {
   const el = document.getElementById('status');
   // Terminal outcomes (a successful save or an error) are announced by the
-  // toast, which is itself an ARIA live region (the static #ha-toast-region).
+  // toast, which is itself an ARIA live region (the .ha-toast element inside
+  // #ha-toast-region).
   // Writing the same text to the #status live region too would make screen
   // readers announce it twice, so for toast cases route the announcement
   // solely through showToast and leave #status for the transient progress
@@ -847,8 +848,11 @@ function updateStatus(text, saved, isError) {
     showToast(text, {isError: !!isError});
     return;
   }
-  setStatusAlert(el, isError);
-  el.className = saved ? 'status saved' : 'status';
+  // Past the early return, ``saved`` and ``isError`` are always false —
+  // only the transient progress states reach here — so the status span is
+  // always the neutral role=status/polite variant.
+  setStatusAlert(el, false);
+  el.className = 'status';
   el.textContent = text;
 }
 
@@ -1010,16 +1014,16 @@ function renderBackupConfig() {
     row.className = 'backup-field';
     let controlHtml;
     if (typeof f.value === 'boolean') {
-      controlHtml = `<input type="checkbox" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-label="${escapeHtml(meta.label)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="checkbox" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-labelledby="label-backup-${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
     } else if (typeof f.value === 'string') {
       // Path / freeform string fields (auto_backup_dir).
-      controlHtml = `<input type="text" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-label="${escapeHtml(meta.label)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="text" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-labelledby="label-backup-${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
     } else {
       let min = 1;
       let max = 10000;
       if (f.field === 'auto_backup_throttle_minutes') { min = 0; max = 1440; }
       else if (f.field === 'auto_backup_calendar_lookahead_days') { min = 1; max = 365; }
-      controlHtml = `<input type="number" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-label="${escapeHtml(meta.label)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="number" name="backup:${escapeHtml(f.field)}" data-field="${escapeHtml(f.field)}" aria-labelledby="label-backup-${escapeHtml(f.field)}" value="${Number(f.value)}" min="${min}" max="${max}" ${f.editable ? '' : 'disabled'}>`;
     }
     let originMsg;
     if (f.origin === 'env') {
@@ -1029,7 +1033,7 @@ function renderBackupConfig() {
     }
     const lockedBadge = f.editable ? '' : `<span class="backup-field-locked">env-locked</span>`;
     row.innerHTML =
-      `<span class="backup-field-label">${escapeHtml(meta.label)}</span>` +
+      `<span class="backup-field-label" id="label-backup-${escapeHtml(f.field)}">${escapeHtml(meta.label)}</span>` +
       `<span class="backup-field-control">${controlHtml}</span>` +
       lockedBadge +
       `<span class="backup-field-help">${escapeHtml(meta.help)}${originMsg ? '. ' + originMsg : ''}</span>`;
@@ -1407,6 +1411,13 @@ function showModal(title, html) {
   document.getElementById('modalTitle').textContent = title;
   document.getElementById('modalBody').innerHTML = html;
   const backdrop = document.getElementById('modalBackdrop');
+  // Defensive: if showModal is called while a modal is already open (a stale
+  // handler still bound), drop the prior keydown listener first so trap
+  // handlers don't accumulate on the backdrop.
+  if (_modalKeydownHandler) {
+    backdrop.removeEventListener('keydown', _modalKeydownHandler);
+    _modalKeydownHandler = null;
+  }
   _modalOpener = document.activeElement;
   backdrop.classList.add('show');
   const modal = backdrop.querySelector('.modal');
@@ -1691,7 +1702,7 @@ function renderFeatureFlags(flags) {
         `${escapeHtml(ORIGIN_INFO_NOTE[f.origin])}</div>`
       : '';
     info.innerHTML =
-      `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-name" id="label-feature-${fieldName}">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
       lockedNote + infoNote;
 
@@ -1710,7 +1721,7 @@ function renderFeatureFlags(flags) {
       input.name = 'feature:' + fieldName;
       input.checked = !!f.value;
       input.disabled = !f.editable || lockedByMaster;
-      input.setAttribute('aria-label', meta.label);
+      input.setAttribute('aria-labelledby', 'label-feature-' + fieldName);
       input.addEventListener('change', () => {
         // Master flip → re-render the panel synchronously so the
         // sub-row dimming reflects the new state immediately. The
@@ -1762,7 +1773,7 @@ function renderFeatureFlags(flags) {
       if (typeof f.min === 'number') input.min = f.min;
       if (typeof f.max === 'number') input.max = f.max;
       input.disabled = !f.editable;
-      input.setAttribute('aria-label', meta.label);
+      input.setAttribute('aria-labelledby', 'label-feature-' + fieldName);
       input.addEventListener('change', () => {
         const parsed = parseInt(input.value, 10);
         if (Number.isFinite(parsed)) saveFeatureFlag(fieldName, parsed);
@@ -3078,22 +3089,22 @@ function renderAdvancedSection(containerId, fields) {
     const meta = ADVANCED_FIELD_META[f.field] || { label: f.field, help: '' };
     let controlHtml;
     if (f.choices) {
-      controlHtml = `<select name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-label="${escapeHtml(meta.label)}" ${f.editable ? '' : 'disabled'}>` +
+      controlHtml = `<select name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" ${f.editable ? '' : 'disabled'}>` +
         f.choices.map(c =>
           `<option value="${escapeHtml(c)}" ${String(f.value) === c ? 'selected' : ''}>${escapeHtml(c)}</option>`
         ).join('') +
         '</select>';
     } else if (f.type === 'bool') {
-      controlHtml = `<input type="checkbox" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-label="${escapeHtml(meta.label)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="checkbox" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" ${f.value ? 'checked' : ''} ${f.editable ? '' : 'disabled'}>`;
     } else if (f.type === 'int' || f.type === 'float') {
-      controlHtml = `<input type="number" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-label="${escapeHtml(meta.label)}" value="${Number(f.value)}" ` +
+      controlHtml = `<input type="number" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" value="${Number(f.value)}" ` +
         (f.min !== undefined ? `min="${f.min}" ` : '') +
         (f.max !== undefined ? `max="${f.max}" ` : '') +
         (f.type === 'float' ? 'step="0.1" ' : '') +
         (f.editable ? '' : 'disabled') + '>';
     } else {
       // str
-      controlHtml = `<input type="text" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-label="${escapeHtml(meta.label)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
+      controlHtml = `<input type="text" name="adv:${escapeHtml(f.field)}" data-adv-field="${escapeHtml(f.field)}" aria-labelledby="label-adv-${escapeHtml(f.field)}" value="${escapeHtml(String(f.value ?? ''))}" ${f.editable ? '' : 'disabled'}>`;
     }
     let originMsg = '';
     if (f.origin === 'env') {
@@ -3103,7 +3114,7 @@ function renderAdvancedSection(containerId, fields) {
     }
     row.innerHTML =
       `<div class="adv-info">` +
-        `<div class="adv-name">${escapeHtml(meta.label)}</div>` +
+        `<div class="adv-name" id="label-adv-${escapeHtml(f.field)}">${escapeHtml(meta.label)}</div>` +
         `<div class="adv-help">${escapeHtml(meta.help)}</div>` +
         (originMsg ? `<div class="adv-locked-note">${originMsg}</div>` : '') +
       `</div>` +
@@ -3235,7 +3246,7 @@ async function saveAdvancedSettings() {
     // (e.g. arrived during the in-flight POST — its re-armed save reloads
     // later), or (b) the user is actively typing in another advanced field
     // whose change hasn't fired yet (not in _advancedDirty), which the reload
-    // would otherwise discard. A later save or tab-away reloads once safe.
+    // would otherwise discard. A later save reloads once safe.
     const editingAdvField = !!(
       document.activeElement
       && document.activeElement.closest

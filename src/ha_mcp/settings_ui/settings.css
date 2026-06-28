@@ -771,10 +771,9 @@
   }
   /* The closed control sits on the header and uses the header text colour, so
      it stays legible whether the header is dark (dark theme) or light (light
-     theme). The native <option> popup, though, follows the page color-scheme,
-     so without an explicit rule the options inherit the header colour and can
-     render invisibly (e.g. white-on-white in light mode). Pin the popup to the
-     surface palette so options stay legible in every theme. */
+     theme). The native <option> popup follows the page color-scheme, not the
+     header, so pin it to the surface palette; that keeps the options legible
+     in every theme regardless of the header text colour. */
   .theme-toggle option { background: var(--surface); color: var(--text); }
   .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 

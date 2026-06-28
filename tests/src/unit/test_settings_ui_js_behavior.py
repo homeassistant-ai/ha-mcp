@@ -115,9 +115,22 @@ def _build_min_dom() -> str:
         elif el_id in ("backupList", "featuresBody"):
             rows.append(f'<table><tbody id="{el_id}"></tbody></table>')
         elif el_id == "modalBackdrop":
-            rows.append('<div id="modalBackdrop"><div id="modalBody"></div></div>')
-        elif el_id == "modalBody":
-            continue  # rendered as a child of modalBackdrop above
+            # Full modal scaffold (mirrors settings.html) so the focus-trap
+            # code in showModal/closeModal — which queries `.modal` and
+            # #modalClose — has the structure it depends on.
+            rows.append(
+                '<div id="modalBackdrop">'
+                '<div class="modal" role="dialog" tabindex="-1">'
+                '<div class="modal-header">'
+                '<span class="modal-title" id="modalTitle"></span>'
+                '<button class="modal-close" id="modalClose">×</button>'
+                "</div>"
+                '<div class="modal-body" id="modalBody"></div>'
+                "</div>"
+                "</div>"
+            )
+        elif el_id in ("modalBody", "modalTitle", "modalClose"):
+            continue  # rendered as children of modalBackdrop above
         elif el_id.startswith("panel-"):
             rows.append(f'<div id="{el_id}" class="panel"></div>')
         elif el_id in (
@@ -126,7 +139,6 @@ def _build_min_dom() -> str:
             "backupConfigSave",
             "backupRefresh",
             "backupBulkDelete",
-            "modalClose",
         ):
             rows.append(f'<button id="{el_id}"></button>')
         elif el_id == "restartNotice":
@@ -3412,7 +3424,9 @@ class TestTablistAndStatusBehavior:
             """,
         )
         _assert_clean_init(result)
-        assert 'data-test="fail=alert/assertive progress=status/polite"' in result.dom, (
+        assert (
+            'data-test="fail=alert/assertive progress=status/polite"' in result.dom
+        ), (
             "terminal failure should announce via the toast (assertive) and leave "
             f"#status polite for progress; dom tail: {result.dom[-800:]}"
         )
@@ -3610,3 +3624,559 @@ class TestToastFeedback:
             f"reused toast was removed by stale timer: {result.dom[-600:]}"
         )
         assert ">second<" in result.dom, result.dom[-600:]
+
+
+def _probe(result: HarnessResult, attr: str) -> str | None:
+    """Read a ``data-<attr>`` value stamped onto an element in result.dom.
+
+    The JS behaviour tests stash assertion data into data-* attributes
+    (live, before the fake clock advances past toast auto-dismiss). This
+    pulls the value back out without depending on attribute order.
+    """
+    m = re.search(rf'data-{attr}="([^"]*)"', result.dom)
+    return m.group(1) if m else None
+
+
+class TestModalFocusTrap:
+    """The snapshot modal follows the WAI-ARIA APG dialog pattern:
+    focus moves into the dialog on open, Tab is trapped inside it, Escape
+    closes it, and focus returns to the opener on close. Regression guard
+    for the focus-management handlers added in showModal/closeModal.
+    """
+
+    def test_focus_moves_traps_and_restores(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              await new Promise(r => setTimeout(r, 50));
+              // Focus a page element so closeModal has an opener to restore to.
+              const opener = document.getElementById('search');
+              opener.focus();
+              const openerId = document.activeElement ? document.activeElement.id : '';
+              // Two focusable controls in the body so the trap has a range.
+              showModal('T', '<button id="b1">one</button><button id="b2">two</button>');
+              const backdrop = document.getElementById('modalBackdrop');
+              const afterOpen = document.activeElement ? document.activeElement.id : '';
+              const shownOpen = backdrop.classList.contains('show');
+              // Tab at the last focusable wraps to the first (#modalClose).
+              document.getElementById('b2').focus();
+              backdrop.dispatchEvent(
+                new window.KeyboardEvent('keydown', {key: 'Tab', bubbles: true}));
+              const afterTab = document.activeElement ? document.activeElement.id : '';
+              // Shift+Tab at the first focusable wraps to the last (#b2).
+              document.getElementById('modalClose').focus();
+              backdrop.dispatchEvent(
+                new window.KeyboardEvent(
+                  'keydown', {key: 'Tab', shiftKey: true, bubbles: true}));
+              const afterShiftTab = document.activeElement ? document.activeElement.id : '';
+              // Escape closes the dialog and restores focus to the opener.
+              backdrop.dispatchEvent(
+                new window.KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+              const shownEsc = backdrop.classList.contains('show');
+              const afterClose = document.activeElement ? document.activeElement.id : '';
+              const probe = document.createElement('div');
+              probe.id = '__modal_probe';
+              probe.dataset.opener = openerId;
+              probe.dataset.afterOpen = afterOpen;
+              probe.dataset.shownOpen = String(shownOpen);
+              probe.dataset.afterTab = afterTab;
+              probe.dataset.afterShiftTab = afterShiftTab;
+              probe.dataset.shownEsc = String(shownEsc);
+              probe.dataset.afterClose = afterClose;
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "opener") == "search", "opener was not focused first"
+        assert _probe(result, "shown-open") == "true", "modal did not open"
+        assert _probe(result, "after-open") == "modalClose", (
+            "showModal did not move focus to the close button"
+        )
+        assert _probe(result, "after-tab") == "modalClose", (
+            "Tab at the last focusable did not wrap to the first"
+        )
+        assert _probe(result, "after-shift-tab") == "b2", (
+            "Shift+Tab at the first focusable did not wrap to the last"
+        )
+        assert _probe(result, "shown-esc") == "false", "Escape did not close the dialog"
+        assert _probe(result, "after-close") == "search", (
+            "closeModal did not restore focus to the opener"
+        )
+
+
+# Advanced field shared by the reload-guard tests below.
+_ADV_GUARD_FIELD = {
+    "field": "fuzzy_threshold",
+    "env_var": "FUZZY_THRESHOLD",
+    "value": 60,
+    "type": "int",
+    "section": "search",
+    "origin": "default",
+    "editable": True,
+}
+
+
+def _adv_method_counts(result: HarnessResult) -> tuple[int, int]:
+    """Return ``(get_count, post_count)`` for /api/settings/advanced."""
+    gets = sum(
+        1
+        for f in result.fetches
+        if "/api/settings/advanced" in f["url"] and f["method"] == "GET"
+    )
+    posts = sum(
+        1
+        for f in result.fetches
+        if "/api/settings/advanced" in f["url"] and f["method"] == "POST"
+    )
+    return gets, posts
+
+
+class TestAdvancedAutoSaveReloadGuard:
+    """saveAdvancedSettings() rebuilds the panel (innerHTML='') after a save
+    only when it is SAFE: skipped while another edit is still pending or the
+    user is typing in an advanced field, otherwise the reload GET fires. The
+    skip prevents a focus-stealing / typing-discarding rebuild mid-edit.
+    """
+
+    def test_reload_skipped_when_another_field_still_dirty(
+        self, settings_script: str
+    ) -> None:
+        """An edit that lands while the POST is in flight stays in
+        _advancedDirty after the saved batch is cleared, so the post-save
+        reload must NOT fire (it would discard the pending edit)."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [_ADV_GUARD_FIELD], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));  // init load (GET #1)
+              _advancedDirty['fuzzy_threshold'] = 5;
+              const p = saveAdvancedSettings();   // restartFields=['fuzzy_threshold']
+              // Arrives during the in-flight POST -> not in the saved batch.
+              _advancedDirty['log_level'] = 'DEBUG';
+              await p;
+              document.body.setAttribute(
+                'data-remaining', Object.keys(_advancedDirty).sort().join(','));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "remaining") == "log_level", (
+            "the in-flight edit was not preserved in _advancedDirty"
+        )
+        gets, posts = _adv_method_counts(result)
+        assert posts == 1, f"expected exactly one save POST, got {posts}"
+        assert gets == 1, (
+            f"reload GET should be skipped while an edit is pending; "
+            f"got {gets} GETs (init load is the only expected one)"
+        )
+
+    def test_reload_skipped_when_focus_in_advanced_field(
+        self, settings_script: str
+    ) -> None:
+        """With focus inside a [data-adv-field] the reload must NOT fire — a
+        rebuild would yank focus and discard in-progress typing."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [_ADV_GUARD_FIELD], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));  // init load (GET #1)
+              const input = document.querySelector('[data-adv-field="fuzzy_threshold"]');
+              input.value = '5';
+              input.dispatchEvent(new Event('change'));  // commit + arm debounce
+              input.focus();                             // focus inside an adv field
+              await new Promise(r => setTimeout(r, 1500));  // debounce fires the save
+              document.body.setAttribute(
+                'data-active',
+                document.activeElement
+                  ? (document.activeElement.getAttribute('data-adv-field') || 'none')
+                  : 'none');
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "active") == "fuzzy_threshold", (
+            "test precondition: focus should remain in the advanced field"
+        )
+        gets, posts = _adv_method_counts(result)
+        assert posts == 1, f"expected exactly one save POST, got {posts}"
+        assert gets == 1, (
+            f"reload GET should be skipped while a field is focused; got {gets}"
+        )
+
+    def test_reload_fires_when_clean_and_unfocused(self, settings_script: str) -> None:
+        """Control: with _advancedDirty empty after the save and focus NOT in
+        an advanced field, the post-save reload GET DOES fire."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [_ADV_GUARD_FIELD], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));  // init load (GET #1)
+              const input = document.querySelector('[data-adv-field="fuzzy_threshold"]');
+              input.value = '5';
+              input.dispatchEvent(new Event('change'));  // commit + arm debounce
+              // Ensure focus is not inside any advanced field.
+              if (document.activeElement && document.activeElement.blur) {
+                document.activeElement.blur();
+              }
+              await new Promise(r => setTimeout(r, 1500));  // debounce fires the save
+            """,
+        )
+        _assert_clean_init(result)
+        gets, posts = _adv_method_counts(result)
+        assert posts == 1, f"expected exactly one save POST, got {posts}"
+        assert gets == 2, f"expected init load + one post-save reload GET, got {gets}"
+
+
+class TestLoadPolicyStateKeepsPriorGated:
+    """loadPolicyState() keeps the previously-loaded gatedTools when the
+    /api/policy/config reload fails, instead of clobbering it to empty —
+    so a transient blip can't make the Tools tab falsely claim nothing is
+    gated.
+    """
+
+    def test_gated_row_survives_failed_policy_reload(
+        self, settings_script: str
+    ) -> None:
+        tool = {
+            "name": "ha_get_state",
+            "title": "Get State",
+            "category": "read",
+            "description": "Read a state.",
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [tool],
+                    "states": {},
+                    "env_pinned": {},
+                    "read_only_exempt": [],
+                },
+            },
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_tool_security_policies": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                        }
+                    },
+                    "beta_sub_flags": [],
+                    "is_addon": False,
+                },
+            },
+            "/api/policy/config": {
+                "responses": [
+                    {"status": 200, "json": {"rules": [{"tool_name": "ha_get_state"}]}},
+                    {"status": 500, "json": {"error": {"message": "boom"}}},
+                ]
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));  // first load seeds gatedTools
+              const before = document.querySelector('input[name="tool:ha_get_state:gated"]');
+              const checkedBefore = !!(before && before.checked);
+              await loadPolicyState();   // second load: policy/config 500 -> keep prior
+              render();
+              const after = document.querySelector('input[name="tool:ha_get_state:gated"]');
+              document.body.setAttribute('data-before', String(checkedBefore));
+              document.body.setAttribute('data-after', String(!!(after && after.checked)));
+              document.body.setAttribute(
+                'data-has', String(policyState.gatedTools.has('ha_get_state')));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "before") == "true", (
+            "precondition: the tool should render gated after the first load"
+        )
+        assert _probe(result, "has") == "true", (
+            "gatedTools was cleared after the failed policy reload"
+        )
+        assert _probe(result, "after") == "true", (
+            "the gated checkbox lost its checked state after the failed reload"
+        )
+
+
+class TestCapabilityBadgeUnknownFallback:
+    """A tool whose category is missing/blank or an unrecognised value must
+    still render a visible badge (``badge unknown`` with '?' or the escaped
+    value) — a destructive tool showing no tier badge would understate risk.
+    """
+
+    def test_blank_and_bogus_categories_render_unknown_badge(
+        self, settings_script: str
+    ) -> None:
+        tools = [
+            {
+                "name": "tool_empty_cat",
+                "title": "Empty Cat",
+                "category": "",
+                "description": "x",
+            },
+            {
+                "name": "tool_bogus_cat",
+                "title": "Bogus Cat",
+                "category": "weird",
+                "description": "y",
+            },
+        ]
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": tools,
+                    "states": {},
+                    "env_pinned": {},
+                    "read_only_exempt": [],
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const badges = Array.from(document.querySelectorAll('span.badge.unknown'));
+              document.body.setAttribute('data-count', String(badges.length));
+              document.body.setAttribute(
+                'data-texts', badges.map(b => b.textContent).join('|'));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "count") == "2", (
+            f"expected two unknown-category badges; dom tail: {result.dom[-600:]}"
+        )
+        texts = _probe(result, "texts") or ""
+        assert set(texts.split("|")) == {"?", "weird"}, (
+            f"unknown badges should show '?' (blank) and the raw value; got {texts}"
+        )
+
+
+class TestBackupActionErrorToast:
+    """A network drop on a destructive backup action surfaces a visible
+    error toast instead of silently no-opping (the bare rejection would
+    only reach the visually-hidden #status region).
+    """
+
+    @pytest.mark.parametrize(
+        "act,verb,name,throw_pattern",
+        [
+            ("restore", "Restore", "snap_a", "/restore"),
+            ("delete", "Delete", "snap_b", "/backups/snap_b"),
+        ],
+    )
+    def test_network_error_shows_error_toast(
+        self,
+        settings_script: str,
+        act: str,
+        verb: str,
+        name: str,
+        throw_pattern: str,
+    ) -> None:
+        fetches = {**DEFAULT_FETCHES, throw_pattern: {"throw": "network down"}}
+        invoke = (
+            (
+                "await new Promise(r => setTimeout(r, 100));\n"
+                "await window.backupAction('__ACT__', '__NAME__');\n"
+                "const t = document.querySelector('#ha-toast-region .ha-toast');\n"
+                "document.body.setAttribute('data-toast',\n"
+                "  t ? (t.className + '::' + "
+                "(t.querySelector('.ha-toast-msg')?.textContent || '')) : 'NONE');\n"
+            )
+            .replace("__ACT__", act)
+            .replace("__NAME__", name)
+        )
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            settle_ms=300,
+            invoke=invoke,
+        )
+        _assert_clean_init(result)
+        toast = _probe(result, "toast") or ""
+        assert "ha-toast-error" in toast, (
+            f"expected an error toast for a failed {act}; got {toast!r}"
+        )
+        assert verb in toast and name in toast and "failed" in toast, (
+            f"error toast missing action/name context; got {toast!r}"
+        )
+
+
+class TestSaveConfigStructuredError:
+    """A failed tools save surfaces the server's structured error message
+    (``Save failed: <message>``) rather than a generic failure string.
+    """
+
+    def test_structured_error_message_surfaced(self, settings_script: str) -> None:
+        tool = {
+            "name": "ha_get_state",
+            "title": "Get State",
+            "category": "read",
+            "description": "x",
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/tools": {
+                "responses": [
+                    {
+                        "status": 200,
+                        "json": {
+                            "tools": [tool],
+                            "states": {},
+                            "env_pinned": {},
+                            "read_only_exempt": [],
+                        },
+                    },
+                    {"status": 400, "json": {"error": {"message": "disk full"}}},
+                ]
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            settle_ms=300,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              await window.saveConfig();
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              document.body.setAttribute('data-toast',
+                t ? (t.querySelector('.ha-toast-msg')?.textContent || '') : 'NONE');
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "toast") == "Save failed: disk full", (
+            f"expected the structured error message; got {_probe(result, 'toast')!r}"
+        )
+
+
+class TestGoogleFontsRemoved:
+    """The #1695 redesign dropped the Google Fonts CDN <link>/preconnect in
+    favour of the system font stack — keep it out (privacy + offline use).
+    """
+
+    def test_settings_html_has_no_google_fonts_or_preconnect(self) -> None:
+        from ha_mcp.settings_ui import _SETTINGS_HTML
+
+        assert "fonts.googleapis.com" not in _SETTINGS_HTML
+        assert "fonts.gstatic.com" not in _SETTINGS_HTML
+        assert "preconnect" not in _SETTINGS_HTML
+
+
+class TestAriaLabelledbyOnRenderedInputs:
+    """Feature-flag, advanced, and backup inputs are associated with their
+    visible label via aria-labelledby pointing at the label element's id
+    (replacing the duplicated aria-label text).
+    """
+
+    def test_feature_advanced_backup_inputs_reference_visible_label(
+        self, settings_script: str
+    ) -> None:
+        feature_flags = {
+            "enable_tool_search": {
+                "value": False,
+                "origin": "default",
+                "editable": True,
+                "type": "bool",
+            }
+        }
+        adv_field = {
+            "field": "fuzzy_threshold",
+            "env_var": "FUZZY_THRESHOLD",
+            "value": 60,
+            "type": "int",
+            "section": "search",
+            "origin": "default",
+            "editable": True,
+        }
+        backup_field = {
+            "field": "enable_auto_backup",
+            "value": True,
+            "origin": "default",
+            "editable": True,
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": feature_flags,
+                    "beta_sub_flags": [],
+                    "is_addon": False,
+                },
+            },
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+            },
+            "/api/settings/backup-config": {
+                "status": 200,
+                "json": {"fields": [backup_field], "is_addon": False},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              await loadBackupConfig();  // not loaded on init
+              const fInput = document.querySelector('input[name="feature:enable_tool_search"]');
+              const fLabel = document.getElementById('label-feature-enable_tool_search');
+              const aInput = document.querySelector('[data-adv-field="fuzzy_threshold"]');
+              const aLabel = document.getElementById('label-adv-fuzzy_threshold');
+              const bInput = document.querySelector('input[data-field="enable_auto_backup"]');
+              const bLabel = document.getElementById('label-backup-enable_auto_backup');
+              document.body.setAttribute('data-feat',
+                `${fInput ? fInput.getAttribute('aria-labelledby') : 'noinput'}`
+                + `|${fLabel ? fLabel.className : 'nolabel'}`);
+              document.body.setAttribute('data-adv',
+                `${aInput ? aInput.getAttribute('aria-labelledby') : 'noinput'}`
+                + `|${aLabel ? aLabel.className : 'nolabel'}`);
+              document.body.setAttribute('data-backup',
+                `${bInput ? bInput.getAttribute('aria-labelledby') : 'noinput'}`
+                + `|${bLabel ? bLabel.className : 'nolabel'}`);
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "feat") == "label-feature-enable_tool_search|feature-name"
+        assert _probe(result, "adv") == "label-adv-fuzzy_threshold|adv-name"
+        assert (
+            _probe(result, "backup")
+            == "label-backup-enable_auto_backup|backup-field-label"
+        )
