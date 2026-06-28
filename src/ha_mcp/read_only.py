@@ -133,11 +133,21 @@ def _custom_tool_write(args: dict[str, Any]) -> str | None:
 
 def _radio_write(args: dict[str, Any]) -> str | None:
     action = args.get("action")
-    # Reads: per-node diagnostics, the integration/network summary, and the
-    # active reachability probe. Everything else is a write (commission/add,
-    # remove, reinterview, firmware, fabric / credential / channel / network
-    # changes). A missing action fails closed.
-    if action in ("diagnostics", "network_status", "ping"):
+    # Reads (allowed): per-node diagnostics, the integration/network summary,
+    # the active reachability probe, a single Zigbee cluster-attribute read, and
+    # the Thread dataset listing. Everything else is a write — commission/add,
+    # remove, reinterview, firmware, fabric/credential/channel/network changes,
+    # plus the two actions that LOOK read-ish but are not: zigbee network_backup
+    # (creates a backup artifact + key material, like ha_manage_backup's blocked
+    # snapshot create) and thread discover_routers (kicks off a long-running
+    # mDNS scan). A missing action fails closed.
+    if action in (
+        "diagnostics",
+        "network_status",
+        "ping",
+        "cluster_read",
+        "list_datasets",
+    ):
         return None
     return f"action={action!r}"
 
@@ -146,8 +156,9 @@ def _radio_write(args: dict[str, Any]) -> str | None:
 # (verified per tool: ha_get_addon cannot proxy-read addon-internal
 # APIs; energy prefs and assist pipelines are reachable only through
 # these tools; edit-backup listing exists nowhere else; the saved-tools
-# cache is only listable here; ha_manage_radio's active 'ping' probe is
-# unique — its 'diagnostics'/'network_status' reads mirror ha_get_device /
+# cache is only listable here; ha_manage_radio's 'ping' probe, 'cluster_read'
+# and 'list_datasets' have no pure-read duplicate elsewhere, while its
+# 'diagnostics'/'network_status' reads mirror ha_get_device /
 # ha_get_system_health but stay reachable here mid-management). Everything
 # NOT in this table and not ``readOnlyHint=True`` is hidden and blocked
 # outright.
@@ -184,9 +195,10 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
     ),
     "ha_manage_radio": ReadOnlyExemption(
         _radio_write,
-        "node diagnostics (action='diagnostics'), the integration/network "
-        "summary (action='network_status'), and the active reachability probe "
-        "(action='ping')",
+        "node diagnostics ('diagnostics'), the integration/network summary "
+        "('network_status'), the active reachability probe ('ping'), a Zigbee "
+        "cluster-attribute read ('cluster_read'), and the Thread dataset "
+        "listing ('list_datasets')",
     ),
 }
 
