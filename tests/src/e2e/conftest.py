@@ -167,14 +167,6 @@ def pytest_collection_modifyitems(config, items):
         elif "external_only" in keywords and inaddon:
             item.add_marker(skip_external_only)
 
-    # Push run_last-marked tests to the very end so that under --dist loadscope
-    # their scope is the last one dispatched. Each xdist worker owns an isolated
-    # add-on (see _haos_worker_setup), so the last-dispatched scope runs with
-    # nothing after it on that worker. The inaddon read-only test relies on this:
-    # it leaves the add-on in read-only mode and must not precede a write test on
-    # its worker. Stable sort preserves the existing order otherwise.
-    items.sort(key=lambda it: 1 if it.get_closest_marker("run_last") else 0)
-
 
 # Fail fast on a doomed run, on EVERY e2e lane (this conftest is shared by the
 # testcontainer / external-HAOS / inaddon suites, so the hook guards all three).
