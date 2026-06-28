@@ -496,7 +496,7 @@ class TestBugReportTool:
     async def test_bug_report_includes_core_error_log(
         self, ha_report_issue_func, mock_client
     ):
-        """Issue #1694: the report surfaces home-assistant.log (the decisive
+        """Issue #1694: the report surfaces home-assistant.log (the high-value
         auth/integration errors) in both the structured output and the runtime
         template — the gap that made #1694 a multi-round diagnosis."""
         mock_client.get_config.return_value = {"version": "2026.6.4"}
@@ -511,6 +511,23 @@ class TestBugReportTool:
         assert "InsecureKeyLengthWarning" in result["formatted_report"]
         assert "Home Assistant Error Log" in result["runtime_bug_template"]
         assert "InsecureKeyLengthWarning" in result["runtime_bug_template"]
+
+    @pytest.mark.asyncio
+    async def test_bug_report_omits_empty_core_error_log(
+        self, ha_report_issue_func, mock_client
+    ):
+        """When get_error_log returns empty, the 'Home Assistant Error Log'
+        section is omitted (the `if core_error_log:` gates) rather than left as
+        a dangling empty header, and core_error_log is an empty string."""
+        mock_client.get_config.return_value = {"version": "2026.6.4"}
+        mock_client.get_states.return_value = []
+        mock_client.get_error_log.return_value = ""
+
+        result = await ha_report_issue_func()
+
+        assert result["core_error_log"] == ""
+        assert "Home Assistant Error Log" not in result["formatted_report"]
+        assert "Home Assistant Error Log" not in result["runtime_bug_template"]
 
     @pytest.mark.asyncio
     async def test_bug_report_suggested_title(self, ha_report_issue_func, mock_client):

@@ -741,8 +741,8 @@ def _emit_new_inbound_lines(state: dict[str, int]) -> None:
     ``INBOUND_LOG_FILE``; this tails that file so the same lines show up in the
     addon log. ``state["offset"]`` tracks the byte position consumed so far.
     Only whole lines are emitted; a trailing partial line is left for the next
-    poll. Best-effort — any error is swallowed so mirroring never disrupts the
-    keep-alive loop.
+    poll. Best-effort — any filesystem (``OSError``) error is swallowed so
+    mirroring never disrupts the keep-alive loop.
     """
     try:
         if not INBOUND_LOG_FILE.exists():
@@ -751,8 +751,11 @@ def _emit_new_inbound_lines(state: dict[str, int]) -> None:
         with INBOUND_LOG_FILE.open("rb") as fh:
             size = fh.seek(0, 2)
             if offset > size:
-                # File was truncated/rotated by the integration — restart.
+                # File was truncated/rotated by the integration — restart. Reset
+                # the stored offset too, otherwise a truncated file with no
+                # newline yet keeps re-reading from 0 on every poll.
                 offset = 0
+                state["offset"] = 0
             if offset == size:
                 return
             fh.seek(offset)
@@ -766,6 +769,56 @@ def _emit_new_inbound_lines(state: dict[str, int]) -> None:
                 log_info(line)
     except OSError:
         return
+
+
+def _initial_tail_offset() -> int:
+    """Byte offset to start tailing the inbound mirror from — the end of the
+    file, so startup doesn't replay history. Guarded: a stat() failure
+    (permissions, or the file vanishing between exists() and stat()) must not
+    crash startup."""
+    try:
+        return INBOUND_LOG_FILE.stat().st_size if INBOUND_LOG_FILE.exists() else 0
+    except OSError as e:
+        log_error(f"Could not stat inbound log file ({type(e).__name__}): {e}")
+        return 0
+
+
+def _install_shutdown_handlers() -> dict[str, str | None]:
+    """Install SIGTERM/SIGINT handlers and return the shared shutdown-reason
+    dict. A Supervisor "stop" sends SIGTERM; without a handler the process was
+    killed mid-loop, so the cleanup never ran (the webhook was left registered)
+    and nothing logged why it exited. The handler raises KeyboardInterrupt so an
+    in-progress time.sleep() returns immediately (PEP 475 would otherwise resume
+    it)."""
+    shutdown_reason: dict[str, str | None] = {"reason": None}
+
+    def _on_signal(signum: int, _frame: object) -> None:
+        shutdown_reason["reason"] = signal.Signals(signum).name
+        raise KeyboardInterrupt
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, _on_signal)
+    return shutdown_reason
+
+
+def _shutdown_cleanup(reason: str | None) -> None:
+    """Clean shutdown: restore default signal handling first so a second signal
+    can't abort cleanup, log why we exited, remove the config entry to
+    unregister the webhook (keeping the config + component files so the next
+    start needs no HA restart), and drop the inbound mirror file.
+
+    On full uninstall the user may still need to manually remove
+    /config/custom_components/mcp_proxy/, /config/.mcp_proxy_config.json, and
+    /config/.mcp_proxy_inbound.log, then restart HA."""
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, signal.SIG_DFL)
+    log_info(f"Shutting down (reason: {reason or 'unknown'})...")
+    _remove_config_entry()
+    try:
+        INBOUND_LOG_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        log_error(f"Could not remove inbound log file ({type(e).__name__}): {e}")
+    log_info("Webhook proxy stopped.")
 
 
 # ---------------------------------------------------------------------------
@@ -1211,28 +1264,15 @@ def main() -> int:
     log_info("=" * 70)
     log_info("")
 
-    # Install signal handlers so a Supervisor "stop" (SIGTERM) — and Ctrl-C
-    # (SIGINT) in an interactive run — shut down cleanly through the cleanup
-    # below. Previously SIGTERM killed the process mid-loop, so the cleanup
-    # never ran (the webhook was left registered) and nothing logged WHY the
-    # addon exited. The handler raises KeyboardInterrupt so an in-progress
-    # time.sleep() returns immediately (PEP 475 would otherwise resume it).
-    shutdown_reason: dict[str, str | None] = {"reason": None}
-
-    def _on_signal(signum: int, _frame: object) -> None:
-        shutdown_reason["reason"] = signal.Signals(signum).name
-        raise KeyboardInterrupt
-
-    for _sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(_sig, _on_signal)
+    # Install SIGTERM/SIGINT handlers so a Supervisor "stop" shuts down through
+    # the cleanup below instead of being killed mid-loop.
+    shutdown_reason = _install_shutdown_handlers()
 
     # Keep-alive loop. A short poll interval keeps inbound-log mirroring
     # responsive when "Log inbound requests" is on; the MCP-server health
     # check runs on its own ~60s cadence regardless of the poll interval.
     log_info("Entering keep-alive loop (health check every 60s)...")
-    inbound_tail: dict[str, int] = {
-        "offset": INBOUND_LOG_FILE.stat().st_size if INBOUND_LOG_FILE.exists() else 0
-    }
+    inbound_tail: dict[str, int] = {"offset": _initial_tail_offset()}
     consecutive_failures = 0
     last_health = 0.0
     try:
@@ -1260,25 +1300,11 @@ def main() -> int:
             time.sleep(3 if debug_logging else 30)
     except KeyboardInterrupt:
         # SIGINT in environments where it still raises directly, rather than
-        # going through _on_signal (which already set a reason).
+        # going through the installed handler (which already set a reason).
         if shutdown_reason["reason"] is None:
             shutdown_reason["reason"] = "KeyboardInterrupt"
 
-    # Cleanup on stop: remove config entry to unregister the webhook (stops
-    # proxying), but keep the config file and custom component files so the
-    # next start doesn't require an HA restart. The webhook_id persists in
-    # /data/webhook_id.txt so the URL stays the same across stop/start.
-    #
-    # On full uninstall, the user may need to manually remove
-    # /config/custom_components/mcp_proxy/, /config/.mcp_proxy_config.json, and
-    # /config/.mcp_proxy_inbound.log, then restart HA.
-    log_info(f"Shutting down (reason: {shutdown_reason['reason'] or 'unknown'})...")
-    _remove_config_entry()
-    try:
-        INBOUND_LOG_FILE.unlink(missing_ok=True)
-    except OSError as e:
-        log_error(f"Could not remove inbound log file ({type(e).__name__}): {e}")
-    log_info("Webhook proxy stopped.")
+    _shutdown_cleanup(shutdown_reason["reason"])
     return 0
 
 

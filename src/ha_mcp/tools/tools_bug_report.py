@@ -421,7 +421,7 @@ async def _fetch_core_error_log(client: Any) -> str:
     add-on installs to the Supervisor, supervised/HAOS to the hassio proxy, and
     container/pip to ``/api/error_log``. Captured over REST, which stays up even
     when the WebSocket path is failing; that is exactly the failure mode in
-    issue #1694, where the decisive auth-store lines
+    issue #1694, where the high-value auth lines
     (``InsecureKeyLengthWarning``, "invalid authentication") only appeared in
     home-assistant.log, not in the add-on log this tool already captured.
 

@@ -79,12 +79,13 @@ MAX_PENDING_CODES = 1000
 # misconfiguration if a future caller forgets the up-front check.
 MIN_CLIENT_ID_LEN = 16
 
-# Appended to every error response the proxy returns. Most webhook-proxy
-# failures that aren't an obvious request mistake trace back to Home Assistant
-# serving a stale OAuth/webhook registration — HTTP views can't be re-registered
-# mid-session, so a regenerate / OAuth toggle / reinstall only takes effect on a
-# full HA restart. Pointing every error at that (issue #1694) is the cheapest
-# way to unstick the common "invalid client_id" case without a forced restart.
+# Appended to every error response the proxy returns. The OAuth provider's HTTP
+# views are bound at register_views() time and HA can't re-register / drop them
+# mid-session, so a client-id regenerate / OAuth toggle / reinstall only takes
+# effect on a full HA restart — the "invalid client_id" case this targets. (The
+# webhook itself IS re-registered on reload; the hint is a catch-all appended to
+# every error, including upstream 502/500 where a restart may not be the fix.)
+# Pointing every error at a full restart (issue #1694) is the cheapest unstick.
 RESTART_HINT = (
     "If this persists, fully restart Home Assistant "
     "(Settings -> System -> Restart) — not just the add-on or the integration."

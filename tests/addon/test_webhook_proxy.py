@@ -2538,6 +2538,108 @@ class TestRestartHintOnErrors:
         assert "restart Home Assistant" in text
 
 
+class TestShutdownAndWebhookErrors:
+    """Issue #1694 follow-ups: the SIGTERM/SIGINT → cleanup contract (the
+    headline shutdown fix) and the restart hint on the webhook handler's
+    502/500 responses."""
+
+    def test_initial_tail_offset(self, tmp_path):
+        start = _import_start()
+        log_file = tmp_path / "inbound.log"
+        with patch.object(start, "INBOUND_LOG_FILE", log_file):
+            assert start._initial_tail_offset() == 0  # no file
+            log_file.write_bytes(b"hello\n")
+            assert start._initial_tail_offset() == 6  # end of existing file
+
+    def test_install_shutdown_handlers_records_reason_and_raises(self):
+        import signal
+
+        start = _import_start()
+        old = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
+        try:
+            reason = start._install_shutdown_handlers()
+            assert reason == {"reason": None}
+            handler = signal.getsignal(signal.SIGTERM)
+            with pytest.raises(KeyboardInterrupt):
+                handler(signal.SIGTERM, None)
+            assert reason["reason"] == "SIGTERM"
+        finally:
+            signal.signal(signal.SIGTERM, old[0])
+            signal.signal(signal.SIGINT, old[1])
+
+    def test_shutdown_cleanup_resets_handlers_unlinks_and_logs(self, tmp_path):
+        import signal
+
+        start = _import_start()
+        log_file = tmp_path / "inbound.log"
+        log_file.write_text("x\n")
+        old = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
+        logs: list[str] = []
+        try:
+            with (
+                patch.object(start, "INBOUND_LOG_FILE", log_file),
+                patch.object(start, "_remove_config_entry") as rm,
+                patch.object(start, "log_info", side_effect=logs.append),
+            ):
+                start._shutdown_cleanup("SIGTERM")
+            rm.assert_called_once()
+            assert not log_file.exists()  # mirror file dropped
+            assert any("reason: SIGTERM" in m for m in logs)
+            # Handlers restored to default so a second signal can't abort cleanup.
+            assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+        finally:
+            signal.signal(signal.SIGTERM, old[0])
+            signal.signal(signal.SIGINT, old[1])
+
+    async def test_webhook_502_includes_restart_hint(self):
+        mod = _import_mcp_proxy()
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("down")
+        )
+        with patch.object(mod.web, "Response") as resp_ctor:
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "upstream unavailable" in text
+        assert "restart Home Assistant" in text
+
+    async def test_webhook_500_includes_restart_hint(self):
+        mod = _import_mcp_proxy()
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=RuntimeError("boom")
+        )
+        with patch.object(mod.web, "Response") as resp_ctor:
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "internal error" in text
+        assert "restart Home Assistant" in text
+
+
 class TestAuthorizeViewPost:
     @pytest.fixture
     def setup(self, tmp_path):

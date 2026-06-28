@@ -20,6 +20,7 @@ addon creates the config entry automatically via the HA API.
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -54,10 +55,16 @@ INBOUND_LOG_FILE = Path("/config/.mcp_proxy_inbound.log")
 # Cap the mirror file so it can't grow without bound; trim to the last half
 # when exceeded. 256 KiB keeps plenty of recent history at ~100 bytes/line.
 _INBOUND_LOG_CAP = 256 * 1024
+# Serializes writes to INBOUND_LOG_FILE: HA dispatches _append_inbound_log to a
+# multi-worker executor pool, so concurrent inbound requests could interleave
+# the append + the cap's read-modify-write trim without this lock.
+_LOG_WRITE_LOCK = threading.Lock()
 
 # Appended to the errors the webhook handler returns. Kept in sync with
-# oauth.py:RESTART_HINT — many webhook-proxy failures clear only on a full HA
-# restart because HTTP/webhook registration doesn't refresh on a reload.
+# oauth.py:RESTART_HINT. The OAuth HTTP views can't be re-registered mid-session
+# (HA can't drop routes from a running app), so a client-id regenerate / OAuth
+# toggle / reinstall only takes effect on a full HA restart. (The webhook itself
+# is re-registered on reload; the hint is a catch-all for the proxy's errors.)
 RESTART_HINT = (
     "If this persists, fully restart Home Assistant "
     "(Settings -> System -> Restart) — not just the add-on or the integration."
@@ -347,14 +354,15 @@ def _append_inbound_log(line: str) -> None:
     exception. Blocking filesystem I/O — call via ``hass.async_add_executor_job``.
     """
     try:
-        with INBOUND_LOG_FILE.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-        if INBOUND_LOG_FILE.stat().st_size > _INBOUND_LOG_CAP:
-            data = INBOUND_LOG_FILE.read_bytes()[-(_INBOUND_LOG_CAP // 2) :]
-            nl = data.find(b"\n")
-            if nl != -1:
-                data = data[nl + 1 :]
-            INBOUND_LOG_FILE.write_bytes(data)
+        with _LOG_WRITE_LOCK:
+            with INBOUND_LOG_FILE.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            if INBOUND_LOG_FILE.stat().st_size > _INBOUND_LOG_CAP:
+                data = INBOUND_LOG_FILE.read_bytes()[-(_INBOUND_LOG_CAP // 2) :]
+                nl = data.find(b"\n")
+                if nl != -1:
+                    data = data[nl + 1 :]
+                INBOUND_LOG_FILE.write_bytes(data)
     except OSError as e:
         _LOGGER.debug("MCP Proxy: inbound mirror write failed: %s", e)
 
@@ -367,7 +375,9 @@ async def _debug_log(hass: HomeAssistant, message: str) -> None:
     The mirror write is dispatched to the executor fire-and-forget: it runs off
     the event loop and we deliberately don't await it, so an opt-in debug log
     never adds latency to (or fails) the proxied request. ``_append_inbound_log``
-    swallows its own errors, so the unawaited future never carries an exception.
+    swallows its own ``OSError`` (the only realistic failure here, since the
+    message is controlled ASCII), so the unawaited future does not carry an
+    exception in practice.
     """
     _LOGGER.info("%s", message)
     hass.async_add_executor_job(_append_inbound_log, message)

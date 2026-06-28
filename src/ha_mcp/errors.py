@@ -312,8 +312,8 @@ _ADDON_AUTH_INVALID_SUGGESTIONS: list[str] = [
     + "clears transient WebSocket authentication failures — try that first",
     "Check home-assistant.log for 'invalid authentication' or "
     + "'InsecureKeyLengthWarning' around the time of the failure; if those "
-    + "appear, the cause is in Home Assistant's auth store (a Core/Supervisor "
-    + "issue), not ha-mcp",
+    + "appear, the problem is likely in Home Assistant's auth handling rather "
+    + "than ha-mcp's request — capture those lines when reporting",
 ]
 
 
