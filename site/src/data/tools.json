@@ -875,8 +875,8 @@
   },
   {
     "name": "ha_get_device",
-    "title": "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)",
-    "description": "Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.\n\nWithout device_id/entity_id: Lists devices with optional filters and pagination.\nWith device_id or entity_id: Returns full detail for that specific device.\n\n**List devices (paginated):**\n- First page: ha_get_device()\n- Next page: ha_get_device(offset=50)\n- By area: ha_get_device(area_id=\"living_room\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Full details in list: ha_get_device(detail_level=\"full\", limit=10)\n\n**Single device lookup (always full detail):**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee:** integration=\"zha\" or \"zigbee2mqtt\". Returns ieee_address, radio metrics.\n**Z-Wave:** integration=\"zwave_js\". Returns node_id, node_status.",
+    "title": "Get Device (incl. Zigbee/ZHA/Z2M, Z-Wave and Matter)",
+    "description": "Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.\n\nWithout device_id/entity_id: Lists devices with optional filters and pagination.\nWith device_id or entity_id: Returns full detail for that specific device.\n\n**List devices (paginated):**\n- First page: ha_get_device()\n- Next page: ha_get_device(offset=50)\n- By area: ha_get_device(area_id=\"living_room\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Full details in list: ha_get_device(detail_level=\"full\", limit=10)\n\n**Single device lookup (always full detail):**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee:** integration=\"zha\" or \"zigbee2mqtt\". Returns ieee_address, radio metrics.\n**Z-Wave:** integration=\"zwave_js\". Returns node_id, node_status.\n**Matter:** integration=\"matter\". Returns node_diagnostics (network type,\nreachability, IPs, fabrics). For management use ha_manage_radio.",
     "inputSchema": {
       "properties": {
         "device_id": {
@@ -919,6 +919,7 @@
     },
     "tags": [
       "Device Registry",
+      "Matter",
       "Z-Wave",
       "Zigbee"
     ],
@@ -2014,7 +2015,7 @@
   {
     "name": "ha_get_system_health",
     "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
-    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.\n\nThe result also carries an ``ha_mcp_update`` object —\n``{current, latest, update_available}`` — reporting whether a newer\nha-mcp release is available (from PyPI for pip/Docker, or the Supervisor\nadd-on store for the add-on), so you can proactively tell the user to\nupgrade. Present on every install type including the HA add-on (so a user\nwho missed the Supervisor's update prompt still hears about it); omitted\nonly for the ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK``\nis set.\n\n**Parameters:**\n- include: Optional comma-separated list of additional data to include.\n  - \"repairs\": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all)\n  - \"zha_network\": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)\n  - \"zha_network_full\": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer \"zha_network\" for summary)\n  - \"zwave_network\": Z-Wave JS network status and node summary (status, security, routing)\n  - \"themes\": Installed theme names and defaults (sorted list of theme names, count, default_theme, default_dark_theme)\n  - \"diagnostics\": Per-integration diagnostics dump — integration-defined JSON\n    (commonly includes redacted config, device list, state snapshots; exact\n    top-level keys vary by integration). REQUIRES ``config_entry_id``. The\n    canonical artifact users grab via Settings → Devices & Services →\n    [integration] → ⋯ → Download diagnostics. Use this when triaging integration\n    bugs or filing ``ha_report_issue`` for a specific integration. Payloads can\n    be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with\n    ``diagnostics_fields`` or ``diagnostics_truncate_at_bytes`` to fit the LLM\n    context budget.\n  - \"config_check\": Validate HA configuration via POST /config/core/check_config\n    (the pre-restart safety check; ha_restart runs it automatically). Returns\n    {result: valid|invalid, is_valid, errors}; read-only/idempotent, takes no args.\n  - \"dead_entities\": Surface orphaned/stale entity-registry entries by diffing\n    the registry against the state machine and the live config-entries set.\n    Returns confidence-tiered buckets — ``config_entry_orphans`` (owning\n    integration instance gone; definitively dead) and ``stale_restored`` (HA\n    restored the entity from the registry on startup but the loaded integration\n    no longer provides it). Each item carries entity_id + platform so a client\n    can propose cleanup with ha_remove_entity. Deliberately excludes\n    ``unknown``-state entities and merely-offline devices to keep false positives\n    low. Read-only; takes no args.\n  - Example: include=\"repairs,zha_network,zwave_network,config_check\"\n  - Example: include=\"diagnostics\", config_entry_id=\"abc123...\"\n- include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when \"repairs\" is in `include`.\n- config_entry_id: Required when ``include`` contains ``diagnostics``. The config\n  entry ID of the integration (find via ``ha_get_integration``).\n- device_id: Optional. When set with ``include=diagnostics``, returns the\n  device-scoped diagnostics dump for that specific device under the integration\n  (rather than the full integration dump). Some integrations only expose\n  config-entry-level dumps; others expose both.\n- diagnostics_fields: Optional list of top-level keys to keep from the\n  diagnostics ``data`` payload (e.g. ``[\"home_assistant\", \"issues\"]``). Accepts\n  a JSON list or comma-separated string. Only applies with ``include=diagnostics``.\n- diagnostics_truncate_at_bytes: Optional byte cap on the serialized\n  diagnostics payload (post-projection / post-data_path). On hit,\n  drops ``data`` and emits ``truncated=true``, ``bytes_total``,\n  ``byte_cap``, plus ``available_fields`` (when the capped value\n  is a dict). Only applies when ``include`` contains ``diagnostics``.\n  Recommended starting point: 20000 bytes.\n- diagnostics_data_path: Optional dotted path into the diagnostics\n  ``data`` sub-tree (e.g. ``\"data.devices\"`` for ZHA per-device records).\n  Walks into the post-fields payload. Resolution failures replace\n  ``data`` with ``null`` and surface ``data_path_error``. Only applies\n  when ``include`` contains ``diagnostics``.\n- diagnostics_data_offset / diagnostics_data_limit: Pagination on\n  list-valued ``diagnostics_data_path`` results. When ``data_limit``\n  is set and the resolved path is a list, ``data`` becomes\n  ``{\"path\", \"items\", \"offset\", \"limit\", \"total\", \"has_more\"}``. Only\n  applies when ``include`` contains ``diagnostics``.\n\n  Example workflow (walk a list-valued sub-tree one page at a time;\n  the exact ``data_path`` varies by integration version):\n  ``ha_get_system_health(include=\"diagnostics\", config_entry_id=\"abc\",\n  diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10)``\n  → inspect the page envelope's ``total`` / ``has_more`` → repeat\n  with ``diagnostics_data_offset=10`` for the next slice.",
+    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.\n\nReturns health check results from integrations, system resources, and connectivity.\nAvailable information varies by installation type and loaded integrations.\n\nThe result also carries an ``ha_mcp_update`` object —\n``{current, latest, update_available}`` — reporting whether a newer\nha-mcp release is available (from PyPI for pip/Docker, or the Supervisor\nadd-on store for the add-on), so you can proactively tell the user to\nupgrade. Present on every install type including the HA add-on (so a user\nwho missed the Supervisor's update prompt still hears about it); omitted\nonly for the ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK``\nis set.\n\n**Parameters:**\n- include: Optional comma-separated list of additional data to include.\n  - \"repairs\": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all)\n  - \"zha_network\": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)\n  - \"zha_network_full\": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer \"zha_network\" for summary)\n  - \"zwave_network\": Z-Wave JS network status and node summary (status, security, routing)\n  - \"thread_network\": Thread/OpenThread Border Router (OTBR) summary — per border-router channel, extended_pan_id, and border_agent_id (integration-presence + radio-network view, not per-node Thread health)\n  - \"matter_network\": Matter integration presence summary — config_entry_id, state, and title (per-node health is exposed separately via Matter node diagnostics, not here)\n  - \"themes\": Installed theme names and defaults (sorted list of theme names, count, default_theme, default_dark_theme)\n  - \"diagnostics\": Per-integration diagnostics dump — integration-defined JSON\n    (commonly includes redacted config, device list, state snapshots; exact\n    top-level keys vary by integration). REQUIRES ``config_entry_id``. The\n    canonical artifact users grab via Settings → Devices & Services →\n    [integration] → ⋯ → Download diagnostics. Use this when triaging integration\n    bugs or filing ``ha_report_issue`` for a specific integration. Payloads can\n    be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with\n    ``diagnostics_fields`` or ``diagnostics_truncate_at_bytes`` to fit the LLM\n    context budget.\n  - \"config_check\": Validate HA configuration via POST /config/core/check_config\n    (the pre-restart safety check; ha_restart runs it automatically). Returns\n    {result: valid|invalid, is_valid, errors}; read-only/idempotent, takes no args.\n  - \"dead_entities\": Surface orphaned/stale entity-registry entries by diffing\n    the registry against the state machine and the live config-entries set.\n    Returns confidence-tiered buckets — ``config_entry_orphans`` (owning\n    integration instance gone; definitively dead) and ``stale_restored`` (HA\n    restored the entity from the registry on startup but the loaded integration\n    no longer provides it). Each item carries entity_id + platform so a client\n    can propose cleanup with ha_remove_entity. Deliberately excludes\n    ``unknown``-state entities and merely-offline devices to keep false positives\n    low. Read-only; takes no args.\n  - Example: include=\"repairs,zha_network,zwave_network,config_check\"\n  - Example: include=\"diagnostics\", config_entry_id=\"abc123...\"\n- include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when \"repairs\" is in `include`.\n- config_entry_id: Required when ``include`` contains ``diagnostics``. The config\n  entry ID of the integration (find via ``ha_get_integration``).\n- device_id: Optional. When set with ``include=diagnostics``, returns the\n  device-scoped diagnostics dump for that specific device under the integration\n  (rather than the full integration dump). Some integrations only expose\n  config-entry-level dumps; others expose both.\n- diagnostics_fields: Optional list of top-level keys to keep from the\n  diagnostics ``data`` payload (e.g. ``[\"home_assistant\", \"issues\"]``). Accepts\n  a JSON list or comma-separated string. Only applies with ``include=diagnostics``.\n- diagnostics_truncate_at_bytes: Optional byte cap on the serialized\n  diagnostics payload (post-projection / post-data_path). On hit,\n  drops ``data`` and emits ``truncated=true``, ``bytes_total``,\n  ``byte_cap``, plus ``available_fields`` (when the capped value\n  is a dict). Only applies when ``include`` contains ``diagnostics``.\n  Recommended starting point: 20000 bytes.\n- diagnostics_data_path: Optional dotted path into the diagnostics\n  ``data`` sub-tree (e.g. ``\"data.devices\"`` for ZHA per-device records).\n  Walks into the post-fields payload. Resolution failures replace\n  ``data`` with ``null`` and surface ``data_path_error``. Only applies\n  when ``include`` contains ``diagnostics``.\n- diagnostics_data_offset / diagnostics_data_limit: Pagination on\n  list-valued ``diagnostics_data_path`` results. When ``data_limit``\n  is set and the resolved path is a list, ``data`` becomes\n  ``{\"path\", \"items\", \"offset\", \"limit\", \"total\", \"has_more\"}``. Only\n  applies when ``include`` contains ``diagnostics``.\n\n  Example workflow (walk a list-valued sub-tree one page at a time;\n  the exact ``data_path`` varies by integration version):\n  ``ha_get_system_health(include=\"diagnostics\", config_entry_id=\"abc\",\n  diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10)``\n  → inspect the page envelope's ``total`` / ``has_more`` → repeat\n  with ``diagnostics_data_offset=10`` for the next slice.",
     "inputSchema": {
       "properties": {
         "include": {
@@ -2061,7 +2062,9 @@
     },
     "tags": [
       "Integrations",
+      "Matter",
       "System",
+      "Thread",
       "Z-Wave",
       "Zigbee"
     ],
@@ -2262,6 +2265,53 @@
       "Labels & Categories"
     ],
     "source_file": "tools_labels.py"
+  },
+  {
+    "name": "ha_manage_radio",
+    "title": "Manage Radios (Z-Wave / Zigbee / Matter / Thread)",
+    "description": "Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.\n\nFor read-only inspection prefer ha_get_device / ha_get_system_health,\nwhich mirror the 'diagnostics' and 'network_status' actions; use this\ntool for writes and the active 'ping' probe (unique to this tool). Write\nactions perform inclusion/commissioning, removal, healing,\nreconfiguration, firmware updates and credential provisioning.\n\nCaveats: destructive actions (e.g. remove_device, network restore,\nchange_channel, hard_reset, remove_fabric) require confirm=True.\nLong-running actions (inclusion, rebuild routes, firmware) start the\noperation and return immediately with long_running=true; completion\nhappens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-\nPIN pairing) is not scriptable — use SmartStart/QR provisioning here or\nthe HA UI.",
+    "inputSchema": {
+      "properties": {
+        "radio": {
+          "type": "Annotated[Literal['zwave', 'zigbee', 'matter', 'thread'], Field(description='Which radio to manage.')]"
+        },
+        "action": {
+          "type": "Annotated[str, Field(description=\"Operation to perform. Actions vary per radio; an unknown action returns the supported list for that radio. Common: 'diagnostics', 'network_status', 'ping', 'add'/'commission', 'remove_device', 'reinterview'/'reconfigure', 'firmware_update'.\")]"
+        },
+        "device_id": {
+          "type": "Annotated[str | None, Field(description='Target device (node) for node-scoped actions.', default=None)]",
+          "default": null
+        },
+        "entity_id": {
+          "type": "Annotated[str | None, Field(description='Resolve the device from this entity for node-scoped actions.', default=None)]",
+          "default": null
+        },
+        "params": {
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Action-specific parameters (e.g. code, pin, channel, property, value). An unknown action returns that radio's supported action list with one-line summaries.\", default=None)]",
+          "default": null
+        },
+        "confirm": {
+          "type": "Annotated[bool, Field(description='Required (True) to run destructive actions.', default=False)]",
+          "default": false
+        }
+      },
+      "required": [
+        "radio",
+        "action"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false
+    },
+    "tags": [
+      "Matter",
+      "Radio Management",
+      "Thread",
+      "Z-Wave",
+      "Zigbee"
+    ],
+    "source_file": "tools_radio.py"
   },
   {
     "name": "ha_config_get_scene",
