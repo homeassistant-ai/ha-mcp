@@ -246,6 +246,29 @@ class TestBugReportAddonLogsReal:
             f"chars: {(addon_logs or '')[:200]!r}"
         )
 
+    async def test_core_error_log_in_report(self, mcp_client) -> None:
+        """``ha_report_issue`` wires ``core_error_log`` (home-assistant.log) on
+        inaddon — the #1694 gap.
+
+        Captured over REST via ``get_error_log`` (add-on installs route to the
+        Supervisor), this is the field that surfaces auth/integration errors the
+        add-on container log alone doesn't show. Shape-only assertion: the live
+        core-log content varies (a clean boot may be near-empty), but the field
+        must come through as a top-level sanitized string, proving the real
+        Supervisor-routed fetch succeeds end-to-end.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success("ha_report_issue", {})
+
+        assert "core_error_log" in result, (
+            f"Expected top-level core_error_log field; got keys: {sorted(result)}"
+        )
+        core_error_log = result.get("core_error_log")
+        assert isinstance(core_error_log, str), (
+            f"Expected core_error_log to be a string, got "
+            f"{type(core_error_log).__name__}"
+        )
+
 
 @pytest.mark.system
 class TestSettingsUiRestartReal:
