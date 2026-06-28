@@ -255,6 +255,45 @@ async def _enrich_zwave_status(
         )
 
 
+async def _enrich_matter_diagnostics(
+    client: Any, device_id: str, device_info: dict[str, Any]
+) -> None:
+    """Fetch Matter node diagnostics and add to device_info in-place.
+
+    Mirrors _enrich_zwave_status: surfaces the Matter equivalent of Z-Wave node
+    status — network type (wifi/thread), reachability, IPs and joined fabrics.
+    """
+    try:
+        result = await client.send_websocket_message(
+            {"type": "matter/node_diagnostics", "device_id": device_id}
+        )
+        if result.get("success"):
+            data = result.get("result", {})
+            device_info["node_diagnostics"] = {
+                "network_type": data.get("network_type"),
+                "node_type": data.get("node_type"),
+                "available": data.get("available"),
+                "network_name": data.get("network_name"),
+                # Upstream NodeDiagnostics misspells the field "ip_adresses"
+                # (single d); read that key but surface it correctly.
+                "ip_addresses": data.get("ip_adresses"),
+                "mac_address": data.get("mac_address"),
+                "active_fabrics": data.get("active_fabrics"),
+                "active_fabric_index": data.get("active_fabric_index"),
+            }
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        TimeoutError,
+        OSError,
+    ) as e:
+        logger.warning(
+            "Could not fetch Matter node diagnostics for device %s: %s",
+            device_info.get("device_id"),
+            e,
+        )
+
+
 async def _get_single_device_result(
     client: Any,
     device_id: str,
@@ -296,6 +335,8 @@ async def _get_single_device_result(
         await _enrich_zha_metrics(client, device_info)
     if device_info.get("integration_type") == "zwave_js" and device_info.get("node_id"):
         await _enrich_zwave_status(client, device_id, device_info)
+    if device_info.get("integration_type") == "matter":
+        await _enrich_matter_diagnostics(client, device_id, device_info)
 
     entities = device_info.get("entities", [])
     return {
@@ -573,11 +614,11 @@ class RegistryTools:
 
     @tool(
         name="ha_get_device",
-        tags={"Device Registry", "Zigbee", "Z-Wave"},
+        tags={"Device Registry", "Zigbee", "Z-Wave", "Matter"},
         annotations={
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Device (incl. Zigbee/ZHA/Z2M and Z-Wave)",
+            "title": "Get Device (incl. Zigbee/ZHA/Z2M, Z-Wave and Matter)",
         },
     )
     @log_tool_usage
@@ -665,6 +706,8 @@ class RegistryTools:
 
         **Zigbee:** integration="zha" or "zigbee2mqtt". Returns ieee_address, radio metrics.
         **Z-Wave:** integration="zwave_js". Returns node_id, node_status.
+        **Matter:** integration="matter". Returns node_diagnostics (network type,
+        reachability, IPs, fabrics). For management use ha_manage_radio.
         """
         try:
             all_devices, all_entities = await _fetch_registries(self._client)

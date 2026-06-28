@@ -244,8 +244,23 @@ class McpComponentTools:
             if not existing_repo:
                 existing_repo = await self._add_repo_to_hacs(ws_client)
 
-            # Now download/install the repository
-            repo_id = await self._resolve_repo_id(ws_client, existing_repo)
+            # Resolve the repo ID. A freshly-added repo can miss the first
+            # registration budget on a loaded runner or slow GitHub; on that
+            # timeout, re-add to re-nudge HACS and wait once more before
+            # surfacing the failure. Best-effort: a genuinely stuck add still
+            # fails on the retry. A repo that already had an ID is a real
+            # failure, not a slow add, so it is re-raised immediately.
+            try:
+                repo_id = await self._resolve_repo_id(ws_client, existing_repo)
+            except ToolError:
+                if existing_repo.get("id"):
+                    raise
+                logger.warning(
+                    "HACS repo registration timed out; re-adding %s and retrying once",
+                    MCP_TOOLS_REPO,
+                )
+                await self._add_repo_to_hacs(ws_client)
+                repo_id = await self._resolve_repo_id(ws_client, None)
 
             logger.info(f"Installing {MCP_TOOLS_REPO} (ID: {repo_id})")
             # HACS' download often returns a generic "Command failed:
