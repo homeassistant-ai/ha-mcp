@@ -131,12 +131,26 @@ def _custom_tool_write(args: dict[str, Any]) -> str | None:
     return "sandbox code execution"
 
 
+def _radio_write(args: dict[str, Any]) -> str | None:
+    action = args.get("action")
+    # Reads: per-node diagnostics, the integration/network summary, and the
+    # active reachability probe. Everything else is a write (commission/add,
+    # remove, reinterview, firmware, fabric / credential / channel / network
+    # changes). A missing action fails closed.
+    if action in ("diagnostics", "network_status", "ping"):
+        return None
+    return f"action={action!r}"
+
+
 # Mixed read/write tools whose read surface has no pure-read duplicate
 # (verified per tool: ha_get_addon cannot proxy-read addon-internal
 # APIs; energy prefs and assist pipelines are reachable only through
 # these tools; edit-backup listing exists nowhere else; the saved-tools
-# cache is only listable here). Everything NOT in this table and not
-# ``readOnlyHint=True`` is hidden and blocked outright.
+# cache is only listable here; ha_manage_radio's active 'ping' probe is
+# unique — its 'diagnostics'/'network_status' reads mirror ha_get_device /
+# ha_get_system_health but stay reachable here mid-management). Everything
+# NOT in this table and not ``readOnlyHint=True`` is hidden and blocked
+# outright.
 #
 # ``MANDATORY_TOOLS`` (settings_ui/__init__.py) intentionally needs no special
 # case here: every mandatory tool is either ``readOnlyHint=True`` or
@@ -167,6 +181,12 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
     "ha_manage_custom_tool": ReadOnlyExemption(
         _custom_tool_write,
         "listing saved tools (list_saved=True)",
+    ),
+    "ha_manage_radio": ReadOnlyExemption(
+        _radio_write,
+        "node diagnostics (action='diagnostics'), the integration/network "
+        "summary (action='network_status'), and the active reachability probe "
+        "(action='ping')",
     ),
 }
 

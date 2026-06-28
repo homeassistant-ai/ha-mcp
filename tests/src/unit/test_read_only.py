@@ -198,6 +198,25 @@ class TestExemptionRules:
         rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_custom_tool"].blocked_write
         assert (rule(args) is None) is allowed
 
+    @pytest.mark.parametrize(
+        ("args", "allowed"),
+        [
+            ({"radio": "matter", "action": "diagnostics", "device_id": "d1"}, True),
+            ({"radio": "zwave", "action": "network_status"}, True),
+            ({"radio": "matter", "action": "ping", "device_id": "d1"}, True),
+            ({"radio": "zwave", "action": "add"}, False),
+            ({"radio": "matter", "action": "remove_fabric", "device_id": "d1"}, False),
+            ({"radio": "thread", "action": "set_network", "confirm": True}, False),
+            ({"radio": "zwave", "action": "firmware_update", "device_id": "d1"}, False),
+            # A missing action fails closed — never a silent read.
+            ({"radio": "zwave"}, False),
+            ({}, False),
+        ],
+    )
+    def test_manage_radio(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_radio"].blocked_write
+        assert (rule(args) is None) is allowed
+
 
 @pytest.mark.anyio
 class TestMiddleware:
@@ -438,6 +457,7 @@ class TestExemptTableContract:
             "ha_manage_energy_prefs",
             "ha_manage_pipeline",
             "ha_manage_custom_tool",
+            "ha_manage_radio",
         }
 
     def test_every_exemption_describes_whats_allowed(self):
@@ -458,6 +478,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_energy_prefs": "tools_energy.py",
     "ha_manage_pipeline": "tools_voice_assistant.py",
     "ha_manage_custom_tool": "tools_code.py",
+    "ha_manage_radio": "tools_radio.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -484,6 +505,7 @@ _EXEMPT_INSPECTED_ARGS = {
     "ha_manage_energy_prefs": {"mode", "dry_run"},
     "ha_manage_pipeline": {"action"},
     "ha_manage_custom_tool": {"list_saved", "code", "run_saved"},
+    "ha_manage_radio": {"action"},
 }
 
 # The subset of the addon manifest that ``_addon_write`` iterates as
@@ -583,6 +605,17 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # Modifiers of the code-execution path, which is blocked outright.
         "justification",
         "save_as",
+    },
+    "ha_manage_radio": {
+        # Node/network targeting + the confirm gate are all consumed only
+        # under the inspected ``action`` dispatch (reads need no confirm;
+        # writes are blocked before they run), so none is independently
+        # write-capable.
+        "radio",
+        "device_id",
+        "entity_id",
+        "params",
+        "confirm",
     },
 }
 

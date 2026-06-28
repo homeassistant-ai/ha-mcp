@@ -147,6 +147,7 @@ async def test_write_tools_hidden_exempt_and_read_tools_listed(readonly_mcp):
         "ha_manage_backup",
         "ha_manage_pipeline",
         "ha_manage_energy_prefs",
+        "ha_manage_radio",
     ):
         assert kept in names, f"{kept} should stay listed"
 
@@ -235,6 +236,32 @@ async def test_exempt_tool_write_action_blocked(readonly_mcp):
     assert body["blocked_operation"], body
     # The error teaches what remains available on this tool.
     assert "list" in body["error"]["message"], body
+
+
+@pytest.mark.asyncio
+async def test_radio_read_action_works(readonly_mcp):
+    """ha_manage_radio is exempt: a read action (network_status) stays
+    callable in read-only mode. Z-Wave JS is not configured on the test
+    container, so this also exercises the graceful integration-absent read
+    path (available=False but success=True)."""
+    client, _server = readonly_mcp
+    result = await client.call_tool(
+        "ha_manage_radio", {"radio": "zwave", "action": "network_status"}
+    )
+    body = parse_mcp_result(result)
+    assert body.get("success") is True, body
+
+
+@pytest.mark.asyncio
+async def test_radio_write_action_blocked(readonly_mcp):
+    """A ha_manage_radio write action (zwave 'add') is blocked with the
+    structured READ_ONLY_MODE error before the handler runs."""
+    client, _server = readonly_mcp
+    body = await _expect_read_only_blocked(
+        client, "ha_manage_radio", {"radio": "zwave", "action": "add"}
+    )
+    assert body["tool_name"] == "ha_manage_radio", body
+    assert body["blocked_operation"], body
 
 
 @pytest.mark.asyncio
