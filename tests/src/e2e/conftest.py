@@ -44,6 +44,7 @@ from testcontainers.core.container import DockerContainer
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_runtime
 
+from doomed_run import DoomedRunDetector
 from fastmcp import Client
 from haos_runtime import (
     HA_MCP_DEV_ADDON_SLUG,
@@ -170,39 +171,32 @@ def pytest_collection_modifyitems(config, items):
 
 # Fail fast on a doomed run, on EVERY e2e lane (this conftest is shared by the
 # testcontainer / external-HAOS / inaddon suites, so the hook guards all three).
-# When session-scoped setup breaks systemically — a Supervisor add-on-update
-# flake did exactly this on PR #1699, erroring all 997 inaddon tests at setup
-# (0 passed, 0 failed) while the run ground on 11m39s producing nothing but
-# errors — abort the moment we've seen this many
-# consecutive setup/teardown errors with ZERO call-phase pass/fail in between —
-# that streak means no test body is executing, so the run is doomed. A genuine
-# pass or fail resets the streak, so an isolated flaky-setup test never trips
-# it; this is NOT --maxfail (that counts real test FAILURES, which we still run
-# through in full). On xdist this hook runs on the controller, which receives
-# every worker's reports, so the streak is global across workers.
-_DOOMED_RUN_ERROR_STREAK = 50
-_doomed_run_state = {"streak": 0}
+# A Supervisor add-on-update flake did exactly this on PR #1699: all 997 inaddon
+# tests ERRORed at setup (0 passed, 0 failed) while the run ground on 11m39s
+# producing nothing but errors. DoomedRunDetector aborts once it sees 50
+# consecutive setup/teardown errors with zero call-phase pass/fail between them;
+# a genuine pass/fail resets the streak, so real failures still run through in
+# full (this is NOT --maxfail). The detector logic is unit-tested in
+# tests/src/unit/test_doomed_run.py.
+#
+# Under xdist, pytest_runtest_logreport fires in EACH process — the controller
+# (which receives every worker's reports) AND each worker for its own tests — so
+# every process keeps its own module-global detector; the streak is per-process,
+# not global. That is fine: a doomed run errors on every process, so whichever
+# reaches 50 first calls pytest.exit and ends the session (validated under -n2:
+# a 150-test all-error run aborts at 50 in ~2s).
+_doomed_detector = DoomedRunDetector()
 
 
 def pytest_runtest_logreport(report):
-    # A real test body ran (passed or failed) -> the run is alive; reset. The
-    # outcome check excludes pytest-rerunfailures' intermediate "rerun" reports,
-    # which must NOT reset a doomed streak.
-    if report.when == "call" and report.outcome in ("passed", "failed"):
-        _doomed_run_state["streak"] = 0
-        return
-    # A setup/teardown error (an "error", not a "fail"). outcome=="failed" here
-    # likewise excludes the "rerun" outcome.
-    if report.when in ("setup", "teardown") and report.outcome == "failed":
-        _doomed_run_state["streak"] += 1
-        if _doomed_run_state["streak"] >= _DOOMED_RUN_ERROR_STREAK:
-            pytest.exit(
-                f"Aborting: {_doomed_run_state['streak']} consecutive setup/"
-                f"teardown errors with no test passing or failing — the run is "
-                f"doomed by a systemic setup failure (e.g. add-on/container "
-                f"setup). Failing fast instead of grinding through the suite.",
-                returncode=1,
-            )
+    if _doomed_detector.record(report.when, report.outcome):
+        pytest.exit(
+            f"Aborting: {_doomed_detector.streak} consecutive setup/teardown "
+            f"errors with no test passing or failing — the run is doomed by a "
+            f"systemic setup failure (e.g. add-on/container setup). Failing fast "
+            f"instead of grinding through the suite.",
+            returncode=1,
+        )
 
 
 def pytest_sessionfinish(session, exitstatus):

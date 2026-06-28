@@ -431,7 +431,7 @@ async def test_code_mode_tool_read_works_and_execution_blocked(readonly_codemode
 @pytest.mark.inaddon_only
 @pytest.mark.asyncio
 async def test_inaddon_read_only_mode_blocks_radio_writes(
-    ha_container_with_fresh_config,
+    ha_container_with_fresh_config, mcp_client
 ):
     """Read-only mode on the REAL inaddon add-on (every test above skips inaddon
     via ``_build_readonly_server``, which can only inject ``READ_ONLY_MODE`` into
@@ -444,12 +444,15 @@ async def test_inaddon_read_only_mode_blocks_radio_writes(
     asserts ha_manage_radio's read action still works while a write is blocked with
     the structured READ_ONLY_MODE error, then RESTORES read-only to off.
 
-    Self-contained: xdist runs a worker's tests serially and each worker owns an
-    isolated add-on (``_haos_worker_setup``), so enabling read-only for just this
-    test and restoring it in ``finally`` is safe at any position. Ordering tricks
-    do NOT help — ``--dist loadscope`` groups tests by module, so a single
-    "run last" marker can't make this the last thing on its worker; leaving
-    read-only on once cascaded READ_ONLY_MODE into every later write test.
+    xdist runs a worker's tests serially and each worker owns an isolated add-on
+    (``_haos_worker_setup``), so bracketing read-only around just this test and
+    restoring it in ``finally`` is safe at any position. (Ordering tricks do NOT
+    help — ``--dist loadscope`` groups tests by module, so a single "run last"
+    marker can't make this the last thing on its worker.) The two dev-add-on
+    restarts also drop the SHARED session ``mcp_client`` connection
+    (test_supervisor_inaddon.py documents that restarting the dev add-on kills
+    mcp_client for later tests), so the ``finally`` also warms that client back up
+    so whatever module loadscope hands this worker next gets a live session.
     """
     import asyncio
     import time
@@ -483,27 +486,28 @@ async def test_inaddon_read_only_mode_blocks_radio_writes(
             )
 
     async def _await_read_only(expected: bool) -> None:
-        """Poll, reconnecting each round, until ha_get_overview reports
-        read_only_mode == expected — i.e. the restart actually took effect. Rides
-        out the bounce and the window where the pre-restart process still answers.
-        ha_get_overview is read-only, so it works in both states."""
+        """Poll, reconnecting each round, until the add-on's CATALOG reflects
+        read_only_mode == expected — i.e. the restart actually took effect. In
+        read-only mode the catalog filter hides write tools, so ``ha_call_service``
+        is absent iff read-only is on. Keying on a positive signal from a real
+        ``list_tools`` response (rather than the absence of an overview key, which
+        a degraded payload could also fake) ensures we only confirm against a
+        healthy, fully-booted add-on."""
         deadline = time.monotonic() + 180.0
         last: object = None
         while time.monotonic() < deadline:
             try:
                 url = wait_for_addon_mcp_ready(timeout=30.0)
                 async with Client(StreamableHttpTransport(url=url)) as mcp:
-                    overview = parse_mcp_result(
-                        await mcp.call_tool("ha_get_overview", {})
-                    )
-                if bool(overview.get("read_only_mode")) is expected:
+                    names = {t.name for t in await mcp.list_tools()}
+                if ("ha_call_service" not in names) is expected:
                     return
-                last = overview.get("read_only_mode")
+                last = len(names)
             except _transient as err:
                 last = err
             await asyncio.sleep(3)
         raise AssertionError(
-            f"read_only_mode did not become {expected} within 180s (last={last!r})"
+            f"read-only catalog did not become {expected} within 180s (last={last!r})"
         )
 
     try:
@@ -531,5 +535,18 @@ async def test_inaddon_read_only_mode_blocks_radio_writes(
                 break
             except _transient:
                 if time.monotonic() >= restore_deadline:
+                    raise
+                await asyncio.sleep(3)
+        # The dev-add-on restarts above dropped the SHARED session mcp_client's
+        # connection. Warm it back up so the next test loadscope schedules on this
+        # worker gets a live session rather than a stale one (a read tool is enough
+        # to force re-establishment; retry while the add-on finishes coming up).
+        warm_deadline = time.monotonic() + 120.0
+        while True:
+            try:
+                await mcp_client.call_tool("ha_get_overview", {})
+                break
+            except _transient:
+                if time.monotonic() >= warm_deadline:
                     raise
                 await asyncio.sleep(3)
