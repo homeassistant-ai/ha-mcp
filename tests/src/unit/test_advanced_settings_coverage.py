@@ -187,7 +187,7 @@ def test_validate_registries_rejects_beta_field_not_in_feature_flags(
 # file, so both the attribute forms (``os.environ[...]`` / ``os.getenv``)
 # and the ``from os import environ, getenv`` forms — including ``as``
 # aliases — are caught. Registry-driven reads (``os.environ.get(var)``
-# with a non-literal argument, as in ``config.py`` / ``settings_ui.py``)
+# with a non-literal argument, as in ``config.py`` / ``settings_ui/__init__.py``)
 # carry no literal to inspect and are correctly skipped — those iterate
 # the registries themselves.
 

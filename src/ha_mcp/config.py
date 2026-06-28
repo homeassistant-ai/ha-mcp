@@ -535,7 +535,7 @@ def validate_settings() -> tuple[bool, str | None]:
 RegistryFieldType = type[bool] | type[int] | type[float] | type[str]
 
 # Closed set of UI section names. The advanced renderer in
-# settings_ui.py picks a DOM container per section; a typo would render
+# settings_ui/__init__.py picks a DOM container per section; a typo would render
 # the row into nothing.
 AdvancedSection = Literal[
     "connection",

@@ -8,9 +8,10 @@
      /favicon.ico (which would 404 and log a console error, since the
      settings server serves no such asset in any deployment mode). -->
 <link rel="icon" href="data:,">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono&display=swap" rel="stylesheet">
+<!-- Fonts are intentionally NOT loaded from a CDN: ha-mcp must stay self-contained
+     and work offline / air-gapped (no phoning out to Google on every load). The
+     font-family stack in settings.css falls back to Roboto-if-installed then the
+     system sans-serif. -->
 <script data-purpose="server-prefs" data-prefs="__HA_MCP_THEME_PREFS__">
   // #1574 review: theme/accessibility prefs also persist server-side
   // (theme_prefs.json) because stdio respawns its settings sidecar on a
@@ -161,44 +162,45 @@
 </div>
 <div class="restart-notice" id="restartNotice">
   <span class="restart-notice-text" id="restartNoticeText">
-    ⚠ Changes saved. Restart ha-mcp for them to take effect. On next
-    startup, ha-mcp fully removes disabled tools from the MCP tool list.
+    ⚠ Changes saved. Restart HA-MCP for them to take effect. On next
+    startup, HA-MCP fully removes disabled tools from the MCP tool list.
     Then reconnect or refresh the MCP server in your AI client (e.g.
-    re-add/refresh the connector in ChatGPT, or close and reopen Claude
-    Desktop) so it reloads the tool list. Restarting the add-on or Home
-    Assistant does NOT refresh your client's cached tool list.
+    refresh tool list on claude.ai, re-add/refresh the connector in
+    ChatGPT, or close and reopen Claude Desktop) so it reloads the tool
+    list. Restarting the App (add-on) or Home Assistant does NOT refresh your
+    client's cached tool list.
   </span>
-  <button class="restart-btn" id="restartBtn" style="display:none">Restart Add-on</button>
+  <button class="restart-btn" id="restartBtn" style="display:none">Restart App (add-on)</button>
 </div>
 <div class="panel active" id="panel-tools" role="tabpanel" aria-labelledby="tab-tools" tabindex="0">
   <div class="readonly-notice">
     Server-wide features (Tool Search, YAML config editing, filesystem
     tools, etc.) appear in both the <strong>Server Settings</strong>
-    tab and the add-on Configuration page; they're the same settings
+    tab and the App (add-on) Configuration page; they're the same settings
     either way. Either surface stays in sync with the other after the
-    addon restart. Changes require an MCP-host restart to apply.
+    App (add-on) restarts. Changes require HA-MCP to be restarted.
   </div>
   <div class="pin-notice show" id="pinNotice">
     Tools listed in the <code>DISABLED_TOOLS</code> or <code>PINNED_TOOLS</code>
     env vars are locked read-only; unset the env var to edit them here.
     Pin toggles only take effect when Tool Search is enabled (Server Settings tab
-    or add-on Configuration page).
+    or App (add-on) Configuration page).
   </div>
   <div class="summary" id="summary"></div>
   <div class="feature-row" id="readOnlyModeRow">
     <div class="feature-info">
-      <div class="feature-name">Read Only Mode</div>
+      <div class="feature-name" id="read-only-mode-label">Read Only Mode</div>
       <div class="feature-help">
         Turns off all write tools and blocks every tool from making
         write or destructive calls. Mixed read/write tools
-        (backups, add-ons, energy preferences, voice pipelines, and code
+        (backups, Apps (add-ons), energy preferences, voice pipelines, and code
         mode when enabled) stay available with their write operations
         blocked.
       </div>
     </div>
     <div class="feature-control">
       <label class="switch">
-        <input type="checkbox" id="read-only-mode-toggle">
+        <input type="checkbox" id="read-only-mode-toggle" aria-labelledby="read-only-mode-label">
         <span class="slider"></span>
       </label>
     </div>
@@ -207,7 +209,7 @@
     Could not read server settings. Read Only Mode status unknown; this
     view may not reflect what the server enforces.
   </div>
-  <input type="search" class="search" id="search" placeholder="Search tools..."
+  <input type="search" class="search" id="search" placeholder="Search tools..." aria-label="Search tools"
          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
   <div id="groups"></div>
 </div>
@@ -218,10 +220,10 @@
     </svg>
     <div class="ha-alert-body">
       Settings on this tab save automatically. Changes take effect only after
-      you restart the add-on (applies them server-side) and reconnect or
+      you restart the App (add-on) (applies them server-side) and reconnect or
       refresh the MCP server in your AI client (reloads the tool list), e.g.
-      re-add or refresh the connector in ChatGPT, or close and reopen Claude
-      Desktop.
+      refresh tool list on claude.ai, re-add or refresh the connector in
+      ChatGPT, or close and reopen Claude Desktop.
     </div>
   </div>
 
@@ -273,8 +275,8 @@
     </div>
   </div>
   <div class="backup-filters">
-    <input type="text" id="backupDomain" placeholder="Domain (e.g. automation)">
-    <input type="text" id="backupEntity" placeholder="Entity ID">
+    <input type="text" id="backupDomain" placeholder="Domain (e.g. automation)" aria-label="Filter backups by domain">
+    <input type="text" id="backupEntity" placeholder="Entity ID" aria-label="Filter backups by entity ID">
     <button id="backupRefresh">Refresh</button>
     <button id="backupBulkDelete" class="danger">Bulk delete matching…</button>
   </div>
@@ -293,17 +295,17 @@
     <h3 style="font-size:1rem;margin-bottom:8px">Global settings</h3>
     <div class="feature-row">
       <div class="feature-info">
-        <div class="feature-name">Enable Tool Security Policies</div>
+        <div class="feature-name" id="policy-master-label">Enable Tool Security Policies</div>
         <div class="feature-help">
           Master switch. Mirrors the toggle in Server Settings. Off by
-          default. Toggle on and restart the addon to activate the
+          default. Toggle on and restart the App (add-on) to activate the
           gating middleware. While off, the rules below persist but
           aren't enforced.
         </div>
       </div>
       <div class="feature-control">
         <label class="switch">
-          <input type="checkbox" id="policy-master-toggle">
+          <input type="checkbox" id="policy-master-toggle" aria-labelledby="policy-master-label">
           <span class="slider"></span>
         </label>
       </div>
@@ -314,7 +316,7 @@
         <div class="feature-help">How long the middleware waits for an approval before timing out.</div>
       </div>
       <div class="feature-control">
-        <input type="number" id="policy-wait-seconds" min="5" max="600">
+        <input type="number" id="policy-wait-seconds" min="5" max="600" aria-label="Wait seconds (5-600)">
       </div>
     </div>
     <div class="feature-row">
@@ -323,7 +325,7 @@
         <div class="feature-help">How long a pending approval stays in the queue before expiring.</div>
       </div>
       <div class="feature-control">
-        <input type="number" id="policy-ttl-minutes" min="1" max="60">
+        <input type="number" id="policy-ttl-minutes" min="1" max="60" aria-label="Approval TTL minutes (1-60)">
       </div>
     </div>
     <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
@@ -403,14 +405,18 @@
 </div>
 </main>
 <div class="modal-backdrop" id="modalBackdrop">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1">
     <div class="modal-header">
       <span class="modal-title" id="modalTitle"></span>
-      <button class="modal-close" id="modalClose">×</button>
+      <button class="modal-close" id="modalClose" aria-label="Close">×</button>
     </div>
     <div class="modal-body" id="modalBody"></div>
   </div>
 </div>
+<!-- Static toast container: present in the DOM at load so the toast (which is
+     itself the ARIA live region) is appended into a stable parent instead of
+     being created from scratch on the first toast. -->
+<div id="ha-toast-region"></div>
 <script>__HA_MCP_JS__</script>
 <footer id="versionFooter" class="version-footer">
   <span id="versionFooterText"></span>

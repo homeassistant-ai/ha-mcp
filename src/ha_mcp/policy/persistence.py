@@ -1,4 +1,4 @@
-"""Atomic load/save for tool_policy.json (mirrors tool_config.json pattern in settings_ui.py)."""
+"""Atomic load/save for tool_policy.json (mirrors tool_config.json pattern in settings_ui/__init__.py)."""
 
 import json
 import os

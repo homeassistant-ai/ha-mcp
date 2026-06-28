@@ -136,7 +136,7 @@ class TestPyprojectPackageData:
         """settings.js and settings.css must be declared for both the wheel
         (pyproject package-data) and the sdist (MANIFEST.in).
 
-        settings_ui.py reads both files at import time, and the HA add-on's
+        settings_ui/__init__.py reads both files at import time, and the HA add-on's
         Dockerfile copies only the installed .venv -- so the files reach the
         add-on solely via wheel package-data. A future edit dropping either
         entry would break 100% of installs at import, invisible to the unit

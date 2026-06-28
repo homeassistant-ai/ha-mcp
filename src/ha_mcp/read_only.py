@@ -138,7 +138,7 @@ def _custom_tool_write(args: dict[str, Any]) -> str | None:
 # cache is only listable here). Everything NOT in this table and not
 # ``readOnlyHint=True`` is hidden and blocked outright.
 #
-# ``MANDATORY_TOOLS`` (settings_ui.py) intentionally needs no special
+# ``MANDATORY_TOOLS`` (settings_ui/__init__.py) intentionally needs no special
 # case here: every mandatory tool is either ``readOnlyHint=True`` or
 # present in this table (``ha_manage_backup``). The e2e test
 # ``test_real_catalog_mandatory_tools_stay_available``
