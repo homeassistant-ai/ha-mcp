@@ -438,7 +438,7 @@ class TestRouteRegistration:
 
 class TestFaviconSuppression:
     """The page carries an empty-data-URI `<link rel="icon">` so the browser
-    never requests /favicon.ico (rationale at the `<link>` in settings_ui.py).
+    never requests /favicon.ico (rationale at the `<link>` in settings_ui/__init__.py).
     """
 
     def test_settings_html_head_suppresses_favicon_request(self) -> None:
@@ -518,7 +518,7 @@ class TestSettingsJsExtraction:
 
         Both sides derive from the same in-memory _SETTINGS_JS, so this does
         NOT prove the on-disk file is what ships — the sentinel-substitution
-        ImportError guard in settings_ui.py is the real file<->Python sync
+        ImportError guard in settings_ui/__init__.py is the real file<->Python sync
         check, and the packaging tests assert the file is distributed. What
         this locks is the inline embedding itself: that injection produced
         exactly one inline <script> and that _SETTINGS_JS carries no stray
@@ -574,7 +574,7 @@ class TestSettingsCssExtraction:
         """Round-trip guard for the CSS, mirroring the <script> body test.
 
         Both sides derive from the same in-memory _SETTINGS_CSS (the
-        FileNotFoundError->ImportError guard in settings_ui.py covers a
+        OSError->ImportError guard in settings_ui/__init__.py covers a
         missing file); this locks that injection produced exactly one inline
         <style> block and that _SETTINGS_CSS carries no stray </style> (see
         test_settings_css_has_no_closing_style_tag).
@@ -2475,6 +2475,105 @@ class TestEnvPinnedTools:
         body = json.loads(resp.body)
         assert body["read_only_exempt"] == sorted(READ_ONLY_EXEMPT_TOOLS)
         assert "ha_manage_backup" in body["read_only_exempt"]
+
+
+class TestGetHandlersAddonLiveOptions:
+    """Add-on GET handlers surface LIVE /data/options.json values.
+
+    Regression guard: before this fix the feature-flags and advanced GET
+    handlers displayed boot-time env values, so editing the add-on
+    Configuration tab (or the web UI) without a restart left the page
+    showing stale values. Add-on-synced / schema-backed fields must now
+    reflect the latest SAVED options value (active after restart), and any
+    fetch failure must fall back to the boot-env value rather than crash or
+    blank the field.
+    """
+
+    @pytest.mark.asyncio
+    async def test_features_addon_surface_live_options(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")  # boot-time value
+        _reset_global_settings()
+
+        async def fake_fetch(_verify_ssl):
+            # options.json edited since boot: tool search now on.
+            return {"enable_tool_search": True}, None
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_feature_flags"](MagicMock())
+        body = json.loads(resp.body)
+        row = body["flags"]["enable_tool_search"]
+        assert row["value"] is True  # live options win over stale boot-env
+        assert row["origin"] == "addon"
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_advanced_addon_surface_live_options(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")  # boot-time value
+        monkeypatch.setenv("HA_VERIFY_SSL", "true")  # boot-time value
+        _reset_global_settings()
+
+        async def fake_fetch(_verify_ssl):
+            return {"backup_hint": "weak", "verify_ssl": False}, None
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        backup_row = next(f for f in body["fields"] if f["field"] == "backup_hint")
+        verify_row = next(f for f in body["fields"] if f["field"] == "verify_ssl")
+        assert backup_row["value"] == "weak"  # live options win
+        assert verify_row["value"] is False
+        # origin/editable semantics are unchanged by the live-value surfacing.
+        assert backup_row["origin"] == "addon"
+        assert backup_row["editable"] is True
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_advanced_addon_falls_back_to_boot_env_on_fetch_error(
+        self, monkeypatch
+    ):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import (
+            _SupervisorOptionsError,
+            build_settings_handlers,
+        )
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")  # boot-time value
+        _reset_global_settings()
+
+        async def fake_fetch(_verify_ssl):
+            return {}, _SupervisorOptionsError.transport("supervisor unreachable")
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        assert resp.status_code == 200  # never crashes on fetch failure
+        body = json.loads(resp.body)
+        backup_row = next(f for f in body["fields"] if f["field"] == "backup_hint")
+        assert backup_row["value"] == "normal"  # boot-env fallback, never blank
+        _reset_global_settings()
 
 
 class TestAdvancedSettingsEndpoints:

@@ -1,4 +1,4 @@
-"""Behavioural tests for the rendered ``<script>`` body in ``settings_ui.py``.
+"""Behavioural tests for the rendered ``<script>`` body in ``settings_ui/__init__.py``.
 
 Use the JSDOM harness at ``tests/js/harness.mjs`` to drive the script
 through realistic flows and assert on observable side effects (HTTP
@@ -173,7 +173,7 @@ def _assert_min_dom_covers_handlers() -> None:
     missing = referenced - set(_TOP_LEVEL_ELEMENT_IDS)
     if missing:
         raise RuntimeError(
-            "settings_ui.py top-level getElementById ids drifted past "
+            "settings_ui/__init__.py top-level getElementById ids drifted past "
             f"_TOP_LEVEL_ELEMENT_IDS in this test file: {sorted(missing)}. "
             "Add them and rebuild MIN_DOM.",
         )
@@ -1704,8 +1704,8 @@ class TestAddonModeLockedBannerCopy:
             "addon-mode master banner still shows standalone 'unset env var' copy"
         )
         # Addon-aware copy must appear.
-        assert "addon Configuration" in result.dom, (
-            f"expected 'addon Configuration' hint; dom tail: {result.dom[-2000:]}"
+        assert "App (add-on) Configuration" in result.dom, (
+            f"expected 'App (add-on) Configuration' hint; dom tail: {result.dom[-2000:]}"
         )
 
     def test_advanced_locked_banner_in_addon_mode_avoids_unset_copy(
@@ -1749,8 +1749,8 @@ class TestAddonModeLockedBannerCopy:
         assert "unset it to edit here" not in result.dom, (
             "addon-mode advanced banner still shows standalone 'unset env var' copy"
         )
-        assert "addon runtime environment" in result.dom, (
-            f"expected 'addon runtime environment' wording; "
+        assert "App (add-on) runtime environment" in result.dom, (
+            f"expected 'App (add-on) runtime environment' wording; "
             f"dom tail: {result.dom[-2000:]}"
         )
 
@@ -1867,11 +1867,11 @@ class TestAddonModeLockedBannerCopy:
         # Supervisor" helper text (Supervisor never sees this start.py
         # setdefault value).
         assert "Hardcoded to" in result.dom and "cannot be changed" in result.dom, (
-            f"expected field-specific 'hardcoded in add-on mode' copy; "
+            f"expected field-specific 'hardcoded in App (add-on) mode' copy; "
             f"dom tail: {result.dom[-2000:]}"
         )
         assert "managed by Home Assistant Supervisor" not in result.dom, (
-            "add-on copy must not imply Supervisor manages this hardcoded field"
+            "App (add-on) copy must not imply Supervisor manages this hardcoded field"
         )
 
     def test_codemode_subrow_standalone_mode_still_uses_unset_copy(
@@ -3388,30 +3388,33 @@ class TestTablistAndStatusBehavior:
     def _dom_with_tabs(self) -> str:
         return MIN_DOM.replace("</body>", self._TAB_STRIP + "\n</body>")
 
-    def test_status_failure_toggles_alert_role(self, settings_script: str) -> None:
-        """updateStatus(text, saved, isError) must flip #status to
-        role=alert / aria-live=assertive on failure and back to
-        role=status / aria-live=polite otherwise — the contract every save
-        handler (incl. saveBackupConfig) relies on for assertive
-        announcement."""
+    def test_failure_announces_via_assertive_toast(self, settings_script: str) -> None:
+        """A terminal failure is announced assertively through the toast
+        (role=alert / aria-live=assertive), NOT the #status region: updateStatus
+        routes saved/error outcomes solely to showToast so screen readers hear
+        them exactly once (no #status + toast double-announce). #status stays
+        role=status / aria-live=polite for the transient progress text
+        ("Saving…"/"Loading…") that never toasts."""
         result = run_script(
             settings_script,
             initial_html=MIN_DOM,
             fetch_map=DEFAULT_FETCHES,
             invoke="""
               updateStatus('Save failed!', false, true);
-              const fr = document.getElementById('status').getAttribute('role');
-              const fl = document.getElementById('status').getAttribute('aria-live');
-              updateStatus('Loaded', false, false);
-              const orr = document.getElementById('status').getAttribute('role');
-              const ol = document.getElementById('status').getAttribute('aria-live');
+              const t = document.querySelector('#ha-toast-region .ha-toast');
+              const tr = t ? t.getAttribute('role') : '';
+              const tl = t ? t.getAttribute('aria-live') : '';
+              updateStatus('Loading...', false, false);
+              const sr = document.getElementById('status').getAttribute('role');
+              const sl = document.getElementById('status').getAttribute('aria-live');
               document.body.setAttribute('data-test',
-                `fail=${fr}/${fl} ok=${orr}/${ol}`);
+                `fail=${tr}/${tl} progress=${sr}/${sl}`);
             """,
         )
         _assert_clean_init(result)
-        assert 'data-test="fail=alert/assertive ok=status/polite"' in result.dom, (
-            f"setStatusAlert polarity wrong; dom tail: {result.dom[-800:]}"
+        assert 'data-test="fail=alert/assertive progress=status/polite"' in result.dom, (
+            "terminal failure should announce via the toast (assertive) and leave "
+            f"#status polite for progress; dom tail: {result.dom[-800:]}"
         )
 
     def test_tab_click_syncs_aria_selected_and_roving_tabindex(

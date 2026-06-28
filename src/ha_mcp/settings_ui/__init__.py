@@ -83,12 +83,13 @@ _PROCESS_STARTED_AT: float = time.time()
 logger = logging.getLogger(__name__)
 
 # Tools that are always enabled regardless of saved config — the server
-# strips them out of any disable list before applying. Three of these
+# strips them out of any disable list before applying. Five of these
 # overlap with DEFAULT_PINNED_TOOLS in transforms/categorized_search.py
-# (ha_search, ha_get_overview, ha_report_issue); ha_get_state
-# is mandatory but not pinned-by-default because it is reachable via the
-# ha_call_read_tool proxy when tool search is on. Keep these lists in
-# sync where it matters and divergent where it matters — don't merge them.
+# (ha_search, ha_get_overview, ha_report_issue, ha_get_skill_guide,
+# ha_manage_backup); ha_get_state is mandatory but not pinned-by-default
+# because it is reachable via the ha_call_read_tool proxy when tool search
+# is on. Keep these lists in sync where it matters and divergent where it
+# matters — don't merge them.
 MANDATORY_TOOLS: set[str] = {
     "ha_search",
     "ha_get_overview",
@@ -633,7 +634,7 @@ def apply_tool_visibility(
 _SETTINGS_JS_PATH = Path(__file__).parent / "settings.js"
 try:
     _settings_js_template = _SETTINGS_JS_PATH.read_text(encoding="utf-8")
-except FileNotFoundError as exc:  # pragma: no cover - packaging guard
+except OSError as exc:  # pragma: no cover - packaging guard
     raise ImportError(
         f"settings.js missing at {_SETTINGS_JS_PATH}. It must ship in "
         "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller datas "
@@ -641,9 +642,10 @@ except FileNotFoundError as exc:  # pragma: no cover - packaging guard
     ) from exc
 # str.replace() silently no-ops on an absent token, and a *renamed* sentinel
 # (e.g. PINNED_DEFAULTS) slips past both the "__HA_MCP_" not-in test and the
-# node --check parse guard -- `const DEFAULT_PINNED = PINNED_DEFAULTS;` is valid
-# JS (only a runtime ReferenceError), so a drifted settings.js would ship a
-# broken page green. Assert both sentinels are present before substituting.
+# esbuild/jsdom JS harness (tests/js/harness.mjs) -- `const DEFAULT_PINNED =
+# PINNED_DEFAULTS;` is valid JS (only a runtime ReferenceError), so a drifted
+# settings.js would ship a broken page green. Assert both sentinels are present
+# before substituting.
 for _sentinel in ("__HA_MCP_DEFAULT_PINNED__", "__HA_MCP_MANDATORY__"):
     if _sentinel not in _settings_js_template:
         raise ImportError(
@@ -664,11 +666,11 @@ _SETTINGS_JS = _settings_js_template.replace(
 # read, no token substitution -- and is injected inline between the same
 # <style>/</style> tags so the served page stays byte-identical. It carries
 # the same import-time packaging dependency as settings.js, so the same
-# FileNotFoundError -> ImportError packaging guard applies.
+# OSError -> ImportError packaging guard applies.
 _SETTINGS_CSS_PATH = Path(__file__).parent / "settings.css"
 try:
     _SETTINGS_CSS = _SETTINGS_CSS_PATH.read_text(encoding="utf-8")
-except FileNotFoundError as exc:  # pragma: no cover - packaging guard
+except OSError as exc:  # pragma: no cover - packaging guard
     raise ImportError(
         f"settings.css missing at {_SETTINGS_CSS_PATH}. It must ship in "
         "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller datas "
@@ -683,21 +685,23 @@ except FileNotFoundError as exc:  # pragma: no cover - packaging guard
 #   __HA_MCP_JS__          -> settings.js contents (inside <script>)
 #   __HA_MCP_THEME_PREFS__ -> per-request server-seeded theme prefs JSON,
 #                             substituted in _render_settings_html()
-# Same import-time packaging dependency as settings.js/css (wheel package-data
-# + MANIFEST.in); see _SETTINGS_JS_PATH above.
+# Same import-time packaging dependency as settings.js/css (wheel package-data,
+# MANIFEST.in, PyInstaller datas) and the same OSError guard -- but this loader
+# raises RuntimeError, not the ImportError that settings.js/css raise.
 _SETTINGS_HTML_PATH = Path(__file__).parent / "settings.html"
 try:
     _settings_html_template = _SETTINGS_HTML_PATH.read_text(encoding="utf-8")
 except OSError as exc:  # pragma: no cover - packaging guard
     raise RuntimeError(
         f"settings.html missing at {_SETTINGS_HTML_PATH}. It must ship in "
-        "the wheel (pyproject [tool.setuptools.package-data]) and the sdist "
-        "(MANIFEST.in)."
+        "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller datas "
+        "(binary) -- this is a packaging bug, not a usage error."
     ) from exc
 
 # Fail fast if a marker was renamed in settings.html but not here (or vice
 # versa) — str.replace() silently no-ops on an absent token, which would ship a
-# page missing its CSS or JS. Assert all three markers are present.
+# page missing its CSS, JS, or server-seeded theme prefs. Assert all three
+# markers are present.
 for _sentinel in ("__HA_MCP_CSS__", "__HA_MCP_JS__", "__HA_MCP_THEME_PREFS__"):
     if _sentinel not in _settings_html_template:
         raise RuntimeError(
@@ -771,10 +775,10 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
             {
                 "error": (
                     "Tool security policies live approvals are not active. "
-                    "Either the feature is turned off in addon config, the "
+                    "Either the feature is turned off in App (add-on) config, the "
                     "settings UI is running in stdio-sidecar mode, or the "
                     "policy package failed to import at startup. Check the "
-                    "addon log for ImportError / RuntimeError details if you "
+                    "App (add-on) log for ImportError / RuntimeError details if you "
                     "expected gating to be on."
                 )
             },
@@ -1388,7 +1392,7 @@ def build_settings_handlers(
                     "Unset DISABLED_TOOLS / PINNED_TOOLS first.",
                     suggestions=[
                         "Unset the DISABLED_TOOLS / PINNED_TOOLS environment "
-                        "variables (or remove them from your addon/Docker "
+                        "variables (or remove them from your App (add-on)/Docker "
                         "config), then restart to edit these tools from the UI.",
                     ],
                     context={"rejected": rejected},
@@ -1451,7 +1455,7 @@ def build_settings_handlers(
             return JSONResponse(
                 create_error_response(
                     ErrorCode.CONFIG_VALIDATION_FAILED,
-                    "Restart only available when running as an add-on",
+                    "Restart only available when running as an App (add-on)",
                     details="SUPERVISOR_TOKEN environment variable is not set",
                 ),
                 status_code=400,
@@ -1583,6 +1587,42 @@ def build_settings_handlers(
             }
         )
 
+    async def _live_addon_options() -> dict[str, Any]:
+        """Best-effort fetch of the add-on's current ``/data/options.json``.
+
+        Read-consistency with the add-on Configuration tab: the GET handlers
+        below otherwise display boot-time env values, so a user who edits the
+        add-on config (or saves from this web UI) WITHOUT restarting would see
+        stale values. For add-on-synced / schema-backed fields the live value
+        lives in Supervisor's options, so surface that — the latest SAVED
+        value, which is what becomes active after restart (the existing
+        "Restart required after save" banner conveys apply-on-restart).
+
+        Returns an empty dict outside add-on mode, without a live server, or
+        on any fetch failure, so callers fall back to the boot-env value and
+        the page never crashes or blanks a field.
+        """
+        if not is_running_in_addon() or server is None:
+            return {}
+        try:
+            options, err = await _supervisor_fetch_current_options(
+                server.settings.verify_ssl
+            )
+        except Exception as exc:  # pragma: no cover - defensive belt-and-braces
+            logger.debug(
+                "Live add-on options fetch raised %s — using boot-env values",
+                exc,
+            )
+            return {}
+        if err is not None:
+            logger.debug(
+                "Live add-on options fetch failed (%s): %s — using boot-env values",
+                err.kind,
+                err.message,
+            )
+            return {}
+        return options
+
     async def _get_feature_flags(_: Request) -> JSONResponse:
         """Return live feature-flag values + per-field origin + editable flag.
 
@@ -1613,10 +1653,17 @@ def build_settings_handlers(
         )
 
         settings = get_global_settings()
+        # Read-consistency with the add-on Configuration tab: addon-origin
+        # flags are sourced from /data/options.json at boot, so the boot-env
+        # value goes stale after a config edit without a restart. Surface the
+        # latest SAVED options value for those (see _live_addon_options).
+        live_options = await _live_addon_options()
         flags: dict[str, Any] = {}
         for field_name, env_name, ftype in FEATURE_FLAG_FIELDS:
             origin = get_feature_flag_origin(env_name)
             value = getattr(settings, field_name)
+            if origin == "addon" and field_name in live_options:
+                value = live_options[field_name]
             entry: dict[str, Any] = {
                 "value": value,
                 "origin": origin,
@@ -1796,7 +1843,7 @@ def build_settings_handlers(
                         (
                             f"{field_name!r} is locked by {origin}. "
                             f"Adjust the {env_name} env var "
-                            "(or addon configuration) instead."
+                            "(or App (add-on) configuration) instead."
                         ),
                     ),
                     status_code=400,
@@ -1917,7 +1964,7 @@ def build_settings_handlers(
                             "Supervisor helper returned ok=False with no error",
                             suggestions=[
                                 "Check the Home Assistant Supervisor logs and "
-                                + "the add-on logs for the underlying failure.",
+                                + "the App (add-on) logs for the underlying failure.",
                                 "Report this at "
                                 + "https://github.com/homeassistant-ai/ha-mcp/issues "
                                 + "if it persists. This indicates an internal bug.",
@@ -2286,6 +2333,11 @@ def build_settings_handlers(
         # called per field, and re-reading the file 17+ times would
         # produce duplicate WARNINGs on a corrupt file (one per field).
         overrides = _read_feature_flag_override_file()
+        # Read-consistency with the add-on Configuration tab: addon-synced
+        # fields (origin "addon") live in /data/options.json, so the boot-env
+        # value goes stale after a config edit without a restart. Surface the
+        # latest SAVED options value for those (see _live_addon_options).
+        live_options = await _live_addon_options()
         fields: list[dict[str, Any]] = []
         for (
             fname,
@@ -2296,6 +2348,8 @@ def build_settings_handlers(
         ) in ADVANCED_SETTINGS_FIELDS:
             origin = _origin_for_advanced_field(env_name, overrides=overrides)
             value: Any = getattr(settings, fname, None)
+            if origin == "addon" and fname in live_options:
+                value = live_options[fname]
             # Mask the token: never echo the actual long-lived access
             # token to the UI. The OAuth-mode sentinel survives so
             # operators can tell connection mode at a glance.
@@ -2456,7 +2510,7 @@ def build_settings_handlers(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"{fname!r} is display-only. Modify via env var "
-                        "or addon configuration.",
+                        "or App (add-on) configuration.",
                     ),
                     status_code=409,
                 )
@@ -2475,11 +2529,11 @@ def build_settings_handlers(
                 # add-on-aware copy instead of implying a lever exists.
                 if addon_mode:
                     message = (
-                        f"{fname!r} is fixed by the add-on runtime and "
+                        f"{fname!r} is fixed by the App (add-on) runtime and "
                         "cannot be changed from the web UI."
                     )
                     suggestions = [
-                        "This value is baked into the add-on and is not "
+                        "This value is baked into the App (add-on) and is not "
                         "exposed as an editable setting.",
                     ]
                 else:
@@ -2640,7 +2694,7 @@ def build_settings_handlers(
                             "Supervisor helper returned ok=False with no error",
                             suggestions=[
                                 "Check the Home Assistant Supervisor logs and "
-                                + "the add-on logs for the underlying failure.",
+                                + "the App (add-on) logs for the underlying failure.",
                                 "Report this at "
                                 + "https://github.com/homeassistant-ai/ha-mcp/issues "
                                 + "if it persists. This indicates an internal bug.",

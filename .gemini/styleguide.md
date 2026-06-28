@@ -180,7 +180,7 @@ A change is BREAKING only if it removes functionality that users depend on.
 
 ## Accessibility (web UI)
 
-Both rendered surfaces — the Astro docs site (`site/`) and the add-on settings UI (`src/ha_mcp/settings_ui.py` + `settings.css` / `settings.js`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
+Both rendered surfaces — the Astro docs site (`site/`) and the add-on settings UI (`src/ha_mcp/settings_ui/__init__.py` + `settings.css` / `settings.js`) — follow the conventions from #1574/#1596, anchored in CI by the `site-checks` job (`astro check`, `eslint-plugin-astro` + `jsx-a11y`, and an axe-core audit over the built pages — all blocking).
 
 **Flag MEDIUM severity when a change:**
 

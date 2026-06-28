@@ -210,7 +210,7 @@ which would restart HA. Layered defenses:
 
 ## Settings UI changes
 
-`settings_ui.py` gains:
+`settings_ui/__init__.py` gains:
 - 5 new routes (list / view / diff / restore / delete + bulk delete)
 - A "Backups" tab in the existing `/settings` HTML page — list table with filter inputs (domain, entity, since), each row with View / Diff / Restore / Delete buttons, plus a "Bulk delete matching" action
 - A small JS section at the bottom of the existing inline script tag
@@ -275,7 +275,7 @@ One test file per backed-up domain (`test_automation.py`, `test_script.py`, ...,
 **Modified:**
 - `src/ha_mcp/config.py` (4 settings)
 - `src/ha_mcp/tools/backup.py` — merge `ha_backup_create`+`ha_backup_restore` into a single `ha_manage_backup` polymorphic tool; add the `edits` scope handlers
-- `src/ha_mcp/settings_ui.py` (5 routes + Backups tab)
+- `src/ha_mcp/settings_ui/__init__.py` (5 routes + Backups tab)
 - `homeassistant-addon/config.yaml` + `homeassistant-addon-dev/config.yaml` (4 options + schema)
 - `homeassistant-addon-dev/translations/en.yaml` (4 translations)
 - 28 `tools_*.py` modules (one `@with_auto_backup(...)` line each above existing `@mcp.tool(...)`)

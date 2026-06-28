@@ -69,7 +69,7 @@ def test_anti_fouc_resolvers_are_logically_identical() -> None:
 
     assert _normalize(settings_body) == _normalize(layout_body), (
         "The anti-FOUC accessibility-pref resolvers in "
-        "ha_mcp/settings_ui.py and site/src/layouts/Layout.astro have "
+        "ha_mcp/settings_ui/__init__.py and site/src/layouts/Layout.astro have "
         "diverged. They must stay logically identical (same localStorage "
         "keys, same <html> attributes) or one surface paints with the "
         "wrong prefs before CSS loads. Mirror your change into both."
