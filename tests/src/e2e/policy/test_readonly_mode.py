@@ -147,6 +147,7 @@ async def test_write_tools_hidden_exempt_and_read_tools_listed(readonly_mcp):
         "ha_manage_backup",
         "ha_manage_pipeline",
         "ha_manage_energy_prefs",
+        "ha_manage_radio",
     ):
         assert kept in names, f"{kept} should stay listed"
 
@@ -235,6 +236,32 @@ async def test_exempt_tool_write_action_blocked(readonly_mcp):
     assert body["blocked_operation"], body
     # The error teaches what remains available on this tool.
     assert "list" in body["error"]["message"], body
+
+
+@pytest.mark.asyncio
+async def test_radio_read_action_works(readonly_mcp):
+    """ha_manage_radio is exempt: a read action (network_status) stays
+    callable in read-only mode. Z-Wave JS is not configured on the test
+    container, so this also exercises the graceful integration-absent read
+    path (available=False but success=True)."""
+    client, _server = readonly_mcp
+    result = await client.call_tool(
+        "ha_manage_radio", {"radio": "zwave", "action": "network_status"}
+    )
+    body = parse_mcp_result(result)
+    assert body.get("success") is True, body
+
+
+@pytest.mark.asyncio
+async def test_radio_write_action_blocked(readonly_mcp):
+    """A ha_manage_radio write action (zwave 'add') is blocked with the
+    structured READ_ONLY_MODE error before the handler runs."""
+    client, _server = readonly_mcp
+    body = await _expect_read_only_blocked(
+        client, "ha_manage_radio", {"radio": "zwave", "action": "add"}
+    )
+    assert body["tool_name"] == "ha_manage_radio", body
+    assert body["blocked_operation"], body
 
 
 @pytest.mark.asyncio
@@ -399,3 +426,127 @@ async def test_code_mode_tool_read_works_and_execution_blocked(readonly_codemode
         {"code": "1 + 1", "justification": "read-only mode test"},
     )
     assert body["tool_name"] == "ha_manage_custom_tool", body
+
+
+@pytest.mark.inaddon_only
+@pytest.mark.asyncio
+async def test_inaddon_read_only_mode_blocks_radio_writes(
+    ha_container_with_fresh_config, mcp_client
+):
+    """Read-only mode on the REAL inaddon add-on (every test above skips inaddon
+    via ``_build_readonly_server``, which can only inject ``READ_ONLY_MODE`` into
+    a fresh in-process server).
+
+    Enables read_only_mode through the add-on's OWN settings API — which merges it
+    into the Supervisor add-on options the production way (a bare options POST is
+    full-replacement and would drop required keys) — self-restarts ONLY the add-on
+    (~10s; Home Assistant is untouched) so it boots with ``READ_ONLY_MODE=true``,
+    asserts ha_manage_radio's read action still works while a write is blocked with
+    the structured READ_ONLY_MODE error, then RESTORES read-only to off.
+
+    xdist runs a worker's tests serially and each worker owns an isolated add-on
+    (``_haos_worker_setup``), so bracketing read-only around just this test and
+    restoring it in ``finally`` is safe at any position. (Ordering tricks do NOT
+    help — ``--dist loadscope`` groups tests by module, so a single "run last"
+    marker can't make this the last thing on its worker.) The two dev-add-on
+    restarts also drop the SHARED session ``mcp_client`` connection
+    (test_supervisor_inaddon.py documents that restarting the dev add-on kills
+    mcp_client for later tests), so the ``finally`` also warms that client back up
+    so whatever module loadscope hands this worker next gets a live session.
+    """
+    import asyncio
+    import time
+
+    import httpx
+    from fastmcp.client.transports import StreamableHttpTransport
+    from haos_runtime import HA_MCP_TEST_SECRET_PATH, wait_for_addon_mcp_ready
+
+    container_info = ha_container_with_fresh_config
+    addon_mcp_url = container_info.get("addon_mcp_url")
+    assert addon_mcp_url, "inaddon backend should expose addon_mcp_url"
+    # The settings UI is mounted at the secret-path root (see TestSettingsUiRestartReal).
+    base = addon_mcp_url.split("/mcp", 1)[0]
+    settings = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings"
+    _transient = (AssertionError, TimeoutError, OSError, httpx.HTTPError, RuntimeError)
+
+    async def _set_read_only(enabled: bool) -> None:
+        """POST the flag (handler merges into Supervisor options) + self-restart
+        the add-on. Empty restart body -> target='self', which the handler
+        schedules in the background so this 200 flushes before the bounce."""
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            resp = await http.post(
+                f"{settings}/features", json={"flags": {"read_only_mode": enabled}}
+            )
+            assert resp.status_code == 200, (
+                f"set read_only_mode={enabled}: {resp.status_code} {resp.text[:300]!r}"
+            )
+            resp = await http.post(f"{settings}/restart", json={})
+            assert resp.status_code == 200, (
+                f"restart add-on: {resp.status_code} {resp.text[:300]!r}"
+            )
+
+    async def _await_read_only(expected: bool) -> None:
+        """Poll, reconnecting each round, until the add-on's CATALOG reflects
+        read_only_mode == expected — i.e. the restart actually took effect. In
+        read-only mode the catalog filter hides write tools, so ``ha_call_service``
+        is absent iff read-only is on. Keying on a positive signal from a real
+        ``list_tools`` response (rather than the absence of an overview key, which
+        a degraded payload could also fake) ensures we only confirm against a
+        healthy, fully-booted add-on."""
+        deadline = time.monotonic() + 180.0
+        last: object = None
+        while time.monotonic() < deadline:
+            try:
+                url = wait_for_addon_mcp_ready(timeout=30.0)
+                async with Client(StreamableHttpTransport(url=url)) as mcp:
+                    names = {t.name for t in await mcp.list_tools()}
+                if ("ha_call_service" not in names) is expected:
+                    return
+                last = len(names)
+            except _transient as err:
+                last = err
+            await asyncio.sleep(3)
+        raise AssertionError(
+            f"read-only catalog did not become {expected} within 180s (last={last!r})"
+        )
+
+    try:
+        await _set_read_only(True)
+        await _await_read_only(True)
+        url = wait_for_addon_mcp_ready(timeout=30.0)
+        async with Client(StreamableHttpTransport(url=url)) as mcp:
+            result = await mcp.call_tool(
+                "ha_manage_radio", {"radio": "zwave", "action": "network_status"}
+            )
+            assert parse_mcp_result(result).get("success") is True, result
+            blocked = await _expect_read_only_blocked(
+                mcp, "ha_manage_radio", {"radio": "zwave", "action": "add"}
+            )
+            assert blocked.get("tool_name") == "ha_manage_radio", blocked
+    finally:
+        # Restore read-only OFF: this worker's remaining tests share the add-on
+        # and need writes, so a leaked read-only would cascade READ_ONLY_MODE into
+        # all of them. Retry the whole set+restart until it's confirmed off.
+        restore_deadline = time.monotonic() + 300.0
+        while True:
+            try:
+                await _set_read_only(False)
+                await _await_read_only(False)
+                break
+            except _transient:
+                if time.monotonic() >= restore_deadline:
+                    raise
+                await asyncio.sleep(3)
+        # The dev-add-on restarts above dropped the SHARED session mcp_client's
+        # connection. Warm it back up so the next test loadscope schedules on this
+        # worker gets a live session rather than a stale one (a read tool is enough
+        # to force re-establishment; retry while the add-on finishes coming up).
+        warm_deadline = time.monotonic() + 120.0
+        while True:
+            try:
+                await mcp_client.call_tool("ha_get_overview", {})
+                break
+            except _transient:
+                if time.monotonic() >= warm_deadline:
+                    raise
+                await asyncio.sleep(3)
