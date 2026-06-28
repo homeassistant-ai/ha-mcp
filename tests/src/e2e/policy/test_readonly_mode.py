@@ -426,3 +426,90 @@ async def test_code_mode_tool_read_works_and_execution_blocked(readonly_codemode
         {"code": "1 + 1", "justification": "read-only mode test"},
     )
     assert body["tool_name"] == "ha_manage_custom_tool", body
+
+
+@pytest.mark.inaddon_only
+@pytest.mark.run_last
+@pytest.mark.asyncio
+async def test_inaddon_read_only_mode_blocks_radio_writes(
+    ha_container_with_fresh_config,
+):
+    """Read-only mode on the REAL inaddon add-on (every test above skips inaddon
+    via ``_build_readonly_server``, which can only inject ``READ_ONLY_MODE`` into
+    a fresh in-process server).
+
+    Enables read_only_mode through the add-on's OWN settings API — which merges it
+    into the Supervisor add-on options the production way (a bare options POST is
+    full-replacement and would drop required keys) — then self-restarts ONLY the
+    add-on (~10s; Home Assistant is untouched) so it boots with
+    ``READ_ONLY_MODE=true``, and asserts ha_manage_radio's read action still works
+    while a write is blocked with the structured READ_ONLY_MODE error.
+
+    Runs LAST (``run_last``): it leaves the add-on in read-only mode, and the
+    option does not persist across e2e runs, so nothing needs undoing. Each xdist
+    worker owns an isolated add-on (``_haos_worker_setup``), so last-in-scope means
+    no write test runs after it on this worker.
+    """
+    import asyncio
+    import time
+
+    import httpx
+    from fastmcp.client.transports import StreamableHttpTransport
+    from haos_runtime import HA_MCP_TEST_SECRET_PATH, wait_for_addon_mcp_ready
+
+    container_info = ha_container_with_fresh_config
+    addon_mcp_url = container_info.get("addon_mcp_url")
+    assert addon_mcp_url, "inaddon backend should expose addon_mcp_url"
+    # The settings UI is mounted at the secret-path root (see TestSettingsUiRestartReal).
+    base = addon_mcp_url.split("/mcp", 1)[0]
+    settings = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings"
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        resp = await http.post(
+            f"{settings}/features", json={"flags": {"read_only_mode": True}}
+        )
+        assert resp.status_code == 200, (
+            f"enable read_only_mode: {resp.status_code} {resp.text[:300]!r}"
+        )
+        # Empty body -> target_slug='self': the handler schedules the Supervisor
+        # restart from a background task and returns 200 first, so the add-on
+        # boots fresh with the new option without cutting this response.
+        resp = await http.post(f"{settings}/restart", json={})
+        assert resp.status_code == 200, (
+            f"restart add-on: {resp.status_code} {resp.text[:300]!r}"
+        )
+
+    # The add-on bounces (~10s). Poll, reconnecting each round, until read-only
+    # mode is actually in effect: a write returns READ_ONLY_MODE and a read still
+    # works. This also rides out the brief window where the pre-restart process is
+    # still answering and the post-restart endpoint is not yet back up.
+    deadline = time.monotonic() + 180.0
+    last_err: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            url = wait_for_addon_mcp_ready(timeout=30.0)
+            async with Client(StreamableHttpTransport(url=url)) as mcp:
+                blocked = await _expect_read_only_blocked(
+                    mcp, "ha_manage_radio", {"radio": "zwave", "action": "add"}
+                )
+                assert blocked.get("tool_name") == "ha_manage_radio", blocked
+                result = await mcp.call_tool(
+                    "ha_manage_radio",
+                    {"radio": "zwave", "action": "network_status"},
+                )
+                assert parse_mcp_result(result).get("success") is True, result
+            return
+        except (
+            AssertionError,
+            TimeoutError,
+            OSError,
+            httpx.HTTPError,
+            RuntimeError,
+        ) as err:
+            # Pre-restart process still answering (write not yet blocked), endpoint
+            # not back yet, or a transient during the bounce — wait and retry.
+            last_err = err
+            await asyncio.sleep(3)
+    raise AssertionError(
+        f"read_only_mode did not take effect on the add-on within 180s: {last_err!r}"
+    )
