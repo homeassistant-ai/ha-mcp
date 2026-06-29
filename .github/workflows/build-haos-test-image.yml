@@ -267,7 +267,7 @@ jobs:
       - name: Warm shared Actions cache for E2E lanes (master only)
         if: github.ref == 'refs/heads/master' && steps.e2e_cache_key.outputs.cache-key != ''
         continue-on-error: true
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.e2e_cache_key.outputs.cache-key }}

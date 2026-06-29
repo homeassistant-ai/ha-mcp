@@ -143,7 +143,7 @@ jobs:
 
       - name: Restore image from cache
         id: restore-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
@@ -211,7 +211,7 @@ jobs:
         # doesn't save, see the block comment at the same position in
         # ``haos-e2e-inaddon-tests.yml``.
         if: steps.restore-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
