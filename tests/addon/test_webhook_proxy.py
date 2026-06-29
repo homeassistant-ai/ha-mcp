@@ -1545,6 +1545,101 @@ class TestDebugLogging:
         assert webhook_id[:6] in caplog.text
 
 
+class TestInboundLogMirror:
+    """Issue #1694: inbound debug lines are mirrored into the addon log.
+
+    The integration appends each inbound line to INBOUND_LOG_FILE; the addon's
+    keep-alive loop tails that file and echoes new lines to its own stdout so
+    they show up in the addon log, not only in Settings -> System -> Logs.
+    """
+
+    def test_append_inbound_log_writes_and_caps(self, tmp_path):
+        mod = _import_mcp_proxy()
+        log_file = tmp_path / "inbound.log"
+        with (
+            patch.object(mod, "INBOUND_LOG_FILE", log_file),
+            patch.object(mod, "_INBOUND_LOG_CAP", 200),
+        ):
+            for i in range(100):
+                mod._append_inbound_log(f"MCP Proxy [inbound]: line number {i}")
+            # Capped to bound growth, and the most recent line survives intact.
+            assert log_file.stat().st_size <= 200
+            assert log_file.read_text().splitlines()[-1].endswith("line number 99")
+
+    def test_append_inbound_log_swallows_oserror(self, tmp_path):
+        """A read-only / missing /config must not turn a debug write into a
+        propagating error (it runs in the executor, fire-and-forget)."""
+        mod = _import_mcp_proxy()
+        bad = tmp_path / "missing-dir" / "inbound.log"  # parent doesn't exist
+        with patch.object(mod, "INBOUND_LOG_FILE", bad):
+            mod._append_inbound_log("x")  # must not raise
+
+    async def test_handle_webhook_mirrors_inbound_line(self, tmp_path):
+        """A debug-on request dispatches the inbound line to the executor, which
+        lands in INBOUND_LOG_FILE for the addon to tail."""
+        mod = _import_mcp_proxy()
+        log_file = tmp_path / "inbound.log"
+
+        def fake_executor(func, *args):
+            func(*args)  # run the append synchronously for the test
+            return MagicMock()
+
+        hass = MagicMock()
+        hass.async_add_executor_job = MagicMock(side_effect=fake_executor)
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+                "debug_logging": True,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.remote = "203.0.113.4"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("stop")
+        )
+        with patch.object(mod, "INBOUND_LOG_FILE", log_file):
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+
+        text = log_file.read_text()
+        assert "[inbound]" in text
+        assert "203.0.113.4" in text
+
+    def test_emit_new_inbound_lines_tails_file(self, tmp_path):
+        """The addon tail emits only whole lines, holds a partial for the next
+        poll, never duplicates, and resets when the file is rotated."""
+        start = _import_start()
+        log_file = tmp_path / "inbound.log"
+        emitted: list[str] = []
+        with (
+            patch.object(start, "INBOUND_LOG_FILE", log_file),
+            patch.object(start, "log_info", side_effect=emitted.append),
+        ):
+            state = {"offset": 0}
+            start._emit_new_inbound_lines(state)  # no file yet
+            assert emitted == []
+
+            log_file.write_bytes(b"line A\nline B\npartial")
+            start._emit_new_inbound_lines(state)
+            assert emitted == ["line A", "line B"]  # partial held back
+
+            with log_file.open("ab") as fh:
+                fh.write(b" done\n")
+            emitted.clear()
+            start._emit_new_inbound_lines(state)
+            assert emitted == ["partial done"]  # completed, not re-emitted
+
+            log_file.write_bytes(b"fresh\n")  # truncation/rotation
+            emitted.clear()
+            start._emit_new_inbound_lines(state)
+            assert emitted == ["fresh"]
+
+
 class TestOAuthProvider:
     """Direct unit tests against the OAuthProvider class."""
 
@@ -2394,6 +2489,165 @@ class TestAuthorizeViewGet:
         assert "&lt;script&gt;" in html
 
 
+class TestRestartHintOnErrors:
+    """Issue #1694: the 'fully restart Home Assistant' hint is appended ONLY to
+    the stale-OAuth-registration errors (invalid_client / invalid client_id) a
+    restart actually unsticks — it is opt-in per call, not on every error."""
+
+    def test_text_error_hint_is_opt_in(self, tmp_path):
+        oauth = _import_oauth(tmp_path)
+        # Default: no hint (a client-side request mistake).
+        with patch.object(oauth.web, "Response") as resp_ctor:
+            oauth._text_error(400, "unsupported_response_type")
+        assert "restart Home Assistant" not in resp_ctor.call_args.kwargs.get(
+            "text", ""
+        )
+        # Opt-in: the stale-registration case carries the hint.
+        with patch.object(oauth.web, "Response") as resp_ctor:
+            oauth._text_error(400, "invalid client_id", restart_hint=True)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "invalid client_id" in text
+        assert "restart Home Assistant" in text
+
+    def test_json_error_hint_is_opt_in(self, tmp_path):
+        oauth = _import_oauth(tmp_path)
+        # Default: client-side protocol error, no error_description hint.
+        with patch.object(oauth.web, "json_response") as jr:
+            oauth._json_error("invalid_grant", 400)
+        assert "error_description" not in jr.call_args.args[0]
+        # Opt-in: invalid_client carries the hint.
+        with patch.object(oauth.web, "json_response") as jr:
+            oauth._json_error("invalid_client", 401, restart_hint=True)
+        payload = jr.call_args.args[0]
+        assert payload["error"] == "invalid_client"
+        assert "restart Home Assistant" in payload["error_description"]
+
+    async def test_invalid_client_id_browser_message_has_hint(self, tmp_path):
+        """The user's exact case: a wrong client_id at /authorize produces a
+        browser 400 whose text tells them to fully restart HA."""
+        oauth, provider = _provider_for_view_tests(tmp_path)
+        view = oauth.AuthorizeView(provider)
+        request = _make_view_request(
+            query={
+                "response_type": "code",
+                "client_id": "not-the-configured-id",
+                "redirect_uri": "https://claude.ai/cb",
+                "code_challenge": "X" * 43,
+                "code_challenge_method": "S256",
+                "state": "s",
+            }
+        )
+        with patch.object(oauth.web, "Response") as resp_ctor:
+            await view.get(request)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "invalid client_id" in text
+        assert "restart Home Assistant" in text
+
+
+class TestShutdownAndWebhookErrors:
+    """Issue #1694 follow-ups: the SIGTERM/SIGINT → cleanup contract (the
+    headline shutdown fix) and the restart hint on the webhook handler's
+    502/500 responses."""
+
+    def test_initial_tail_offset(self, tmp_path):
+        start = _import_start()
+        log_file = tmp_path / "inbound.log"
+        with patch.object(start, "INBOUND_LOG_FILE", log_file):
+            assert start._initial_tail_offset() == 0  # no file
+            log_file.write_bytes(b"hello\n")
+            assert start._initial_tail_offset() == 6  # end of existing file
+
+    def test_install_shutdown_handlers_records_reason_and_raises(self):
+        import signal
+
+        start = _import_start()
+        old = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
+        try:
+            reason = start._install_shutdown_handlers()
+            assert reason == {"reason": None}
+            handler = signal.getsignal(signal.SIGTERM)
+            with pytest.raises(KeyboardInterrupt):
+                handler(signal.SIGTERM, None)
+            assert reason["reason"] == "SIGTERM"
+        finally:
+            signal.signal(signal.SIGTERM, old[0])
+            signal.signal(signal.SIGINT, old[1])
+
+    def test_shutdown_cleanup_resets_handlers_unlinks_and_logs(self, tmp_path):
+        import signal
+
+        start = _import_start()
+        log_file = tmp_path / "inbound.log"
+        log_file.write_text("x\n")
+        old = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
+        logs: list[str] = []
+        try:
+            with (
+                patch.object(start, "INBOUND_LOG_FILE", log_file),
+                patch.object(start, "_remove_config_entry") as rm,
+                patch.object(start, "log_info", side_effect=logs.append),
+            ):
+                start._shutdown_cleanup("SIGTERM")
+            rm.assert_called_once()
+            assert not log_file.exists()  # mirror file dropped
+            assert any("reason: SIGTERM" in m for m in logs)
+            # Handlers restored to default so a second signal can't abort cleanup.
+            assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+        finally:
+            signal.signal(signal.SIGTERM, old[0])
+            signal.signal(signal.SIGINT, old[1])
+
+    async def test_webhook_502_has_no_restart_hint(self):
+        mod = _import_mcp_proxy()
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("down")
+        )
+        with patch.object(mod.web, "Response") as resp_ctor:
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "upstream unavailable" in text
+        # Scoped out: a restart won't fix a downed upstream MCP server.
+        assert "restart Home Assistant" not in text
+
+    async def test_webhook_500_has_no_restart_hint(self):
+        mod = _import_mcp_proxy()
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=RuntimeError("boom")
+        )
+        with patch.object(mod.web, "Response") as resp_ctor:
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "internal error" in text
+        # Scoped out: a restart won't fix a proxy bug.
+        assert "restart Home Assistant" not in text
+
+
 class TestAuthorizeViewPost:
     @pytest.fixture
     def setup(self, tmp_path):
@@ -2491,7 +2745,9 @@ class TestTokenView:
 
         kwargs = resp_ctor.call_args.kwargs
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_client"}
+        assert body["error"] == "invalid_client"
+        # Stale-registration case keeps the restart hint.
+        assert "restart Home Assistant" in body["error_description"]
         assert kwargs.get("status") == 401
         assert (
             kwargs.get("headers", {}).get("WWW-Authenticate")
@@ -2511,7 +2767,7 @@ class TestTokenView:
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_client"}
+        assert body["error"] == "invalid_client"
 
     async def test_unsupported_grant_type(self, setup):
         oauth, provider, view = setup
@@ -2528,7 +2784,9 @@ class TestTokenView:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
         kwargs = resp_ctor.call_args.kwargs
-        assert body == {"error": "unsupported_grant_type"}
+        assert body["error"] == "unsupported_grant_type"
+        # Client-side protocol error: no restart hint.
+        assert "error_description" not in body
         assert kwargs.get("status") == 400
 
     async def test_authorization_code_missing_fields(self, setup):
@@ -2545,7 +2803,7 @@ class TestTokenView:
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_request"}
+        assert body["error"] == "invalid_request"
 
     async def test_authorization_code_full_round_trip(self, setup):
         oauth, provider, view = setup
@@ -2622,7 +2880,7 @@ class TestTokenView:
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_grant"}
+        assert body["error"] == "invalid_grant"
 
 
 class TestPkceLengthEnforcement:

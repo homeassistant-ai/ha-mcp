@@ -31,6 +31,16 @@ This addon enables remote access to your HA MCP Server through any reverse proxy
 
 > **Reachability check:** Claude.ai connects from Anthropic's servers, not from your computer — so the URL must be reachable from the public internet, not just your LAN. If a connection won't establish, open the remote URL on your **phone with Wi-Fi turned off** (cellular only). If it doesn't load there, the URL isn't publicly reachable (a DNS, port-forward, TLS, or reverse-proxy problem) and Claude.ai can't reach it either — fix that first.
 
+> **Recreate the connector when OAuth or the URL changes.** Claude.ai binds an
+> authentication mode to a connector when you add it, and caches it. If you
+> later **turn OAuth on or off**, or the **webhook URL changes** (you rotated
+> it, or reinstalled the addon — which generates a new URL), the existing
+> connector keeps using the old mode/URL and tool calls fail (often
+> `invalid client id` on the consent page, or a silently dead endpoint).
+> **Delete the connector in Claude.ai and add a fresh one** with the current
+> URL (and current OAuth Client ID/Secret, if OAuth is on). This is required
+> even when going from OAuth on → off.
+
 > **Note:** If something doesn't seem to work after restarting HA, try restarting the addon as well.
 
 ## Configuration
@@ -181,7 +191,7 @@ What stops an attacker who can reach the consent page from gaining access:
 
 If a client (e.g. Claude.ai) can't connect and you can't tell whether its requests are even reaching Home Assistant, turn on **Log inbound requests** (the `debug_logging` option on the main Configuration page) and **restart the addon**.
 
-When it's on, every request that hits the webhook is logged to the **Home Assistant log** — *not* this addon's log, because requests reach Home Assistant directly rather than passing through the addon process. View them at **Settings → System → Logs** (or filter for `mcp_proxy`). Each line shows the method, a masked webhook path, the source address, whether an `Authorization` header was present, and the upstream response status:
+When it's on, every request that hits the webhook is logged to the **Home Assistant log** (requests reach Home Assistant directly rather than passing through the addon process). View them at **Settings → System → Logs** (or filter for `mcp_proxy`). The same lines are also **mirrored into this addon's own log**, so you can watch them on the addon's Log tab without leaving the addon page. Each line shows the method, a masked webhook path, the source address, whether an `Authorization` header was present, and the upstream response status:
 
 ```
 MCP Proxy [inbound]: POST /api/webhook/mcp_3e... from 203.0.113.4 (Authorization header: present)
@@ -230,6 +240,21 @@ If the `mcp_proxy` integration doesn't appear in Settings > Devices & Services:
 1. Restart Home Assistant (Settings > System > Restart)
 2. The addon will start automatically and retry setup
 
+### Persistent errors, especially OAuth "Invalid client id"
+
+If the proxy keeps returning the same error — most notably **"Invalid client id"**
+on the OAuth consent page even though you pasted the correct Client ID — **fully
+restart Home Assistant** (Settings → System → Restart).
+
+The OAuth provider's HTTP views are bound into Home Assistant's HTTP layer when the
+integration first loads, and Home Assistant can't re-register or drop them on a
+config reload. So changes that come from **toggling OAuth on/off, regenerating
+credentials, or reinstalling the add-on** don't take effect until a full HA
+restart — *reloading the integration or restarting the add-on is not enough.* (The
+webhook endpoint itself is re-registered on every reload, so it's specifically the
+OAuth views that need the restart.) After the restart, re-add the Claude.ai
+connector with the current URL (and current Client ID/Secret, if OAuth is on).
+
 ### Claude.ai says "Couldn't reach the MCP server"
 
 Two cases:
@@ -242,10 +267,12 @@ Two cases:
 ## Disabling / Uninstalling
 
 - **Stopping** the addon is safe — the webhook URL stays the same and resumes working when the addon is restarted
+- **Reinstalling** the addon always changes the webhook URL. Uninstalling wipes the addon's `/data` (where `webhook_id.txt` is stored), so the next start generates a fresh webhook id and overwrites `/config/.mcp_proxy_config.json` with it. Update your MCP client (and re-add the Claude.ai connector) with the new URL afterwards.
 - **Uninstalling** the addon does not automatically remove the custom integration files. To fully clean up after uninstalling:
   1. Delete `/config/custom_components/mcp_proxy/`
   2. Delete `/config/.mcp_proxy_config.json`
-  3. Restart Home Assistant
+  3. Delete `/config/.mcp_proxy_inbound.log` (only present if you used **Log inbound requests**; normally removed when the addon stops)
+  4. Restart Home Assistant
 
 ## Support
 

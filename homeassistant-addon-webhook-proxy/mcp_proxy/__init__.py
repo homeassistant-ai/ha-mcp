@@ -20,6 +20,7 @@ addon creates the config entry automatically via the HA API.
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -45,6 +46,19 @@ _LOGGER_LEVEL_RAISED = False
 
 DOMAIN = "mcp_proxy"
 CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
+
+# Inbound-request mirror file. When "Log inbound requests" is on we append each
+# inbound debug line here in addition to logging it to Home Assistant, so the
+# Webhook Proxy addon (a separate process) can tail it and surface the same
+# lines in the addon log. Path kept in sync with start.py:INBOUND_LOG_FILE.
+INBOUND_LOG_FILE = Path("/config/.mcp_proxy_inbound.log")
+# Cap the mirror file so it can't grow without bound; trim to the last half
+# when exceeded. 256 KiB keeps plenty of recent history at ~100 bytes/line.
+_INBOUND_LOG_CAP = 256 * 1024
+# Serializes writes to INBOUND_LOG_FILE: HA dispatches _append_inbound_log to a
+# multi-worker executor pool, so concurrent inbound requests could interleave
+# the append + the cap's read-modify-write trim without this lock.
+_LOG_WRITE_LOCK = threading.Lock()
 
 # ha-mcp generates a 22-char base64url token after `/private_`. We accept >=16
 # as a sanity floor — a truncated/corrupted ha-mcp config yields a shorter
@@ -320,6 +334,45 @@ def _read_config() -> dict | None:
     return data
 
 
+def _append_inbound_log(line: str) -> None:
+    """Append one inbound-debug line to the mirror file the addon tails.
+
+    Capped: when the file grows past ``_INBOUND_LOG_CAP`` it is trimmed to its
+    last half (dropping the now-partial first line) so it can't grow without
+    bound. Best-effort — swallows its own ``OSError`` (e.g. a read-only
+    ``/config``) so a mirror failure never surfaces as an unretrieved executor
+    exception. Blocking filesystem I/O — call via ``hass.async_add_executor_job``.
+    """
+    try:
+        with _LOG_WRITE_LOCK:
+            with INBOUND_LOG_FILE.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            if INBOUND_LOG_FILE.stat().st_size > _INBOUND_LOG_CAP:
+                data = INBOUND_LOG_FILE.read_bytes()[-(_INBOUND_LOG_CAP // 2) :]
+                nl = data.find(b"\n")
+                if nl != -1:
+                    data = data[nl + 1 :]
+                INBOUND_LOG_FILE.write_bytes(data)
+    except OSError as e:
+        _LOGGER.debug("MCP Proxy: inbound mirror write failed: %s", e)
+
+
+async def _debug_log(hass: HomeAssistant, message: str) -> None:
+    """Log an inbound-request debug line to Home Assistant AND mirror it to the
+    addon log file (``INBOUND_LOG_FILE``) so it surfaces in the Webhook Proxy
+    addon log too, not only in Settings -> System -> Logs.
+
+    The mirror write is dispatched to the executor fire-and-forget: it runs off
+    the event loop and we deliberately don't await it, so an opt-in debug log
+    never adds latency to (or fails) the proxied request. ``_append_inbound_log``
+    swallows its own ``OSError`` (the only realistic failure here, since the
+    message is controlled ASCII), so the unawaited future does not carry an
+    exception in practice.
+    """
+    _LOGGER.info("%s", message)
+    hass.async_add_executor_job(_append_inbound_log, message)
+
+
 async def _handle_webhook(
     hass: HomeAssistant, webhook_id: str, request: web.Request
 ) -> web.StreamResponse:
@@ -340,12 +393,10 @@ async def _handle_webhook(
         # the logged source.
         source = request.remote or "unknown"
         has_auth = "present" if request.headers.get("Authorization") else "absent"
-        _LOGGER.info(
-            "MCP Proxy [inbound]: %s %s from %s (Authorization header: %s)",
-            request.method,
-            masked_path,
-            source,
-            has_auth,
+        await _debug_log(
+            hass,
+            f"MCP Proxy [inbound]: {request.method} {masked_path} from {source} "
+            f"(Authorization header: {has_auth})",
         )
 
     # OAuth gate. When OAuth isn't configured, `oauth_provider` is None and
@@ -354,9 +405,10 @@ async def _handle_webhook(
     oauth_provider = data.get("oauth")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
         if debug:
-            _LOGGER.info(
+            await _debug_log(
+                hass,
                 "MCP Proxy [inbound]: -> 401 Unauthorized (no/invalid OAuth "
-                "bearer; expected for the initial discovery probe)"
+                "bearer; expected for the initial discovery probe)",
             )
         from .oauth import build_unauthorized_response
 
@@ -392,10 +444,10 @@ async def _handle_webhook(
             content_type = upstream_resp.headers.get("Content-Type", "")
 
             if debug:
-                _LOGGER.info(
-                    "MCP Proxy [inbound]: -> upstream responded %s (%s)",
-                    upstream_resp.status,
-                    content_type or "no content-type",
+                await _debug_log(
+                    hass,
+                    f"MCP Proxy [inbound]: -> upstream responded "
+                    f"{upstream_resp.status} ({content_type or 'no content-type'})",
                 )
 
             # Common headers for both streaming and non-streaming

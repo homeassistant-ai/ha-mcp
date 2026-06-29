@@ -3,6 +3,38 @@
 <!-- version list -->
 
 
+## v1.2.1 (2026-06-28)
+
+### Added
+
+- Mirror inbound-request debug lines into the addon's own log. When "Log
+  inbound requests" is on, the lines that were previously only visible in the
+  Home Assistant log (Settings → System → Logs) now also appear on the addon's
+  Log tab, so you can confirm a client is reaching the server without leaving
+  the addon page.
+
+### Fixed
+
+- Log a shutdown reason and run cleanup on a Supervisor stop. The addon now
+  handles `SIGTERM`/`SIGINT`, so stopping it unregisters the webhook (as the
+  docs describe) and records why it exited, instead of being killed mid-loop
+  with no log line and the webhook left registered.
+
+- Append a "fully restart Home Assistant" hint to the OAuth stale-registration
+  errors (`invalid_client` and the browser "Invalid client id" page). The OAuth
+  HTTP views only refresh on a full HA restart, so a regenerate / OAuth toggle /
+  reinstall can otherwise leave a stale error with no obvious fix. (Client-side
+  protocol errors and the upstream 502/500 paths don't get the hint — a restart
+  isn't the fix there.)
+
+### Documentation
+
+- Warn that the Claude.ai connector must be deleted and re-created when OAuth
+  is toggled on/off or the webhook URL changes — Claude.ai caches the
+  authentication mode and URL per connector, so reusing the old one fails (for
+  example `invalid client id` on the consent page).
+
+
 ## v1.2.0 (2026-06-15)
 
 ### Added

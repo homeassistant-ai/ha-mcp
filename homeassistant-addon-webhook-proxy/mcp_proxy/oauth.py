@@ -79,6 +79,53 @@ MAX_PENDING_CODES = 1000
 # misconfiguration if a future caller forgets the up-front check.
 MIN_CLIENT_ID_LEN = 16
 
+# Appended ONLY to the stale-OAuth-registration errors (invalid_client /
+# invalid client_id) via the _text_error/_json_error restart_hint flag. The OAuth
+# provider's HTTP views are bound at register_views() time and HA can't
+# re-register / drop them mid-session, so a client-id regenerate / OAuth toggle /
+# reinstall only takes effect on a full HA restart — the case this targets
+# (issue #1694). Deliberately NOT added to client-side protocol errors
+# (invalid_grant / invalid_request / unsupported_grant_type) or the webhook
+# 502/500 paths, where a restart is not the fix. (The webhook itself is
+# re-registered on reload; only the OAuth views need the restart.)
+RESTART_HINT = (
+    "If this persists, fully restart Home Assistant "
+    "(Settings -> System -> Restart) — not just the add-on or the integration."
+)
+
+
+def _text_error(
+    status: int, message: str, *, restart_hint: bool = False
+) -> web.Response:
+    """Plain-text error response.
+
+    ``restart_hint`` appends ``RESTART_HINT`` — set it only for the
+    stale-OAuth-registration cases (``invalid client_id``) a full HA restart
+    actually unsticks, not for client-side request mistakes.
+    """
+    text = f"{message}. {RESTART_HINT}" if restart_hint else message
+    return web.Response(status=status, text=text)
+
+
+def _json_error(
+    error: str,
+    status: int,
+    headers: dict[str, str] | None = None,
+    *,
+    restart_hint: bool = False,
+) -> web.Response:
+    """OAuth JSON error response.
+
+    ``restart_hint`` carries ``RESTART_HINT`` in ``error_description`` — set it
+    only for the stale-registration case (``invalid_client``), not for
+    client-side protocol errors (``invalid_grant`` / ``invalid_request`` /
+    ``unsupported_grant_type``) where a restart is not the fix.
+    """
+    body = {"error": error}
+    if restart_hint:
+        body["error_description"] = RESTART_HINT
+    return web.json_response(body, status=status, headers=headers)
+
 
 class _PendingCode(TypedDict):
     """Shape of an entry in OAuthProvider._codes. TypedDict so a typo on
@@ -546,7 +593,7 @@ class AuthorizeView(HomeAssistantView):
         if action == "deny":
             return self._redirect_with(redirect_uri, error="access_denied", state=state)
         if action != "approve":
-            return web.Response(status=400, text="invalid action")
+            return _text_error(400, "invalid action")
 
         code = self._provider.issue_code(redirect_uri, code_challenge)
         if code is None:
@@ -571,21 +618,17 @@ class AuthorizeView(HomeAssistantView):
         identical validation — the POST path explicitly re-validates the
         hidden form fields rather than trusting them."""
         if response_type != "code":
-            return web.Response(status=400, text="unsupported_response_type")
+            return _text_error(400, "unsupported_response_type")
         if code_challenge_method != "S256":
-            return web.Response(
-                status=400, text="invalid code_challenge_method (S256 required)"
-            )
+            return _text_error(400, "invalid code_challenge_method (S256 required)")
         if not _PKCE_CHALLENGE_RE.match(code_challenge):
-            return web.Response(
-                status=400, text="invalid code_challenge (must be 43-char base64url)"
+            return _text_error(
+                400, "invalid code_challenge (must be 43-char base64url)"
             )
         if client_id != self._provider.client_id:
-            return web.Response(status=400, text="invalid client_id")
+            return _text_error(400, "invalid client_id", restart_hint=True)
         if not _is_valid_redirect_uri(redirect_uri):
-            return web.Response(
-                status=400, text="redirect_uri must be an https:// URL with a host"
-            )
+            return _text_error(400, "redirect_uri must be an https:// URL with a host")
         return None
 
 
@@ -623,10 +666,11 @@ class TokenView(HomeAssistantView):
         form = dict(await request.post())
         client_id, client_secret = self._extract_client_creds(request, form)
         if not self._provider.authenticate_client(client_id, client_secret):
-            return web.json_response(
-                {"error": "invalid_client"},
-                status=401,
+            return _json_error(
+                "invalid_client",
+                401,
                 headers={"WWW-Authenticate": 'Basic realm="MCP Proxy OAuth"'},
+                restart_hint=True,
             )
 
         grant_type = form.get("grant_type", "")
@@ -634,16 +678,16 @@ class TokenView(HomeAssistantView):
             return await self._handle_authorization_code(form)
         if grant_type == "refresh_token":
             return await self._handle_refresh(form)
-        return web.json_response({"error": "unsupported_grant_type"}, status=400)
+        return _json_error("unsupported_grant_type", 400)
 
     async def _handle_authorization_code(self, form: dict) -> web.Response:
         code = str(form.get("code", ""))
         redirect_uri = str(form.get("redirect_uri", ""))
         code_verifier = str(form.get("code_verifier", ""))
         if not (code and redirect_uri and code_verifier):
-            return web.json_response({"error": "invalid_request"}, status=400)
+            return _json_error("invalid_request", 400)
         if not self._provider.consume_code(code, redirect_uri, code_verifier):
-            return web.json_response({"error": "invalid_grant"}, status=400)
+            return _json_error("invalid_grant", 400)
         return web.json_response(
             {
                 "access_token": self._provider.issue_access_token(),
@@ -656,7 +700,7 @@ class TokenView(HomeAssistantView):
     async def _handle_refresh(self, form: dict) -> web.Response:
         refresh = str(form.get("refresh_token", ""))
         if not refresh or not self._provider.validate_refresh_token(refresh):
-            return web.json_response({"error": "invalid_grant"}, status=400)
+            return _json_error("invalid_grant", 400)
         return web.json_response(
             {
                 "access_token": self._provider.issue_access_token(),
