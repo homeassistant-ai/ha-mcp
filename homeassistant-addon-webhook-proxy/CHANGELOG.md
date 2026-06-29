@@ -13,6 +13,13 @@
   `^[^/]+\.tar$`, so the slash made "Update" with "Create backup before update"
   enabled fail with `does not match regular expression` (issue #1707).
 
+### Documentation
+
+- Correct the "Log inbound requests" option description. It still said requests
+  are logged to the Home Assistant log "NOT this addon log", which contradicts
+  the v1.2.1 mirroring — the lines now appear in this addon's own log as well
+  (issue #1708).
+
 
 ## v1.2.1 (2026-06-28)
 
