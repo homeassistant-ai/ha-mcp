@@ -267,7 +267,7 @@ jobs:
       # Node.js" was the network download, not the extract. apt-get
       # install still runs (unpack is fast); we're just skipping the
       # download leg on cache hit.
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: /var/cache/apt/archives
         key: apt-trixie-git-nodejs-npm-v1
@@ -297,7 +297,7 @@ jobs:
       # Lockfile-keyed so a dependency bump invalidates cleanly. `npm ci`
       # is still safe to run on cache hit (it short-circuits when the
       # tree already matches the lockfile).
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: tests/js/node_modules
         key: tests-js-node-modules-${{ hashFiles('tests/js/package-lock.json') }}
@@ -355,7 +355,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
