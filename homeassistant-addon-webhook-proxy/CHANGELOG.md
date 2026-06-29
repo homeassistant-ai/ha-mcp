@@ -3,6 +3,17 @@
 <!-- version list -->
 
 
+## v1.2.2 (2026-06-29)
+
+### Fixed
+
+- Remove the `/` from the add-on name ("Nabu Casa / Webhook Proxy for HA MCP" ->
+  "Nabu Casa - Webhook Proxy for HA MCP"). Home Assistant Supervisor builds the
+  pre-update backup filename from the add-on name and validates it against
+  `^[^/]+\.tar$`, so the slash made "Update" with "Create backup before update"
+  enabled fail with `does not match regular expression` (issue #1707).
+
+
 ## v1.2.1 (2026-06-28)
 
 ### Added
