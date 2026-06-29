@@ -3,6 +3,24 @@
 <!-- version list -->
 
 
+## v1.2.2 (2026-06-29)
+
+### Fixed
+
+- Remove the `/` from the add-on name ("Nabu Casa / Webhook Proxy for HA MCP" ->
+  "Nabu Casa - Webhook Proxy for HA MCP"). Home Assistant Supervisor builds the
+  pre-update backup filename from the add-on name and validates it against
+  `^[^/]+\.tar$`, so the slash made "Update" with "Create backup before update"
+  enabled fail with `does not match regular expression` (issue #1707).
+
+### Documentation
+
+- Correct the "Log inbound requests" option description. It still said requests
+  are logged to the Home Assistant log "NOT this addon log", which contradicts
+  the v1.2.1 mirroring — the lines now appear in this addon's own log as well
+  (issue #1708).
+
+
 ## v1.2.1 (2026-06-28)
 
 ### Added

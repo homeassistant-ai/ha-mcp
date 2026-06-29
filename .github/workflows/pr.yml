@@ -311,6 +311,15 @@ jobs:
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
 
+    - name: Run add-on structure tests
+      # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
+      # the backup-filename-safe name guard, #1707) — previously these ran
+      # nowhere in CI. Excludes test_addon_startup.py, which spins up real
+      # Docker containers (testcontainers) this lint/unit runner doesn't have.
+      run: >-
+        uv run pytest tests/addon/ -n auto --tb=short -v
+        --ignore=tests/addon/test_addon_startup.py
+
   # Comprehensive E2E validation for all PRs
   e2e-validation:
     name: E2E Validation (${{ matrix.os }})

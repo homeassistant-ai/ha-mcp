@@ -63,7 +63,7 @@ LOG = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.haos_only]
 
-WEBHOOK_PROXY_NAME = "Nabu Casa / Webhook Proxy for HA MCP"
+WEBHOOK_PROXY_NAME = "Nabu Casa - Webhook Proxy for HA MCP"
 WEBHOOK_PROXY_SLUG = "local_ha_mcp_webhook_proxy"
 DEV_ADDON_SLUG = "local_ha_mcp_dev"
 
