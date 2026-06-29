@@ -246,13 +246,14 @@ If the proxy keeps returning the same error — most notably **"Invalid client i
 on the OAuth consent page even though you pasted the correct Client ID — **fully
 restart Home Assistant** (Settings → System → Restart).
 
-OAuth and webhook registration are bound into Home Assistant's HTTP layer when the
-integration first loads, and Home Assistant can't re-register them on a config
-reload. So changes that come from **toggling OAuth on/off, regenerating
+The OAuth provider's HTTP views are bound into Home Assistant's HTTP layer when the
+integration first loads, and Home Assistant can't re-register or drop them on a
+config reload. So changes that come from **toggling OAuth on/off, regenerating
 credentials, or reinstalling the add-on** don't take effect until a full HA
-restart — *reloading the integration or restarting the add-on is not enough.*
-After the restart, re-add the Claude.ai connector with the current URL (and
-current Client ID/Secret, if OAuth is on).
+restart — *reloading the integration or restarting the add-on is not enough.* (The
+webhook endpoint itself is re-registered on every reload, so it's specifically the
+OAuth views that need the restart.) After the restart, re-add the Claude.ai
+connector with the current URL (and current Client ID/Secret, if OAuth is on).
 
 ### Claude.ai says "Couldn't reach the MCP server"
 

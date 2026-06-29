@@ -60,16 +60,6 @@ _INBOUND_LOG_CAP = 256 * 1024
 # the append + the cap's read-modify-write trim without this lock.
 _LOG_WRITE_LOCK = threading.Lock()
 
-# Appended to the errors the webhook handler returns. Kept in sync with
-# oauth.py:RESTART_HINT. The OAuth HTTP views can't be re-registered mid-session
-# (HA can't drop routes from a running app), so a client-id regenerate / OAuth
-# toggle / reinstall only takes effect on a full HA restart. (The webhook itself
-# is re-registered on reload; the hint is a catch-all for the proxy's errors.)
-RESTART_HINT = (
-    "If this persists, fully restart Home Assistant "
-    "(Settings -> System -> Restart) — not just the add-on or the integration."
-)
-
 # ha-mcp generates a 22-char base64url token after `/private_`. We accept >=16
 # as a sanity floor — a truncated/corrupted ha-mcp config yields a shorter
 # token, which is the failure mode this length check exists to catch.
@@ -498,16 +488,10 @@ async def _handle_webhook(
 
     except aiohttp.ClientError as err:
         _LOGGER.error("MCP Proxy: upstream request failed: %s", err)
-        return web.Response(
-            status=502,
-            text=f"MCP Proxy: upstream unavailable. {RESTART_HINT}",
-        )
+        return web.Response(status=502, text="MCP Proxy: upstream unavailable")
     except Exception as err:
         _LOGGER.exception("MCP Proxy: unexpected error: %s", err)
-        return web.Response(
-            status=500,
-            text=f"MCP Proxy: internal error. {RESTART_HINT}",
-        )
+        return web.Response(status=500, text="MCP Proxy: internal error")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

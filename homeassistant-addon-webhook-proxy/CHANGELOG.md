@@ -20,10 +20,12 @@
   docs describe) and records why it exited, instead of being killed mid-loop
   with no log line and the webhook left registered.
 
-- Append a "fully restart Home Assistant" hint to every error the proxy returns
-  (including the browser "Invalid client id" OAuth page). OAuth/webhook
-  registration only refreshes on a full HA restart, so a regenerate / OAuth
-  toggle / reinstall can otherwise leave a stale error with no obvious fix.
+- Append a "fully restart Home Assistant" hint to the OAuth stale-registration
+  errors (`invalid_client` and the browser "Invalid client id" page). The OAuth
+  HTTP views only refresh on a full HA restart, so a regenerate / OAuth toggle /
+  reinstall can otherwise leave a stale error with no obvious fix. (Client-side
+  protocol errors and the upstream 502/500 paths don't get the hint — a restart
+  isn't the fix there.)
 
 ### Documentation
 

@@ -2490,28 +2490,34 @@ class TestAuthorizeViewGet:
 
 
 class TestRestartHintOnErrors:
-    """Issue #1694: every proxy error appends a 'fully restart Home Assistant'
-    hint — OAuth/webhook registration only refreshes on a full HA restart, so a
-    regenerate / OAuth toggle / reinstall can otherwise leave a stale error."""
+    """Issue #1694: the 'fully restart Home Assistant' hint is appended ONLY to
+    the stale-OAuth-registration errors (invalid_client / invalid client_id) a
+    restart actually unsticks — it is opt-in per call, not on every error."""
 
-    def test_init_and_oauth_hints_stay_in_sync(self, tmp_path):
+    def test_text_error_hint_is_opt_in(self, tmp_path):
         oauth = _import_oauth(tmp_path)
-        mod = _import_mcp_proxy()
-        assert mod.RESTART_HINT == oauth.RESTART_HINT
-        assert "restart Home Assistant" in oauth.RESTART_HINT
-
-    def test_text_error_appends_hint(self, tmp_path):
-        oauth = _import_oauth(tmp_path)
+        # Default: no hint (a client-side request mistake).
         with patch.object(oauth.web, "Response") as resp_ctor:
-            oauth._text_error(400, "invalid client_id")
+            oauth._text_error(400, "unsupported_response_type")
+        assert "restart Home Assistant" not in resp_ctor.call_args.kwargs.get(
+            "text", ""
+        )
+        # Opt-in: the stale-registration case carries the hint.
+        with patch.object(oauth.web, "Response") as resp_ctor:
+            oauth._text_error(400, "invalid client_id", restart_hint=True)
         text = resp_ctor.call_args.kwargs.get("text", "")
         assert "invalid client_id" in text
         assert "restart Home Assistant" in text
 
-    def test_json_error_carries_hint_in_description(self, tmp_path):
+    def test_json_error_hint_is_opt_in(self, tmp_path):
         oauth = _import_oauth(tmp_path)
+        # Default: client-side protocol error, no error_description hint.
         with patch.object(oauth.web, "json_response") as jr:
-            oauth._json_error("invalid_client", 401)
+            oauth._json_error("invalid_grant", 400)
+        assert "error_description" not in jr.call_args.args[0]
+        # Opt-in: invalid_client carries the hint.
+        with patch.object(oauth.web, "json_response") as jr:
+            oauth._json_error("invalid_client", 401, restart_hint=True)
         payload = jr.call_args.args[0]
         assert payload["error"] == "invalid_client"
         assert "restart Home Assistant" in payload["error_description"]
@@ -2591,7 +2597,7 @@ class TestShutdownAndWebhookErrors:
             signal.signal(signal.SIGTERM, old[0])
             signal.signal(signal.SIGINT, old[1])
 
-    async def test_webhook_502_includes_restart_hint(self):
+    async def test_webhook_502_has_no_restart_hint(self):
         mod = _import_mcp_proxy()
         hass = MagicMock()
         hass.data = {
@@ -2613,9 +2619,10 @@ class TestShutdownAndWebhookErrors:
             await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
         text = resp_ctor.call_args.kwargs.get("text", "")
         assert "upstream unavailable" in text
-        assert "restart Home Assistant" in text
+        # Scoped out: a restart won't fix a downed upstream MCP server.
+        assert "restart Home Assistant" not in text
 
-    async def test_webhook_500_includes_restart_hint(self):
+    async def test_webhook_500_has_no_restart_hint(self):
         mod = _import_mcp_proxy()
         hass = MagicMock()
         hass.data = {
@@ -2637,7 +2644,8 @@ class TestShutdownAndWebhookErrors:
             await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
         text = resp_ctor.call_args.kwargs.get("text", "")
         assert "internal error" in text
-        assert "restart Home Assistant" in text
+        # Scoped out: a restart won't fix a proxy bug.
+        assert "restart Home Assistant" not in text
 
 
 class TestAuthorizeViewPost:
@@ -2738,6 +2746,8 @@ class TestTokenView:
         kwargs = resp_ctor.call_args.kwargs
         body = resp_ctor.call_args.args[0]
         assert body["error"] == "invalid_client"
+        # Stale-registration case keeps the restart hint.
+        assert "restart Home Assistant" in body["error_description"]
         assert kwargs.get("status") == 401
         assert (
             kwargs.get("headers", {}).get("WWW-Authenticate")
@@ -2775,6 +2785,8 @@ class TestTokenView:
         body = resp_ctor.call_args.args[0]
         kwargs = resp_ctor.call_args.kwargs
         assert body["error"] == "unsupported_grant_type"
+        # Client-side protocol error: no restart hint.
+        assert "error_description" not in body
         assert kwargs.get("status") == 400
 
     async def test_authorization_code_missing_fields(self, setup):

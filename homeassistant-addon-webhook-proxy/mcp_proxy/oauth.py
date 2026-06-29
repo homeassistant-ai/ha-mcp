@@ -79,33 +79,52 @@ MAX_PENDING_CODES = 1000
 # misconfiguration if a future caller forgets the up-front check.
 MIN_CLIENT_ID_LEN = 16
 
-# Appended to every error response the proxy returns. The OAuth provider's HTTP
-# views are bound at register_views() time and HA can't re-register / drop them
-# mid-session, so a client-id regenerate / OAuth toggle / reinstall only takes
-# effect on a full HA restart — the "invalid client_id" case this targets. (The
-# webhook itself IS re-registered on reload; the hint is a catch-all appended to
-# every error, including upstream 502/500 where a restart may not be the fix.)
-# Pointing every error at a full restart (issue #1694) is the cheapest unstick.
+# Appended ONLY to the stale-OAuth-registration errors (invalid_client /
+# invalid client_id) via the _text_error/_json_error restart_hint flag. The OAuth
+# provider's HTTP views are bound at register_views() time and HA can't
+# re-register / drop them mid-session, so a client-id regenerate / OAuth toggle /
+# reinstall only takes effect on a full HA restart — the case this targets
+# (issue #1694). Deliberately NOT added to client-side protocol errors
+# (invalid_grant / invalid_request / unsupported_grant_type) or the webhook
+# 502/500 paths, where a restart is not the fix. (The webhook itself is
+# re-registered on reload; only the OAuth views need the restart.)
 RESTART_HINT = (
     "If this persists, fully restart Home Assistant "
     "(Settings -> System -> Restart) — not just the add-on or the integration."
 )
 
 
-def _text_error(status: int, message: str) -> web.Response:
-    """Plain-text error response with the restart hint appended."""
-    return web.Response(status=status, text=f"{message}. {RESTART_HINT}")
+def _text_error(
+    status: int, message: str, *, restart_hint: bool = False
+) -> web.Response:
+    """Plain-text error response.
+
+    ``restart_hint`` appends ``RESTART_HINT`` — set it only for the
+    stale-OAuth-registration cases (``invalid client_id``) a full HA restart
+    actually unsticks, not for client-side request mistakes.
+    """
+    text = f"{message}. {RESTART_HINT}" if restart_hint else message
+    return web.Response(status=status, text=text)
 
 
 def _json_error(
-    error: str, status: int, headers: dict[str, str] | None = None
+    error: str,
+    status: int,
+    headers: dict[str, str] | None = None,
+    *,
+    restart_hint: bool = False,
 ) -> web.Response:
-    """OAuth JSON error carrying the restart hint in error_description."""
-    return web.json_response(
-        {"error": error, "error_description": RESTART_HINT},
-        status=status,
-        headers=headers,
-    )
+    """OAuth JSON error response.
+
+    ``restart_hint`` carries ``RESTART_HINT`` in ``error_description`` — set it
+    only for the stale-registration case (``invalid_client``), not for
+    client-side protocol errors (``invalid_grant`` / ``invalid_request`` /
+    ``unsupported_grant_type``) where a restart is not the fix.
+    """
+    body = {"error": error}
+    if restart_hint:
+        body["error_description"] = RESTART_HINT
+    return web.json_response(body, status=status, headers=headers)
 
 
 class _PendingCode(TypedDict):
@@ -607,7 +626,7 @@ class AuthorizeView(HomeAssistantView):
                 400, "invalid code_challenge (must be 43-char base64url)"
             )
         if client_id != self._provider.client_id:
-            return _text_error(400, "invalid client_id")
+            return _text_error(400, "invalid client_id", restart_hint=True)
         if not _is_valid_redirect_uri(redirect_uri):
             return _text_error(400, "redirect_uri must be an https:// URL with a host")
         return None
@@ -651,6 +670,7 @@ class TokenView(HomeAssistantView):
                 "invalid_client",
                 401,
                 headers={"WWW-Authenticate": 'Basic realm="MCP Proxy OAuth"'},
+                restart_hint=True,
             )
 
         grant_type = form.get("grant_type", "")
