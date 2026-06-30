@@ -59,23 +59,31 @@ const withBase = (path: string) => {
       <div class="max-w-5xl mx-auto mb-8">
         <div class="glass-card rounded-2xl p-6 md:p-8 relative overflow-hidden">
           <div class="absolute inset-0 bg-gradient-to-br from-brand/[0.06] to-transparent pointer-events-none" aria-hidden="true"></div>
-          <div class="relative flex flex-col md:flex-row md:items-center gap-6">
-            <div class="flex items-start gap-4 flex-1">
+          <div class="relative">
+            <div class="flex items-start gap-4 mb-5">
               <div class="w-12 h-12 rounded-xl bg-brand/[0.1] flex items-center justify-center flex-shrink-0">
                 <PlatformIcon icon="home-assistant" size={26} class="text-brand" />
               </div>
               <div>
                 <div class="flex items-center gap-2 mb-1.5 flex-wrap">
                   <h3 class="font-display font-semibold text-white text-lg">Home Assistant App (add-on)</h3>
-                  <span class="px-2 py-0.5 text-xs rounded-full bg-brand/[0.12] text-brand font-medium">Runs on Home Assistant OS</span>
+                  <span class="px-2 py-0.5 text-xs rounded-full bg-brand/[0.12] text-brand font-medium">Recommended on Home Assistant OS</span>
                 </div>
-                <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Runs inside Home Assistant &mdash; it auto-discovers the connection and manages the token for you, so there's no access token to copy. Works with Claude Desktop, Claude.ai, ChatGPT and any other MCP client.</p>
+                <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Runs inside Home Assistant &mdash; no access token to manage. Can run on your local network or be configured for HTTP / internet access, and works with Claude Desktop, Claude.ai, ChatGPT and any other MCP client.</p>
               </div>
             </div>
-            <div class="flex flex-col sm:flex-row md:flex-col gap-3 md:w-56 flex-shrink-0">
-              <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="px-5 py-2.5 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors text-center text-sm">Add to Home Assistant</a>
-              <a href={withBase('/guide-addon')} class="px-5 py-2.5 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors text-center text-sm">App setup guide &rarr;</a>
+            <div class="grid md:grid-cols-[1fr_auto] gap-6 md:items-center">
+              <ol class="text-[var(--text-secondary)] space-y-2 text-sm">
+                <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">1.</span> Add the ha-mcp repository, then install <strong class="text-white/80">Home Assistant MCP Server</strong> from the App Store.</li>
+                <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">2.</span> Start it and copy the server URL from its <strong class="text-white/80">Logs</strong> tab.</li>
+                <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">3.</span> Connect your client to that URL &mdash; no token. Ask: <em class="text-white/70">"Can you see my Home Assistant?"</em></li>
+              </ol>
+              <div class="flex flex-col sm:flex-row md:flex-col gap-3 md:w-56 flex-shrink-0">
+                <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="px-5 py-2.5 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors text-center text-sm">Add to Home Assistant</a>
+                <a href={withBase('/guide-addon')} class="px-5 py-2.5 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors text-center text-sm">App setup guide &rarr;</a>
+              </div>
             </div>
+            <p class="text-[var(--text-muted)] text-xs mt-4">If "Add to Home Assistant" opens the App Store without an add-repository dialog (a <a href="https://github.com/home-assistant/my.home-assistant.io/issues/698" target="_blank" rel="noopener" class="underline hover:text-white">known Home Assistant issue</a>), add it manually: <strong>App Store &rarr; &#8942; &rarr; Repositories</strong>, paste <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code>.</p>
           </div>
         </div>
       </div>

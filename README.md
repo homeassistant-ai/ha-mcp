@@ -34,9 +34,27 @@
 
 ## 🚀 Get Started
 
-### Full guide to get you started with Claude Desktop (~10 min)
+### 🏠 Recommended: Home Assistant App (add-on)
 
-*No paid subscription required.* Click on your operating system:
+Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access token to manage, works with Claude Desktop, Claude.ai, ChatGPT and any other MCP client, and can stay on your local network or be configured for remote / HTTP access.
+
+1. Add the repository to your Home Assistant instance:
+
+   [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
+
+   If that opens the App Store without an add-repository dialog (a [known Home Assistant issue](https://github.com/home-assistant/my.home-assistant.io/issues/698)), add it manually: **App Store → ⋮ → Repositories**, then paste `https://github.com/homeassistant-ai/ha-mcp`.
+
+2. Install **"Home Assistant MCP Server"** from the App Store and click **Start**. *(Home Assistant 2026.2 renamed "Add-ons" to "Apps"; on older versions this is the Add-on Store.)*
+3. Open the **Logs** tab to find your unique MCP URL
+4. Connect your AI client to that URL — **no token or credential setup needed**
+
+[Full add-on documentation →](homeassistant-addon/DOCS.md)
+
+> ⚠️ **Two ways to run ha-mcp — don't mix them.** The add-on above is the recommended path. The local **stdio** path below runs ha-mcp on your own computer; it is more advanced, has fewer features, and is behind most connection problems. If you use the add-on, your Claude Desktop config points at the add-on URL through `mcp-proxy` with **no token** — do **not** also keep a local `uvx ha-mcp@latest` entry (with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`) in your Claude Desktop config. Running both at once is a known cause of connection hangs.
+
+### 💻 Run locally with Claude Desktop (stdio · advanced)
+
+*No paid subscription required.* This runs ha-mcp on your own machine over stdio. Click on your operating system:
 
 <p>
 <a href="https://homeassistant-ai.github.io/ha-mcp/guide-macos/"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/guide-linux/"><img src="https://img.shields.io/badge/Setup_Guide_for_Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Setup Guide for Linux" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/guide-windows/"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120"></a>
@@ -98,23 +116,6 @@ Anthropic doesn't ship Claude Desktop for Linux, so pick one path:
 4. Ask Claude: **"Can you see my Home Assistant?"**
 
 You're now connected to the demo environment! [Connect your own Home Assistant →](https://homeassistant-ai.github.io/ha-mcp/guide-windows/#step-6-connect-your-home-assistant)
-
-</details>
-
-<details>
-<summary><b>🏠 Home Assistant OS (Add-on)</b></summary>
-
-1. Add the repository to your Home Assistant instance:
-
-   [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
-
-2. Install **"Home Assistant MCP Server"** from the Add-on Store and wait for it to complete
-3. Click **Start**, then open the **Logs** tab to find your unique MCP URL
-4. Configure your AI client with that URL
-
-No token or credential setup needed — the add-on connects to Home Assistant automatically.
-
-[Full add-on documentation →](homeassistant-addon/DOCS.md)
 
 </details>
 

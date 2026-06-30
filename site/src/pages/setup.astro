@@ -348,7 +348,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
             >
               <div class="flex items-center gap-2 mb-1">
                 {/* eslint-disable-next-line astro/jsx-a11y/no-noninteractive-element-interactions -- onerror hides a broken decorative logo (alt=""); it is a load-failure fallback, not a user interaction, and must be inline so it catches images that fail before any delegated listener could attach */}
-                <img src={client.logo} alt="" class="w-8 h-8 rounded" onerror="this.style.display='none'" />
+                <img src={client.logo} alt="" class="w-8 h-8 rounded client-logo" onerror="this.style.display='none'" />
                 <div class="min-w-0">
                   <h3 class="font-medium text-white text-sm truncate group-hover:text-blue-400">{client.name}</h3>
                   <p class="text-xs text-slate-500">{client.company}</p>
@@ -1410,6 +1410,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" class="inline-block mb-3">
             <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Repository" />
           </a>
+          <p class="text-xs text-slate-500 mb-3">If that opens the App Store without an add-repository dialog (a <a href="https://github.com/home-assistant/my.home-assistant.io/issues/698" target="_blank" class="text-blue-400 hover:underline">known HA issue</a>), add it manually: <strong>App Store → ⋮ → Repositories</strong>, then paste <code>https://github.com/homeassistant-ai/ha-mcp</code>.</p>
           <p class="text-slate-300 mb-2">2. Install "Home Assistant MCP Server" from the app store</p>
           <p class="text-slate-300 mb-2">3. Start the app, then open <strong>Settings → Apps → Home Assistant MCP Server → Logs</strong> tab (these are the app logs, not the main HA logs)</p>
           <p class="text-xs text-slate-500 mb-2">Home Assistant 2026.2 renamed "Add-ons" to "Apps" — on older versions this is <strong>Settings → Add-ons → Add-on Store</strong>.</p>

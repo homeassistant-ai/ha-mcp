@@ -232,6 +232,10 @@ pre {
    @apply'd text-white into one of the two lists. */
 :root[data-theme="light"] :is(.section-header, .instruction-title, .arch-label) { color: var(--text-primary); }
 
+/* Client logos in the setup wizard are monochrome white SVGs (built for the
+   dark theme). On a light page they vanish, so invert them to dark. */
+:root[data-theme="light"] .client-logo { filter: invert(1); }
+
 /* White-alpha chrome (arbitrary values: nav hairline, ghost buttons, icon
    bubbles, search field) — flip the tint base from white to slate-950 so
    the chrome stays visible on a light page. Complete set per grep of
