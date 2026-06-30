@@ -37,7 +37,7 @@ const withBase = (path: string) => {
     <!-- Don't-mix-modes callout -->
     <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mb-8">
       <h2 class="font-medium text-amber-300 mb-2">One mode at a time</h2>
-      <p class="text-amber-200/90 text-sm">This is the <strong>app (add-on)</strong> setup. It is separate from the local/stdio setup in the <a href={withBase('/guide-windows')} class="underline hover:text-white">Windows</a> / <a href={withBase('/guide-macos')} class="underline hover:text-white">macOS</a> guides. If you already configured the local version (a Claude Desktop entry running <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> with <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> and <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>), <strong>remove that entry</strong> &mdash; the app replaces it and needs no token. Running both at once is the most common cause of connection problems. <a href={withBase('/faq#app-vs-stdio')} class="underline hover:text-white">More in the FAQ</a>.</p>
+      <p class="text-amber-200/90 text-sm">This is the <strong>app (add-on)</strong> setup. It is separate from the local/stdio setup in the <a href={withBase('/guide-windows')} class="underline hover:text-white">Windows</a> / <a href={withBase('/guide-macos')} class="underline hover:text-white">macOS</a> / <a href={withBase('/guide-linux')} class="underline hover:text-white">Linux</a> guides. If you already configured the local version (a Claude Desktop entry running <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> with <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> and <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>), <strong>remove that entry</strong> &mdash; the app replaces it and needs no token. Running both at once is a common cause of connection problems. <a href={withBase('/faq#app-vs-stdio')} class="underline hover:text-white">More in the FAQ</a>.</p>
     </div>
 
     <!-- Steps -->
@@ -95,7 +95,7 @@ const withBase = (path: string) => {
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Windows (PowerShell)
-winget install astral-sh.uv -e</code></pre>
+winget install --id=astral-sh.uv -e</code></pre>
           <p class="text-slate-300 mb-2">Open Claude Desktop's config (<strong>Settings &rarr; Developer &rarr; Edit Config</strong>) and paste this, replacing the URL with the one from Step 3:</p>
           <pre class="code-block"><code>{`{
   "mcpServers": {
@@ -111,7 +111,7 @@ winget install astral-sh.uv -e</code></pre>
   }
 }`}</code></pre>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mt-4">
-            <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No token goes here.</strong> The app already handles authentication behind the secret path in the URL. Do <strong>not</strong> add <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code>, <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>, or an <code class="bg-slate-800 px-1 rounded">env</code> block &mdash; that is the local/stdio config, and pasting it alongside the app is what causes the connection to hang.</p>
+            <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No token goes here.</strong> The app already handles authentication behind the secret path in the URL. Do <strong>not</strong> add <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code>, <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>, or an <code class="bg-slate-800 px-1 rounded">env</code> block &mdash; that is the local/stdio config, and pasting it alongside the app is a known cause of connection hangs.</p>
           </div>
           <p class="text-slate-400 text-sm mt-4">Then restart Claude Desktop: <strong>File &rarr; Exit</strong>, then reopen.</p>
           <details class="mt-4">
