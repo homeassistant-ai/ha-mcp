@@ -137,8 +137,8 @@ The generated values are persisted at `/data/oauth_creds.json` inside the addon,
 **Endpoints exposed when enabled:**
 
 - `/.../api/webhook/<id>` — MCP webhook (now bearer-protected)
-- `/.../api/mcp_proxy/oauth/protected-resource` — RFC 9728 metadata
-- `/.../api/mcp_proxy/oauth/authorization-server` — RFC 8414 metadata
+- `/.../api/mcp_proxy_dev/oauth/protected-resource` — RFC 9728 metadata
+- `/.../api/mcp_proxy_dev/oauth/authorization-server` — RFC 8414 metadata
 - `/.../authorize` — consent screen (root path; Claude.ai expects it here)
 - `/.../token` — token endpoint (root path; Claude.ai expects it here)
 
@@ -146,7 +146,7 @@ The generated values are persisted at `/data/oauth_creds.json` inside the addon,
 
 - Tokens are HMAC-signed and stateless — they survive HA restarts. Access tokens expire after 1 hour; refresh tokens after 30 days.
 - Rotating the Client ID invalidates all outstanding tokens (the client_id is part of the token's signed payload).
-- The signing key is generated once and persisted at `/config/.mcp_proxy_oauth_secret`. Delete that file to invalidate every token in one shot.
+- The signing key is generated once and persisted at `/config/.mcp_proxy_dev_oauth_secret`. Delete that file to invalidate every token in one shot.
 - **Beta status:** the OAuth flow is implemented against the [MCP 2025-06-18 spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) but real-world MCP-client coverage varies. The URL-as-secret mode (default) is the stable, documented path. Treat OAuth as opt-in until tested with your client. Report problems on GitHub.
 
 ### End-to-end flow (what happens when Claude.ai connects)
@@ -191,7 +191,7 @@ What stops an attacker who can reach the consent page from gaining access:
 
 If a client (e.g. Claude.ai) can't connect and you can't tell whether its requests are even reaching Home Assistant, turn on **Log inbound requests** (the `debug_logging` option on the main Configuration page) and **restart the addon**.
 
-When it's on, every request that hits the webhook is logged to the **Home Assistant log** (requests reach Home Assistant directly rather than passing through the addon process). View them at **Settings → System → Logs** (or filter for `mcp_proxy`). The same lines are also **mirrored into this addon's own log**, so you can watch them on the addon's Log tab without leaving the addon page. Each line shows the method, a masked webhook path, the source address, whether an `Authorization` header was present, and the upstream response status:
+When it's on, every request that hits the webhook is logged to the **Home Assistant log** (requests reach Home Assistant directly rather than passing through the addon process). View them at **Settings → System → Logs** (or filter for `mcp_proxy_dev`). The same lines are also **mirrored into this addon's own log**, so you can watch them on the addon's Log tab without leaving the addon page. Each line shows the method, a masked webhook path, the source address, whether an `Authorization` header was present, and the upstream response status:
 
 ```
 MCP Proxy [inbound]: POST /api/webhook/mcp_3e... from 203.0.113.4 (Authorization header: present)
@@ -207,7 +207,7 @@ Turn it back off for normal operation (restart the addon after changing it).
 
 ## How it works
 
-1. The addon installs a lightweight `mcp_proxy` custom integration into Home Assistant
+1. The addon installs a lightweight `mcp_proxy_dev` custom integration into Home Assistant
 2. By default this integration registers an **unauthenticated** webhook endpoint (`/api/webhook/<id>`) — the URL itself is the shared secret
 3. When a request hits the webhook, it is proxied to the MCP server addon (after a bearer-token check, if **Enable OAuth** is on)
 4. The addon stays alive with a periodic health check loop
@@ -236,7 +236,7 @@ The health check cannot reach the MCP server. Check:
 
 ### Integration not loading
 
-If the `mcp_proxy` integration doesn't appear in Settings > Devices & Services:
+If the `mcp_proxy_dev` integration doesn't appear in Settings > Devices & Services:
 1. Restart Home Assistant (Settings > System > Restart)
 2. The addon will start automatically and retry setup
 
@@ -267,11 +267,11 @@ Two cases:
 ## Disabling / Uninstalling
 
 - **Stopping** the addon is safe — the webhook URL stays the same and resumes working when the addon is restarted
-- **Reinstalling** the addon always changes the webhook URL. Uninstalling wipes the addon's `/data` (where `webhook_id.txt` is stored), so the next start generates a fresh webhook id and overwrites `/config/.mcp_proxy_config.json` with it. Update your MCP client (and re-add the Claude.ai connector) with the new URL afterwards.
+- **Reinstalling** the addon always changes the webhook URL. Uninstalling wipes the addon's `/data` (where `webhook_id.txt` is stored), so the next start generates a fresh webhook id and overwrites `/config/.mcp_proxy_dev_config.json` with it. Update your MCP client (and re-add the Claude.ai connector) with the new URL afterwards.
 - **Uninstalling** the addon does not automatically remove the custom integration files. To fully clean up after uninstalling:
-  1. Delete `/config/custom_components/mcp_proxy/`
-  2. Delete `/config/.mcp_proxy_config.json`
-  3. Delete `/config/.mcp_proxy_inbound.log` (only present if you used **Log inbound requests**; normally removed when the addon stops)
+  1. Delete `/config/custom_components/mcp_proxy_dev/`
+  2. Delete `/config/.mcp_proxy_dev_config.json`
+  3. Delete `/config/.mcp_proxy_dev_inbound.log` (only present if you used **Log inbound requests**; normally removed when the addon stops)
   4. Restart Home Assistant
 
 ## Support

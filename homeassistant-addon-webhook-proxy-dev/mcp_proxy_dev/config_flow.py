@@ -6,7 +6,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 
-DOMAIN = "mcp_proxy"
+DOMAIN = "mcp_proxy_dev"
 
 
 class McpProxyConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
