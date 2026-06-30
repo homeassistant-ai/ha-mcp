@@ -83,7 +83,7 @@ const withBase = (path: string) => {
                 <a href={withBase('/guide-addon')} class="px-5 py-2.5 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors text-center text-sm">App setup guide &rarr;</a>
               </div>
             </div>
-            <p class="text-[var(--text-muted)] text-xs mt-4">If "Add to Home Assistant" opens the App Store without an add-repository dialog (a <a href="https://github.com/home-assistant/my.home-assistant.io/issues/698" target="_blank" rel="noopener" class="underline hover:text-white">known Home Assistant issue</a>), add it manually: <strong>App Store &rarr; &#8942; &rarr; Repositories</strong>, paste <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code>.</p>
+            <p class="text-[var(--text-muted)] text-xs mt-4">If "Add to Home Assistant" opens the App Store without an add-repository dialog (a <a href="https://github.com/home-assistant/my.home-assistant.io/issues/698" target="_blank" rel="noopener" class="underline hover:text-white">known Home Assistant issue</a>), add it manually: <strong>App Store &rarr; &#8942; &rarr; Repositories</strong>, paste <code class="bg-slate-800 px-1 rounded break-all">https://github.com/homeassistant-ai/ha-mcp</code>.</p>
           </div>
         </div>
       </div>
@@ -94,9 +94,9 @@ const withBase = (path: string) => {
         <span class="px-2 py-0.5 text-xs rounded-full bg-white/[0.05] text-[var(--text-muted)] border border-white/[0.06]">stdio &middot; advanced &middot; local machine only</span>
       </div>
 
-      <div class="grid md:grid-cols-3 gap-5 max-w-5xl mx-auto">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5 max-w-5xl mx-auto">
         <!-- macOS -->
-        <div class="glass-card rounded-2xl p-6">
+        <div class="glass-card rounded-2xl p-6 min-w-0">
           <div class="flex items-center gap-3 mb-5">
             <div class="w-10 h-10 rounded-xl bg-white/[0.05] flex items-center justify-center">
               <PlatformIcon icon="apple" size={20} class="text-[var(--text-secondary)]" />
@@ -118,7 +118,7 @@ const withBase = (path: string) => {
         </div>
 
         <!-- Linux -->
-        <div class="glass-card rounded-2xl p-6">
+        <div class="glass-card rounded-2xl p-6 min-w-0">
           <div class="flex items-center gap-3 mb-5">
             <div class="w-10 h-10 rounded-xl bg-white/[0.05] flex items-center justify-center">
               <PlatformIcon icon="linux" size={20} class="text-[var(--text-secondary)]" />
@@ -141,7 +141,7 @@ const withBase = (path: string) => {
         </div>
 
         <!-- Windows -->
-        <div class="glass-card rounded-2xl p-6">
+        <div class="glass-card rounded-2xl p-6 min-w-0">
           <div class="flex items-center gap-3 mb-5">
             <div class="w-10 h-10 rounded-xl bg-white/[0.05] flex items-center justify-center">
               <PlatformIcon icon="windows" size={20} class="text-[var(--text-secondary)]" />

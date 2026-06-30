@@ -34,6 +34,14 @@
 
 ## 🚀 Get Started
 
+**Set up for your operating system** — you'll pick **Local (Claude Desktop)** or the **Home Assistant App** on the setup page:
+
+<p>
+<a href="https://homeassistant-ai.github.io/ha-mcp/setup/#easy-macos"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/setup/#easy-linux"><img src="https://img.shields.io/badge/Setup_Guide_for_Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Setup for Linux" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/setup/#easy-windows"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup for Windows" height="120"></a>
+</p>
+
+Prefer to set it up by hand? The detailed paths are below.
+
 ### 🏠 Recommended: Home Assistant App (add-on)
 
 Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access token to manage, works with Claude Desktop, Claude.ai, ChatGPT and any other MCP client, and can stay on your local network or be configured for remote / HTTP access.
@@ -54,11 +62,7 @@ Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access to
 
 ### 💻 Run locally with Claude Desktop (stdio · advanced)
 
-*No paid subscription required.* This runs ha-mcp on your own machine over stdio. Click on your operating system:
-
-<p>
-<a href="https://homeassistant-ai.github.io/ha-mcp/guide-macos/"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/guide-linux/"><img src="https://img.shields.io/badge/Setup_Guide_for_Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Setup Guide for Linux" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/guide-windows/"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120"></a>
-</p>
+*No paid subscription required.* This runs ha-mcp on your own machine over stdio.
 
 ### Quick install (~5 min)
 
