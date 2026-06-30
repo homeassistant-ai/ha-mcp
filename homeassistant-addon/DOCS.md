@@ -50,15 +50,14 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ### <details><summary><b>📱 Claude Desktop</b></summary>
 
-Claude Desktop requires a proxy to connect to HTTP MCP servers. Install **mcp-proxy** first:
+Claude Desktop talks to MCP servers over stdio, so it reaches the add-on through **mcp-proxy**, run automatically via `uvx`. That only needs **uv** on the computer running Claude Desktop:
 
 ```bash
-# Install mcp-proxy
-uv tool install mcp-proxy
-# or
-pipx install mcp-proxy
-# or (macOS)
-brew install mcp-proxy
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+winget install --id=astral-sh.uv -e
 ```
 
 Then add to your Claude Desktop configuration file:
@@ -73,18 +72,18 @@ Then add to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "home-assistant": {
-      "command": "mcp-proxy",
-      "args": ["--transport", "streamablehttp", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
+      "command": "uvx",
+      "args": ["mcp-proxy", "--transport", "streamablehttp", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
     }
   }
 }
 ```
 
-Replace the URL in `args` with the one from your add-on logs.
+Replace the URL in `args` with the one from your add-on logs. No token goes here — the add-on handles authentication behind the secret path in the URL.
 
 **Restart Claude Desktop** after saving the configuration.
 
-**How it works:** mcp-proxy converts the HTTP endpoint to stdio that Claude Desktop can use.
+**How it works:** `uvx` runs mcp-proxy, which converts the add-on's HTTP endpoint to the stdio Claude Desktop expects.
 
 </details>
 

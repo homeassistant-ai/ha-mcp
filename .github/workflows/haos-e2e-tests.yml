@@ -81,8 +81,13 @@ jobs:
             while IFS= read -r f; do
               [ -z "$f" ] && continue
               case "$f" in
+                # Markdown docs inside the addon / component dirs are user-facing
+                # docs (DOCS.md, README, CHANGELOG), not bake inputs — they don't
+                # change what the suite tests, so they skip like any other docs.
+                homeassistant-addon/*.md|homeassistant-addon-dev/*.md|homeassistant-addon-webhook-proxy/*.md|custom_components/ha_mcp_tools/*.md)
+                  continue ;;
                 # Bake inputs / addon dirs are baked into the qcow2 / shipped —
-                # their docs change what the suite tests, so they count as code.
+                # their non-doc files change what the suite tests, so they count as code.
                 homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
                   run=true; break ;;
                 # Pure docs / website do not, on their own, warrant the suite.

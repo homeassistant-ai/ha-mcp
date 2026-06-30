@@ -34,6 +34,11 @@ const withBase = (path: string) => {
       </div>
     </header>
 
+    <!-- Not the app (add-on) -->
+    <div class="bg-blue-900/20 border border-blue-700/50 rounded-xl p-4 mb-8">
+      <p class="text-blue-200/90 text-sm"><strong class="text-blue-300">This is the local (stdio) setup.</strong> ha-mcp runs on this computer and talks to Claude Desktop directly. You do <strong>not</strong> need the Home Assistant App (add-on) for this, and this config does not use it &mdash; don't set up both. Running Home Assistant OS and prefer to run ha-mcp inside HA with no access token to manage? Use the <a href={withBase('/guide-addon')} class="underline hover:text-white">App (add-on) guide</a> instead.</p>
+    </div>
+
     <!-- Steps -->
     <div class="space-y-8">
       <!-- Step 1 -->
@@ -63,7 +68,7 @@ const withBase = (path: string) => {
             <div class="mt-4 pl-4 border-l-2 border-slate-700">
               <h3 class="font-medium text-white mb-2">Install uv</h3>
               <p class="text-slate-300 mb-2">Open <strong>PowerShell</strong> or <strong>cmd</strong>:</p>
-              <pre class="code-block mb-4"><code>winget install astral-sh.uv -e</code></pre>
+              <pre class="code-block mb-4"><code>winget install --id=astral-sh.uv -e</code></pre>
 
               <h3 class="font-medium text-white mb-2">Configure Claude Desktop</h3>
               <ol class="text-slate-300 space-y-2 mb-4">
@@ -190,7 +195,7 @@ const withBase = (path: string) => {
         <div class="step-content">
           <p class="text-slate-300 mb-2">ha-mcp ships a local web settings page where you can enable, disable, and pin individual MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests (handy if you find Claude reaching for tools you'd rather it didn't, or want to surface a niche tool you use often).</p>
           <p class="text-slate-300 mb-2">The easiest way to find the URL: ask Claude something like <em>"how do I open the ha-mcp settings page?"</em> — the URL is included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response. You can also read it directly from <code class="bg-slate-800 px-1 rounded">%USERPROFILE%\.ha-mcp\ui.url</code>.</p>
-          <p class="text-slate-400 text-sm">The page is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path. See the <a href={withBase('/faq#tool-settings-page')} class="text-blue-400 hover:underline">FAQ</a> for every way to reach it (Docker, add-on, remote) and how to disable the settings server if you don't want it.</p>
+          <p class="text-slate-400 text-sm">The page is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path. See the <a href={withBase('/faq#tool-settings-page')} class="text-blue-400 hover:underline">FAQ</a> for every way to reach it (Docker, app, remote) and how to disable the settings server if you don't want it.</p>
         </div>
       </section>
 
