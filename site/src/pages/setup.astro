@@ -241,7 +241,7 @@ const platformsData: { id: string; name: string; icon: IconName; order: number }
 ];
 
 const connectionsData: { id: string; name: string; transport: string; description: string; icon: IconName; order: number }[] = [
-  {"id": "local", "name": "Local Machine", "transport": "stdio", "description": "Run ha-mcp on the same computer as your AI client", "icon": "computer", "order": 1},
+  {"id": "local", "name": "Local Machine", "transport": "stdio", "description": "Run ha-mcp on your own computer over stdio (e.g. Claude Desktop) — advanced, not the Home Assistant app", "icon": "computer", "order": 1},
   {"id": "network", "name": "Local Network", "transport": "http", "description": "Run ha-mcp as an HTTP server accessible on your LAN", "icon": "network", "order": 2},
   {"id": "remote", "name": "Remote (Internet)", "transport": "https", "description": "Access ha-mcp from anywhere via secure HTTPS", "icon": "globe", "order": 3},
 ];
@@ -249,11 +249,11 @@ const connectionsData: { id: string; name: string; transport: string; descriptio
 const deploymentData: { id: string; name: string; description: string; icon: IconName; forConnections: string[]; order: number }[] = [
   {"id": "uvx", "name": "uvx (Python)", "description": "Run ha-mcp directly via Python package manager", "icon": "python", "forConnections": ["local", "network"], "order": 1},
   {"id": "docker", "name": "Docker", "description": "Run ha-mcp in a container", "icon": "docker", "forConnections": ["local", "network", "remote"], "order": 2},
-  {"id": "ha-addon", "name": "Home Assistant Add-on", "description": "Run ha-mcp inside Home Assistant OS", "icon": "home-assistant", "forConnections": ["network", "remote"], "order": 3},
+  {"id": "ha-addon", "name": "Home Assistant App (add-on)", "description": "Run ha-mcp inside Home Assistant OS", "icon": "home-assistant", "forConnections": ["network", "remote"], "order": 3},
   {"id": "cloudflared", "name": "Cloudflare Tunnel", "description": "Expose ha-mcp to the internet securely", "icon": "cloudflare", "forConnections": ["remote"], "order": 4},
   {
     "id": "webhook-proxy",
-    "name": "Webhook Proxy Add-on",
+    "name": "Webhook Proxy App",
     "description": "Remote access via existing reverse proxy (Nabu Casa, Cloudflare, etc.)",
     "icon": "webhook",
     "forConnections": ["remote"],
@@ -281,10 +281,10 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
       <h1 class="text-3xl font-bold text-white mb-2">Home Assistant MCP Setup Wizard</h1>
       <p class="text-slate-400 mb-6">Configure the Home Assistant MCP Server for your AI assistant</p>
 
-      <!-- HA OS Add-on quick option -->
+      <!-- HA OS App quick option -->
       <div class="flex flex-wrap items-center justify-center gap-3 mb-8">
-        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="inline-flex" title="Add the ha-mcp add-on repository to your Home Assistant (HAOS)">
-          <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add ha-mcp add-on repository to your Home Assistant" height="36" />
+        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="inline-flex" title="Add the ha-mcp app repository to your Home Assistant (HAOS)">
+          <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add ha-mcp app repository to your Home Assistant" height="36" />
         </a>
       </div>
 
@@ -582,14 +582,14 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
             <h3 class="font-semibold text-white">Windows</h3>
             <p class="text-sm text-slate-400">uvx</p>
           </button>
-          <!-- HA Add-on -->
+          <!-- HA App -->
           <button data-server-setup="ha-addon" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
               <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
               <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
             <h3 class="font-semibold text-white">HA OS</h3>
-            <p class="text-sm text-slate-400">Add-on</p>
+            <p class="text-sm text-slate-400">App (add-on)</p>
           </button>
           <!-- Docker -->
           <button data-server-setup="docker" class="option-card-large">
@@ -931,7 +931,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     'macos-uvx': { platform: 'macos', deployment: 'uvx', label: 'macOS (uvx)' },
     'linux-uvx': { platform: 'linux', deployment: 'uvx', label: 'Linux (uvx)' },
     'windows-uvx': { platform: 'windows', deployment: 'uvx', label: 'Windows (uvx)' },
-    'ha-addon': { platform: null, deployment: 'ha-addon', label: 'HA OS Add-on' },
+    'ha-addon': { platform: null, deployment: 'ha-addon', label: 'HA OS App (add-on)' },
     'docker': { platform: null, deployment: 'docker', label: 'Docker' },
   };
 
@@ -1404,17 +1404,20 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         </div>`;
       } else if (derivedDeployment === 'ha-addon') {
         deployInstr = `<div class="instruction-block">
-          <h4 class="instruction-title">Home Assistant Add-on</h4>
-          <p class="text-slate-300 text-sm mb-3">The add-on auto-discovers the HA connection, generates a secure secret path, and configures the token — no manual setup needed.</p>
+          <h4 class="instruction-title">Home Assistant App (add-on)</h4>
+          <p class="text-slate-300 text-sm mb-3">The app auto-discovers the HA connection, generates a secure secret path, and configures the token — no manual setup needed.</p>
           <p class="text-slate-300 mb-3">1. Add the repository to Home Assistant:</p>
           <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" class="inline-block mb-3">
             <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Repository" />
           </a>
-          <p class="text-slate-300 mb-2">2. Install "Home Assistant MCP Server" from the add-on store</p>
-          <p class="text-slate-300 mb-2">3. Start the add-on, then open <strong>Settings → Add-ons → Home Assistant MCP Server → Logs</strong> tab (these are the add-on logs, not the main HA logs)</p>
+          <p class="text-slate-300 mb-2">2. Install "Home Assistant MCP Server" from the app store</p>
+          <p class="text-slate-300 mb-2">3. Start the app, then open <strong>Settings → Apps → Home Assistant MCP Server → Logs</strong> tab (these are the app logs, not the main HA logs)</p>
           <p class="text-slate-300 mb-2">4. Copy the MCP server URL from the log line — it looks like:</p>
           <pre class="code-block text-xs"><code>MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw</code></pre>
           <p class="text-xs text-slate-500 mt-2">Defaults: port <code>9583</code>, 128-bit random secret path, persisted across restarts.</p>
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-3">
+            <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No access token here.</strong> The app authenticates behind the secret path in the URL. Don't also configure the local/stdio version for the same client (a <code>uvx ha-mcp@latest</code> entry with <code>HOMEASSISTANT_URL</code> / <code>HOMEASSISTANT_TOKEN</code>) — running the app and the stdio version together is a known cause of connection hangs.</p>
+          </div>
         </div>`;
       }
       instructions.push(deployInstr);
@@ -1467,17 +1470,17 @@ ingress:
   - service: http_status:404</code></pre>
           </div>
           <details class="mt-4">
-            <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Running on Home Assistant OS? Use the Cloudflared add-on</summary>
-            <p class="text-slate-300 text-sm mt-3 mb-2">If your ha-mcp is the HA add-on, install the Cloudflared add-on alongside it and route the tunnel to the MCP add-on's port:</p>
+            <summary class="cursor-pointer text-sm text-slate-300 font-medium hover:text-slate-100">Running on Home Assistant OS? Use the Cloudflared app</summary>
+            <p class="text-slate-300 text-sm mt-3 mb-2">If your ha-mcp is the HA app, install the Cloudflared app alongside it and route the tunnel to the MCP app's port:</p>
             <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fbrenner-tobias%2Faddon-cloudflared" target="_blank" class="inline-block mt-1 mb-2">
-              <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Cloudflared Add-on" />
+              <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Cloudflared App" />
             </a>
-            <p class="text-slate-300 text-sm mb-2">In the Cloudflared add-on configuration:</p>
+            <p class="text-slate-300 text-sm mb-2">In the Cloudflared app configuration:</p>
             <pre class="code-block text-xs"><code>additional_hosts:
   - hostname: ha-mcp.yourdomain.com
     service: http://homeassistant.local:9583</code></pre>
-            <p class="text-xs text-slate-400 mt-2">Replace <code>homeassistant.local</code> with your HA host's IP or hostname — match the IP from the MCP add-on's log line (e.g. <code>http://192.168.1.100:9583/...</code>). The Cloudflared add-on tunnels from inside its own container, so <code>localhost</code> won't reach the MCP add-on.</p>
-            <p class="text-xs text-slate-400 mt-2">Or, point the tunnel at the MCP add-on's container hostname (shown on the MCP Server add-on's <strong>Information</strong> page, e.g. <code>b37de126-ha-mcp</code>): <code>service: http://&lt;your-prefix&gt;-ha-mcp:9583</code>.</p>
+            <p class="text-xs text-slate-400 mt-2">Replace <code>homeassistant.local</code> with your HA host's IP or hostname — match the IP from the MCP app's log line (e.g. <code>http://192.168.1.100:9583/...</code>). The Cloudflared app tunnels from inside its own container, so <code>localhost</code> won't reach the MCP app.</p>
+            <p class="text-xs text-slate-400 mt-2">Or, point the tunnel at the MCP app's container hostname (shown on the MCP Server app's <strong>Information</strong> page, e.g. <code>b37de126-ha-mcp</code>): <code>service: http://&lt;your-prefix&gt;-ha-mcp:9583</code>.</p>
           </details>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
             <p class="text-amber-300 text-sm font-medium">Disable "Block AI Training Bots"</p>
@@ -1495,23 +1498,23 @@ ingress:
         </div>`;
       } else if (state.proxy === 'webhook-proxy') {
         proxyInstr = `<div class="instruction-block">
-          <h4 class="instruction-title">Webhook Proxy Add-on</h4>
-          <p class="text-slate-300 mb-3">The Webhook Proxy add-on routes MCP traffic through your existing Home Assistant reverse proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.) — no separate tunnel to port 9583 needed.</p>
+          <h4 class="instruction-title">Webhook Proxy App</h4>
+          <p class="text-slate-300 mb-3">The Webhook Proxy app routes MCP traffic through your existing Home Assistant reverse proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.) — no separate tunnel to port 9583 needed.</p>
           <div class="mb-4 text-sm text-slate-400">
             <p class="font-medium text-slate-300 mb-1">How It Works</p>
-            <p class="font-mono text-xs bg-slate-800/60 rounded p-2 mb-2">AI Client → HTTPS → Your Reverse Proxy → HA (port 8123) → Webhook (<code>/api/webhook/&lt;id&gt;</code>) → MCP Add-on</p>
+            <p class="font-mono text-xs bg-slate-800/60 rounded p-2 mb-2">AI Client → HTTPS → Your Reverse Proxy → HA (port 8123) → Webhook (<code>/api/webhook/&lt;id&gt;</code>) → MCP App</p>
             <p><strong class="text-slate-300">Prerequisite:</strong> Requires a Nabu Casa subscription with Remote UI enabled, <em>or</em> another reverse proxy already pointing at your HA URL.</p>
           </div>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
-            <li><strong>Install the MCP Server add-on</strong> first (if not already installed):
+            <li><strong>Install the MCP Server app</strong> first (if not already installed):
               <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" class="inline-block mt-2 mb-2">
                 <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add Repository" />
               </a>
             </li>
-            <li><strong>Install the "Webhook Proxy for HA MCP"</strong> add-on from the same store</li>
-            <li><strong>Start the add-on</strong> — it will ask you to restart Home Assistant</li>
+            <li><strong>Install the "Webhook Proxy for HA MCP"</strong> app from the same store</li>
+            <li><strong>Start the app</strong> — it will ask you to restart Home Assistant</li>
             <li><strong>Restart Home Assistant</strong> (Settings &gt; System &gt; Restart)</li>
-            <li><strong>Copy the remote URL</strong> from the webhook proxy add-on logs:
+            <li><strong>Copy the remote URL</strong> from the webhook proxy app logs:
               <pre class="code-block mt-2"><code>MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx</code></pre>
             </li>
           </ol>
@@ -1524,7 +1527,7 @@ ingress:
                 <th class="text-left py-1 text-slate-300">Cloudflare Tunnel</th>
               </tr></thead>
               <tbody>
-                <tr class="border-b border-slate-800"><td class="py-1 pr-4 font-medium text-slate-300">Setup</td><td class="py-1 pr-4">Install add-on, restart HA</td><td class="py-1">Install cloudflared, configure tunnel</td></tr>
+                <tr class="border-b border-slate-800"><td class="py-1 pr-4 font-medium text-slate-300">Setup</td><td class="py-1 pr-4">Install app, restart HA</td><td class="py-1">Install cloudflared, configure tunnel</td></tr>
                 <tr class="border-b border-slate-800"><td class="py-1 pr-4 font-medium text-slate-300">Cost</td><td class="py-1 pr-4">Existing reverse proxy / Nabu Casa (paid)</td><td class="py-1">Cloudflare account (free)</td></tr>
                 <tr class="border-b border-slate-800"><td class="py-1 pr-4 font-medium text-slate-300">Routing</td><td class="py-1 pr-4">Through HA port 8123 (webhook)</td><td class="py-1">Direct to MCP port (9583)</td></tr>
                 <tr><td class="py-1 pr-4 font-medium text-slate-300">Best for</td><td class="py-1 pr-4">Already have Nabu Casa / reverse proxy</td><td class="py-1">No existing proxy, want direct connection</td></tr>
@@ -1537,21 +1540,21 @@ ingress:
           </div>
           <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Non-Nabu Casa users</p>
-            <p class="text-slate-400 text-xs mt-1">If you use a custom reverse proxy (Cloudflare, DuckDNS, nginx, etc.), set <code class="bg-slate-800 px-1 rounded">remote_url</code> in the webhook proxy add-on configuration to your external HA URL (e.g., <code class="bg-slate-800 px-1 rounded">https://ha.example.com</code>).</p>
+            <p class="text-slate-400 text-xs mt-1">If you use a custom reverse proxy (Cloudflare, DuckDNS, nginx, etc.), set <code class="bg-slate-800 px-1 rounded">remote_url</code> in the webhook proxy app configuration to your external HA URL (e.g., <code class="bg-slate-800 px-1 rounded">https://ha.example.com</code>).</p>
           </div>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-3">
             <p class="text-amber-300 text-sm font-medium">⚠️ Treat the webhook URL like a password</p>
-            <p class="text-amber-200/80 text-xs mt-1">By default the webhook URL is <strong>unauthenticated</strong> — anyone with the full URL can reach your MCP server. Don't share it in screenshots, logs, or chat transcripts. If it leaks, rotate immediately: stop the add-on, delete <code class="bg-slate-800 px-1 rounded">/data/webhook_id.txt</code> from the add-on filesystem, restart, and copy the new URL into your client.</p>
+            <p class="text-amber-200/80 text-xs mt-1">By default the webhook URL is <strong>unauthenticated</strong> — anyone with the full URL can reach your MCP server. Don't share it in screenshots, logs, or chat transcripts. If it leaks, rotate immediately: stop the app, delete <code class="bg-slate-800 px-1 rounded">/data/webhook_id.txt</code> from the app filesystem, restart, and copy the new URL into your client.</p>
           </div>
           <div class="bg-purple-900/20 border border-purple-700/50 rounded-lg p-3 mt-3">
             <p class="text-purple-300 text-sm font-medium">🔒 Optional: OAuth (Beta)</p>
-            <p class="text-purple-200/80 text-xs mt-1 mb-2">For a real auth layer on top of the URL secret, enable <strong>OAuth (Beta)</strong> in the add-on configuration. Toggle <em>Show unused optional configuration options</em>, set <strong>Enable OAuth</strong> to on, leave Client ID and Client Secret blank, and restart the add-on. The add-on auto-generates a strong Client ID and Client Secret on first start and prints them in the log; copy them into your MCP client's <strong>Advanced settings</strong> OAuth fields (in Claude.ai). Generated values persist at <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code> across restarts. When the toggle is off, the webhook behaves exactly as before with no auth.</p>
+            <p class="text-purple-200/80 text-xs mt-1 mb-2">For a real auth layer on top of the URL secret, enable <strong>OAuth (Beta)</strong> in the app configuration. Toggle <em>Show unused optional configuration options</em>, set <strong>Enable OAuth</strong> to on, leave Client ID and Client Secret blank, and restart the app. The app auto-generates a strong Client ID and Client Secret on first start and prints them in the log; copy them into your MCP client's <strong>Advanced settings</strong> OAuth fields (in Claude.ai). Generated values persist at <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code> across restarts. When the toggle is off, the webhook behaves exactly as before with no auth.</p>
             <p class="text-purple-300 text-xs font-medium mt-2 mb-1">Flow when Claude.ai connects</p>
             <p class="text-purple-200/80 text-xs mt-1 mb-2">Claude.ai redirects to <code class="bg-slate-800 px-1 rounded">/authorize</code> → you click <strong>Allow</strong> on the consent page → Claude.ai exchanges the auth code at <code class="bg-slate-800 px-1 rounded">/token</code> using your Client ID + Client Secret + PKCE → it gets a 1-hour bearer token (auto-refreshed via a 30-day refresh token). Every MCP request after that carries <code class="bg-slate-800 px-1 rounded">Authorization: Bearer ...</code>.</p>
             <p class="text-purple-300 text-xs font-medium mt-2 mb-1">Keep the Client Secret safe</p>
             <p class="text-purple-200/80 text-xs mt-1 mb-2">The <code class="bg-slate-800 px-1 rounded">/authorize</code> consent page is reachable without being logged into Home Assistant — that's how OAuth works. The <strong>Client Secret</strong> at the token endpoint is what actually gates access; an attacker can't redeem a code without it. Don't paste it into screenshots/logs/chats. If you suspect it has leaked, rotate immediately.</p>
             <p class="text-purple-300 text-xs font-medium mt-2 mb-1">Rotating credentials</p>
-            <p class="text-purple-200/80 text-xs mt-1">Either set new values in the config fields, or flip <strong>Regenerate OAuth Credentials on Next Start</strong> on and restart — the add-on auto-clears the toggle after generating fresh values, then update Claude.ai with the new pair. Beta — works with Claude.ai today; other clients may vary.</p>
+            <p class="text-purple-200/80 text-xs mt-1">Either set new values in the config fields, or flip <strong>Regenerate OAuth Credentials on Next Start</strong> on and restart — the app auto-clears the toggle after generating fresh values, then update Claude.ai with the new pair. Beta — works with Claude.ai today; other clients may vary.</p>
           </div>
         </div>`;
       } else if (state.proxy === 'custom') {
@@ -1582,12 +1585,12 @@ ingress:
 
     // Transport disclaimer (all HTTP-based setups): Streamable HTTP is the modern standard
     // supported by virtually all current clients; SSE is legacy and only applies to the
-    // dedicated ha-mcp-sse entry point — not the add-on / ha-mcp-web.
+    // dedicated ha-mcp-sse entry point — not the app / ha-mcp-web.
     if (!isLocal) {
       instructions.push(`<div class="instruction-block border-blue-700/50 bg-blue-900/10">
         <h4 class="instruction-title text-blue-300">Transport: use Streamable HTTP, not SSE</h4>
-        <p class="text-slate-300 text-sm">The ha-mcp add-on (and <code class="bg-slate-800 px-1 rounded">ha-mcp-web</code>) serve <strong>Streamable HTTP</strong> — the modern default, supported by virtually all current MCP clients (Claude Code, Claude.ai, ChatGPT, Cursor, GitHub Copilot, and more). The config above already uses it.</p>
-        <p class="text-slate-300 text-sm mt-2"><strong>SSE is legacy.</strong> You only need it for the separate <code class="bg-slate-800 px-1 rounded">ha-mcp-sse</code> entry point (deprecated SSE on port 8087). The add-on does <strong>not</strong> serve SSE, so an SSE / <code class="bg-slate-800 px-1 rounded">--transport sse</code> config pointed at it returns a <code class="bg-slate-800 px-1 rounded">405</code> and won't connect.</p>
+        <p class="text-slate-300 text-sm">The ha-mcp app (and <code class="bg-slate-800 px-1 rounded">ha-mcp-web</code>) serve <strong>Streamable HTTP</strong> — the modern default, supported by virtually all current MCP clients (Claude Code, Claude.ai, ChatGPT, Cursor, GitHub Copilot, and more). The config above already uses it.</p>
+        <p class="text-slate-300 text-sm mt-2"><strong>SSE is legacy.</strong> You only need it for the separate <code class="bg-slate-800 px-1 rounded">ha-mcp-sse</code> entry point (deprecated SSE on port 8087). The app does <strong>not</strong> serve SSE, so an SSE / <code class="bg-slate-800 px-1 rounded">--transport sse</code> config pointed at it returns a <code class="bg-slate-800 px-1 rounded">405</code> and won't connect.</p>
       </div>`);
     }
 
@@ -1825,7 +1828,7 @@ ingress:
         } else if (state.client.id === 'github-copilot-agents') {
           // GitHub Copilot Agents reads .vscode/mcp.json with a bare top-level "servers" key;
           // each server uses a "type" field ("http" for Streamable HTTP, "sse" for legacy SSE)
-          // — confirmed against VS Code + GitHub coding-agent MCP docs. The add-on serves
+          // — confirmed against VS Code + GitHub coding-agent MCP docs. The app serves
           // Streamable HTTP only, so use type "http" (an sse config against it returns 405).
           config = JSON.stringify({
             servers: {
@@ -2255,7 +2258,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
             <p class="text-amber-300 text-sm font-medium">Using a smaller or local LLM (Ollama, etc.)?</p>
             <p class="text-amber-200/80 text-xs mt-1">If the model can't see the tools or your Home Assistant, it may be getting handed all 80+ tools at once. It's recommended to try the following to see if it helps:</p>
             <ul class="text-amber-200/80 text-xs mt-1 space-y-1 list-disc list-inside">
-              <li>Enable tool search (add-on option <code class="bg-amber-900/30 px-1 rounded">enable_tool_search</code>, or <code class="bg-amber-900/30 px-1 rounded">ENABLE_TOOL_SEARCH=true</code>): the full catalog is deferred behind a search interface so tools load on demand instead of all at once.</li>
+              <li>Enable tool search (app option <code class="bg-amber-900/30 px-1 rounded">enable_tool_search</code>, or <code class="bg-amber-900/30 px-1 rounded">ENABLE_TOOL_SEARCH=true</code>): the full catalog is deferred behind a search interface so tools load on demand instead of all at once.</li>
               <li>Raise your model's context window above the default (in Ollama, <code class="bg-amber-900/30 px-1 rounded">num_ctx</code>) so the tool definitions and your conversation fit.</li>
             </ul>
             <p class="text-amber-200/80 text-xs mt-1"><a href="https://github.com/homeassistant-ai/ha-mcp#smaller-or-local-llms-ollama-etc" target="_blank" rel="noopener" class="text-amber-300 hover:underline">Smaller or local LLM setup →</a></p>
@@ -2323,7 +2326,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
 
     // ha-mcp ships a web settings page (enable/disable/pin tools, feature
     // flags, advanced/beta settings, auto-backups, tool-approval prompts).
-    // Non-add-on HTTP/Docker users often don't know it exists or where the
+    // Non-app HTTP/Docker users often don't know it exists or where the
     // URL is (issue #1458), so surface a "what's next" hint for every
     // deployment, with the access method matched to how it's running.
     {
@@ -2338,8 +2341,8 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
       } else if (derivedDeployment === 'ha-addon' || state.proxy === 'webhook-proxy') {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h4 class="instruction-title">After it's running: the settings page</h4>
-        <p class="text-slate-300 mb-2">The MCP Server add-on ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the add-on page (Home Assistant ingress &mdash; no secret needed). For direct or remote access it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the add-on's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-300 mb-2">The MCP Server app ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
+        <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the app page (Home Assistant ingress &mdash; no secret needed). For direct or remote access it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the app's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       } else if (isRemote) {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
@@ -2386,7 +2389,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
     }
     if (!isStdio) {
       const urlHint = state.proxy === 'webhook-proxy'
-        ? 'your webhook proxy URL (from the webhook proxy add-on logs)'
+        ? 'your webhook proxy URL (from the webhook proxy app logs)'
         : 'your MCP server URL (from deployment step above)';
       hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{MCP_SERVER_URL}}</code> (braces and all) with ${urlHint}</li>`);
     }

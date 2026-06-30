@@ -1,0 +1,189 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Nav from '../components/Nav.astro';
+import PlatformIcon from '../components/PlatformIcon.astro';
+
+const base = import.meta.env.BASE_URL;
+
+const withBase = (path: string) => {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${cleanPath}`;
+};
+---
+
+<Layout title="Home Assistant App (Add-on) Setup Guide - Home Assistant MCP">
+  <Nav active="setup" />
+
+  <main id="main-content" tabindex="-1" class="focus:outline-none">
+
+  <div class="container mx-auto px-4 py-8 max-w-3xl">
+    <!-- Header -->
+    <header class="mb-10">
+      <div class="flex items-center gap-2 text-sm text-slate-400 mb-4">
+        <a href={withBase('/setup')} class="hover:text-white">&larr; Back to Setup</a>
+      </div>
+      <div class="flex items-center gap-4 mb-4">
+        <PlatformIcon icon="home-assistant" size={40} class="text-[var(--text-secondary)] flex-shrink-0" />
+        <div>
+          <h1 class="text-3xl font-bold text-white">Home Assistant App (Add-on) Setup</h1>
+          <p class="text-slate-400">Run ha-mcp inside Home Assistant OS &mdash; works with Claude Desktop and any MCP client</p>
+        </div>
+      </div>
+      <div class="bg-green-900/20 border border-green-700/50 rounded-xl p-4">
+        <p class="text-green-300 font-medium">Recommended for Home Assistant OS. No access token to create or manage &mdash; the app handles the connection for you.</p>
+      </div>
+    </header>
+
+    <!-- Don't-mix-modes callout -->
+    <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mb-8">
+      <h2 class="font-medium text-amber-300 mb-2">One mode at a time</h2>
+      <p class="text-amber-200/90 text-sm">This is the <strong>app (add-on)</strong> setup. It is separate from the local/stdio setup in the <a href={withBase('/guide-windows')} class="underline hover:text-white">Windows</a> / <a href={withBase('/guide-macos')} class="underline hover:text-white">macOS</a> guides. If you already configured the local version (a Claude Desktop entry running <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> with <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> and <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>), <strong>remove that entry</strong> &mdash; the app replaces it and needs no token. Running both at once is the most common cause of connection problems. <a href={withBase('/faq#app-vs-stdio')} class="underline hover:text-white">More in the FAQ</a>.</p>
+    </div>
+
+    <!-- Steps -->
+    <div class="space-y-8">
+      <!-- Step 1 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">1</span>
+          <h2 class="text-xl font-semibold text-white">Add the ha-mcp repository</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">In Home Assistant, add the ha-mcp app repository:</p>
+          <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="inline-block mb-3">
+            <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add the ha-mcp app (add-on) repository to your Home Assistant" />
+          </a>
+          <p class="text-slate-400 text-sm">Or paste the repository URL into <strong>Settings &rarr; Apps &rarr; App Store &rarr; &#8942; (top right) &rarr; Repositories</strong>: <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code></p>
+        </div>
+      </section>
+
+      <!-- Step 2 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">2</span>
+          <h2 class="text-xl font-semibold text-white">Install the app</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-2">Open <strong>Settings &rarr; Apps &rarr; App Store</strong>, find <strong>Home Assistant MCP Server</strong>, and install it.</p>
+          <p class="text-slate-400 text-sm">Home Assistant 2026.2 renamed "Add-ons" to "Apps" &mdash; on older versions this is <strong>Settings &rarr; Add-ons &rarr; Add-on Store</strong>, and the app is the same "MCP Server".</p>
+        </div>
+      </section>
+
+      <!-- Step 3 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">3</span>
+          <h2 class="text-xl font-semibold text-white">Start it and copy the server URL</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-2"><strong>Start</strong> the app, then open its <strong>Logs</strong> tab (Settings &rarr; Apps &rarr; Home Assistant MCP Server &rarr; Logs &mdash; these are the app's logs, not the main HA logs).</p>
+          <p class="text-slate-300 mb-2">Copy the MCP server URL from the log line &mdash; it looks like:</p>
+          <pre class="code-block text-xs"><code>MCP Server URL: http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw</code></pre>
+          <p class="text-slate-400 text-sm mt-3">The app auto-discovers the HA connection, generates a secure secret path, and configures the token &mdash; no manual setup needed. Defaults: port <code class="bg-slate-800 px-1 rounded">9583</code>, 128-bit random secret path, persisted across restarts.</p>
+        </div>
+      </section>
+
+      <!-- Step 4 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">4</span>
+          <h2 class="text-xl font-semibold text-white">Connect Claude Desktop</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-3">Claude Desktop talks to MCP servers over stdio, so it reaches the app through <strong>mcp-proxy</strong> (run automatically via <code class="bg-slate-800 px-1 rounded">uvx</code>). That needs <strong>uv</strong> on the computer running Claude Desktop:</p>
+          <pre class="code-block mb-4"><code># macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+winget install astral-sh.uv -e</code></pre>
+          <p class="text-slate-300 mb-2">Open Claude Desktop's config (<strong>Settings &rarr; Developer &rarr; Edit Config</strong>) and paste this, replacing the URL with the one from Step 3:</p>
+          <pre class="code-block"><code>{`{
+  "mcpServers": {
+    "home-assistant": {
+      "command": "uvx",
+      "args": [
+        "mcp-proxy",
+        "--transport",
+        "streamablehttp",
+        "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"
+      ]
+    }
+  }
+}`}</code></pre>
+          <div class="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4 mt-4">
+            <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No token goes here.</strong> The app already handles authentication behind the secret path in the URL. Do <strong>not</strong> add <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code>, <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code>, or an <code class="bg-slate-800 px-1 rounded">env</code> block &mdash; that is the local/stdio config, and pasting it alongside the app is what causes the connection to hang.</p>
+          </div>
+          <p class="text-slate-400 text-sm mt-4">Then restart Claude Desktop: <strong>File &rarr; Exit</strong>, then reopen.</p>
+          <details class="mt-4">
+            <summary class="text-slate-400 hover:text-white cursor-pointer font-medium">Using a different client (Claude.ai, ChatGPT, Cursor, &hellip;)?</summary>
+            <div class="mt-3 pl-4 border-l-2 border-slate-700">
+              <p class="text-slate-300 text-sm">Clients that speak HTTP natively don't need mcp-proxy &mdash; they take the Step 3 URL directly. The <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> generates the exact config for each client.</p>
+              <p class="text-slate-400 text-xs mt-2">The app serves <strong>Streamable HTTP</strong>, not SSE. A <code class="bg-slate-800 px-1 rounded">--transport sse</code> config pointed at it returns a <code class="bg-slate-800 px-1 rounded">405</code> and won't connect.</p>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <!-- Step 5 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">5</span>
+          <h2 class="text-xl font-semibold text-white">Test it</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-4">Ask your client:</p>
+          <pre class="code-block"><code>Can you see my Home Assistant?</code></pre>
+          <p class="text-slate-400 text-sm mt-3">It should respond with entities from your Home Assistant.</p>
+        </div>
+      </section>
+
+      <!-- Step 6 -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">6</span>
+          <h2 class="text-xl font-semibold text-white">Access it from outside your network (optional)</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-2">The URL from Step 3 only works on your local network. To reach the app from anywhere &mdash; for example from Claude.ai or ChatGPT, which need a public HTTPS URL &mdash; put it behind a secure tunnel or your existing reverse proxy.</p>
+          <p class="text-slate-300">The <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> walks through the remote options step by step: pick <strong>Remote (Internet)</strong>, then <strong>Cloudflare Tunnel</strong> or <strong>Nabu Casa / Webhook Proxy</strong>.</p>
+        </div>
+      </section>
+
+      <!-- Tip -->
+      <section class="guide-step">
+        <div class="step-header">
+          <span class="step-number">7</span>
+          <h2 class="text-xl font-semibold text-white">Tip: the ha-mcp Settings page</h2>
+        </div>
+        <div class="step-content">
+          <p class="text-slate-300 mb-2">The app ships a web settings page where you can enable, disable, and pin individual MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
+          <p class="text-slate-300 mb-2">Open it from the app's <strong>Open Web UI</strong> button, or ask Claude <em>"how do I open the ha-mcp settings page?"</em></p>
+          <p class="text-slate-400 text-sm">See the <a href={withBase('/faq#tool-settings-page')} class="text-blue-400 hover:underline">FAQ</a> for every way to reach it and how to disable the settings server if you don't want it.</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- Footer -->
+    <div class="mt-12 pt-8 border-t border-slate-800">
+      <p class="text-slate-400 text-center">
+        Having issues? See the <a href={withBase('/faq')} class="text-blue-400 hover:underline">FAQ &amp; Troubleshooting Guide</a>
+      </p>
+    </div>
+  </div>
+  </main>
+</Layout>
+
+<style>
+  .guide-step {
+    @apply bg-slate-800/30 rounded-xl border border-slate-700/50 p-6;
+  }
+  .step-header {
+    @apply flex items-center gap-3 mb-4;
+  }
+  .step-number {
+    @apply w-8 h-8 rounded-full bg-blue-600 text-white font-semibold flex items-center justify-center flex-shrink-0;
+  }
+  .step-content {
+    @apply pl-11;
+  }
+</style>
