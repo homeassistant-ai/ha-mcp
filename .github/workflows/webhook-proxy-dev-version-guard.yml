@@ -1,0 +1,57 @@
+name: Webhook Proxy Dev — Version Guard
+
+on:
+  pull_request:
+    paths:
+      - "homeassistant-addon-webhook-proxy-dev/**"
+
+jobs:
+  require-version-bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a dev version bump and config/manifest parity
+        run: |
+          set -euo pipefail
+          BASE="origin/${{ github.base_ref }}"
+          CFG=homeassistant-addon-webhook-proxy-dev/config.yaml
+          MAN=homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/manifest.json
+
+          ver() { python3 - "$@" <<'PY'
+          import sys, json, re, pathlib
+          p = pathlib.Path(sys.argv[1])
+          if p.suffix == ".json":
+              print(json.loads(p.read_text())["version"])
+          else:
+              m = re.search(r'^version:\s*"([^"]+)"', p.read_text(), re.M)
+              print(m.group(1) if m else "")
+          PY
+          }
+
+          NEW_CFG=$(ver "$CFG")
+          NEW_MAN=$(ver "$MAN")
+          if [ "$NEW_CFG" != "$NEW_MAN" ]; then
+            echo "::error::config.yaml ($NEW_CFG) and manifest.json ($NEW_MAN) versions must match"
+            exit 1
+          fi
+
+          OLD_CFG=$(git show "$BASE:$CFG" 2>/dev/null | python3 -c \
+            'import sys,re;m=re.search(r"^version:\s*\"([^\"]+)\"",sys.stdin.read(),re.M);print(m.group(1) if m else "")' || true)
+          if [ -z "$OLD_CFG" ]; then
+            echo "New dev add-on (no base version) — OK."; exit 0
+          fi
+          if [ "$NEW_CFG" = "$OLD_CFG" ]; then
+            echo "::error::homeassistant-addon-webhook-proxy-dev changed but version is still $NEW_CFG — bump it."
+            exit 1
+          fi
+          python3 - "$OLD_CFG" "$NEW_CFG" <<'PY'
+          import sys
+          from packaging.version import Version
+          old, new = sys.argv[1], sys.argv[2]
+          if Version(new) <= Version(old):
+              print(f"::error::dev version must increase: {old} -> {new}")
+              sys.exit(1)
+          print(f"dev version bump OK: {old} -> {new}")
+          PY
