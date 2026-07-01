@@ -19,7 +19,53 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import yaml
 
-PROXY_ADDON_DIR = "homeassistant-addon-webhook-proxy"
+WEBHOOK_PROXY_VARIANTS = {
+    "stable": {
+        "key": "stable",
+        "addon_dir": "homeassistant-addon-webhook-proxy",
+        "component": "mcp_proxy",
+        "domain": "mcp_proxy",
+        "slug": "ha_mcp_webhook_proxy",
+        "oauth_base": "/api/mcp_proxy/oauth",
+        "config_file": "/config/.mcp_proxy_config.json",
+        "inbound_log": "/config/.mcp_proxy_inbound.log",
+        "oauth_marker": "/config/.mcp_proxy_oauth_restart_required",
+        "sibling_base": "ha_mcp_webhook_proxy_dev",
+        "mutex_id": "mcp_proxy_mutex",
+    },
+    "dev": {
+        "key": "dev",
+        "addon_dir": "homeassistant-addon-webhook-proxy-dev",
+        "component": "mcp_proxy_dev",
+        "domain": "mcp_proxy_dev",
+        "slug": "ha_mcp_webhook_proxy_dev",
+        "oauth_base": "/api/mcp_proxy_dev/oauth",
+        "config_file": "/config/.mcp_proxy_dev_config.json",
+        "inbound_log": "/config/.mcp_proxy_dev_inbound.log",
+        "oauth_marker": "/config/.mcp_proxy_dev_oauth_restart_required",
+        "sibling_base": "ha_mcp_webhook_proxy",
+        "mutex_id": "mcp_proxy_dev_mutex",
+    },
+}
+
+# Rebound per-variant by the autouse `_webhook_proxy_variant` fixture below.
+PROXY_ADDON_DIR = WEBHOOK_PROXY_VARIANTS["stable"]["addon_dir"]
+CURRENT = WEBHOOK_PROXY_VARIANTS["stable"]
+
+
+@pytest.fixture(
+    autouse=True,
+    params=list(WEBHOOK_PROXY_VARIANTS.values()),
+    ids=lambda v: v["key"],
+)
+def _webhook_proxy_variant(request, monkeypatch):
+    """Rebind PROXY_ADDON_DIR/CURRENT so every test in this module runs once
+    per addon flavor (stable, dev). monkeypatch auto-reverts after each test."""
+    variant = request.param
+    mod = sys.modules[__name__]
+    monkeypatch.setattr(mod, "PROXY_ADDON_DIR", variant["addon_dir"])
+    monkeypatch.setattr(mod, "CURRENT", variant)
+    return variant
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +76,9 @@ PROXY_ADDON_DIR = "homeassistant-addon-webhook-proxy"
 def _import_start():
     """Import the webhook proxy start.py as a module."""
     start_path = os.path.join(PROXY_ADDON_DIR, "start.py")
-    spec = importlib.util.spec_from_file_location("webhook_proxy_start", start_path)
+    spec = importlib.util.spec_from_file_location(
+        f"webhook_proxy_start_{CURRENT['key']}", start_path
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -164,23 +212,28 @@ def _import_mcp_proxy(preload_oauth=None):
     """Import the mcp_proxy package's __init__.py with HA imports stubbed.
 
     `preload_oauth`: pre-register a specific oauth module under the
-    relative-import name (`mcp_proxy_init.oauth`). Without this, the
-    integration's `from .oauth import ...` calls would load a fresh oauth
-    module pointing at /config — fine for production, useless for tests.
+    relative-import name (`mcp_proxy_init_<variant>.oauth`). Without this,
+    the integration's `from .oauth import ...` calls would load a fresh
+    oauth module pointing at /config — fine for production, useless for
+    tests. The module name is suffixed with the active variant key so
+    stable/dev imports never share (or clobber) each other's sys.modules
+    entry.
     """
     _install_runtime_stubs()
-    init_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "__init__.py")
-    sys.modules.pop("mcp_proxy_init", None)
-    sys.modules.pop("mcp_proxy_init.oauth", None)
+    component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
+    init_path = os.path.join(component_dir, "__init__.py")
+    mod_name = f"mcp_proxy_init_{CURRENT['key']}"
+    sys.modules.pop(mod_name, None)
+    sys.modules.pop(f"{mod_name}.oauth", None)
     spec = importlib.util.spec_from_file_location(
-        "mcp_proxy_init",
+        mod_name,
         init_path,
-        submodule_search_locations=[os.path.join(PROXY_ADDON_DIR, "mcp_proxy")],
+        submodule_search_locations=[component_dir],
     )
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["mcp_proxy_init"] = mod
+    sys.modules[mod_name] = mod
     if preload_oauth is not None:
-        sys.modules["mcp_proxy_init.oauth"] = preload_oauth
+        sys.modules[f"{mod_name}.oauth"] = preload_oauth
     spec.loader.exec_module(mod)
     return mod
 
@@ -189,17 +242,18 @@ def _import_oauth(tmp_secret_dir=None):
     """Import the oauth submodule, optionally redirecting the secret file
     to a tmp dir so tests don't need root or write access to /config.
 
-    Registers in sys.modules under both `mcp_proxy_oauth` (so test patches
-    targeting that name resolve) and the module returned can be passed to
-    `_import_mcp_proxy(preload_oauth=...)` so the integration's relative
-    import resolves to the same instance.
+    Registers in sys.modules under `mcp_proxy_oauth_<variant>` (so test
+    patches targeting that name resolve) and the module returned can be
+    passed to `_import_mcp_proxy(preload_oauth=...)` so the integration's
+    relative import resolves to the same instance.
     """
     _install_runtime_stubs()
-    oauth_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "oauth.py")
-    sys.modules.pop("mcp_proxy_oauth", None)
-    spec = importlib.util.spec_from_file_location("mcp_proxy_oauth", oauth_path)
+    oauth_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "oauth.py")
+    mod_name = f"mcp_proxy_oauth_{CURRENT['key']}"
+    sys.modules.pop(mod_name, None)
+    spec = importlib.util.spec_from_file_location(mod_name, oauth_path)
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["mcp_proxy_oauth"] = mod
+    sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     if tmp_secret_dir is not None:
         mod.SECRET_FILE = Path(tmp_secret_dir) / ".mcp_proxy_oauth_secret"
@@ -221,11 +275,13 @@ class TestWebhookProxyStructure:
             assert os.path.exists(path), f"Missing required file: {f}"
 
     def test_mcp_proxy_integration_exists(self):
-        int_dir = os.path.join(PROXY_ADDON_DIR, "mcp_proxy")
+        int_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
         required = ["__init__.py", "config_flow.py", "manifest.json", "strings.json"]
         for f in required:
             path = os.path.join(int_dir, f)
-            assert os.path.exists(path), f"Missing integration file: mcp_proxy/{f}"
+            assert os.path.exists(path), (
+                f"Missing integration file: {CURRENT['component']}/{f}"
+            )
 
     def test_config_yaml_valid(self):
         with open(f"{PROXY_ADDON_DIR}/config.yaml") as f:
@@ -235,7 +291,7 @@ class TestWebhookProxyStructure:
         for field in required_fields:
             assert field in config, f"Missing required field: {field}"
 
-        assert config["slug"] == "ha_mcp_webhook_proxy"
+        assert config["slug"] == CURRENT["slug"]
         assert config["hassio_api"] is True
         assert config["homeassistant_api"] is True
         assert config["hassio_role"] == "manager"
@@ -305,7 +361,7 @@ class TestWebhookProxyStructure:
         `_install_integration` correctly detects updates."""
         with open(f"{PROXY_ADDON_DIR}/config.yaml") as f:
             addon_version = yaml.safe_load(f)["version"]
-        with open(f"{PROXY_ADDON_DIR}/mcp_proxy/manifest.json") as f:
+        with open(f"{PROXY_ADDON_DIR}/{CURRENT['component']}/manifest.json") as f:
             manifest_version = json.load(f)["version"]
         assert addon_version == manifest_version, (
             "Addon config.yaml version and integration manifest.json "
@@ -320,10 +376,10 @@ class TestWebhookProxyStructure:
         assert "image" not in config
 
     def test_manifest_json_valid(self):
-        with open(f"{PROXY_ADDON_DIR}/mcp_proxy/manifest.json") as f:
+        with open(f"{PROXY_ADDON_DIR}/{CURRENT['component']}/manifest.json") as f:
             manifest = json.load(f)
 
-        assert manifest["domain"] == "mcp_proxy"
+        assert manifest["domain"] == CURRENT["domain"]
         assert manifest["config_flow"] is True
         assert "webhook" in manifest["dependencies"]
 
@@ -1167,7 +1223,8 @@ class TestOAuthOffPreservesBehavior:
             "webhook_id": "mcp_test_webhook_id_12345",
         }
         # Wipe any stale import
-        sys.modules.pop("mcp_proxy_init.oauth", None)
+        oauth_submodule_name = f"mcp_proxy_init_{CURRENT['key']}.oauth"
+        sys.modules.pop(oauth_submodule_name, None)
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
@@ -1176,8 +1233,9 @@ class TestOAuthOffPreservesBehavior:
             await mod.async_setup_entry(hass, MagicMock())
 
         # The submodule name follows from the parent's package name
-        # ("mcp_proxy_init"). If it ever appears here, the OFF path imported it.
-        assert "mcp_proxy_init.oauth" not in sys.modules
+        # ("mcp_proxy_init_<variant>"). If it ever appears here, the OFF path
+        # imported it.
+        assert oauth_submodule_name not in sys.modules
 
     async def test_blank_creds_raises_config_entry_error(self, mod, hass):
         """Blank creds in an oauth section signal a config bug — the user
@@ -1832,7 +1890,8 @@ class TestOAuthSetupEntry:
         self, hass, tmp_path
     ):
         # Pre-load the oauth module with a tmp secret file, then bind it as
-        # mcp_proxy_init.oauth so the integration's relative import finds it.
+        # mcp_proxy_init_<variant>.oauth so the integration's relative import
+        # finds it.
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
         mod = _import_mcp_proxy(preload_oauth=oauth)
         proxy_config = {
@@ -2146,10 +2205,10 @@ class TestStartInstallIntegration:
 
         # Patch the two Path calls inside _install_integration
         def path_factory(arg):
-            if arg == "/opt/mcp_proxy":
+            if arg == f"/opt/{CURRENT['component']}":
                 return src
-            if arg == "/config/custom_components/mcp_proxy":
-                return dst_parent / "mcp_proxy"
+            if arg == f"/config/custom_components/{CURRENT['component']}":
+                return dst_parent / CURRENT["component"]
             if arg == "/config/custom_components":
                 return dst_parent
             return Path(arg)
@@ -2159,7 +2218,7 @@ class TestStartInstallIntegration:
 
         assert first_install is True
         assert version_changed is False
-        assert (dst_parent / "mcp_proxy" / "manifest.json").exists()
+        assert (dst_parent / CURRENT["component"] / "manifest.json").exists()
 
     def test_version_changed_when_versions_differ(self, tmp_path):
         start = _import_start()
@@ -2168,14 +2227,16 @@ class TestStartInstallIntegration:
         (src / "manifest.json").write_text('{"version": "1.0.3-beta.1"}')
         dst_parent = tmp_path / "dst-parent"
         dst_parent.mkdir()
-        (dst_parent / "mcp_proxy").mkdir()
-        (dst_parent / "mcp_proxy" / "manifest.json").write_text('{"version": "1.0.2"}')
+        (dst_parent / CURRENT["component"]).mkdir()
+        (dst_parent / CURRENT["component"] / "manifest.json").write_text(
+            '{"version": "1.0.2"}'
+        )
 
         def path_factory(arg):
-            if arg == "/opt/mcp_proxy":
+            if arg == f"/opt/{CURRENT['component']}":
                 return src
-            if arg == "/config/custom_components/mcp_proxy":
-                return dst_parent / "mcp_proxy"
+            if arg == f"/config/custom_components/{CURRENT['component']}":
+                return dst_parent / CURRENT["component"]
             if arg == "/config/custom_components":
                 return dst_parent
             return Path(arg)
@@ -2193,16 +2254,16 @@ class TestStartInstallIntegration:
         (src / "manifest.json").write_text('{"version": "1.0.3-beta.1"}')
         dst_parent = tmp_path / "dst-parent"
         dst_parent.mkdir()
-        (dst_parent / "mcp_proxy").mkdir()
-        (dst_parent / "mcp_proxy" / "manifest.json").write_text(
+        (dst_parent / CURRENT["component"]).mkdir()
+        (dst_parent / CURRENT["component"] / "manifest.json").write_text(
             '{"version": "1.0.3-beta.1"}'
         )
 
         def path_factory(arg):
-            if arg == "/opt/mcp_proxy":
+            if arg == f"/opt/{CURRENT['component']}":
                 return src
-            if arg == "/config/custom_components/mcp_proxy":
-                return dst_parent / "mcp_proxy"
+            if arg == f"/config/custom_components/{CURRENT['component']}":
+                return dst_parent / CURRENT["component"]
             if arg == "/config/custom_components":
                 return dst_parent
             return Path(arg)
@@ -2224,15 +2285,15 @@ class TestStartInstallIntegration:
         (src / "manifest.json").write_text('{"version": "1.0.3-beta.1"}')
         dst_parent = tmp_path / "dst-parent"
         dst_parent.mkdir()
-        (dst_parent / "mcp_proxy").mkdir()
+        (dst_parent / CURRENT["component"]).mkdir()
         # Corrupted JSON
-        (dst_parent / "mcp_proxy" / "manifest.json").write_text("not json{{{")
+        (dst_parent / CURRENT["component"] / "manifest.json").write_text("not json{{{")
 
         def path_factory(arg):
-            if arg == "/opt/mcp_proxy":
+            if arg == f"/opt/{CURRENT['component']}":
                 return src
-            if arg == "/config/custom_components/mcp_proxy":
-                return dst_parent / "mcp_proxy"
+            if arg == f"/config/custom_components/{CURRENT['component']}":
+                return dst_parent / CURRENT["component"]
             if arg == "/config/custom_components":
                 return dst_parent
             return Path(arg)
@@ -2243,7 +2304,7 @@ class TestStartInstallIntegration:
         assert first_install is False
         assert version_changed is False
         # Repaired install — files are copied
-        assert (dst_parent / "mcp_proxy" / "manifest.json").exists()
+        assert (dst_parent / CURRENT["component"] / "manifest.json").exists()
 
 
 # ===========================================================================
@@ -2340,7 +2401,7 @@ class TestProtectedResourceView:
             "https://legit.example/api/webhook/mcp_webhook_id_aaaa"
         )
         assert body["authorization_servers"] == [
-            "https://legit.example/api/mcp_proxy/oauth"
+            f"https://legit.example{CURRENT['oauth_base']}"
         ]
         assert body["bearer_methods_supported"] == ["header"]
 
@@ -2357,7 +2418,7 @@ class TestAuthorizationServerView:
             await view.get(request)
 
         body = json_resp.call_args.args[0]
-        assert body["issuer"].endswith("/api/mcp_proxy/oauth")
+        assert body["issuer"].endswith(CURRENT["oauth_base"])
         # Authorize/token endpoints live at the root path of the host so
         # that clients constructing them from the resource host (Claude.ai)
         # find them.
@@ -3060,11 +3121,12 @@ class TestRepairsModule:
     @pytest.fixture
     def repairs(self, tmp_path):
         _install_runtime_stubs()
-        repairs_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "repairs.py")
-        sys.modules.pop("mcp_proxy_repairs", None)
-        spec = importlib.util.spec_from_file_location("mcp_proxy_repairs", repairs_path)
+        repairs_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "repairs.py")
+        mod_name = f"mcp_proxy_repairs_{CURRENT['key']}"
+        sys.modules.pop(mod_name, None)
+        spec = importlib.util.spec_from_file_location(mod_name, repairs_path)
         mod = importlib.util.module_from_spec(spec)
-        sys.modules["mcp_proxy_repairs"] = mod
+        sys.modules[mod_name] = mod
         spec.loader.exec_module(mod)
         # Redirect the marker file into the test's tmp dir
         mod.RESTART_MARKER_FILE = tmp_path / ".mcp_proxy_oauth_restart_required"
@@ -3091,7 +3153,7 @@ class TestRepairsModule:
         from homeassistant.helpers import issue_registry
 
         hass = MagicMock()
-        repairs.maybe_create_issue(hass, "mcp_proxy")
+        repairs.maybe_create_issue(hass, CURRENT["domain"])
         issue_registry.async_create_issue.assert_not_called()
 
     def test_maybe_create_issue_fires_when_marker_present(self, repairs):
@@ -3100,11 +3162,11 @@ class TestRepairsModule:
         issue_registry.async_create_issue.reset_mock()
         repairs.RESTART_MARKER_FILE.write_text("test")
         hass = MagicMock()
-        repairs.maybe_create_issue(hass, "mcp_proxy")
+        repairs.maybe_create_issue(hass, CURRENT["domain"])
         issue_registry.async_create_issue.assert_called_once()
         # Domain + issue_id are positional args after hass
         call_args = issue_registry.async_create_issue.call_args
-        assert call_args.args[1] == "mcp_proxy"
+        assert call_args.args[1] == CURRENT["domain"]
         assert call_args.args[2] == "oauth_restart_required"
         assert call_args.kwargs.get("is_fixable") is True
 
@@ -3114,10 +3176,10 @@ class TestRepairsModule:
         issue_registry.async_delete_issue.reset_mock()
         repairs.RESTART_MARKER_FILE.write_text("test")
         hass = MagicMock()
-        repairs.clear_issue(hass, "mcp_proxy")
+        repairs.clear_issue(hass, CURRENT["domain"])
         assert not repairs.RESTART_MARKER_FILE.exists()
         issue_registry.async_delete_issue.assert_called_once_with(
-            hass, "mcp_proxy", "oauth_restart_required"
+            hass, CURRENT["domain"], "oauth_restart_required"
         )
 
 
@@ -3131,11 +3193,12 @@ class TestRepairsFlowSubmit:
     @pytest.fixture
     def repairs(self, tmp_path):
         _install_runtime_stubs()
-        repairs_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "repairs.py")
-        sys.modules.pop("mcp_proxy_repairs", None)
-        spec = importlib.util.spec_from_file_location("mcp_proxy_repairs", repairs_path)
+        repairs_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "repairs.py")
+        mod_name = f"mcp_proxy_repairs_{CURRENT['key']}"
+        sys.modules.pop(mod_name, None)
+        spec = importlib.util.spec_from_file_location(mod_name, repairs_path)
         mod = importlib.util.module_from_spec(spec)
-        sys.modules["mcp_proxy_repairs"] = mod
+        sys.modules[mod_name] = mod
         spec.loader.exec_module(mod)
         mod.RESTART_MARKER_FILE = tmp_path / ".mcp_proxy_oauth_restart_required"
         return mod
@@ -3175,7 +3238,7 @@ class TestStringsJSONIssueKeys:
     localized text."""
 
     def test_issue_translation_keys_match_repair_flow(self):
-        with open(f"{PROXY_ADDON_DIR}/mcp_proxy/strings.json") as f:
+        with open(f"{PROXY_ADDON_DIR}/{CURRENT['component']}/strings.json") as f:
             strings = json.load(f)
 
         assert "oauth_restart_required" in strings.get("issues", {})
@@ -3304,8 +3367,8 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         # those URLs from the resource host without consulting the
         # authorization-server metadata document.
         assert registered_urls == {
-            "/api/mcp_proxy/oauth/protected-resource",
-            "/api/mcp_proxy/oauth/authorization-server",
+            f"{CURRENT['oauth_base']}/protected-resource",
+            f"{CURRENT['oauth_base']}/authorization-server",
             "/authorize",
             "/token",
         }
@@ -3332,4 +3395,4 @@ class TestUnauthorizedResponseShape:
         ww = kwargs["headers"]["WWW-Authenticate"]
         # Pinned base means evil.example is NOT in the metadata URL
         assert "evil.example" not in ww
-        assert "https://legit.example/api/mcp_proxy/oauth/protected-resource" in ww
+        assert f"https://legit.example{CURRENT['oauth_base']}/protected-resource" in ww
