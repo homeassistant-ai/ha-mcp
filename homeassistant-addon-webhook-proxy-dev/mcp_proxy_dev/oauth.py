@@ -155,9 +155,13 @@ def _atomic_write_0600(path: Path, data: bytes) -> bool:
     ``os.replace()``s it over ``path``. Because the replace is atomic and the
     temp was 0600 from creation, ``path`` is never observable with the new
     bytes at wider-than-0600 permissions — on first create OR on an
-    overwrite/regenerate. Returns True on success; returns False when the
-    filesystem can't honor a restricted-mode create (tmpfs / non-POSIX) so the
-    caller can fall back to a best-effort plain write and warn.
+    overwrite/regenerate. Returns True on success; returns False if the
+    restricted-mode create OR the subsequent write/replace failed — i.e. on
+    ANY OSError, whether the filesystem can't honor restricted mode (tmpfs /
+    non-POSIX) or a genuine I/O error occurred (full disk, EACCES, read-only
+    fs). A False therefore doesn't prove it was only the mode: the caller's
+    plain-write fallback also fails on a hard I/O error, so its "wider
+    permissions" warning must not be treated as certain.
     """
     tmp = path.with_name(f"{path.name}.tmp")
     try:
@@ -207,9 +211,12 @@ def load_or_create_secret() -> bytes:
     new_secret = secrets.token_bytes(32)
     SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
     if not _atomic_write_0600(SECRET_FILE, new_secret):
-        # Filesystem can't create with restricted mode (tmpfs / non-POSIX) —
-        # fall back to a plain write so the addon still works, but warn: the
-        # secret may end up world-readable in /config.
+        # False = the restricted-mode create OR the write/replace failed (any
+        # OSError: tmpfs / non-POSIX that can't honor 0600, or a hard I/O error
+        # like a full disk / EACCES / read-only fs). Fall back to a plain
+        # write: on a mode-only limitation it succeeds (the secret may end up
+        # world-readable in /config — hence the warning); on a hard I/O error
+        # it raises and propagates.
         SECRET_FILE.write_bytes(new_secret)
         _LOGGER.warning(
             "MCP Proxy OAuth: could not create the signing key file with "

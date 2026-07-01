@@ -486,9 +486,13 @@ def _atomic_write_0600(path: Path, data: bytes) -> bool:
     ``os.replace()``s it over ``path``. Because the replace is atomic and the
     temp was 0600 from creation, ``path`` is never observable with the new
     bytes at wider-than-0600 permissions — on first create OR on an
-    overwrite/regenerate. Returns True on success; returns False when the
-    filesystem can't honor a restricted-mode create (tmpfs / non-POSIX) so the
-    caller can fall back to a best-effort plain write and warn.
+    overwrite/regenerate. Returns True on success; returns False if the
+    restricted-mode create OR the subsequent write/replace failed — i.e. on
+    ANY OSError, whether the filesystem can't honor restricted mode (tmpfs /
+    non-POSIX) or a genuine I/O error occurred (full disk, EACCES, read-only
+    fs). A False therefore doesn't prove it was only the mode: the caller's
+    plain-write fallback also fails on a hard I/O error, so its "wider
+    permissions" warning must not be treated as certain.
     """
     tmp = path.with_name(f"{path.name}.tmp")
     try:
@@ -565,10 +569,14 @@ def _resolve_oauth_creds(
                 {"client_id": final_id, "client_secret": final_secret}
             )
             if not _atomic_write_0600(creds_file, creds_json.encode("utf-8")):
-                # Filesystem can't create with restricted mode (tmpfs /
-                # non-POSIX) — fall back to a plain write so the addon still
-                # works, but warn: the creds may be wider than 0600. (The
-                # sibling signing-key path warns on the same degradation.)
+                # False = the restricted-mode create OR the write/replace
+                # failed (any OSError: tmpfs / non-POSIX that can't honor 0600,
+                # or a hard I/O error like a full disk / EACCES / read-only fs).
+                # Fall back to a plain write: on a mode-only limitation it
+                # succeeds (the creds may be wider than 0600 — hence the
+                # warning); on a hard I/O error it raises too and the outer
+                # OSError guard handles it. (The sibling signing-key path warns
+                # on the same degradation.)
                 creds_file.write_text(creds_json)
                 log_error(
                     f"Could not create the OAuth creds file with restricted "
@@ -618,7 +626,7 @@ def _read_integration_domain() -> str | None:
     return domain if isinstance(domain, str) else None
 
 
-def _probe_oauth_active() -> bool:
+def _probe_oauth_active(attempts: int = 3, delay: int = 2) -> bool:
     """Probe the OAuth protected-resource metadata endpoint.
 
     Returns True only if HA serves the metadata URL — which means the
@@ -630,12 +638,25 @@ def _probe_oauth_active() -> bool:
     config entry against the OLD module's `async_setup_entry`, which
     has no OAuth gate, and the webhook would serve unauthenticated
     requests despite the user's "OAuth ENABLED" line in the log.
+
+    This gates a destructive action (tearing down a working webhook and
+    demanding a restart), so a single transient HA-API hiccup or a
+    momentarily unreadable manifest must not trigger it. Retry up to
+    ``attempts`` times with a short sleep between tries, returning True the
+    moment the endpoint reports active. Only an active response
+    short-circuits; the fail-closed default (absent → False) still holds
+    once every attempt is exhausted. Mirrors the bounded retries in
+    `_refuse_if_sibling_running` and `_ensure_config_entry`.
     """
-    domain = _read_integration_domain()
-    if not domain:
-        return False
-    result = _ha_core_api("GET", f"/{domain}/oauth/protected-resource")
-    return isinstance(result, dict) and "authorization_servers" in result
+    for attempt in range(attempts):
+        domain = _read_integration_domain()
+        if domain:
+            result = _ha_core_api("GET", f"/{domain}/oauth/protected-resource")
+            if isinstance(result, dict) and "authorization_servers" in result:
+                return True
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    return False
 
 
 def _install_integration() -> IntegrationInstall:

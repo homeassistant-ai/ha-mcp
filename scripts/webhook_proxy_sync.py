@@ -10,6 +10,11 @@ inverses of each other, and applies it mechanically:
 * ``--direction promote``  copies dev -> stable (SRC=dev, DST=stable)
 * ``--direction reset``    copies stable -> dev (SRC=stable, DST=dev)
 
+Beyond the component code, the copy+rename set also spans ``start.py``, the
+``Dockerfile``, ``config.yaml``, and ``translations/en.yaml`` — each carries
+the ``mcp_proxy`` identity token (in ``translations/en.yaml`` it is the
+log-filter hint) that must flip with the flavor.
+
 Everything is expressed as small pure functions so the transform can be unit
 tested without touching the filesystem. The one side-effecting step is
 ``ruff format`` on the emitted ``.py`` files, which re-wraps lines whose length
@@ -372,7 +377,7 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
     dst_dir = root / dst.addon_dir
     dst_comp = dst_dir / dst.component
 
-    # 1. Replace the component dir + copy start.py / Dockerfile.
+    # 1. Replace the component dir + copy start.py / Dockerfile / translations.
     if dst_comp.exists():
         shutil.rmtree(dst_comp)
     shutil.copytree(
@@ -382,9 +387,16 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
     )
     shutil.copy2(src_dir / "start.py", dst_dir / "start.py")
     shutil.copy2(src_dir / "Dockerfile", dst_dir / "Dockerfile")
+    shutil.copy2(
+        src_dir / "translations" / "en.yaml", dst_dir / "translations" / "en.yaml"
+    )
 
-    # 2. Blanket token rename on the copied code + Dockerfile.
-    rename_targets = [dst_dir / "start.py", dst_dir / "Dockerfile"]
+    # 2. Blanket token rename on the copied code + Dockerfile + translations.
+    rename_targets = [
+        dst_dir / "start.py",
+        dst_dir / "Dockerfile",
+        dst_dir / "translations" / "en.yaml",
+    ]
     rename_targets += [
         p
         for p in sorted(dst_comp.rglob("*"))
