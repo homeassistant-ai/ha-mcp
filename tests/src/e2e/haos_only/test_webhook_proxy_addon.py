@@ -643,13 +643,17 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
                 await asyncio.sleep(_STATE_POLL_INTERVAL)
                 continue
             last_status = resp.status_code
-            if last_status in (401, 403, 404):
+            # Require the OAuth challenge (401; 403 tolerated) as proof the gate
+            # is actively enforcing. A 404 means the webhook is unregistered /
+            # broken (invalid target_url or a fail-closed teardown), NOT that
+            # OAuth rejected the request, so it must not count as "gated".
+            if last_status in (401, 403):
                 gated = True
                 break
             await asyncio.sleep(_STATE_POLL_INTERVAL)
 
         assert gated, (
-            "enable_oauth=true did not close the webhook within "
+            "enable_oauth=true did not return a 401 OAuth challenge within "
             f"{_STATE_POLL_TIMEOUT}s of addon restart. Last status: "
             f"{last_status} (baseline was {baseline_resp.status_code}). "
             "PR #1184 fail-closed gate may have regressed."
