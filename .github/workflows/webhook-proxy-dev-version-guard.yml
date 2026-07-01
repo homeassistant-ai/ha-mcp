@@ -49,10 +49,17 @@ jobs:
             exit 1
           fi
           python3 - "$OLD_CFG" "$NEW_CFG" <<'PY'
-          import sys
-          from packaging.version import Version
+          import re, sys
+          def key(v):
+              m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?$", v)
+              if not m:
+                  sys.exit(f"::error::unparseable dev version: {v!r}")
+              # A release (no .devN) sorts after its pre-releases, so a non-dev
+              # version gets an infinitely-high dev component.
+              dev = int(m[4]) if m[4] is not None else float("inf")
+              return (int(m[1]), int(m[2]), int(m[3]), dev)
           old, new = sys.argv[1], sys.argv[2]
-          if Version(new) <= Version(old):
+          if key(new) <= key(old):
               print(f"::error::dev version must increase: {old} -> {new}")
               sys.exit(1)
           print(f"dev version bump OK: {old} -> {new}")

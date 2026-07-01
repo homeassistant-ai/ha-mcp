@@ -84,3 +84,28 @@ def test_sibling_matcher_handles_hash_prefix_and_disambiguates_dev():
         )
         is True
     )
+
+
+DEV_START = DEV_ADDON / "start.py"
+
+
+def _load_dev_start():
+    spec = importlib.util.spec_from_file_location("wp_dev_start", DEV_START)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # safe: module-level has no side effects
+    return mod
+
+
+def test_dev_sibling_matcher_detects_stable_not_itself():
+    start = _load_dev_start()
+    # The dev flavor's sibling is STABLE (not its own dev slug).
+    assert start.SIBLING_SLUG_BASE == "ha_mcp_webhook_proxy"
+    assert start.MUTEX_NOTIFICATION_ID == "mcp_proxy_dev_mutex"
+    stable_base = "ha_mcp_webhook_proxy"
+    running_stable = [{"slug": "abc12345_ha_mcp_webhook_proxy", "state": "started"}]
+    running_dev_self = [
+        {"slug": "abc12345_ha_mcp_webhook_proxy_dev", "state": "started"}
+    ]
+    assert start._sibling_is_running(running_stable, stable_base) is True
+    # dev must NOT treat its own (dev) slug as the stable sibling:
+    assert start._sibling_is_running(running_dev_self, stable_base) is False

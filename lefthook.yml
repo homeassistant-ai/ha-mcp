@@ -28,7 +28,7 @@ pre-commit:
             run: uv run mypy src/ homeassistant-addon/ scripts/
           - name: mypy-webhook-proxy
             glob: "**/*.py"
-            run: uv run mypy homeassistant-addon-webhook-proxy/start.py
+            run: uv run mypy homeassistant-addon-webhook-proxy/start.py homeassistant-addon-webhook-proxy-dev/start.py
           - name: unit-tests
             glob:
               - "**/*.py"

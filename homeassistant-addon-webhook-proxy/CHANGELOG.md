@@ -3,6 +3,16 @@
 <!-- version list -->
 
 
+## v1.2.3 (2026-07-01)
+
+### Added
+
+- Refuse to start when the other Webhook Proxy flavor is already running (stable refuses
+  if the dev add-on `ha_mcp_webhook_proxy_dev` is running, and vice versa). Both flavors
+  register the same root OAuth `/authorize` and `/token` routes, so only one may run at a
+  time; the add-on now logs a clear error and raises a notification instead of colliding.
+
+
 ## v1.2.2 (2026-06-29)
 
 ### Fixed

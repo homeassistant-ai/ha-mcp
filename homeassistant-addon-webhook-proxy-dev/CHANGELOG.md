@@ -2,6 +2,12 @@
 
 <!-- version list -->
 
+<!--
+Dev channel: forked from the stable Webhook Proxy add-on at v1.2.2 and versioned
+independently (1.2.2.dev1, 1.2.2.dev2, …). The entries below are inherited stable
+history from before the fork.
+-->
+
 
 ## v1.2.2 (2026-06-29)
 
