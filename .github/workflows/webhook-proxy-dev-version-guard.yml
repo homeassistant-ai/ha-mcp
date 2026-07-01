@@ -62,6 +62,10 @@ jobs:
               dev = int(m[4]) if m[4] is not None else float("inf")
               return (int(m[1]), int(m[2]), int(m[3]), dev)
           old, new = sys.argv[1], sys.argv[2]
+          # The dev add-on version must always carry a .devN pre-release suffix;
+          # a stable-looking X.Y.Z would mislabel a dev build as a release.
+          if not re.match(r"^\d+\.\d+\.\d+\.dev\d+$", new):
+              sys.exit(f"::error::dev add-on version must be X.Y.Z.devN, got {new!r}")
           if key(new) <= key(old):
               print(f"::error::dev version must increase: {old} -> {new}")
               sys.exit(1)
