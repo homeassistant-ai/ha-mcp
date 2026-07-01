@@ -115,8 +115,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     If the user has an old `mcp_proxy_dev:` entry in configuration.yaml,
     auto-migrate to a config entry so the YAML line can be removed.
 
-    Also runs the boot-time repair-issue check: if the addon left a
-    "needs HA restart for OAuth" marker file behind, surface it as a
+    Also runs the boot-time repair-issue check: if a "needs HA restart
+    for OAuth" marker file was left behind (by the add-on's fail-closed
+    gate or the integration's mid-session OAuth enable), surface it as a
     Repair card with a click-to-restart fix flow. See repairs.py for
     the full lifecycle.
     """
@@ -319,16 +320,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 signing_key=signing_key,
                 public_base_url=public_base_url,
             )
-            oauth_provider.register_views()
-            # We now own the root OAuth routes for this HA instance. Record it
-            # so the sibling flavor fails loudly above instead of silently
-            # shadowing. Set only after a successful registration.
-            hass.data[OAUTH_ROUTE_OWNER_KEY] = DOMAIN
-            # HA binds the root /authorize + /token views cleanly only during
-            # startup. If we're being set up mid-session (the user just toggled
-            # OAuth on and the add-on reloaded the entry), those views don't
-            # activate correctly until a full HA restart — so flag it.
-            oauth_restart_needed = hass.is_running
+            if route_owner == DOMAIN:
+                # Mid-session reload of our own entry: we already registered the
+                # root OAuth views earlier this HA session. HA can't drop or
+                # re-register root HTTP views mid-session, and the already-bound
+                # views use the same persisted signing key + creds, so they keep
+                # validating — re-registering would only pile up shadowed
+                # duplicate routes. OAuth is already live, so no restart is
+                # needed (oauth_restart_needed stays False).
+                _LOGGER.debug(
+                    "MCP Proxy: root OAuth views already registered this "
+                    "session; reusing them (no re-register, no restart)."
+                )
+            else:
+                oauth_provider.register_views()
+                # First registration this session — we now own the root OAuth
+                # routes. Record it so the sibling flavor fails loudly above
+                # instead of silently shadowing.
+                hass.data[OAUTH_ROUTE_OWNER_KEY] = DOMAIN
+                # HA binds the root /authorize + /token views cleanly only during
+                # startup. A first registration happening mid-session (the user
+                # just toggled OAuth on and the add-on reloaded the entry) isn't
+                # live until a full HA restart — flag it to surface the restart
+                # Repair below. At HA boot (is_running False) they bind cleanly.
+                oauth_restart_needed = hass.is_running
         except Exception as err:
             _LOGGER.exception(
                 "MCP Proxy: failed to initialise OAuth provider (%s)",

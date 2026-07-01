@@ -1,20 +1,28 @@
 """Repairs flow for MCP Webhook Proxy.
 
 Surfaces a HACS-style "click submit to restart" card in HA's Repairs UI
-when the addon has detected that OAuth is enabled but the integration
-code currently loaded in HA doesn't enforce it. The card is the more
-discoverable counterpart to the persistent_notification the addon also
-posts; submitting the fix flow restarts HA so the new OAuth-aware code
-takes over.
+when OAuth is enabled but the root OAuth views aren't live in the running
+HA session yet — either because the add-on's fail-closed gate detected that
+the integration code currently loaded doesn't enforce OAuth, or because the
+integration itself enabled OAuth mid-session (HA binds the root /authorize +
+/token views cleanly only at startup). The card is the more discoverable
+counterpart to the persistent_notification the addon also posts; submitting
+the fix flow restarts HA so the OAuth-aware code / freshly bound root views
+take over.
 
 Lifecycle:
-- Addon writes RESTART_MARKER_FILE when its fail-closed gate triggers.
-- Integration's `async_setup` (in __init__.py) checks the marker on HA
+- The marker file (RESTART_MARKER_FILE) has two writers: the add-on's
+  fail-closed gate (a separate process that writes the path directly), and
+  the integration's `async_setup_entry` (in __init__.py) via `_write_marker`
+  when it enables OAuth mid-session — that same path also calls `create_issue`
+  to raise the Repair immediately.
+- Integration's `async_setup` (in __init__.py) also checks the marker on HA
   boot; if present, it calls `async_create_issue` with this domain's
   `oauth_restart_required` ID and `is_fixable=True` so the user sees
   a Repair card.
-- User clicks Submit on the repair card → this module's fix flow
-  deletes the marker, then calls the `homeassistant.restart` service.
+- User clicks Submit on the repair card → this module's fix flow calls the
+  `homeassistant.restart` service (blocking) WITHOUT clearing the marker, so
+  the Repair survives an aborted restart.
 - After HA restart, the addon's keep-alive re-creates the config entry,
   the new code's setup probes OAuth, deletes the marker (if still
   present), and the issue self-clears.
@@ -50,9 +58,14 @@ class OAuthRestartRepairFlow(RepairsFlow):
         self, user_input: dict[str, str] | None = None
     ) -> data_entry_flow.FlowResult:
         if user_input is not None:
-            await self.hass.async_add_executor_job(_clear_marker)
+            # Restart HA so the root OAuth views bind cleanly. blocking=True so a
+            # failed config check surfaces as a flow error instead of being
+            # swallowed — fire-and-forget would report success even when the
+            # restart never happened. Do NOT clear the marker here: if the
+            # restart aborts it must survive so the Repair persists; a successful
+            # restart's boot-time setup clears it once OAuth is actually live.
             await self.hass.services.async_call(
-                "homeassistant", "restart", {}, blocking=False
+                "homeassistant", "restart", {}, blocking=True
             )
             return self.async_create_entry(data={})
         return self.async_show_form(
@@ -127,9 +140,10 @@ def _delete_issue_only(hass: HomeAssistant, domain: str) -> None:
 
     Used by `async_setup_entry` after it has already cleared the marker
     via the executor — calling `clear_issue` here would do the executor
-    work twice. Kept separate from `clear_issue` so external callers
-    (start.py, fix flow) get the convenience of a single function that
-    does both.
+    work twice. `clear_issue` is the combined convenience wrapper (marker
+    + issue) kept for tests and any future in-process caller; neither
+    start.py (a separate process that manipulates the marker file directly
+    without importing repairs) nor the fix flow calls it.
     """
     ir.async_delete_issue(hass, domain, ISSUE_ID)
 
