@@ -1,0 +1,62 @@
+name: Webhook Proxy — Stable Guard
+
+# Stable is promote-only: a PR may not edit the stable webhook-proxy add-on
+# directly. The only exceptions are the promote workflow's own branches
+# (promote-webhook-proxy/*) and PRs explicitly tagged `allow-stable-edit`
+# (e.g. a stable-only hotfix).
+on:
+  pull_request:
+    paths:
+      - "homeassistant-addon-webhook-proxy/**"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard-stable-edits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Block direct stable edits outside the promote workflow
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "$BASE_REF"
+          CHANGED=$(git diff --name-only "origin/$BASE_REF...HEAD" \
+            -- homeassistant-addon-webhook-proxy/ || true)
+
+          if [ -z "$CHANGED" ]; then
+            echo "No changes under the stable add-on dir — nothing to guard."
+            exit 0
+          fi
+
+          # Exception 1: promote-workflow branches are allowed to edit stable.
+          case "$HEAD_REF" in
+            promote-webhook-proxy/*)
+              echo "Head branch '$HEAD_REF' is a promote branch — stable edits allowed."
+              exit 0
+              ;;
+          esac
+
+          # Exception 2: the PR carries the `allow-stable-edit` label.
+          if printf '%s' "$PR_LABELS" \
+            | python3 -c 'import json, sys; sys.exit(0 if "allow-stable-edit" in json.load(sys.stdin) else 1)'; then
+            echo "PR carries the 'allow-stable-edit' label — stable edits allowed."
+            exit 0
+          fi
+
+          echo "::error::This PR edits the STABLE webhook-proxy add-on directly:"
+          while IFS= read -r f; do
+            [ -n "$f" ] && echo "::error::  $f"
+          done <<< "$CHANGED"
+          echo "::error::Stable is promote-only. Run the 'Webhook Proxy — Promote Dev to"
+          echo "::error::Stable' workflow to sync dev -> stable, or add the 'allow-stable-edit'"
+          echo "::error::label if this stable-only edit is intentional (e.g. a hotfix)."
+          exit 1
