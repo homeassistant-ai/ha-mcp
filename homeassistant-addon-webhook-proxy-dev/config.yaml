@@ -1,4 +1,4 @@
-name: "Nabu Casa / Webhook Proxy for HA MCP (Dev)"
+name: "Nabu Casa - Webhook Proxy for HA MCP (Dev)"
 description: "DEV CHANNEL (unstable) — remote access proxy via Nabu Casa or any reverse proxy. Cannot run alongside the stable Webhook Proxy add-on."
 version: "1.2.2.dev1"
 slug: "ha_mcp_webhook_proxy_dev"
