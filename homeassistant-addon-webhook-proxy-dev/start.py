@@ -81,8 +81,17 @@ MCP_ADDON_EXACT_SLUGS = ["ha_mcp", "ha_mcp_dev"]
 # third-party slugs with a repo hash (e.g. "abc123_ha_mcp_webhook_proxy_dev"),
 # so we match by exact slug or "_<base>" suffix. The leading underscore in the
 # suffix keeps the stable base from matching a dev slug (which ends in "_dev").
+#
+# The refusal is deliberately UNCONDITIONAL: it fires whenever the sibling is
+# running, even if OAuth is off on both flavors (it does not track per-flavor
+# OAuth state). Simplicity and safety are chosen over precision — the only cost
+# of the broad guard is refusing a pair that happens not to collide today.
 SIBLING_SLUG_BASE = "ha_mcp_webhook_proxy"
 MUTEX_NOTIFICATION_ID = "mcp_proxy_dev_mutex"
+# The sibling flavor's own mutex notification id, dismissed on our clean start
+# so a stale "refused to start" banner it raised doesn't linger once the user
+# has resolved the conflict in this flavor's favor.
+SIBLING_MUTEX_NOTIFICATION_ID = "mcp_proxy_mutex"
 SIBLING_LABEL = "Webhook Proxy"
 
 
@@ -101,8 +110,30 @@ def _sibling_is_running(addons: list[dict], sibling_base: str) -> bool:
 def _refuse_if_sibling_running() -> bool:
     """Return True (caller must exit) if the sibling webhook-proxy add-on is
     running. Logs the reason and raises a self-clearing HA notification."""
-    data = _supervisor_get("/addons")
-    addons = data.get("addons", []) if data else []
+    # This guard protects a real root-route collision, so retry a few times on
+    # a transient Supervisor error (both add-ons booting at once, 10s API
+    # timeout) before giving up.
+    data = None
+    for attempt in range(3):
+        data = _supervisor_get("/addons")
+        if data is not None:
+            break
+        if attempt < 2:
+            time.sleep(2)
+    if data is None:
+        # Could not determine whether the sibling is running. Fail OPEN (start
+        # anyway) but LOUDLY — a silent bypass of this guard is worse than a
+        # noisy one. If both flavors do end up running with OAuth enabled, the
+        # second integration's OAuth view registration fails loudly, so this is
+        # a soft early guard, not the only backstop.
+        log_error(
+            "Could not query the Supervisor /addons list to check whether the "
+            f"'{SIBLING_LABEL}' add-on is running. Starting anyway, but if both "
+            "Webhook Proxy flavors run they collide on the OAuth /authorize and "
+            "/token routes — verify the other flavor is stopped."
+        )
+        return False
+    addons = data.get("addons", [])
     if not _sibling_is_running(addons, SIBLING_SLUG_BASE):
         return False
     log_error("=" * 70)
@@ -443,6 +474,36 @@ def _clear_regenerate_toggle(current_config: dict) -> bool:
     return _supervisor_post("/addons/self/options", {"options": new_options})
 
 
+def _atomic_write_0600(path: Path, data: bytes) -> bool:
+    """Write ``data`` to ``path`` with 0600, atomically and race-free.
+
+    Writes to a sibling temp file created 0600 (the mode is applied by the
+    ``open()`` syscall, so there is no chmod-after-write window), then
+    ``os.replace()``s it over ``path``. Because the replace is atomic and the
+    temp was 0600 from creation, ``path`` is never observable with the new
+    bytes at wider-than-0600 permissions — on first create OR on an
+    overwrite/regenerate. Returns True on success; returns False when the
+    filesystem can't honor a restricted-mode create (tmpfs / non-POSIX) so the
+    caller can fall back to a best-effort plain write and warn.
+    """
+    tmp = path.with_name(f"{path.name}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return True
+    except OSError:
+        return False
+
+
 def _resolve_oauth_creds(
     data_dir: Path, configured_id: str, configured_secret: str
 ) -> tuple[str, str]:
@@ -497,16 +558,17 @@ def _resolve_oauth_creds(
             creds_json = json.dumps(
                 {"client_id": final_id, "client_secret": final_secret}
             )
-            # Create with 0600 in the open() syscall so the creds never exist
-            # with wider permissions (a chmod-after-write race).
-            try:
-                fd = os.open(creds_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(creds_json)
-            except OSError:
-                # tmpfs / non-POSIX filesystems may not support mode bits — fall
-                # back to a plain write so the addon still works.
+            if not _atomic_write_0600(creds_file, creds_json.encode("utf-8")):
+                # Filesystem can't create with restricted mode (tmpfs /
+                # non-POSIX) — fall back to a plain write so the addon still
+                # works, but warn: the creds may be wider than 0600. (The
+                # sibling signing-key path warns on the same degradation.)
                 creds_file.write_text(creds_json)
+                log_error(
+                    f"Could not create the OAuth creds file with restricted "
+                    f"permissions at {creds_file}. The credentials may have "
+                    f"wider permissions than intended."
+                )
         except OSError as e:
             log_error(f"Failed to persist OAuth creds ({type(e).__name__}): {e}")
             return "", ""
@@ -1336,11 +1398,25 @@ def main() -> int:
     # the cleanup below instead of being killed mid-loop.
     shutdown_reason = _install_shutdown_handlers()
 
-    _ha_core_api(
-        "POST",
-        "/services/persistent_notification/dismiss",
-        {"notification_id": MUTEX_NOTIFICATION_ID},
-    )
+    # Clear any stale "refused to start" mutex banner from a prior blocked
+    # start — both our own id and the sibling's (the user may have resolved the
+    # conflict by keeping THIS flavor, leaving the sibling's banner up).
+    # persistent_notification/dismiss is a no-op for an absent id and returns a
+    # (non-None) result; a None result means a real HA API error, so surface it
+    # since a failed dismiss leaves a stale banner on a healthy add-on.
+    for _note_id in (MUTEX_NOTIFICATION_ID, SIBLING_MUTEX_NOTIFICATION_ID):
+        if (
+            _ha_core_api(
+                "POST",
+                "/services/persistent_notification/dismiss",
+                {"notification_id": _note_id},
+            )
+            is None
+        ):
+            log_error(
+                f"Could not dismiss the '{_note_id}' mutex notification; if a "
+                "'refused to start' banner is showing it may need manual dismissal."
+            )
 
     # Keep-alive loop. A short poll interval keeps inbound-log mirroring
     # responsive when "Log inbound requests" is on; the MCP-server health

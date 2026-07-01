@@ -147,6 +147,36 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
+def _atomic_write_0600(path: Path, data: bytes) -> bool:
+    """Write ``data`` to ``path`` with 0600, atomically and race-free.
+
+    Writes to a sibling temp file created 0600 (the mode is applied by the
+    ``open()`` syscall, so there is no chmod-after-write window), then
+    ``os.replace()``s it over ``path``. Because the replace is atomic and the
+    temp was 0600 from creation, ``path`` is never observable with the new
+    bytes at wider-than-0600 permissions — on first create OR on an
+    overwrite/regenerate. Returns True on success; returns False when the
+    filesystem can't honor a restricted-mode create (tmpfs / non-POSIX) so the
+    caller can fall back to a best-effort plain write and warn.
+    """
+    tmp = path.with_name(f"{path.name}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return True
+    except OSError:
+        return False
+
+
 def load_or_create_secret() -> bytes:
     """Persist a 32-byte signing secret across restarts.
 
@@ -174,24 +204,16 @@ def load_or_create_secret() -> bytes:
         )
     new_secret = secrets.token_bytes(32)
     SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
-    # Create the key file with 0600 in the open() syscall so there is no window
-    # where the secret exists with wider permissions (a chmod-after-write race).
-    try:
-        fd = os.open(SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(new_secret)
-    except OSError as e:
-        # Filesystem doesn't support mode bits (tmpfs / non-POSIX) — fall back
-        # to a plain write so the addon still works, but warn: the secret may
-        # end up world-readable in /config.
+    if not _atomic_write_0600(SECRET_FILE, new_secret):
+        # Filesystem can't create with restricted mode (tmpfs / non-POSIX) —
+        # fall back to a plain write so the addon still works, but warn: the
+        # secret may end up world-readable in /config.
         SECRET_FILE.write_bytes(new_secret)
         _LOGGER.warning(
             "MCP Proxy OAuth: could not create the signing key file with "
-            "restricted permissions at %s (%s: %s). The key may have wider "
-            "permissions than intended.",
+            "restricted permissions at %s. The key may have wider permissions "
+            "than intended.",
             SECRET_FILE,
-            type(e).__name__,
-            e,
         )
     return new_secret
 
