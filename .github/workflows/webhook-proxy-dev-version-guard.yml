@@ -5,6 +5,9 @@ on:
     paths:
       - "homeassistant-addon-webhook-proxy-dev/**"
 
+permissions:
+  contents: read
+
 jobs:
   require-version-bump:
     runs-on: ubuntu-latest
