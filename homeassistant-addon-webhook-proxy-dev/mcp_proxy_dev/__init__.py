@@ -17,6 +17,7 @@ by the proxy addon's startup script. No manual configuration is needed — the
 addon creates the config entry automatically via the HA API.
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -68,6 +69,13 @@ _LOG_WRITE_LOCK = threading.Lock()
 # the ownership marker must outlive the config entry too.
 OAUTH_ROUTE_OWNER_KEY = "webhook_proxy_oauth_route_owner"
 
+# Fingerprint of the OAuth identity (client id/secret + signing key) currently
+# bound to the root /authorize + /token views. Lets a mid-session credential
+# regeneration be detected: the bound views can't be re-registered until an HA
+# restart, so if the fingerprint changed we must prompt for one instead of
+# silently serving mismatched views. Same literal in both flavors.
+OAUTH_ROUTE_KEY_FINGERPRINT = "webhook_proxy_oauth_route_key_fingerprint"
+
 # ha-mcp generates a 22-char base64url token after `/private_`. We accept >=16
 # as a sanity floor — a truncated/corrupted ha-mcp config yields a shorter
 # token, which is the failure mode this length check exists to catch.
@@ -82,6 +90,19 @@ CONFIG_SCHEMA = vol.Schema(
     {vol.Optional(DOMAIN): vol.Any(None, dict)},
     extra=vol.ALLOW_EXTRA,
 )
+
+
+def _oauth_route_fingerprint(
+    client_id: str, client_secret: str, signing_key: bytes
+) -> str:
+    """Stable fingerprint of the OAuth identity bound to the root views."""
+    h = hashlib.sha256()
+    h.update(client_id.encode())
+    h.update(b"\0")
+    h.update(client_secret.encode())
+    h.update(b"\0")
+    h.update(signing_key)
+    return h.hexdigest()
 
 
 def _validate_target_url(target_url: str) -> tuple[bool, str]:
@@ -320,29 +341,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 signing_key=signing_key,
                 public_base_url=public_base_url,
             )
-            if route_owner == DOMAIN:
-                # Mid-session reload of our own entry: we already registered the
-                # root OAuth views earlier this HA session. HA can't drop or
-                # re-register root HTTP views mid-session, and the already-bound
-                # views use the same persisted signing key + creds, so they keep
-                # validating — re-registering would only pile up shadowed
-                # duplicate routes. OAuth is already live, so no restart is
-                # needed (oauth_restart_needed stays False).
+            fingerprint = _oauth_route_fingerprint(
+                client_id, client_secret, signing_key
+            )
+            bound_fp = hass.data.get(OAUTH_ROUTE_KEY_FINGERPRINT)
+            if route_owner == DOMAIN and bound_fp == fingerprint:
+                # Reload of our own entry with the SAME credentials + key: the
+                # root views are already bound and current. Reuse them (HA can't
+                # re-register mid-session; re-registering would only pile up
+                # shadowed duplicates). OAuth is live — no restart.
                 _LOGGER.debug(
-                    "MCP Proxy: root OAuth views already registered this "
-                    "session; reusing them (no re-register, no restart)."
+                    "MCP Proxy: root OAuth views already bound with the current "
+                    "credentials this session; reusing them (no restart)."
                 )
+            elif route_owner == DOMAIN:
+                # Reload of our own entry but the credentials/key CHANGED
+                # (regenerated) mid-session. HA can't re-bind the root views
+                # until a restart, so the live /authorize + /token still use the
+                # OLD identity while the webhook now expects the NEW one — clients
+                # can't obtain a token the webhook accepts. Surface the restart
+                # Repair; leave the stored fingerprint on the OLD (still-bound)
+                # value so a boot-time setup re-registers and updates it.
+                _LOGGER.warning(
+                    "MCP Proxy: OAuth credentials changed but the bound root "
+                    "views still use the previous ones — a Home Assistant "
+                    "restart is required to activate the new credentials."
+                )
+                oauth_restart_needed = True
             else:
+                # First registration this HA session.
                 oauth_provider.register_views()
-                # First registration this session — we now own the root OAuth
-                # routes. Record it so the sibling flavor fails loudly above
-                # instead of silently shadowing.
                 hass.data[OAUTH_ROUTE_OWNER_KEY] = DOMAIN
-                # HA binds the root /authorize + /token views cleanly only during
-                # startup. A first registration happening mid-session (the user
-                # just toggled OAuth on and the add-on reloaded the entry) isn't
-                # live until a full HA restart — flag it to surface the restart
-                # Repair below. At HA boot (is_running False) they bind cleanly.
+                hass.data[OAUTH_ROUTE_KEY_FINGERPRINT] = fingerprint
+                # A first registration happening mid-session isn't live until a
+                # full HA restart; flag it. At HA boot it binds cleanly.
                 oauth_restart_needed = hass.is_running
         except Exception as err:
             _LOGGER.exception(

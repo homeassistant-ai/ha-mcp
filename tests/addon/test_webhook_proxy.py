@@ -2306,24 +2306,36 @@ class TestOAuthRestartRepairTrigger:
         mock_write.assert_not_called()
 
     async def test_same_flavor_reload_reuses_views_no_restart(self, hass, tmp_path):
-        """Mid-session reload of OUR OWN entry (route owner already == DOMAIN,
-        is_running True): setup PROCEEDS without the sibling 'already owns'
-        raise, does NOT re-register the root views (HA can't re-bind them
-        mid-session), and clears any stale marker/issue instead of raising a
-        restart Repair — OAuth is already live. This is the FIX for the
-        spurious restart Repair on every benign mid-session reload."""
+        """Mid-session reload of OUR OWN entry with the SAME OAuth identity
+        (route owner already == DOMAIN AND the bound-view fingerprint matches
+        the current creds + signing key, is_running True): setup PROCEEDS
+        without the sibling 'already owns' raise, does NOT re-register the root
+        views (HA can't re-bind them mid-session), and clears any stale
+        marker/issue instead of raising a restart Repair — OAuth is already
+        live. This is the FIX for the spurious restart Repair on every benign
+        mid-session reload."""
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
         mod = _import_mcp_proxy(preload_oauth=oauth)
         repairs = _bind_repairs(mod, tmp_path)
         hass.is_running = True
-        # We already registered the root OAuth views earlier this session.
+        # Pin the signing key so the fingerprint of the bound views is
+        # computable, then seed a MATCHING fingerprint — the "reload with the
+        # same identity" case that must reuse the views without a restart.
+        fixed_key = b"k" * 32
+        creds = self._oauth_config()["oauth"]
+        # We already registered the root OAuth views earlier this session, bound
+        # to the SAME identity we're now reloading with.
         hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = mod.DOMAIN
+        hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = mod._oauth_route_fingerprint(
+            creds["client_id"], creds["client_secret"], fixed_key
+        )
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
         with (
             patch.object(mod, "_read_config", return_value=self._oauth_config()),
             patch.object(mod, "async_register"),
             patch.object(mod, "async_unregister") as mock_unreg,
             patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(oauth, "load_or_create_secret", return_value=fixed_key),
             patch.object(repairs, "create_issue") as mock_create_issue,
             patch.object(repairs, "_write_marker") as mock_write,
             patch.object(repairs, "_delete_issue_only") as mock_delete,
@@ -2338,13 +2350,68 @@ class TestOAuthRestartRepairTrigger:
         mock_unreg.assert_not_called()
         # The 4 root views are NOT re-registered on a same-flavor reload.
         assert hass.http.register_view.call_count == 0
-        # Ownership marker stays ours.
+        # Ownership marker + bound-view fingerprint stay ours (unchanged).
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
+        assert hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] == (
+            mod._oauth_route_fingerprint(
+                creds["client_id"], creds["client_secret"], fixed_key
+            )
+        )
         # No restart Repair: clear path taken (marker cleared, issue deleted).
         assert not repairs.RESTART_MARKER_FILE.exists()
         mock_delete.assert_called_once_with(hass, mod.DOMAIN)
         mock_create_issue.assert_not_called()
         mock_write.assert_not_called()
+
+    async def test_same_flavor_reload_creds_changed_raises_restart(
+        self, hass, tmp_path
+    ):
+        """Mid-session reload of OUR OWN entry after the OAuth creds/key were
+        REGENERATED (route owner == DOMAIN but the bound-view fingerprint no
+        longer matches the reloaded identity, is_running True): the live root
+        views still serve the OLD identity while the webhook now validates
+        against the NEW one, so no client can obtain a token the webhook
+        accepts. Setup must PROCEED (no 'already owns' raise), must NOT
+        re-register the root views (HA can't re-bind them mid-session), and must
+        take the restart path (write marker + create Repair, no clear) so the
+        user is prompted to restart HA to activate the new credentials — the
+        credential-regeneration bug this fixes."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        repairs = _bind_repairs(mod, tmp_path)
+        hass.is_running = True
+        # We own the routes, but the bound views were registered with a
+        # DIFFERENT (now-stale) identity than the creds we're reloading with.
+        hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = mod.DOMAIN
+        hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = "stale-fingerprint"
+        with (
+            patch.object(mod, "_read_config", return_value=self._oauth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_clear_marker") as mock_clear,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            # _write_marker runs for real, writing the redirected tmp marker.
+            result = await mod.async_setup_entry(hass, MagicMock())
+
+        # Setup proceeded (no "already owns" raise); provider stored, webhook
+        # NOT torn down.
+        assert result is True
+        assert hass.data[mod.DOMAIN]["oauth"] is not None
+        mock_unreg.assert_not_called()
+        # The root views are NOT re-registered (HA can't re-bind mid-session).
+        assert hass.http.register_view.call_count == 0
+        # Ownership marker stays ours; the stale fingerprint is left in place so
+        # a later boot-time setup re-registers and refreshes it.
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
+        assert hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] == "stale-fingerprint"
+        # Restart Repair path: marker written + issue created, clear NOT taken.
+        assert repairs.RESTART_MARKER_FILE.exists()
+        mock_create_issue.assert_called_once_with(hass, mod.DOMAIN)
+        mock_clear.assert_not_called()
+        mock_delete.assert_not_called()
 
 
 class TestOAuthWebhookHandler:
