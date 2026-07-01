@@ -257,6 +257,10 @@ jobs:
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
+          # Feeds conftest's HACS token injection (qcow2 pre-boot edit)
+          # so HACS repo adds don't hit the unauthenticated shared-IP
+          # GitHub rate limit — the recurring HACS-install flake.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HA diagnostics from booted qcow2 (always)
         # First lists what's actually present in /supervisor/homeassistant
