@@ -494,13 +494,19 @@ def _resolve_oauth_creds(
     if needs_write:
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
-            creds_file.write_text(
-                json.dumps({"client_id": final_id, "client_secret": final_secret})
+            creds_json = json.dumps(
+                {"client_id": final_id, "client_secret": final_secret}
             )
+            # Create with 0600 in the open() syscall so the creds never exist
+            # with wider permissions (a chmod-after-write race).
             try:
-                creds_file.chmod(0o600)
+                fd = os.open(creds_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(creds_json)
             except OSError:
-                pass  # tmpfs / non-POSIX filesystems may not support chmod
+                # tmpfs / non-POSIX filesystems may not support mode bits — fall
+                # back to a plain write so the addon still works.
+                creds_file.write_text(creds_json)
         except OSError as e:
             log_error(f"Failed to persist OAuth creds ({type(e).__name__}): {e}")
             return "", ""

@@ -12,6 +12,13 @@
   register the same root OAuth `/authorize` and `/token` routes, so only one may run at a
   time; the add-on now logs a clear error and raises a notification instead of colliding.
 
+### Fixed
+
+- Harden OAuth setup: create the signing-key and credential files with `0600` in the
+  `open()` syscall (closing a brief chmod-after-write race), unregister the webhook if
+  OAuth setup fails so no dangling registration is left behind, and defensively reject a
+  non-object JWT payload instead of raising `AttributeError`.
+
 
 ## v1.2.2 (2026-06-29)
 

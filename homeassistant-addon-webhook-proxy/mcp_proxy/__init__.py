@@ -263,6 +263,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         client_id = str(oauth_section.get("client_id", ""))
         client_secret = str(oauth_section.get("client_secret", ""))
         if not client_id or not client_secret:
+            async_unregister(hass, webhook_id)
             await session.close()
             raise ConfigEntryError(
                 "OAuth was enabled in the addon but client_id and/or "
@@ -292,6 +293,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "MCP Proxy: failed to initialise OAuth provider (%s)",
                 type(err).__name__,
             )
+            async_unregister(hass, webhook_id)
             await session.close()
             raise ConfigEntryError(
                 f"Failed to enable OAuth on the MCP webhook: {err}. "

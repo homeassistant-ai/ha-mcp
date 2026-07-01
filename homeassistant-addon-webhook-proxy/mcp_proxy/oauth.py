@@ -30,6 +30,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -173,16 +174,21 @@ def load_or_create_secret() -> bytes:
         )
     new_secret = secrets.token_bytes(32)
     SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SECRET_FILE.write_bytes(new_secret)
+    # Create the key file with 0600 in the open() syscall so there is no window
+    # where the secret exists with wider permissions (a chmod-after-write race).
     try:
-        SECRET_FILE.chmod(0o600)
+        fd = os.open(SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(new_secret)
     except OSError as e:
-        # Filesystem doesn't support chmod (tmpfs / non-POSIX) — secret
-        # ends up world-readable in /config. Warn so an operator with an
-        # unusual /config mount knows the HMAC key isn't perm-restricted.
+        # Filesystem doesn't support mode bits (tmpfs / non-POSIX) — fall back
+        # to a plain write so the addon still works, but warn: the secret may
+        # end up world-readable in /config.
+        SECRET_FILE.write_bytes(new_secret)
         _LOGGER.warning(
-            "MCP Proxy OAuth: could not chmod 0600 the signing key file "
-            "at %s (%s: %s). The key may have wider permissions than intended.",
+            "MCP Proxy OAuth: could not create the signing key file with "
+            "restricted permissions at %s (%s: %s). The key may have wider "
+            "permissions than intended.",
             SECRET_FILE,
             type(e).__name__,
             e,
@@ -336,6 +342,8 @@ class OAuthProvider:
         try:
             payload = json.loads(_b64url_decode(body))
         except (ValueError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
             return False
         if payload.get("kind") != expected_kind:
             return False
