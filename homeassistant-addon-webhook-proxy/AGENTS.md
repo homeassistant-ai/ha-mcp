@@ -52,3 +52,13 @@ When the dev flavor is ready to become stable:
 4. Set `boot: auto`, drop `stage: experimental`, remove the `(Dev)` display-name
    suffixes.
 5. Bump stable's own `config.yaml` + `manifest.json` version (its independent line).
+
+## Testing
+`tests/addon/test_webhook_proxy.py` is parametrized over BOTH flavors — an autouse
+`_webhook_proxy_variant` fixture rebinds `PROXY_ADDON_DIR`/`CURRENT`, so every test runs
+once as `[stable]` and once as `[dev]`. CI runs `tests/addon/`, so the dev code is
+exercised on every PR — that is what makes it safe to develop on the dev flavor before
+promoting. When you add a variant-specific value, add it to the `WEBHOOK_PROXY_VARIANTS`
+table rather than hard-coding it in a test. `tests/src/unit/test_webhook_proxy_dev_isolation.py`
+separately guards the rename (no bare `mcp_proxy` token in the dev tree) and the dev-side
+mutual-exclusion constants.
