@@ -12,7 +12,7 @@ COPY mcp_proxy /opt/mcp_proxy
 ARG BUILD_VERSION
 ARG BUILD_ARCH
 LABEL \
-    io.hass.name="Nabu Casa / Webhook Proxy for HA MCP" \
+    io.hass.name="Nabu Casa - Webhook Proxy for HA MCP" \
     io.hass.description="Remote access proxy for HA MCP via webhook" \
     io.hass.version="${BUILD_VERSION}" \
     io.hass.type="addon" \
