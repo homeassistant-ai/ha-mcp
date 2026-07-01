@@ -44,7 +44,9 @@ def replace_placeholders(value: Any, replacements: dict[str, str]) -> Any:
     if isinstance(value, list):
         return [replace_placeholders(item, replacements) for item in value]
     if isinstance(value, dict):
-        return {key: replace_placeholders(item, replacements) for key, item in value.items()}
+        return {
+            key: replace_placeholders(item, replacements) for key, item in value.items()
+        }
     return value
 
 
@@ -61,10 +63,12 @@ def main() -> int:
     rendered_json = json.dumps(rendered, indent=2)
 
     if "{{" in rendered_json:
-        unresolved = sorted({
-            fragment.split("}}", maxsplit=1)[0] + "}}"
-            for fragment in rendered_json.split("{{")[1:]
-        })
+        unresolved = sorted(
+            {
+                fragment.split("}}", maxsplit=1)[0] + "}}"
+                for fragment in rendered_json.split("{{")[1:]
+            }
+        )
         raise ValueError(f"Unresolved manifest placeholders: {', '.join(unresolved)}")
 
     output_path.write_text(rendered_json + "\n", encoding="utf-8")

@@ -257,6 +257,10 @@ jobs:
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
+          # Feeds conftest's HACS token injection (qcow2 pre-boot edit)
+          # so HACS repo adds don't hit the unauthenticated shared-IP
+          # GitHub rate limit — the recurring HACS-install flake.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HA diagnostics from booted qcow2 (always)
         # First lists what's actually present in /supervisor/homeassistant
@@ -289,6 +293,11 @@ jobs:
           ls -la /tmp/haos-diagnostics/ || true
           echo '--- config dir listing ---'
           cat /tmp/haos-diagnostics/config-dir-listing.txt || true
+          # The HACS token injection (conftest pre-boot edit) puts GITHUB_TOKEN
+          # into core.config_entries inside the extracted storage.tar. Redact
+          # it (fail-closed: an unredactable tar is deleted) so no credential
+          # persists into the downloadable artifact.
+          python3 scripts/redact_diagnostics_secrets.py /tmp/haos-diagnostics
 
       - name: Upload HAOS diagnostics
         if: always()

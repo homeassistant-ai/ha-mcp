@@ -10,7 +10,9 @@ from pathlib import Path
 
 from jsonschema import validate
 
-SCHEMA_URL = "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json"
+SCHEMA_URL = (
+    "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json"
+)
 
 
 def fetch_schema(url: str) -> dict:
@@ -33,7 +35,9 @@ def load_manifest(path: Path) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("manifest", type=Path, help="Path to the server manifest JSON file")
+    parser.add_argument(
+        "manifest", type=Path, help="Path to the server manifest JSON file"
+    )
     parser.add_argument(
         "--schema-url",
         default=SCHEMA_URL,
