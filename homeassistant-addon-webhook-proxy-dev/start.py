@@ -77,7 +77,7 @@ MCP_ADDON_EXACT_SLUGS = ["ha_mcp", "ha_mcp_dev"]
 # fully isolated (separate domain, files, /data), but they must never run at the
 # same time. On startup each refuses if its sibling is already running.
 #
-# This is the STABLE flavor: its sibling is the dev add-on. Supervisor prefixes
+# This is the DEV flavor: its sibling is the stable add-on. Supervisor prefixes
 # third-party slugs with a repo hash (e.g. "abc123_ha_mcp_webhook_proxy_dev"),
 # so we match by exact slug or "_<base>" suffix. The leading underscore in the
 # suffix keeps the stable base from matching a dev slug (which ends in "_dev").
@@ -86,13 +86,13 @@ MCP_ADDON_EXACT_SLUGS = ["ha_mcp", "ha_mcp_dev"]
 # running, even if OAuth is off on both flavors (it does not track per-flavor
 # OAuth state). Simplicity and safety are chosen over precision — the only cost
 # of the broad guard is refusing a pair that happens not to collide today.
-SIBLING_SLUG_BASE = "ha_mcp_webhook_proxy_dev"
-MUTEX_NOTIFICATION_ID = "mcp_proxy_mutex"
+SIBLING_SLUG_BASE = "ha_mcp_webhook_proxy"
+MUTEX_NOTIFICATION_ID = "mcp_proxy_dev_mutex"
 # The sibling flavor's own mutex notification id, dismissed on our clean start
 # so a stale "refused to start" banner it raised doesn't linger once the user
 # has resolved the conflict in this flavor's favor.
-SIBLING_MUTEX_NOTIFICATION_ID = "mcp_proxy_dev_mutex"
-SIBLING_LABEL = "Webhook Proxy (Dev)"
+SIBLING_MUTEX_NOTIFICATION_ID = "mcp_proxy_mutex"
+SIBLING_LABEL = "Webhook Proxy"
 
 
 def _sibling_is_running(addons: list[dict], sibling_base: str) -> bool:
@@ -164,13 +164,13 @@ def _refuse_if_sibling_running() -> bool:
     return True
 
 
-# Inbound-request mirror file. The mcp_proxy integration (which runs inside
+# Inbound-request mirror file. The mcp_proxy_dev integration (which runs inside
 # Home Assistant, where the webhook actually executes) appends each inbound
 # debug line here when "Log inbound requests" is on; this addon tails the file
 # and echoes new lines to its own log so they're visible in the addon log too,
 # not only in Settings -> System -> Logs. Path kept in sync with
-# mcp_proxy/__init__.py:INBOUND_LOG_FILE.
-INBOUND_LOG_FILE = Path("/config/.mcp_proxy_inbound.log")
+# mcp_proxy_dev/__init__.py:INBOUND_LOG_FILE.
+INBOUND_LOG_FILE = Path("/config/.mcp_proxy_dev_inbound.log")
 
 
 def _supervisor_get(path: str) -> dict | None:
@@ -615,9 +615,9 @@ def _read_integration_domain() -> str | None:
     """Read the integration's domain from the source manifest.
 
     Used by the OAuth probe to construct the metadata URL without
-    hard-coding `mcp_proxy` here.
+    hard-coding `mcp_proxy_dev` here.
     """
-    src_manifest = Path("/opt/mcp_proxy/manifest.json")
+    src_manifest = Path("/opt/mcp_proxy_dev/manifest.json")
     try:
         domain = json.loads(src_manifest.read_text()).get("domain")
     except (OSError, json.JSONDecodeError) as e:
@@ -660,7 +660,7 @@ def _probe_oauth_active(attempts: int = 3, delay: int = 2) -> bool:
 
 
 def _install_integration() -> IntegrationInstall:
-    """Install/update the mcp_proxy custom component into HA config dir.
+    """Install/update the mcp_proxy_dev custom component into HA config dir.
 
     `first_install` is True when the integration directory didn't exist
     (fresh setup, full HA restart required to load it).
@@ -673,11 +673,11 @@ def _install_integration() -> IntegrationInstall:
     "restart required" notification, which is reserved for genuine
     version bumps.
     """
-    src = Path("/opt/mcp_proxy")
-    dst = Path("/config/custom_components/mcp_proxy")
+    src = Path("/opt/mcp_proxy_dev")
+    dst = Path("/config/custom_components/mcp_proxy_dev")
 
     if not src.exists():
-        log_error("Integration source not found at /opt/mcp_proxy")
+        log_error("Integration source not found at /opt/mcp_proxy_dev")
         return IntegrationInstall(False, False)
 
     Path("/config/custom_components").mkdir(parents=True, exist_ok=True)
@@ -711,27 +711,27 @@ def _install_integration() -> IntegrationInstall:
         if dst.exists():
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
-        log_info("Installed mcp_proxy integration")
+        log_info("Installed mcp_proxy_dev integration")
     else:
-        log_info("mcp_proxy integration up to date")
+        log_info("mcp_proxy_dev integration up to date")
 
     return IntegrationInstall(first_install, version_changed)
 
 
 def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
-    """Ensure a config entry exists for mcp_proxy. Creates one if missing."""
+    """Ensure a config entry exists for mcp_proxy_dev. Creates one if missing."""
     for attempt in range(1, retries + 1):
         entries = _ha_core_api("GET", "/config/config_entries/entry")
         if entries is not None:
             for entry in entries:
-                if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
-                    log_info("mcp_proxy config entry exists")
+                if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy_dev":
+                    log_info("mcp_proxy_dev config entry exists")
                     return True
 
             # Create via config flow
             log_info(f"Creating config entry (attempt {attempt}/{retries})...")
             flow = _ha_core_api(
-                "POST", "/config/config_entries/flow", {"handler": "mcp_proxy"}
+                "POST", "/config/config_entries/flow", {"handler": "mcp_proxy_dev"}
             )
             if flow is None:
                 if attempt < retries:
@@ -763,20 +763,20 @@ def _ensure_config_entry(retries: int = 5, delay: int = 10) -> bool:
 
 
 def _remove_config_entry() -> None:
-    """Remove the mcp_proxy config entry if it exists."""
+    """Remove the mcp_proxy_dev config entry if it exists."""
     entries = _ha_core_api("GET", "/config/config_entries/entry")
     if entries is None:
         return
     for entry in entries:
-        if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
+        if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy_dev":
             eid = entry.get("entry_id")
             if eid:
                 _ha_core_api("DELETE", f"/config/config_entries/entry/{eid}")
-                log_info("Removed mcp_proxy config entry")
+                log_info("Removed mcp_proxy_dev config entry")
 
 
 def _reload_config_entry() -> None:
-    """Reload the mcp_proxy config entry so it picks up the latest config file.
+    """Reload the mcp_proxy_dev config entry so it picks up the latest config file.
 
     If the entry was loaded during HA boot (before this addon wrote the config),
     async_setup_entry would have found no config and skipped webhook registration.
@@ -786,14 +786,14 @@ def _reload_config_entry() -> None:
     if entries is None:
         return
     for entry in entries:
-        if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
+        if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy_dev":
             eid = entry.get("entry_id")
             if eid:
                 result = _ha_core_api(
                     "POST", f"/config/config_entries/entry/{eid}/reload"
                 )
                 if result is not None:
-                    log_info("Reloaded mcp_proxy config entry")
+                    log_info("Reloaded mcp_proxy_dev config entry")
                 else:
                     log_info("Config entry reload returned no response (may be OK)")
                 return
@@ -845,7 +845,7 @@ def _wait_for_ha_restart(poll_interval: int = 10, timeout: int = 600) -> None:
         # Check if integration already loaded (user restarted fast)
         if isinstance(result, list):
             for entry in result:
-                if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy":
+                if isinstance(entry, dict) and entry.get("domain") == "mcp_proxy_dev":
                     log_info("Integration already loaded — HA must have restarted")
                     return
         time.sleep(poll_interval)
@@ -959,8 +959,8 @@ def _shutdown_cleanup(reason: str | None) -> None:
     start needs no HA restart), and drop the inbound mirror file.
 
     On full uninstall the user may still need to manually remove
-    /config/custom_components/mcp_proxy/, /config/.mcp_proxy_config.json, and
-    /config/.mcp_proxy_inbound.log, then restart HA."""
+    /config/custom_components/mcp_proxy_dev/, /config/.mcp_proxy_dev_config.json, and
+    /config/.mcp_proxy_dev_inbound.log, then restart HA."""
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, signal.SIG_DFL)
     log_info(f"Shutting down (reason: {reason or 'unknown'})...")
@@ -1051,7 +1051,7 @@ def main() -> int:
                             "the toggle back to OFF in the addon "
                             "configuration and start the addon again."
                         ),
-                        "notification_id": "mcp_proxy_regen_stuck",
+                        "notification_id": "mcp_proxy_dev_regen_stuck",
                     },
                 )
                 return 1
@@ -1108,7 +1108,7 @@ def main() -> int:
     webhook_id = _get_or_create_webhook_id(data_dir)
     webhook_path = f"/api/webhook/{webhook_id}"
 
-    # Write proxy config for the mcp_proxy integration. The OFF (no-OAuth)
+    # Write proxy config for the mcp_proxy_dev integration. The OFF (no-OAuth)
     # path writes exactly the same two keys that v1.0.2 wrote — no extra
     # fields, no shape change. The new keys (`public_base_url`, `oauth`)
     # are only added when OAuth is enabled, so existing users who don't
@@ -1131,14 +1131,14 @@ def main() -> int:
     # who leave it off.
     if debug_logging:
         proxy_config["debug_logging"] = True
-    proxy_config_file = Path("/config/.mcp_proxy_config.json")
+    proxy_config_file = Path("/config/.mcp_proxy_dev_config.json")
     try:
         proxy_config_file.write_text(json.dumps(proxy_config))
     except OSError as e:
         log_error(f"Failed to write proxy config: {e}")
         return 1
 
-    # Install the mcp_proxy custom component
+    # Install the mcp_proxy_dev custom component
     first_install, version_changed = _install_integration()
 
     if version_changed:
@@ -1150,7 +1150,7 @@ def main() -> int:
         log_info("")
         log_info("*" * 60)
         log_info("  INTEGRATION UPDATED — restart Home Assistant to load")
-        log_info("  the new mcp_proxy code. The addon will keep running")
+        log_info("  the new mcp_proxy_dev code. The addon will keep running")
         log_info("  with the previous version's code until then.")
         log_info("*" * 60)
         log_info("")
@@ -1166,7 +1166,7 @@ def main() -> int:
                     "takes effect. The webhook keeps working in the "
                     "meantime with the previous version."
                 ),
-                "notification_id": "mcp_proxy_update",
+                "notification_id": "mcp_proxy_dev_update",
             },
         )
 
@@ -1183,7 +1183,7 @@ def main() -> int:
                     "Go to **Settings → System → Restart**. "
                     "The proxy will finish setup automatically after restart."
                 ),
-                "notification_id": "mcp_proxy_restart",
+                "notification_id": "mcp_proxy_dev_restart",
             },
         )
         log_info("")
@@ -1217,7 +1217,7 @@ def main() -> int:
                         "and re-add the MCP Webhook Proxy integration "
                         "from Settings → Devices & Services."
                     ),
-                    "notification_id": "mcp_proxy_setup_failed",
+                    "notification_id": "mcp_proxy_dev_setup_failed",
                 },
             )
         else:
@@ -1225,7 +1225,7 @@ def main() -> int:
             _ha_core_api(
                 "POST",
                 "/services/persistent_notification/dismiss",
-                {"notification_id": "mcp_proxy_restart"},
+                {"notification_id": "mcp_proxy_dev_restart"},
             )
             log_info("Setup completed after HA restart")
     else:
@@ -1249,7 +1249,7 @@ def main() -> int:
                         "MCP Webhook Proxy integration from "
                         "Settings → Devices & Services."
                     ),
-                    "notification_id": "mcp_proxy_setup_failed",
+                    "notification_id": "mcp_proxy_dev_setup_failed",
                 },
             )
         else:
@@ -1261,7 +1261,7 @@ def main() -> int:
             _ha_core_api(
                 "POST",
                 "/services/persistent_notification/dismiss",
-                {"notification_id": "mcp_proxy_restart"},
+                {"notification_id": "mcp_proxy_dev_restart"},
             )
 
     # OAuth fail-closed gate. If the user enabled OAuth but the integration
@@ -1272,8 +1272,8 @@ def main() -> int:
     # If absent, unregister the webhook so the URL stops working entirely
     # until HA is restarted, and tell the user loudly.
     # Path to the marker file that the integration's repairs flow watches.
-    # Kept in sync with `mcp_proxy/repairs.py:RESTART_MARKER_FILE`.
-    oauth_restart_marker = Path("/config/.mcp_proxy_oauth_restart_required")
+    # Kept in sync with `mcp_proxy_dev/repairs.py:RESTART_MARKER_FILE`.
+    oauth_restart_marker = Path("/config/.mcp_proxy_dev_oauth_restart_required")
 
     if enable_oauth and not _probe_oauth_active():
         log_error("")
@@ -1314,7 +1314,7 @@ def main() -> int:
                     "Restart**); the webhook will reactivate "
                     "automatically once HA comes back up."
                 ),
-                "notification_id": "mcp_proxy_oauth_stale",
+                "notification_id": "mcp_proxy_dev_oauth_stale",
             },
         )
         # Wait for HA to restart, then re-create the config entry. With
@@ -1331,7 +1331,7 @@ def main() -> int:
             _ha_core_api(
                 "POST",
                 "/services/persistent_notification/dismiss",
-                {"notification_id": "mcp_proxy_oauth_stale"},
+                {"notification_id": "mcp_proxy_dev_oauth_stale"},
             )
             # Marker is the integration's signal — the integration's
             # `async_setup_entry` will already delete it on its own next
@@ -1377,7 +1377,7 @@ def main() -> int:
                         "it. If the problem persists, file a bug "
                         "report with the addon log."
                     ),
-                    "notification_id": "mcp_proxy_oauth_stuck",
+                    "notification_id": "mcp_proxy_dev_oauth_stuck",
                 },
             )
 

@@ -43,7 +43,7 @@ from homeassistant.helpers import issue_registry as ir
 _LOGGER = logging.getLogger(__name__)
 
 ISSUE_ID = "oauth_restart_required"
-RESTART_MARKER_FILE = Path("/config/.mcp_proxy_oauth_restart_required")
+RESTART_MARKER_FILE = Path("/config/.mcp_proxy_dev_oauth_restart_required")
 
 
 class OAuthRestartRepairFlow(RepairsFlow):

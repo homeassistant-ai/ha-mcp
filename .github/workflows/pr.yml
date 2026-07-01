@@ -186,7 +186,7 @@ jobs:
       run: uv sync --dev
 
     - name: Run ruff check
-      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ scripts/
+      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ scripts/
 
     - name: Run ruff format check on changed Python files
       run: |
@@ -250,6 +250,7 @@ jobs:
       run: |
         uv run mypy src/ custom_components/ homeassistant-addon/ scripts/
         uv run mypy homeassistant-addon-webhook-proxy/
+        uv run mypy homeassistant-addon-webhook-proxy-dev/
 
   # Fast unit tests (no Docker, no HA instance needed)
   unit-tests:

@@ -18,7 +18,7 @@ the addon. The consent screen displays the requesting redirect_uri so the
 user can verify they're authorizing the connector they meant to.
 
 Tokens are signed (HMAC-SHA256) with a per-install secret persisted at
-/config/.mcp_proxy_oauth_secret. They contain enough state to validate
+/config/.mcp_proxy_dev_oauth_secret. They contain enough state to validate
 without a server-side store, so the integration survives restarts.
 """
 
@@ -45,7 +45,7 @@ from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
-OAUTH_BASE = "/api/mcp_proxy/oauth"
+OAUTH_BASE = "/api/mcp_proxy_dev/oauth"
 # Authorize/token endpoints live at the root rather than under
 # OAUTH_BASE because Claude.ai (and apparently other MCP clients)
 # construct the authorize URL as `<host>/authorize` from the resource
@@ -54,7 +54,7 @@ OAUTH_BASE = "/api/mcp_proxy/oauth"
 # is the only way to actually catch the redirect.
 AUTHORIZE_PATH = "/authorize"
 TOKEN_PATH = "/token"
-SECRET_FILE = Path("/config/.mcp_proxy_oauth_secret")
+SECRET_FILE = Path("/config/.mcp_proxy_dev_oauth_secret")
 
 ACCESS_TOKEN_TTL = 60 * 60  # 1 hour
 REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60  # 30 days
@@ -480,7 +480,7 @@ class ProtectedResourceMetadataView(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/protected-resource"
-    name = "mcp_proxy:oauth:protected-resource"
+    name = "mcp_proxy_dev:oauth:protected-resource"
 
     def __init__(self, provider: OAuthProvider) -> None:
         self._provider = provider
@@ -507,7 +507,7 @@ class AuthorizationServerMetadataView(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/authorization-server"
-    name = "mcp_proxy:oauth:authorization-server"
+    name = "mcp_proxy_dev:oauth:authorization-server"
 
     def __init__(self, provider: OAuthProvider) -> None:
         self._provider = provider
@@ -539,7 +539,7 @@ class AuthorizeView(HomeAssistantView):
 
     requires_auth = False
     url = AUTHORIZE_PATH
-    name = "mcp_proxy:oauth:authorize"
+    name = "mcp_proxy_dev:oauth:authorize"
 
     def __init__(self, provider: OAuthProvider) -> None:
         self._provider = provider
@@ -677,7 +677,7 @@ class TokenView(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
     url = TOKEN_PATH
-    name = "mcp_proxy:oauth:token"
+    name = "mcp_proxy_dev:oauth:token"
 
     def __init__(self, provider: OAuthProvider) -> None:
         self._provider = provider

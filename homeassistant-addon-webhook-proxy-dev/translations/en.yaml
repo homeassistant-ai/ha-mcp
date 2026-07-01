@@ -76,7 +76,7 @@ configuration:
     description: |
       Logs every request that reaches this webhook. The lines appear in this
       addon's own log (below) AND in the Home Assistant log (Settings ->
-      System -> Logs, filter for "mcp_proxy"). The webhook is served inside
+      System -> Logs, filter for "mcp_proxy_dev"). The webhook is served inside
       Home Assistant rather than this addon, so the integration logs each
       request there and the addon mirrors those lines into this log. Each line
       shows the method, a masked webhook path, the source address, whether an

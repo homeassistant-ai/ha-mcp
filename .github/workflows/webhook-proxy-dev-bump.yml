@@ -1,0 +1,72 @@
+name: Webhook Proxy Dev — Bump Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Which part to bump"
+        type: choice
+        default: dev
+        options: [dev, patch, minor, major]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump dev version in config.yaml + manifest.json (in lockstep)
+        env:
+          LEVEL: ${{ inputs.level }}
+        run: |
+          set -euo pipefail
+          python3 - "$LEVEL" <<'PY'
+          import json, re, sys, pathlib
+          level = sys.argv[1]
+          cfg = pathlib.Path("homeassistant-addon-webhook-proxy-dev/config.yaml")
+          man = pathlib.Path("homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/manifest.json")
+
+          text = cfg.read_text()
+          cur = re.search(r'^version:\s*"([^"]+)"', text, re.M).group(1)
+          m = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+))?$", cur)
+          if not m:
+              sys.exit(f"unparseable version: {cur!r}")
+          major, minor, patch = int(m[1]), int(m[2]), int(m[3])
+          dev = int(m[4]) if m[4] is not None else 0
+
+          if level == "dev":
+              new = f"{major}.{minor}.{patch}.dev{dev + 1}"
+          elif level == "patch":
+              new = f"{major}.{minor}.{patch + 1}.dev1"
+          elif level == "minor":
+              new = f"{major}.{minor + 1}.0.dev1"
+          else:
+              new = f"{major + 1}.0.0.dev1"
+
+          cfg.write_text(re.sub(r'^version:\s*"[^"]+"', f'version: "{new}"', text, count=1, flags=re.M))
+          data = json.loads(man.read_text())
+          data["version"] = new
+          man.write_text(json.dumps(data, indent=2) + "\n")
+          print(f"bumped {cur} -> {new}")
+          PY
+      - name: Commit on a branch and open a PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          NEW=$(python3 -c 'import re;print(re.search(r"^version:\s*\"([^\"]+)\"",open("homeassistant-addon-webhook-proxy-dev/config.yaml").read(),re.M).group(1))')
+          BRANCH="chore/webhook-proxy-dev-bump-$NEW"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add homeassistant-addon-webhook-proxy-dev/config.yaml \
+                  homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/manifest.json
+          git commit -m "chore(addon-dev): bump webhook-proxy-dev to $NEW"
+          git push -u origin "$BRANCH"
+          gh pr create --draft --base "$BASE_REF" --head "$BRANCH" \
+            --title "chore(addon-dev): bump webhook-proxy-dev to $NEW" \
+            --body "Manual dev version bump to \`$NEW\` (triggered via workflow_dispatch)."

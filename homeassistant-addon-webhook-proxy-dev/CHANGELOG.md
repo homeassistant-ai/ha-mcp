@@ -2,33 +2,11 @@
 
 <!-- version list -->
 
-
-## v1.2.3 (2026-07-01)
-
-### Added
-
-- Refuse to start when the other Webhook Proxy flavor is already running (stable refuses
-  if the dev add-on `ha_mcp_webhook_proxy_dev` is running, and vice versa). Both flavors
-  register the same root OAuth `/authorize` and `/token` routes, so only one may run at a
-  time; the add-on now logs a clear error and raises a notification instead of colliding.
-- Fail the OAuth integration setup loudly (a clear `ConfigEntryError`) if the other flavor
-  already owns the root `/authorize` and `/token` views in this Home Assistant instance,
-  instead of silently shadowing them — Home Assistant keeps those views bound until it
-  restarts, even after the other add-on is stopped.
-- Prompt for a Home Assistant restart when OAuth is enabled. Enabling OAuth needs a full
-  HA restart to bind the root `/authorize`/`/token` views (restarting the add-on is not
-  enough), so the integration now raises a Repair with a click-to-restart button and the
-  option text says so. Disabling OAuth needs no restart.
-
-### Fixed
-
-- Correct the inbound-request debug-logging startup message: it claimed requests are
-  logged to Home Assistant's log "NOT this addon log", but they are now mirrored into the
-  add-on log too.
-- Harden OAuth setup: create the signing-key and credential files with `0600` in the
-  `open()` syscall (closing a brief chmod-after-write race), unregister the webhook if
-  OAuth setup fails so no dangling registration is left behind, and defensively reject a
-  non-object JWT payload instead of raising `AttributeError`.
+<!--
+Dev channel: forked from the stable Webhook Proxy add-on at v1.2.2 and versioned
+independently (1.2.2.dev1, 1.2.2.dev2, …). The entries below are inherited stable
+history from before the fork.
+-->
 
 
 ## v1.2.2 (2026-06-29)

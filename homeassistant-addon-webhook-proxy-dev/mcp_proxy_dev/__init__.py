@@ -12,7 +12,7 @@ lazy-imports `oauth.py` to register the OAuth 2.1 endpoints + bearer-token
 gate. When the toggle is off, no OAuth code is loaded and the proxy behaves
 exactly like the original unauthenticated webhook.
 
-Configuration is read from /config/.mcp_proxy_config.json, which is written
+Configuration is read from /config/.mcp_proxy_dev_config.json, which is written
 by the proxy addon's startup script. No manual configuration is needed — the
 addon creates the config entry automatically via the HA API.
 """
@@ -45,14 +45,14 @@ _LOGGER = logging.getLogger(__name__)
 # must survive a config-entry reload, during which hass.data[DOMAIN] is gone.
 _LOGGER_LEVEL_RAISED = False
 
-DOMAIN = "mcp_proxy"
-CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
+DOMAIN = "mcp_proxy_dev"
+CONFIG_FILE = Path("/config/.mcp_proxy_dev_config.json")
 
 # Inbound-request mirror file. When "Log inbound requests" is on we append each
 # inbound debug line here in addition to logging it to Home Assistant, so the
 # Webhook Proxy addon (a separate process) can tail it and surface the same
 # lines in the addon log. Path kept in sync with start.py:INBOUND_LOG_FILE.
-INBOUND_LOG_FILE = Path("/config/.mcp_proxy_inbound.log")
+INBOUND_LOG_FILE = Path("/config/.mcp_proxy_dev_inbound.log")
 # Cap the mirror file so it can't grow without bound; trim to the last half
 # when exceeded. 256 KiB keeps plenty of recent history at ~100 bytes/line.
 _INBOUND_LOG_CAP = 256 * 1024
@@ -84,8 +84,8 @@ _SECRET_PATH_RE = re.compile(r"^/private_[A-Za-z0-9_-]{16,}$")
 # Permissive whole-config schema: satisfies hassfest's [CONFIG_SCHEMA] check
 # (any integration with async_setup must declare one) while preserving the
 # YAML-migration path below. cv.config_entry_only_config_schema is wrong here:
-# it raises an ERROR-severity repair issue on any `mcp_proxy:` key, which would
-# collide with the legacy `mcp_proxy:` line async_setup imports from.
+# it raises an ERROR-severity repair issue on any `mcp_proxy_dev:` key, which would
+# collide with the legacy `mcp_proxy_dev:` line async_setup imports from.
 CONFIG_SCHEMA = vol.Schema(
     {vol.Optional(DOMAIN): vol.Any(None, dict)},
     extra=vol.ALLOW_EXTRA,
@@ -133,7 +133,7 @@ def _validate_target_url(target_url: str) -> tuple[bool, str]:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the MCP Webhook Proxy from configuration.yaml (migration only).
 
-    If the user has an old `mcp_proxy:` entry in configuration.yaml,
+    If the user has an old `mcp_proxy_dev:` entry in configuration.yaml,
     auto-migrate to a config entry so the YAML line can be removed.
 
     Also runs the boot-time repair-issue check: if a "needs HA restart
@@ -145,7 +145,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     if DOMAIN in config:
         _LOGGER.info(
             "MCP Proxy: Found YAML config — migrating to config entry. "
-            "You can safely remove 'mcp_proxy:' from configuration.yaml."
+            "You can safely remove 'mcp_proxy_dev:' from configuration.yaml."
         )
         hass.async_create_task(
             hass.config_entries.flow.async_init(DOMAIN, context={"source": "import"})
@@ -190,7 +190,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not target_url or not webhook_id:
         _LOGGER.error("MCP Proxy: Invalid config - missing target_url or webhook_id")
         raise ConfigEntryError(
-            "Missing target_url or webhook_id in /config/.mcp_proxy_config.json. "
+            "Missing target_url or webhook_id in /config/.mcp_proxy_dev_config.json. "
             "Restart the Webhook Proxy addon to regenerate it."
         )
 
@@ -213,7 +213,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         raise ConfigEntryError(
             f"Invalid target_url ({reason}). Restart the Webhook Proxy addon "
-            "to regenerate /config/.mcp_proxy_config.json."
+            "to regenerate /config/.mcp_proxy_dev_config.json."
         )
 
     _LOGGER.info("MCP Proxy: target = %s", masked_target)
@@ -252,7 +252,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_register(
             hass,
             DOMAIN,
-            "MCP Proxy",
+            "MCP Proxy (Dev)",
             webhook_id,
             _handle_webhook,
             allowed_methods=["POST", "GET"],
@@ -300,7 +300,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await session.close()
             raise ConfigEntryError(
                 "OAuth was enabled in the addon but client_id and/or "
-                "client_secret is blank in /config/.mcp_proxy_config.json. "
+                "client_secret is blank in /config/.mcp_proxy_dev_config.json. "
                 "Restart the Webhook Proxy addon to regenerate the config "
                 "file, or turn off Enable OAuth in the addon configuration."
             )
