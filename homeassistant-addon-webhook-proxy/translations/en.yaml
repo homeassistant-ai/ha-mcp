@@ -32,9 +32,13 @@ configuration:
       there. Claude.ai will then complete the OAuth handshake automatically
       when adding the connector.
 
-      BETA: this is a beta feature. Restart the addon after changing this
-      option. When this is off the webhook URL works exactly as before with
-      no auth check.
+      Enabling OAuth requires a full Home Assistant restart (Settings ->
+      System -> Restart) to take effect — restarting the add-on alone is NOT
+      enough, because Home Assistant only binds the OAuth authorize/token
+      endpoints cleanly at startup. After you enable this, a Repair
+      notification will appear with a button to restart Home Assistant.
+      Disabling OAuth does NOT require a restart. When this is off the webhook
+      URL works exactly as before with no auth check.
   oauth_client_id:
     name: OAuth Client ID (auto-generated if blank)
     description: |

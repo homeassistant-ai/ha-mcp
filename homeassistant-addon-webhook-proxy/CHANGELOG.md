@@ -15,9 +15,16 @@
   already owns the root `/authorize` and `/token` views in this Home Assistant instance,
   instead of silently shadowing them — Home Assistant keeps those views bound until it
   restarts, even after the other add-on is stopped.
+- Prompt for a Home Assistant restart when OAuth is enabled. Enabling OAuth needs a full
+  HA restart to bind the root `/authorize`/`/token` views (restarting the add-on is not
+  enough), so the integration now raises a Repair with a click-to-restart button and the
+  option text says so. Disabling OAuth needs no restart.
 
 ### Fixed
 
+- Correct the inbound-request debug-logging startup message: it claimed requests are
+  logged to Home Assistant's log "NOT this addon log", but they are now mirrored into the
+  add-on log too.
 - Harden OAuth setup: create the signing-key and credential files with `0600` in the
   `open()` syscall (closing a brief chmod-after-write race), unregister the webhook if
   OAuth setup fails so no dangling registration is left behind, and defensively reject a

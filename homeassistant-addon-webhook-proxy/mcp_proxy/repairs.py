@@ -94,6 +94,34 @@ def _clear_marker() -> None:
         )
 
 
+def _write_marker() -> None:
+    """Write the OAuth restart marker (idempotent). Blocking I/O — call via
+    hass.async_add_executor_job. Any OSError is logged at WARNING (the Repair
+    just won't persist to the next boot; the in-memory issue is still created)."""
+    try:
+        RESTART_MARKER_FILE.write_text('{"reason": "oauth_enabled_mid_session"}')
+    except OSError as e:
+        _LOGGER.warning(
+            "MCP Proxy: could not write OAuth restart marker at %s (%s: %s).",
+            RESTART_MARKER_FILE,
+            type(e).__name__,
+            e,
+        )
+
+
+def create_issue(hass: HomeAssistant, domain: str) -> None:
+    """Create the restart Repair issue directly (does not check the marker).
+    Same shape as maybe_create_issue's registration."""
+    ir.async_create_issue(
+        hass,
+        domain,
+        ISSUE_ID,
+        is_fixable=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=ISSUE_ID,
+    )
+
+
 def _delete_issue_only(hass: HomeAssistant, domain: str) -> None:
     """Dismiss the Repair issue without touching the marker file.
 

@@ -266,6 +266,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # registration fails — we fail loudly via ConfigEntryError. The user
     # explicitly opted into auth; silently falling back to no-auth would
     # leave them with an open endpoint they think is locked.
+    oauth_restart_needed = False
     oauth_section = proxy_config.get("oauth")
     if isinstance(oauth_section, dict):
         client_id = str(oauth_section.get("client_id", ""))
@@ -323,6 +324,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # so the sibling flavor fails loudly above instead of silently
             # shadowing. Set only after a successful registration.
             hass.data[OAUTH_ROUTE_OWNER_KEY] = DOMAIN
+            # HA binds the root /authorize + /token views cleanly only during
+            # startup. If we're being set up mid-session (the user just toggled
+            # OAuth on and the add-on reloaded the entry), those views don't
+            # activate correctly until a full HA restart — so flag it.
+            oauth_restart_needed = hass.is_running
         except Exception as err:
             _LOGGER.exception(
                 "MCP Proxy: failed to initialise OAuth provider (%s)",
@@ -346,16 +352,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN] = hass_data
 
-    # If we got here, the integration is set up and (if OAuth is configured)
-    # the OAuth provider's views are registered. Either way, any prior
-    # "needs HA restart for OAuth" marker is now stale — clear it so the
-    # Repair card disappears. Marker cleanup is filesystem I/O so it runs
-    # in the executor; the issue-registry call is synchronous and safe on
-    # the event loop.
-    from .repairs import _clear_marker, _delete_issue_only
+    # The integration is set up. If OAuth was (re)configured on a mid-session
+    # setup, its root views aren't live until a full HA restart, so surface the
+    # HACS-style restart Repair; otherwise (OAuth off, or set up cleanly during
+    # HA boot) any prior "needs HA restart for OAuth" marker is now stale, so
+    # clear it. Marker writes/cleanup are filesystem I/O and run in the
+    # executor; the issue-registry calls are synchronous and safe on the loop.
+    from .repairs import _clear_marker, _delete_issue_only, _write_marker, create_issue
 
-    await hass.async_add_executor_job(_clear_marker)
-    _delete_issue_only(hass, DOMAIN)
+    if oauth_restart_needed:
+        # OAuth was (re)configured on a mid-session setup — it isn't live until
+        # a full HA restart. Surface the HACS-style restart Repair (+ marker so
+        # it survives to the next boot). A boot-time setup takes the else branch
+        # and clears it once OAuth is genuinely active.
+        await hass.async_add_executor_job(_write_marker)
+        create_issue(hass, DOMAIN)
+    else:
+        # OAuth off, or set up during HA boot (views bound cleanly) — no restart
+        # needed; clear any stale marker/issue.
+        await hass.async_add_executor_job(_clear_marker)
+        _delete_issue_only(hass, DOMAIN)
 
     return True
 

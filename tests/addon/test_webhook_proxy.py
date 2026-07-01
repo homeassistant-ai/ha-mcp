@@ -260,6 +260,28 @@ def _import_oauth(tmp_secret_dir=None):
     return mod
 
 
+def _bind_repairs(mod, tmp_marker_dir):
+    """Load the repairs submodule and bind it as `<mod.__name__>.repairs` so
+    the integration's `from .repairs import ...` (evaluated inside
+    async_setup_entry at call time) resolves to THIS instance. The marker file
+    is redirected into `tmp_marker_dir` so tests never touch /config, and the
+    returned module can be patched (e.g. `create_issue`, `_write_marker`)
+    before calling async_setup_entry — the `from .repairs import ...` reads the
+    module attributes at execution time, so patches take effect.
+    """
+    repairs_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "repairs.py")
+    submod_name = f"{mod.__name__}.repairs"
+    sys.modules.pop(submod_name, None)
+    spec = importlib.util.spec_from_file_location(submod_name, repairs_path)
+    repairs = importlib.util.module_from_spec(spec)
+    sys.modules[submod_name] = repairs
+    spec.loader.exec_module(repairs)
+    repairs.RESTART_MARKER_FILE = (
+        Path(tmp_marker_dir) / ".mcp_proxy_oauth_restart_required"
+    )
+    return repairs
+
+
 # ---------------------------------------------------------------------------
 # Structure tests
 # ---------------------------------------------------------------------------
@@ -2171,6 +2193,113 @@ class TestOAuthSetupEntry:
         session.close.assert_awaited_once()
         assert mod.DOMAIN not in hass.data
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == sibling_domain
+
+
+class TestOAuthRestartRepairTrigger:
+    """async_setup_entry surfaces the restart Repair when OAuth is enabled
+    MID-SESSION (hass.is_running is True), because HA only binds the root
+    /authorize + /token views cleanly at startup. On a boot-time setup
+    (hass.is_running False), or with OAuth off, it clears any stale
+    marker/issue instead — no restart is needed."""
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+        h.http = MagicMock()
+        h.http.register_view = MagicMock()
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        return h
+
+    @staticmethod
+    def _oauth_config():
+        return {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+
+    async def test_oauth_enabled_mid_session_raises_restart_repair(
+        self, hass, tmp_path
+    ):
+        """Mid-session enable: the marker is written and the Repair issue is
+        created; the clear path must NOT run."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        repairs = _bind_repairs(mod, tmp_path)
+        hass.is_running = True
+        with (
+            patch.object(mod, "_read_config", return_value=self._oauth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_clear_marker") as mock_clear,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            # _write_marker runs for real, writing the redirected tmp marker.
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert repairs.RESTART_MARKER_FILE.exists()
+        mock_create_issue.assert_called_once_with(hass, mod.DOMAIN)
+        mock_clear.assert_not_called()
+        mock_delete.assert_not_called()
+
+    async def test_oauth_enabled_during_boot_clears_marker(self, hass, tmp_path):
+        """Boot-time enable (views bind cleanly): the stale marker is cleared,
+        the issue is deleted, and NO restart Repair is created."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        repairs = _bind_repairs(mod, tmp_path)
+        hass.is_running = False
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
+        with (
+            patch.object(mod, "_read_config", return_value=self._oauth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_write_marker") as mock_write,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            # _clear_marker runs for real, deleting the redirected tmp marker.
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert not repairs.RESTART_MARKER_FILE.exists()
+        mock_delete.assert_called_once_with(hass, mod.DOMAIN)
+        mock_create_issue.assert_not_called()
+        mock_write.assert_not_called()
+
+    async def test_oauth_off_clears_marker(self, hass, tmp_path):
+        """No oauth section: even mid-session (is_running True) this clears the
+        stale marker/issue and never creates a restart Repair."""
+        mod = _import_mcp_proxy()
+        repairs = _bind_repairs(mod, tmp_path)
+        hass.is_running = True
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_write_marker") as mock_write,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert not repairs.RESTART_MARKER_FILE.exists()
+        mock_delete.assert_called_once_with(hass, mod.DOMAIN)
+        mock_create_issue.assert_not_called()
+        mock_write.assert_not_called()
 
 
 class TestOAuthWebhookHandler:
