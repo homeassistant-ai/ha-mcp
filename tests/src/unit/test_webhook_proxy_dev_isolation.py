@@ -16,6 +16,15 @@ DEV_ADDON = REPO_ROOT / "homeassistant-addon-webhook-proxy-dev"
 # A bare `mcp_proxy` NOT immediately followed by `_dev`.
 BARE_MCP_PROXY = re.compile(r"mcp_proxy(?!_dev)")
 
+# Lines that legitimately name the STABLE sibling's identity from inside the dev
+# tree. The dev flavor's mutual-exclusion constants point AT stable by design:
+# SIBLING_MUTEX_NOTIFICATION_ID holds the stable flavor's own notification id so
+# a clean dev start can dismiss a stale "refused to start" banner stable raised.
+# This is the ONLY intentional bare-`mcp_proxy` reference; keep it exact.
+ALLOWED_SIBLING_REFS = re.compile(
+    r'^\s*SIBLING_MUTEX_NOTIFICATION_ID\s*=\s*"mcp_proxy_mutex"'
+)
+
 # Files that legitimately discuss the stable name (none expected by default).
 SKIP_NAMES = {"CHANGELOG.md"}
 
@@ -40,7 +49,7 @@ def test_no_bare_mcp_proxy_token_in_dev_tree():
     offenders: list[str] = []
     for path in _dev_text_files():
         for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if BARE_MCP_PROXY.search(line):
+            if BARE_MCP_PROXY.search(line) and not ALLOWED_SIBLING_REFS.search(line):
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{i}: {line.strip()}")
     assert not offenders, (
         "bare `mcp_proxy` token(s) leaked into the dev tree:\n" + "\n".join(offenders)
@@ -70,6 +79,9 @@ def test_sibling_matcher_handles_hash_prefix_and_disambiguates_dev():
     start = _load_stable_start()
     # stable looks for the dev sibling:
     dev_base = "ha_mcp_webhook_proxy_dev"
+    # stable dismisses dev's banner on a clean start, so its sibling-mutex id is
+    # the dev flavor's own notification id.
+    assert start.SIBLING_MUTEX_NOTIFICATION_ID == "mcp_proxy_dev_mutex"
     started_dev = [{"slug": "abc12345_ha_mcp_webhook_proxy_dev", "state": "started"}]
     stopped_dev = [{"slug": "abc12345_ha_mcp_webhook_proxy_dev", "state": "stopped"}]
     only_stable = [{"slug": "abc12345_ha_mcp_webhook_proxy", "state": "started"}]
@@ -101,6 +113,9 @@ def test_dev_sibling_matcher_detects_stable_not_itself():
     # The dev flavor's sibling is STABLE (not its own dev slug).
     assert start.SIBLING_SLUG_BASE == "ha_mcp_webhook_proxy"
     assert start.MUTEX_NOTIFICATION_ID == "mcp_proxy_dev_mutex"
+    # Dev dismisses stable's banner on a clean start, so its sibling-mutex id is
+    # the stable flavor's own notification id.
+    assert start.SIBLING_MUTEX_NOTIFICATION_ID == "mcp_proxy_mutex"
     stable_base = "ha_mcp_webhook_proxy"
     running_stable = [{"slug": "abc12345_ha_mcp_webhook_proxy", "state": "started"}]
     running_dev_self = [

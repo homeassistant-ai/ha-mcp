@@ -598,6 +598,159 @@ class TestAddonDiscovery:
         assert ip == "172.30.33.1"
 
 
+class TestMutexRefusal:
+    """_refuse_if_sibling_running is the startup guard that keeps the dev and
+    stable Webhook Proxy flavors from both owning HA's root OAuth routes."""
+
+    @pytest.fixture
+    def start(self):
+        return _import_start()
+
+    def _sibling_addon(self, state):
+        # Supervisor hash-prefixes third-party slugs; the guard matches by the
+        # "_<base>" suffix, so exercise that shape rather than a bare slug.
+        return {"slug": f"abc123_{CURRENT['sibling_base']}", "state": state}
+
+    def test_refuses_and_notifies_when_sibling_started(self, start):
+        api_calls = []
+
+        def fake_api(method, path, data=None):
+            api_calls.append((method, path, data))
+            return {}
+
+        with (
+            patch.object(
+                start,
+                "_supervisor_get",
+                return_value={"addons": [self._sibling_addon("started")]},
+            ),
+            patch.object(start, "_ha_core_api", side_effect=fake_api),
+        ):
+            assert start._refuse_if_sibling_running() is True
+
+        creates = [
+            data
+            for method, path, data in api_calls
+            if method == "POST" and path == "/services/persistent_notification/create"
+        ]
+        assert len(creates) == 1
+        assert creates[0]["notification_id"] == CURRENT["mutex_id"]
+
+    def test_no_refuse_when_sibling_stopped(self, start):
+        api_calls = []
+        with (
+            patch.object(
+                start,
+                "_supervisor_get",
+                return_value={"addons": [self._sibling_addon("stopped")]},
+            ),
+            patch.object(
+                start, "_ha_core_api", side_effect=lambda *a, **k: api_calls.append(a)
+            ),
+        ):
+            assert start._refuse_if_sibling_running() is False
+        assert api_calls == []
+
+    def test_no_refuse_when_addon_list_empty(self, start):
+        api_calls = []
+        with (
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+            patch.object(
+                start, "_ha_core_api", side_effect=lambda *a, **k: api_calls.append(a)
+            ),
+        ):
+            assert start._refuse_if_sibling_running() is False
+        assert api_calls == []
+
+    def test_fail_open_loudly_when_supervisor_unreachable(self, start, capsys):
+        """When the Supervisor /addons query can't be resolved (always None),
+        the guard fails OPEN (returns False → starts anyway) after a bounded
+        retry, but NOT silently: it logs a loud error so the bypass is visible.
+        time.sleep is neutralized so the retry backoff doesn't actually wait."""
+        sup = MagicMock(return_value=None)
+        sleep = MagicMock()
+        api_calls = []
+        with (
+            patch.object(start, "_supervisor_get", sup),
+            patch.object(start.time, "sleep", sleep),
+            patch.object(
+                start, "_ha_core_api", side_effect=lambda *a, **k: api_calls.append(a)
+            ),
+        ):
+            assert start._refuse_if_sibling_running() is False
+
+        # Bounded retry: 3 attempts, sleeping only between them (not after the
+        # last), so the loop is provably finite.
+        assert sup.call_count == 3
+        assert sleep.call_count == 2
+        # Fail-open is loud, and posts no mutex notification (we didn't refuse).
+        assert "Could not query the Supervisor /addons list" in capsys.readouterr().err
+        assert api_calls == []
+
+
+class TestMainDismissesMutexBanners:
+    """On a clean start (sibling absent) main() dismisses BOTH its own mutex
+    notification and the sibling flavor's, so a stale 'refused to start' banner
+    from either flavor clears once the user resolves the conflict here."""
+
+    def _run_main_to_keepalive(self, tmp_path):
+        start = _import_start()
+        options_dir = tmp_path / "data"
+        options_dir.mkdir()
+        # Skip discovery via the mcp_server_url override; OAuth + debug off so
+        # main() takes the plain success path straight to the dismiss loop.
+        (options_dir / "options.json").write_text(
+            json.dumps(
+                {"mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa"}
+            )
+        )
+        config_path = tmp_path / "proxy_config.json"
+
+        def path_factory(arg):
+            if arg == "/data/options.json":
+                return options_dir / "options.json"
+            if arg == "/data":
+                return options_dir
+            if arg == CURRENT["config_file"]:
+                return config_path
+            return Path(arg)
+
+        api_calls = []
+
+        def fake_api(method, path, data=None):
+            api_calls.append((method, path, data))
+            return {}
+
+        with (
+            patch.object(start, "Path", side_effect=path_factory),
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+            patch.object(start, "_ha_core_api", side_effect=fake_api),
+            patch.object(start, "_install_integration", return_value=(False, False)),
+            patch.object(start, "_ensure_config_entry", return_value=True),
+            patch.object(
+                start, "_install_shutdown_handlers", return_value={"reason": None}
+            ),
+            patch.object(start, "_health_check", return_value=True),
+            patch.object(start, "_shutdown_cleanup"),
+            # Break out of the keep-alive loop on its first sleep; main() catches
+            # KeyboardInterrupt and shuts down cleanly (returns 0).
+            patch.object(start.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            rc = start.main()
+        return rc, api_calls, start
+
+    def test_clean_start_dismisses_own_and_sibling_banner(self, tmp_path):
+        rc, api_calls, start = self._run_main_to_keepalive(tmp_path)
+        assert rc == 0
+        dismissed = [
+            data["notification_id"]
+            for method, path, data in api_calls
+            if path == "/services/persistent_notification/dismiss"
+        ]
+        assert start.MUTEX_NOTIFICATION_ID in dismissed
+        assert start.SIBLING_MUTEX_NOTIFICATION_ID in dismissed
+
+
 class TestSecretPathDiscovery:
     """Test _discover_secret_path with mocked API responses."""
 
@@ -1251,6 +1404,7 @@ class TestOAuthOffPreservesBehavior:
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
             pytest.raises(_FakeConfigEntryError) as exc_info,
         ):
@@ -1258,6 +1412,9 @@ class TestOAuthOffPreservesBehavior:
 
         assert "client_id and/or client_secret is blank" in str(exc_info.value)
         assert mod.DOMAIN not in hass.data
+        # The webhook we registered above is torn down so we don't leave an
+        # unauthenticated endpoint live after OAuth setup bails.
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
         # Session was opened then closed cleanly so we don't leak it on the
         # failure path.
         session.close.assert_awaited_once()
@@ -1864,6 +2021,29 @@ class TestOAuthProvider:
         )
         assert provider2.validate_access_token(token) is True
 
+    def test_validly_signed_non_dict_payload_rejected(self, tmp_path):
+        """A token whose HMAC is valid but whose JSON body is NOT an object
+        (e.g. a list or scalar) must be rejected, not crash the `.get(...)`
+        access in _validate_token. Build the token exactly like _issue_token
+        does but with a list body, signed with the provider's real key."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
+        import hashlib
+        import hmac as _hmac
+
+        body = oauth._b64url_encode(json.dumps([1, 2, 3]).encode())
+        sig = _hmac.new(
+            provider._signing_key, body.encode("ascii"), hashlib.sha256
+        ).digest()
+        token = f"{body}.{oauth._b64url_encode(sig)}"
+        assert provider.validate_access_token(token) is False
+
 
 class TestOAuthSetupEntry:
     """async_setup_entry creates and registers an OAuthProvider when the
@@ -1914,6 +2094,41 @@ class TestOAuthSetupEntry:
         assert provider.client_id == "client-1234567890ABCDEF"
         # 4 OAuth views registered
         assert hass.http.register_view.call_count == 4
+
+    async def test_provider_init_failure_unregisters_and_raises(self, hass, tmp_path):
+        """When the OAuth provider can't be constructed (e.g. the signing key
+        can't be loaded), the user explicitly opted into auth, so we refuse to
+        start: raise ConfigEntryError AND tear down the webhook registered
+        above so no unauthenticated endpoint is left live, and close the
+        session so it isn't leaked."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+        session = MagicMock()
+        session.close = AsyncMock()
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            patch.object(
+                oauth, "load_or_create_secret", side_effect=RuntimeError("boom")
+            ),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "Failed to enable OAuth" in str(exc_info.value)
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
+        session.close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
 
 
 class TestOAuthWebhookHandler:
@@ -2091,6 +2306,74 @@ class TestResolveOAuthCreds:
         assert "Could not read existing OAuth creds" in capsys.readouterr().err
 
 
+class TestOAuthFilePermissions:
+    """The signing-key and creds files must land at 0600 even on an OVERWRITE
+    (os.open only applies the mode on CREATE, so a plain overwrite of a
+    pre-existing wider file would NOT re-restrict it — the atomic temp+replace
+    helper guarantees 0600 on both first-create and regenerate). When the
+    filesystem can't honor a restricted create (tmpfs / non-POSIX), both paths
+    fall back to a best-effort plain write AND warn rather than failing."""
+
+    def _secret_file(self, tmp_path):
+        # Reflect each flavor's REAL default basename (dev's is
+        # .mcp_proxy_dev_oauth_secret), not the stable literal.
+        return tmp_path / f".{CURRENT['component']}_oauth_secret"
+
+    def test_secret_file_created_0600(self, tmp_path):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        oauth.SECRET_FILE = self._secret_file(tmp_path)
+        oauth.load_or_create_secret()
+        assert oauth.SECRET_FILE.exists()
+        assert oct(oauth.SECRET_FILE.stat().st_mode & 0o777) == "0o600"
+
+    def test_secret_file_rerestricted_on_overwrite(self, tmp_path):
+        """Regression for the core fix: a pre-existing WIDER (0644) short/invalid
+        key file gets re-restricted to 0600 when regenerated — the old
+        os.open(O_CREAT) reused the wide mode on overwrite and left it readable."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        secret_file = self._secret_file(tmp_path)
+        oauth.SECRET_FILE = secret_file
+        # Short (invalid) existing key at wide perms → forces regeneration.
+        secret_file.write_bytes(b"short")
+        os.chmod(secret_file, 0o644)
+        oauth.load_or_create_secret()
+        assert oct(secret_file.stat().st_mode & 0o777) == "0o600"
+
+    def test_secret_falls_back_and_warns_on_oserror(self, tmp_path, caplog):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        oauth.SECRET_FILE = self._secret_file(tmp_path)
+        with (
+            patch.object(oauth.os, "open", side_effect=OSError("no mode bits")),
+            caplog.at_level(logging.WARNING),
+        ):
+            secret = oauth.load_or_create_secret()
+        # Persisted via the plain-write fallback...
+        assert oauth.SECRET_FILE.read_bytes() == secret
+        assert len(secret) == 32
+        # ...and the degradation was warned about, not swallowed.
+        assert any("restricted permissions" in r.getMessage() for r in caplog.records)
+
+    def test_creds_file_created_0600(self, tmp_path):
+        start = _import_start()
+        start._resolve_oauth_creds(tmp_path, "", "")
+        creds_file = tmp_path / "oauth_creds.json"
+        assert creds_file.exists()
+        assert oct(creds_file.stat().st_mode & 0o777) == "0o600"
+
+    def test_creds_falls_back_and_warns_on_oserror(self, tmp_path, capsys):
+        start = _import_start()
+        with patch.object(start.os, "open", side_effect=OSError("no mode bits")):
+            cid, sec = start._resolve_oauth_creds(tmp_path, "", "")
+        creds_file = tmp_path / "oauth_creds.json"
+        # Fallback plain-write still persisted VALID creds (not ("", "")).
+        assert cid.startswith("hamcp-")
+        assert len(sec) >= 32
+        stored = json.loads(creds_file.read_text())
+        assert stored["client_id"] == cid
+        assert stored["client_secret"] == sec
+        assert "wider permissions than intended" in capsys.readouterr().err
+
+
 class TestStartOAuthValidation:
     """start.py-level validation: enable_oauth=true triggers credential
     resolution; only the length check on a user-supplied client_id can
@@ -2113,7 +2396,16 @@ class TestStartOAuthValidation:
     def _run_main_with_options(self, tmp_path, **opts):
         start = _import_start()
         path_factory = self._patched_path(tmp_path, **opts)
-        with patch.object(start, "Path", side_effect=path_factory):
+        # main() calls _refuse_if_sibling_running() first, which now retries the
+        # Supervisor /addons query with a time.sleep() backoff on failure. Pin a
+        # benign "no siblings" response so the mutex guard passes instantly with
+        # no network call, and neutralize the backoff sleep, so this test stays
+        # fast and hermetic (no ~4s hang, no real Supervisor HTTP call in CI).
+        with (
+            patch.object(start, "Path", side_effect=path_factory),
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+            patch.object(start.time, "sleep", return_value=None),
+        ):
             return start.main()
 
     def test_short_user_supplied_client_id_rejected(self, tmp_path, capsys):
