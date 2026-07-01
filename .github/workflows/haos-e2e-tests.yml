@@ -293,6 +293,11 @@ jobs:
           ls -la /tmp/haos-diagnostics/ || true
           echo '--- config dir listing ---'
           cat /tmp/haos-diagnostics/config-dir-listing.txt || true
+          # The HACS token injection (conftest pre-boot edit) puts GITHUB_TOKEN
+          # into core.config_entries inside the extracted storage.tar. Redact
+          # it (fail-closed: an unredactable tar is deleted) so no credential
+          # persists into the downloadable artifact.
+          python3 scripts/redact_diagnostics_secrets.py /tmp/haos-diagnostics
 
       - name: Upload HAOS diagnostics
         if: always()

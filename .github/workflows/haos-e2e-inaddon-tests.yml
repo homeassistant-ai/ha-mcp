@@ -329,6 +329,11 @@ jobs:
             cat "$outdir/config.yaml" || true
           done
           ls -laR /tmp/haos-inaddon-diagnostics/ || true
+          # The HACS token injection (conftest pre-boot edit) puts GITHUB_TOKEN
+          # into core.config_entries inside the extracted storage.tar files.
+          # Redact them (fail-closed: an unredactable tar is deleted) so no
+          # credential persists into the downloadable artifact.
+          python3 scripts/redact_diagnostics_secrets.py /tmp/haos-inaddon-diagnostics
 
       - name: Upload HAOS inaddon diagnostics
         if: always()
