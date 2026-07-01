@@ -13,9 +13,11 @@ jobs:
         with:
           fetch-depth: 0
       - name: Require a dev version bump and config/manifest parity
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          BASE="origin/${{ github.base_ref }}"
+          BASE="origin/$BASE_REF"
           CFG=homeassistant-addon-webhook-proxy-dev/config.yaml
           MAN=homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/manifest.json
 

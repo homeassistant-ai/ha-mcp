@@ -18,9 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bump dev version in config.yaml + manifest.json (in lockstep)
+        env:
+          LEVEL: ${{ inputs.level }}
         run: |
           set -euo pipefail
-          python3 - "${{ inputs.level }}" <<'PY'
+          python3 - "$LEVEL" <<'PY'
           import json, re, sys, pathlib
           level = sys.argv[1]
           cfg = pathlib.Path("homeassistant-addon-webhook-proxy-dev/config.yaml")
@@ -52,6 +54,7 @@ jobs:
       - name: Commit on a branch and open a PR
         env:
           GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           NEW=$(python3 -c 'import re;print(re.search(r"^version:\s*\"([^\"]+)\"",open("homeassistant-addon-webhook-proxy-dev/config.yaml").read(),re.M).group(1))')
@@ -63,6 +66,6 @@ jobs:
                   homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/manifest.json
           git commit -m "chore(addon-dev): bump webhook-proxy-dev to $NEW"
           git push -u origin "$BRANCH"
-          gh pr create --draft --base "${{ github.ref_name }}" --head "$BRANCH" \
+          gh pr create --draft --base "$BASE_REF" --head "$BRANCH" \
             --title "chore(addon-dev): bump webhook-proxy-dev to $NEW" \
             --body "Manual dev version bump to \`$NEW\` (triggered via workflow_dispatch)."
