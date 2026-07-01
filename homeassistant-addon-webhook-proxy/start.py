@@ -1390,11 +1390,9 @@ def main() -> int:
     if debug_logging:
         log_info("")
         log_info("  Inbound request debug logging is ON.")
-        log_info("    Every request hitting this webhook is logged to the Home")
-        log_info("    Assistant log (Settings → System → Logs, filter 'mcp_proxy'),")
-        log_info("    NOT this addon log — requests reach Home Assistant directly,")
-        log_info("    not this addon. Use it to confirm your MCP client is actually")
-        log_info("    reaching the server.")
+        log_info("    Every request hitting this webhook is mirrored here in the")
+        log_info("    addon log (it also appears in Home Assistant's log). Use it")
+        log_info("    to confirm your MCP client is actually reaching the server.")
     log_info("=" * 70)
     log_info("")
 
