@@ -6,6 +6,9 @@ name: Webhook Proxy — Stable Guard
 # (e.g. a stable-only hotfix).
 on:
   pull_request:
+    # Include labeled/unlabeled so adding or removing `allow-stable-edit`
+    # re-evaluates the guard on an already-open PR.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
       - "homeassistant-addon-webhook-proxy/**"
 
