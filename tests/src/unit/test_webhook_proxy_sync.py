@@ -222,3 +222,59 @@ def test_committed_dev_equals_reset_transform_of_stable(tmp_path):
         "committed dev tree has drifted from transform(stable) — regenerate it "
         f"with the reset workflow (scripts/webhook_proxy_sync.py): {drifted}"
     )
+
+
+def test_committed_stable_equals_promote_transform_of_dev(tmp_path):
+    """Reverse drift guard: the committed stable tree MUST equal promote(dev) —
+    the inverse identity transform applied to the committed dev tree — modulo
+    the version lines. Mirrors the reset drift guard for the promote direction,
+    confirming the reverse transform restores the stable mutex constants, drops
+    `stage:`, and applies the stable identity/labels. A dev-only change not
+    mirrored back into stable (or a broken inverse) fails CI here.
+    """
+    import re
+    import shutil
+
+    # Stage both committed addon trees + the ruff config into a scratch root and
+    # run the dev -> stable transform there (never touching the real worktree).
+    for flavor in (sync.STABLE, sync.DEV):
+        shutil.copytree(
+            REPO_ROOT / flavor.addon_dir,
+            tmp_path / flavor.addon_dir,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+    shutil.copy2(REPO_ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
+    sync.sync("promote", bump="patch", root=tmp_path)
+
+    committed = REPO_ROOT / sync.STABLE.addon_dir
+    produced = tmp_path / sync.STABLE.addon_dir
+    ver_re = re.compile(r'("?version"?:\s*")[^"]+(")')
+
+    def norm(path: Path) -> str:
+        text = path.read_text(encoding="utf-8")
+        if path.name in ("config.yaml", "manifest.json"):
+            text = ver_re.sub(r"\1<VERSION>\2", text)
+        return text
+
+    def files(root: Path) -> dict:
+        return {
+            p.relative_to(root): p
+            for p in root.rglob("*")
+            if p.is_file() and "__pycache__" not in p.parts
+        }
+
+    committed_files = files(committed)
+    produced_files = files(produced)
+    assert set(committed_files) == set(produced_files), (
+        "stable tree file set differs from transform(dev): "
+        f"{set(committed_files) ^ set(produced_files)}"
+    )
+    drifted = [
+        str(rel)
+        for rel in sorted(committed_files)
+        if norm(committed_files[rel]) != norm(produced_files[rel])
+    ]
+    assert not drifted, (
+        "committed stable tree has drifted from transform(dev) — regenerate it "
+        f"with the promote workflow (scripts/webhook_proxy_sync.py): {drifted}"
+    )
