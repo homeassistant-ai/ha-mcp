@@ -68,6 +68,67 @@ MCP_ADDON_SLUG_SUFFIXES = ["_ha_mcp", "_ha_mcp_dev"]
 # Also try exact slugs for official repo installs
 MCP_ADDON_EXACT_SLUGS = ["ha_mcp", "ha_mcp_dev"]
 
+# ---------------------------------------------------------------------------
+# Mutual exclusion (dev vs stable webhook proxy)
+# ---------------------------------------------------------------------------
+# The webhook-proxy add-on installs a webhook + (optional) OAuth views into HA.
+# The OAuth provider registers /authorize and /token at the HA ROOT, which two
+# live integrations cannot both own. The dev and stable flavors are otherwise
+# fully isolated (separate domain, files, /data), but they must never run at the
+# same time. On startup each refuses if its sibling is already running.
+#
+# This is the DEV flavor: its sibling is the stable add-on. Supervisor prefixes
+# third-party slugs with a repo hash (e.g. "abc123_ha_mcp_webhook_proxy_dev"),
+# so we match by exact slug or "_<base>" suffix. The leading underscore in the
+# suffix keeps the stable base from matching a dev slug (which ends in "_dev").
+SIBLING_SLUG_BASE = "ha_mcp_webhook_proxy"
+MUTEX_NOTIFICATION_ID = "mcp_proxy_dev_mutex"
+SIBLING_LABEL = "Webhook Proxy"
+
+
+def _sibling_is_running(addons: list[dict], sibling_base: str) -> bool:
+    """True if an installed add-on whose slug is `sibling_base` (exact) or ends
+    in `_<sibling_base>` (hash-prefixed install) is in state 'started'."""
+    for addon in addons:
+        slug = addon.get("slug", "")
+        if (slug == sibling_base or slug.endswith("_" + sibling_base)) and addon.get(
+            "state"
+        ) == "started":
+            return True
+    return False
+
+
+def _refuse_if_sibling_running() -> bool:
+    """Return True (caller must exit) if the sibling webhook-proxy add-on is
+    running. Logs the reason and raises a self-clearing HA notification."""
+    data = _supervisor_get("/addons")
+    addons = data.get("addons", []) if data else []
+    if not _sibling_is_running(addons, SIBLING_SLUG_BASE):
+        return False
+    log_error("=" * 70)
+    log_error(f"  The '{SIBLING_LABEL}' add-on is currently running.")
+    log_error("  The dev and stable Webhook Proxy add-ons cannot run at the")
+    log_error("  same time (they would both try to own the OAuth /authorize")
+    log_error("  and /token routes in Home Assistant).")
+    log_error(f"  Stop the '{SIBLING_LABEL}' add-on, then start this one.")
+    log_error("=" * 70)
+    _ha_core_api(
+        "POST",
+        "/services/persistent_notification/create",
+        {
+            "title": "MCP Webhook Proxy: only one flavor can run",
+            "message": (
+                f"The **{SIBLING_LABEL}** add-on is running, so this add-on "
+                "refused to start. The dev and stable Webhook Proxy add-ons "
+                "cannot run at the same time. Stop the other one, then start "
+                "this add-on again."
+            ),
+            "notification_id": MUTEX_NOTIFICATION_ID,
+        },
+    )
+    return True
+
+
 # Inbound-request mirror file. The mcp_proxy_dev integration (which runs inside
 # Home Assistant, where the webhook actually executes) appends each inbound
 # debug line here when "Log inbound requests" is on; this addon tails the file
@@ -824,6 +885,10 @@ def _shutdown_cleanup(reason: str | None) -> None:
 def main() -> int:
     log_info("Starting Webhook Proxy for HA MCP...")
 
+    # Refuse to start if the sibling (dev/stable) webhook proxy is running.
+    if _refuse_if_sibling_running():
+        return 1
+
     # Read config
     config_file = Path("/data/options.json")
     data_dir = Path("/data")
@@ -1264,6 +1329,12 @@ def main() -> int:
     # Install SIGTERM/SIGINT handlers so a Supervisor "stop" shuts down through
     # the cleanup below instead of being killed mid-loop.
     shutdown_reason = _install_shutdown_handlers()
+
+    _ha_core_api(
+        "POST",
+        "/services/persistent_notification/dismiss",
+        {"notification_id": MUTEX_NOTIFICATION_ID},
+    )
 
     # Keep-alive loop. A short poll interval keeps inbound-log mirroring
     # responsive when "Log inbound requests" is on; the MCP-server health
