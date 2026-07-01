@@ -497,6 +497,8 @@ def _atomic_write_0600(path: Path, data: bytes) -> bool:
             try:
                 os.unlink(tmp)
             except OSError:
+                # Best-effort temp cleanup — if unlink fails the stale ".tmp"
+                # is harmless and the caller's fallback path still runs.
                 pass
             raise
         return True
