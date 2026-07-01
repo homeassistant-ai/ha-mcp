@@ -168,30 +168,72 @@ def test_config_yaml_stage_added_for_dev_removed_for_stable():
     assert "boot: auto" in stable_out.split("\n")
 
 
-def test_committed_dev_equals_reset_transform_of_stable(tmp_path):
-    """Drift guard: the committed dev tree MUST equal reset(stable) — the
-    identity transform applied to the committed stable tree — modulo the version
-    lines. Any silent divergence between the two hand-maintained copies (a stable
-    fix not mirrored into dev, or vice-versa) fails CI here. Strictly stronger
-    than the token-only contamination test, which only checks that no bare
-    `mcp_proxy` token leaks into the dev tree.
+# Files that legitimately differ between the two hand-maintained flavors and are
+# NOT part of the identity transform, so the drift guards below compare them
+# against neither flavor's transform output. Hand-maintained allowlist — every
+# code / identity file (the component dir, start.py, Dockerfile, config.yaml,
+# manifest.json, translations/en.yaml) IS transformed and MUST NOT appear here;
+# a real identity-token miss must be reconciled, not hidden by padding this set.
+# Only docs live here:
+#   * AGENTS.md    — maintainer notes, stable-only (absent from the dev tree)
+#   * CLAUDE.md    — stable-only symlink to AGENTS.md (same doc, alias)
+#   * CHANGELOG.md — release-pipeline-synced per flavor, independent content
+#   * DOCS.md      — generated add-on docs, independent per-flavor content
+_DRIFT_ALLOWLIST = frozenset({"AGENTS.md", "CLAUDE.md", "CHANGELOG.md", "DOCS.md"})
+
+
+def _assert_committed_equals_transform(tmp_path, direction, src, dst, bump=None):
+    """Seed the produced tree from the SOURCE flavor, run the identity
+    transform, and assert the result equals the committed DESTINATION tree for
+    every file except the hand-maintained doc allowlist (version lines
+    normalized).
+
+    Seeding the produced (destination) tree from the committed SOURCE — not the
+    destination — is the crux of the guard: any file the transform SHOULD emit
+    but doesn't touch then remains the untransformed source verbatim and
+    mismatches the committed destination, surfacing an identity file left out of
+    the transform (as ``translations/en.yaml`` once was). Seeding from the
+    destination would compare such a file to itself and hide the drift.
     """
     import re
     import shutil
 
-    # Stage both committed addon trees + the ruff config into a scratch root and
-    # run the stable -> dev transform there (never touching the real worktree).
-    for flavor in (sync.STABLE, sync.DEV):
-        shutil.copytree(
-            REPO_ROOT / flavor.addon_dir,
-            tmp_path / flavor.addon_dir,
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
-    shutil.copy2(REPO_ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
-    sync.sync("reset", root=tmp_path)
+    src_committed = REPO_ROOT / src.addon_dir
+    dst_committed = REPO_ROOT / dst.addon_dir
 
-    committed = REPO_ROOT / sync.DEV.addon_dir
-    produced = tmp_path / sync.DEV.addon_dir
+    # Stage the committed SOURCE tree twice — as the transform's input (src dir)
+    # AND as the produced tree's seed (dst dir) — plus the ruff config, in a
+    # scratch root; never touches the real worktree.
+    shutil.copytree(
+        src_committed,
+        tmp_path / src.addon_dir,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    shutil.copytree(
+        src_committed,
+        tmp_path / dst.addon_dir,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    # The component dir is RENAMED (mcp_proxy <-> mcp_proxy_dev) and rebuilt
+    # wholesale by the transform, so the source-named copy the seed left in the
+    # destination dir is a pure seeding artifact — drop it so the transform
+    # produces the destination component dir cleanly. Its files are still fully
+    # compared, under the destination name.
+    shutil.rmtree(tmp_path / dst.addon_dir / src.component)
+    # config.yaml IS transformed (rebuilt from the source), but sync() first
+    # reads the DESTINATION's current version out of it, and that version must
+    # parse in the destination's format (dev ``X.Y.Z.devN`` vs stable
+    # ``X.Y.Z``). Restore the committed destination config.yaml solely so that
+    # read succeeds; the transform overwrites it and the comparison version-
+    # normalizes it, so this hides nothing.
+    shutil.copy2(
+        dst_committed / "config.yaml", tmp_path / dst.addon_dir / "config.yaml"
+    )
+    shutil.copy2(REPO_ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
+
+    sync.sync(direction, bump=bump, root=tmp_path)
+
+    produced = tmp_path / dst.addon_dir
     ver_re = re.compile(r'("?version"?:\s*")[^"]+(")')
 
     def norm(path: Path) -> str:
@@ -204,13 +246,16 @@ def test_committed_dev_equals_reset_transform_of_stable(tmp_path):
         return {
             p.relative_to(root): p
             for p in root.rglob("*")
-            if p.is_file() and "__pycache__" not in p.parts
+            if p.is_file()
+            and "__pycache__" not in p.parts
+            and p.name not in _DRIFT_ALLOWLIST
         }
 
-    committed_files = files(committed)
+    committed_files = files(dst_committed)
     produced_files = files(produced)
     assert set(committed_files) == set(produced_files), (
-        "dev tree file set differs from transform(stable): "
+        f"{dst.addon_dir} file set differs from transform({src.addon_dir}) "
+        f"(allowlist {sorted(_DRIFT_ALLOWLIST)} excluded): "
         f"{set(committed_files) ^ set(produced_files)}"
     )
     drifted = [
@@ -219,62 +264,35 @@ def test_committed_dev_equals_reset_transform_of_stable(tmp_path):
         if norm(committed_files[rel]) != norm(produced_files[rel])
     ]
     assert not drifted, (
-        "committed dev tree has drifted from transform(stable) — regenerate it "
-        f"with the reset workflow (scripts/webhook_proxy_sync.py): {drifted}"
+        f"committed {dst.addon_dir} tree has drifted from "
+        f"transform({src.addon_dir}) — regenerate it with "
+        f"scripts/webhook_proxy_sync.py: {drifted}"
     )
+
+
+def test_committed_dev_equals_reset_transform_of_stable(tmp_path):
+    """Drift guard: the committed dev tree MUST equal reset(stable) — the
+    identity transform applied to the committed stable tree — modulo the version
+    lines and the hand-maintained doc allowlist. Any silent divergence between
+    the two hand-maintained copies (a stable fix not mirrored into dev, or an
+    identity file left out of the transform) fails CI here. Strictly stronger
+    than the token-only contamination test: the produced tree is seeded from the
+    SOURCE (stable) flavor, so a file the transform forgets to emit surfaces as
+    the untransformed source verbatim instead of comparing equal to itself.
+    """
+    _assert_committed_equals_transform(tmp_path, "reset", sync.STABLE, sync.DEV)
 
 
 def test_committed_stable_equals_promote_transform_of_dev(tmp_path):
     """Reverse drift guard: the committed stable tree MUST equal promote(dev) —
     the inverse identity transform applied to the committed dev tree — modulo
-    the version lines. Mirrors the reset drift guard for the promote direction,
-    confirming the reverse transform restores the stable mutex constants, drops
-    `stage:`, and applies the stable identity/labels. A dev-only change not
-    mirrored back into stable (or a broken inverse) fails CI here.
+    the version lines and the hand-maintained doc allowlist. Mirrors the reset
+    drift guard for the promote direction, confirming the reverse transform
+    restores the stable mutex constants, drops `stage:`, and applies the stable
+    identity/labels. A dev-only change not mirrored back into stable (or a broken
+    inverse) fails CI here. Seeded from the SOURCE (dev) flavor so a dropped
+    identity file surfaces rather than comparing equal to itself.
     """
-    import re
-    import shutil
-
-    # Stage both committed addon trees + the ruff config into a scratch root and
-    # run the dev -> stable transform there (never touching the real worktree).
-    for flavor in (sync.STABLE, sync.DEV):
-        shutil.copytree(
-            REPO_ROOT / flavor.addon_dir,
-            tmp_path / flavor.addon_dir,
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
-    shutil.copy2(REPO_ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
-    sync.sync("promote", bump="patch", root=tmp_path)
-
-    committed = REPO_ROOT / sync.STABLE.addon_dir
-    produced = tmp_path / sync.STABLE.addon_dir
-    ver_re = re.compile(r'("?version"?:\s*")[^"]+(")')
-
-    def norm(path: Path) -> str:
-        text = path.read_text(encoding="utf-8")
-        if path.name in ("config.yaml", "manifest.json"):
-            text = ver_re.sub(r"\1<VERSION>\2", text)
-        return text
-
-    def files(root: Path) -> dict:
-        return {
-            p.relative_to(root): p
-            for p in root.rglob("*")
-            if p.is_file() and "__pycache__" not in p.parts
-        }
-
-    committed_files = files(committed)
-    produced_files = files(produced)
-    assert set(committed_files) == set(produced_files), (
-        "stable tree file set differs from transform(dev): "
-        f"{set(committed_files) ^ set(produced_files)}"
-    )
-    drifted = [
-        str(rel)
-        for rel in sorted(committed_files)
-        if norm(committed_files[rel]) != norm(produced_files[rel])
-    ]
-    assert not drifted, (
-        "committed stable tree has drifted from transform(dev) — regenerate it "
-        f"with the promote workflow (scripts/webhook_proxy_sync.py): {drifted}"
+    _assert_committed_equals_transform(
+        tmp_path, "promote", sync.DEV, sync.STABLE, bump="patch"
     )
