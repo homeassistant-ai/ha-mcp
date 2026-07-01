@@ -2094,6 +2094,9 @@ class TestOAuthSetupEntry:
         assert provider.client_id == "client-1234567890ABCDEF"
         # 4 OAuth views registered
         assert hass.http.register_view.call_count == 4
+        # Successful OAuth setup records that THIS flavor owns the root routes,
+        # so the sibling flavor refuses loudly instead of shadowing them.
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
 
     async def test_provider_init_failure_unregisters_and_raises(self, hass, tmp_path):
         """When the OAuth provider can't be constructed (e.g. the signing key
@@ -2129,6 +2132,45 @@ class TestOAuthSetupEntry:
         mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
         session.close.assert_awaited_once()
         assert mod.DOMAIN not in hass.data
+
+    async def test_sibling_flavor_owns_oauth_routes_refuses_loudly(
+        self, hass, tmp_path
+    ):
+        """If the OTHER flavor already registered the root OAuth /authorize +
+        /token views in this HA instance (the shared marker names its domain),
+        we refuse LOUDLY (ConfigEntryError) instead of silently shadowing its
+        routes — HA can't share or release those root views, and our provider
+        uses a different signing key. Covers the sibling add-on being stopped
+        but its views still bound."""
+        mod = _import_mcp_proxy()
+        sibling_domain = "mcp_proxy_dev" if mod.DOMAIN == "mcp_proxy" else "mcp_proxy"
+        hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = sibling_domain
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+        session = MagicMock()
+        session.close = AsyncMock()
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "already owns" in str(exc_info.value)
+        # Refused before creating our provider: webhook torn down, session
+        # closed, our DOMAIN not stored, and the sibling's marker left intact.
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
+        session.close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == sibling_domain
 
 
 class TestOAuthWebhookHandler:

@@ -60,6 +60,14 @@ _INBOUND_LOG_CAP = 256 * 1024
 # the append + the cap's read-modify-write trim without this lock.
 _LOG_WRITE_LOCK = threading.Lock()
 
+# Shared HA-instance marker (SAME literal in both flavors — deliberately
+# domain-neutral so both read the same key) recording which flavor's DOMAIN
+# registered the root OAuth /authorize + /token views. Lets the second flavor
+# fail loudly on a cross-flavor collision instead of silently shadowing. NOT
+# cleared on unload: HA can't unregister the HTTP views until it restarts, so
+# the ownership marker must outlive the config entry too.
+OAUTH_ROUTE_OWNER_KEY = "webhook_proxy_oauth_route_owner"
+
 # ha-mcp generates a 22-char base64url token after `/private_`. We accept >=16
 # as a sanity floor — a truncated/corrupted ha-mcp config yields a shorter
 # token, which is the failure mode this length check exists to catch.
@@ -273,6 +281,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "Restart the Webhook Proxy addon to regenerate the config "
                 "file, or turn off Enable OAuth in the addon configuration."
             )
+        # Root-route collision guard. The OAuth provider registers /authorize
+        # and /token at the HA ROOT (claude.ai builds <host>/authorize from the
+        # host root). HA cannot unregister HTTP views until it restarts, and
+        # aiohttp lets the first-registered path win — a later duplicate is
+        # silently shadowed. So if the OTHER webhook-proxy flavor already owns
+        # these routes in this HA instance, registering ours would be shadowed
+        # (its provider has a different signing key, so nothing it serves would
+        # validate here). Fail LOUDLY instead. This also covers the sibling
+        # being *stopped* but its views still bound (see OAUTH_ROUTE_OWNER_KEY).
+        route_owner = hass.data.get(OAUTH_ROUTE_OWNER_KEY)
+        if route_owner is not None and route_owner != DOMAIN:
+            async_unregister(hass, webhook_id)
+            await session.close()
+            raise ConfigEntryError(
+                f"The other Webhook Proxy flavor ('{route_owner}') already owns "
+                "the root OAuth /authorize and /token routes in this Home "
+                "Assistant instance, and Home Assistant cannot release them "
+                "until it restarts. Stop that add-on and RESTART Home Assistant, "
+                "then start this one. Only one Webhook Proxy flavor can serve "
+                "OAuth at a time."
+            )
         public_base_url = proxy_config.get("public_base_url")
         if not isinstance(public_base_url, str) or not public_base_url:
             public_base_url = None
@@ -290,6 +319,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 public_base_url=public_base_url,
             )
             oauth_provider.register_views()
+            # We now own the root OAuth routes for this HA instance. Record it
+            # so the sibling flavor fails loudly above instead of silently
+            # shadowing. Set only after a successful registration.
+            hass.data[OAUTH_ROUTE_OWNER_KEY] = DOMAIN
         except Exception as err:
             _LOGGER.exception(
                 "MCP Proxy: failed to initialise OAuth provider (%s)",

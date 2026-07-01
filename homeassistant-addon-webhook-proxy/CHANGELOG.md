@@ -11,6 +11,10 @@
   if the dev add-on `ha_mcp_webhook_proxy_dev` is running, and vice versa). Both flavors
   register the same root OAuth `/authorize` and `/token` routes, so only one may run at a
   time; the add-on now logs a clear error and raises a notification instead of colliding.
+- Fail the OAuth integration setup loudly (a clear `ConfigEntryError`) if the other flavor
+  already owns the root `/authorize` and `/token` views in this Home Assistant instance,
+  instead of silently shadowing them — Home Assistant keeps those views bound until it
+  restarts, even after the other add-on is stopped.
 
 ### Fixed
 

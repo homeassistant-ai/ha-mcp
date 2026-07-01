@@ -122,10 +122,14 @@ def _refuse_if_sibling_running() -> bool:
             time.sleep(2)
     if data is None:
         # Could not determine whether the sibling is running. Fail OPEN (start
-        # anyway) but LOUDLY — a silent bypass of this guard is worse than a
-        # noisy one. If both flavors do end up running with OAuth enabled, the
-        # second integration's OAuth view registration fails loudly, so this is
-        # a soft early guard, not the only backstop.
+        # anyway) but LOUDLY (log the bypass) — this add-on-level Supervisor
+        # check is only an early convenience guard. The authoritative backstop
+        # lives in the integration: it records which flavor owns the root OAuth
+        # /authorize + /token views (a shared hass.data marker) and refuses to
+        # set up with a ConfigEntryError if the sibling already owns them, so a
+        # real collision fails loudly there instead of silently shadowing — even
+        # when the sibling add-on is stopped but its views are still bound (HA
+        # keeps HTTP views until a restart).
         log_error(
             "Could not query the Supervisor /addons list to check whether the "
             f"'{SIBLING_LABEL}' add-on is running. Starting anyway, but if both "
@@ -603,14 +607,9 @@ def _read_integration_domain() -> str | None:
     """Read the integration's domain from the source manifest.
 
     Used by the OAuth probe to construct the metadata URL without
-    hard-coding `mcp_proxy` here — the dev fork-variant of the addon
-    overrides the domain (e.g. `mcp_proxy_dev`), and this function
-    keeps the probe consistent with whichever variant is installed.
+    hard-coding `mcp_proxy` here.
     """
     src_manifest = Path("/opt/mcp_proxy/manifest.json")
-    if not src_manifest.exists():
-        # Dev fork-variant places the integration source at /opt/mcp_proxy_dev
-        src_manifest = Path("/opt/mcp_proxy_dev/manifest.json")
     try:
         domain = json.loads(src_manifest.read_text()).get("domain")
     except (OSError, json.JSONDecodeError) as e:

@@ -122,10 +122,14 @@ def _refuse_if_sibling_running() -> bool:
             time.sleep(2)
     if data is None:
         # Could not determine whether the sibling is running. Fail OPEN (start
-        # anyway) but LOUDLY — a silent bypass of this guard is worse than a
-        # noisy one. If both flavors do end up running with OAuth enabled, the
-        # second integration's OAuth view registration fails loudly, so this is
-        # a soft early guard, not the only backstop.
+        # anyway) but LOUDLY (log the bypass) — this add-on-level Supervisor
+        # check is only an early convenience guard. The authoritative backstop
+        # lives in the integration: it records which flavor owns the root OAuth
+        # /authorize + /token views (a shared hass.data marker) and refuses to
+        # set up with a ConfigEntryError if the sibling already owns them, so a
+        # real collision fails loudly there instead of silently shadowing — even
+        # when the sibling add-on is stopped but its views are still bound (HA
+        # keeps HTTP views until a restart).
         log_error(
             "Could not query the Supervisor /addons list to check whether the "
             f"'{SIBLING_LABEL}' add-on is running. Starting anyway, but if both "
