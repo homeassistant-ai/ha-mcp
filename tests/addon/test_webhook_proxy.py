@@ -2198,6 +2198,59 @@ class TestOAuthSetupEntry:
         assert mod.DOMAIN not in hass.data
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == sibling_domain
 
+    async def test_sibling_claims_routes_during_secret_load_refuses(
+        self, hass, tmp_path
+    ):
+        """TOCTOU guard: the pre-await owner check can pass (no owner yet) and
+        the sibling flavor's concurrently-setting-up entry can then register
+        and claim the root routes while this entry is suspended in the
+        load_or_create_secret executor await. The post-await re-check must see
+        the sibling's claim and refuse loudly instead of registering shadowed
+        duplicate views."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        sibling_domain = "mcp_proxy_dev" if mod.DOMAIN == "mcp_proxy" else "mcp_proxy"
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+        session = MagicMock()
+        session.close = AsyncMock()
+
+        def sibling_claims_then_returns_key():
+            # Runs inside the executor await — the suspension window in which
+            # the sibling's setup can interleave on the event loop.
+            hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = sibling_domain
+            return b"k" * 32
+
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            patch.object(
+                oauth,
+                "load_or_create_secret",
+                side_effect=sibling_claims_then_returns_key,
+            ),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "claimed" in str(exc_info.value)
+        # Same teardown contract as the pre-await guard: webhook torn down,
+        # session closed, no views registered, our DOMAIN not stored, and the
+        # sibling's claim left intact.
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
+        session.close.assert_awaited_once()
+        hass.http.register_view.assert_not_called()
+        assert mod.DOMAIN not in hass.data
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == sibling_domain
+
 
 class TestOAuthRestartRepairTrigger:
     """async_setup_entry surfaces the restart Repair when OAuth is enabled

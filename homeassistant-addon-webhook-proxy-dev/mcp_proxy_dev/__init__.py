@@ -333,6 +333,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             # Filesystem I/O — must run off the event loop.
             signing_key = await hass.async_add_executor_job(load_or_create_secret)
+            # That executor await is a suspension point: the sibling flavor's
+            # concurrently-setting-up entry can register and claim the root
+            # routes while this one is suspended, which the pre-await guard
+            # above cannot see (TOCTOU). Re-read the owner now — everything
+            # from this read to the ownership-marker write below runs
+            # synchronously on the event loop, so no further interleave is
+            # possible and the claim-or-refuse is atomic.
+            route_owner = hass.data.get(OAUTH_ROUTE_OWNER_KEY)
+            if route_owner is not None and route_owner != DOMAIN:
+                async_unregister(hass, webhook_id)
+                await session.close()
+                raise ConfigEntryError(
+                    f"The other Webhook Proxy flavor ('{route_owner}') claimed "
+                    "the root OAuth /authorize and /token routes while this "
+                    "entry was setting up, and Home Assistant cannot release "
+                    "them until it restarts. Stop that add-on and RESTART Home "
+                    "Assistant, then start this one. Only one Webhook Proxy "
+                    "flavor can serve OAuth at a time."
+                )
             oauth_provider = OAuthProvider(
                 hass=hass,
                 client_id=client_id,
@@ -376,6 +395,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # A first registration happening mid-session isn't live until a
                 # full HA restart; flag it. At HA boot it binds cleanly.
                 oauth_restart_needed = hass.is_running
+        except ConfigEntryError:
+            # The post-await collision re-check above already tore down (webhook
+            # unregistered, session closed) — re-raise as-is so the generic
+            # handler below doesn't re-wrap the message and tear down twice.
+            raise
         except Exception as err:
             _LOGGER.exception(
                 "MCP Proxy: failed to initialise OAuth provider (%s)",
