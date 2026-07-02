@@ -272,7 +272,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                       {tool.source_file && (
                         <span>Source: <a
                           href={`https://github.com/homeassistant-ai/ha-mcp/blob/master/src/ha_mcp/tools/${tool.source_file}`}
-                          target="_blank"
+                          target="_blank" rel="noopener noreferrer"
                           class="text-slate-400 hover:text-brand transition-colors"
                         >{tool.source_file}</a></span>
                       )}
