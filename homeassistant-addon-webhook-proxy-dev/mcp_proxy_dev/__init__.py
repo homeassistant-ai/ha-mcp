@@ -22,7 +22,9 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
@@ -202,7 +204,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-def _make_refresh_repairs_handler(hass: HomeAssistant):
+def _make_refresh_repairs_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Coroutine[Any, Any, None]]:
     """Build the refresh_repairs service handler (see async_setup docstring)."""
 
     async def _handle_refresh_repairs(call: ServiceCall) -> None:
