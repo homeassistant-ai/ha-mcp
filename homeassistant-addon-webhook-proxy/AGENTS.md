@@ -34,7 +34,8 @@ reaches stable through the promote workflow (see Promotion below).
 The only exception is this file (and its `CLAUDE.md` symlink): it is the contributor
 doc for both flavors (the dev tree carries only a pointer stub to it), the promote
 transform never touches it, and the guard exempts it — edit it directly in a normal
-PR. `DOCS.md` and
+PR. The exemption is pinned to exactly these two paths in their doc shape (regular
+file + symlink to it); anything else at or under those names stays guarded. `DOCS.md` and
 `CHANGELOG.md` are also excluded from the promote transform, but they are user-shipped
 and stay guarded: they follow the dev-first flow and get a manual review/copy on each
 promote PR.

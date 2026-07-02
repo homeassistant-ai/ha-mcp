@@ -4,8 +4,10 @@ name: Webhook Proxy — Stable Guard
 # directly. The only exceptions are the promote workflow's own branches
 # (promote-webhook-proxy/*), PRs explicitly tagged `allow-stable-edit`
 # (e.g. a stable-only hotfix), and AGENTS.md/CLAUDE.md — the contributor doc
-# for both flavors, which has no dev-side counterpart and is never touched by
-# the promote transform.
+# for both flavors (the dev tree carries only a pointer stub), never touched
+# by the promote transform. The exemption is pinned to exactly those two
+# paths in their doc shape (regular file + symlink to it); anything else at
+# or under those names stays guarded.
 on:
   pull_request:
     # Include labeled/unlabeled so adding or removing `allow-stable-edit`
@@ -34,17 +36,37 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --quiet origin "$BASE_REF"
-          # AGENTS.md (+ its CLAUDE.md symlink) is exempt: it is the contributor
-          # doc for BOTH flavors (the dev tree carries only a pointer stub), and
-          # the promote transform never touches it — guarding it would force the
-          # allow-stable-edit label on pure doc corrections.
-          CHANGED=$(git diff --name-only "origin/$BASE_REF...HEAD" \
-            -- homeassistant-addon-webhook-proxy/ \
-            ':(exclude)homeassistant-addon-webhook-proxy/AGENTS.md' \
-            ':(exclude)homeassistant-addon-webhook-proxy/CLAUDE.md' || true)
+          # No `|| true`: a diff error must fail the job (fail closed);
+          # --name-only exits 0 whether or not there are changes.
+          CHANGED_ALL=$(git diff --name-only "origin/$BASE_REF...HEAD" \
+            -- homeassistant-addon-webhook-proxy/)
+
+          # Exempt EXACTLY the two contributor-doc paths (AGENTS.md + its
+          # CLAUDE.md symlink): the doc covers both flavors, the promote
+          # transform never touches it, and guarding it would force the
+          # allow-stable-edit label on pure doc corrections. Exact whole-line
+          # match (grep -vxF), NOT a `:(exclude)` pathspec — a pathspec would
+          # also exclude the contents of a same-named DIRECTORY, letting
+          # `AGENTS.md/anything` slip through unguarded. grep exits 1 when
+          # every changed path is exempt; only rc>1 (a real error) fails the
+          # job.
+          CHANGED=$(printf '%s\n' "$CHANGED_ALL" | grep -vxF \
+            -e "homeassistant-addon-webhook-proxy/AGENTS.md" \
+            -e "homeassistant-addon-webhook-proxy/CLAUDE.md" \
+            || [ "$?" -eq 1 ])
 
           if [ -z "$CHANGED" ]; then
-            echo "No changes under the stable add-on dir — nothing to guard."
+            # Only the exempt doc paths changed (or nothing did). Pin their
+            # shape before trusting the pass: the exemption covers a regular
+            # file and a symlink pointing at it — not a swap to code.
+            AGENTS_MODE=$(git ls-tree HEAD -- homeassistant-addon-webhook-proxy/AGENTS.md | awk '{print $1}')
+            CLAUDE_MODE=$(git ls-tree HEAD -- homeassistant-addon-webhook-proxy/CLAUDE.md | awk '{print $1}')
+            CLAUDE_TARGET=$(git cat-file blob HEAD:homeassistant-addon-webhook-proxy/CLAUDE.md 2>/dev/null || true)
+            if [ "$AGENTS_MODE" != "100644" ] || [ "$CLAUDE_MODE" != "120000" ] || [ "$CLAUDE_TARGET" != "AGENTS.md" ]; then
+              echo "::error::The AGENTS.md/CLAUDE.md exemption applies only while AGENTS.md is a regular file and CLAUDE.md is a symlink to AGENTS.md; this PR changes that shape. Add the 'allow-stable-edit' label if intentional."
+              exit 1
+            fi
+            echo "No guarded changes under the stable add-on dir — nothing to guard."
             exit 0
           fi
 
