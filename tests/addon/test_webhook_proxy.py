@@ -110,6 +110,7 @@ def _install_runtime_stubs():
     ha_config_entries.ConfigEntry = MagicMock
     ha_core = types.ModuleType("homeassistant.core")
     ha_core.HomeAssistant = MagicMock
+    ha_core.ServiceCall = MagicMock
     ha_helpers = types.ModuleType("homeassistant.helpers")
     ha_helpers_typing = types.ModuleType("homeassistant.helpers.typing")
     ha_helpers_typing.ConfigType = dict
@@ -185,6 +186,9 @@ def _install_runtime_stubs():
     voluptuous_mod.Optional = MagicMock(name="Optional")
     voluptuous_mod.Any = MagicMock(name="Any")
     voluptuous_mod.ALLOW_EXTRA = MagicMock(name="ALLOW_EXTRA")
+    # __init__.py builds _REFRESH_REPAIRS_SCHEMA at import time with these.
+    voluptuous_mod.Required = MagicMock(name="Required")
+    voluptuous_mod.In = MagicMock(name="In")
 
     sys.modules.update(
         {
@@ -4006,6 +4010,149 @@ class TestAsyncSetupBootMarker:
 
         assert result is True
         issue_registry.async_create_issue.assert_not_called()
+
+
+class TestRefreshRepairsService:
+    """The add-on-invocable `refresh_repairs` service — the only way a Repair
+    card can appear at the MOMENT a restart becomes necessary (only in-process
+    code can file repair issues; without the service the card appeared only at
+    the next boot, i.e. after the restart it was meant to prompt). Skips on
+    flavors that don't ship the service yet."""
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        return h
+
+    @staticmethod
+    def _skip_unless_shipped(mod):
+        if not hasattr(mod, "SERVICE_REFRESH_REPAIRS"):
+            pytest.skip("flavor does not ship the refresh_repairs service yet")
+
+    async def test_service_registered_on_setup(self, hass, tmp_path):
+        mod = _import_mcp_proxy()
+        self._skip_unless_shipped(mod)
+        _bind_repairs(mod, tmp_path)
+        await mod.async_setup(hass, {})
+        hass.services.async_register.assert_called_once()
+        args = hass.services.async_register.call_args
+        assert args.args[0] == mod.DOMAIN
+        assert args.args[1] == "refresh_repairs"
+
+    async def test_setup_dismisses_stale_update_notification(self, hass, tmp_path):
+        mod = _import_mcp_proxy()
+        self._skip_unless_shipped(mod)
+        _bind_repairs(mod, tmp_path)
+        await mod.async_setup(hass, {})
+        hass.services.async_call.assert_called_once_with(
+            "persistent_notification",
+            "dismiss",
+            {"notification_id": mod.UPDATE_NOTIFICATION_ID},
+        )
+
+    async def test_update_create_files_issue_immediately(self, hass, tmp_path):
+        mod = _import_mcp_proxy()
+        self._skip_unless_shipped(mod)
+        _bind_repairs(mod, tmp_path)
+        from homeassistant.helpers import issue_registry
+
+        issue_registry.async_create_issue.reset_mock()
+        handler = mod._make_refresh_repairs_handler(hass)
+        call = MagicMock()
+        call.data = {"issue_id": "update_restart_required", "action": "create"}
+        await handler(call)
+        issue_registry.async_create_issue.assert_called_once()
+        args = issue_registry.async_create_issue.call_args
+        assert args.args[1] == mod.DOMAIN
+        assert args.args[2] == "update_restart_required"
+        assert args.kwargs.get("is_fixable") is True
+        assert args.kwargs.get("translation_key") == "update_restart_required"
+
+    async def test_oauth_create_is_marker_gated(self, hass, tmp_path):
+        mod = _import_mcp_proxy()
+        self._skip_unless_shipped(mod)
+        repairs = _bind_repairs(mod, tmp_path)
+        from homeassistant.helpers import issue_registry
+
+        issue_registry.async_create_issue.reset_mock()
+        handler = mod._make_refresh_repairs_handler(hass)
+        call = MagicMock()
+        call.data = {"issue_id": "oauth_restart_required", "action": "create"}
+        # No marker on disk → the add-on didn't ask for OAuth enforcement;
+        # the service must NOT file the issue.
+        await handler(call)
+        issue_registry.async_create_issue.assert_not_called()
+        # Marker present → file it.
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale_integration_code"}')
+        await handler(call)
+        issue_registry.async_create_issue.assert_called_once()
+        assert (
+            issue_registry.async_create_issue.call_args.args[2]
+            == "oauth_restart_required"
+        )
+
+    async def test_clear_action_deletes_issue(self, hass, tmp_path):
+        mod = _import_mcp_proxy()
+        self._skip_unless_shipped(mod)
+        _bind_repairs(mod, tmp_path)
+        from homeassistant.helpers import issue_registry
+
+        issue_registry.async_delete_issue.reset_mock()
+        handler = mod._make_refresh_repairs_handler(hass)
+        call = MagicMock()
+        call.data = {"issue_id": "update_restart_required", "action": "clear"}
+        await handler(call)
+        issue_registry.async_delete_issue.assert_called_once_with(
+            hass, mod.DOMAIN, "update_restart_required"
+        )
+
+    def test_issue_ids_in_sync_with_repairs_module(self, tmp_path):
+        """__init__'s schema and start.py hardcode the issue-id literals;
+        repairs.py owns them. Pin the contract."""
+        mod = _import_mcp_proxy()
+        self._skip_unless_shipped(mod)
+        repairs = _bind_repairs(mod, tmp_path)
+        assert repairs.ISSUE_ID == "oauth_restart_required"
+        assert repairs.UPDATE_ISSUE_ID == "update_restart_required"
+
+    def test_translations_ship_and_match_strings(self):
+        """Custom integrations load runtime translations ONLY from
+        translations/<lang>.json — strings.json alone renders raw keys in the
+        Repairs UI. The two must exist and stay identical."""
+        component_dir = Path(PROXY_ADDON_DIR) / CURRENT["component"]
+        translations = component_dir / "translations" / "en.json"
+        if not translations.exists():
+            pytest.skip("flavor does not ship runtime translations yet")
+        strings = json.loads((component_dir / "strings.json").read_text())
+        en = json.loads(translations.read_text())
+        assert en == strings
+        assert set(en["issues"]) == {
+            "oauth_restart_required",
+            "update_restart_required",
+        }
+
+
+class TestRequestRestartRepair:
+    """start.py's best-effort bridge to the integration's refresh_repairs
+    service. Skips on flavors that don't ship it yet."""
+
+    def test_posts_refresh_repairs_service_call(self):
+        start = _import_start()
+        if not hasattr(start, "_request_restart_repair"):
+            pytest.skip("flavor does not ship _request_restart_repair yet")
+        with patch.object(start, "_ha_core_api") as api:
+            start._request_restart_repair("update_restart_required")
+        api.assert_called_once_with(
+            "POST",
+            f"/services/{CURRENT['domain']}/refresh_repairs",
+            {"issue_id": "update_restart_required", "action": "create"},
+        )
 
 
 class TestProbeOAuthActive:

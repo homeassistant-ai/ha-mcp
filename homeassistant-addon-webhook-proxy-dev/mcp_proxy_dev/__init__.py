@@ -33,7 +33,7 @@ from homeassistant.components.webhook import (
     async_unregister,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.typing import ConfigType
 
@@ -47,6 +47,24 @@ _LOGGER_LEVEL_RAISED = False
 
 DOMAIN = "mcp_proxy_dev"
 CONFIG_FILE = Path("/config/.mcp_proxy_dev_config.json")
+
+# Service the add-on calls (via the HA Core API) to raise/clear the
+# click-to-restart Repair issues from outside HA — see async_setup.
+SERVICE_REFRESH_REPAIRS = "refresh_repairs"
+_REFRESH_REPAIRS_SCHEMA = vol.Schema(
+    {
+        # Kept in sync with repairs.py ISSUE_ID / UPDATE_ISSUE_ID (asserted
+        # by the addon test suite); literals here so the schema builds
+        # without importing repairs.py on the happy path.
+        vol.Required("issue_id"): vol.In(
+            ["oauth_restart_required", "update_restart_required"]
+        ),
+        vol.Required("action"): vol.In(["create", "clear"]),
+    }
+)
+# The add-on's "integration updated, restart HA" notification id — dismissed
+# at boot once the new code is actually loaded. Kept in sync with start.py.
+UPDATE_NOTIFICATION_ID = "mcp_proxy_dev_update"
 
 # Inbound-request mirror file. When "Log inbound requests" is on we append each
 # inbound debug line here in addition to logging it to Home Assistant, so the
@@ -141,6 +159,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     gate or the integration's mid-session OAuth enable), surface it as a
     Repair card with a click-to-restart fix flow. See repairs.py for
     the full lifecycle.
+
+    Registers the `refresh_repairs` service the add-on calls to raise a
+    click-to-restart Repair from OUTSIDE Home Assistant the moment a restart
+    becomes necessary (integration files updated on disk, or OAuth enabled
+    against stale loaded code). Only in-process code can file repair issues,
+    so without this service the add-on could only post a persistent
+    notification and the Repair card would not appear until the very restart
+    it is supposed to prompt.
     """
     if DOMAIN in config:
         _LOGGER.info(
@@ -154,7 +180,55 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         from .repairs import maybe_create_issue
 
         maybe_create_issue(hass, DOMAIN)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REFRESH_REPAIRS,
+        _make_refresh_repairs_handler(hass),
+        schema=_REFRESH_REPAIRS_SCHEMA,
+    )
+
+    # This code executing at boot means the most recently installed
+    # integration files are what's loaded — the restart any earlier
+    # "integration updated" notification asked for has happened. Dismissing
+    # a notification that doesn't exist is a no-op.
+    hass.async_create_task(
+        hass.services.async_call(
+            "persistent_notification",
+            "dismiss",
+            {"notification_id": UPDATE_NOTIFICATION_ID},
+        )
+    )
     return True
+
+
+def _make_refresh_repairs_handler(hass: HomeAssistant):
+    """Build the refresh_repairs service handler (see async_setup docstring)."""
+
+    async def _handle_refresh_repairs(call: ServiceCall) -> None:
+        from .repairs import (
+            ISSUE_ID,
+            _delete_issue_only,
+            create_issue,
+            marker_present,
+        )
+
+        issue_id: str = call.data["issue_id"]
+        if call.data["action"] == "clear":
+            _delete_issue_only(hass, DOMAIN, issue_id)
+            return
+        if issue_id == ISSUE_ID:
+            # The marker file is the source of truth for the OAuth repair
+            # (it must survive an aborted restart), so file the issue only
+            # when the add-on has actually written it.
+            if await hass.async_add_executor_job(marker_present):
+                create_issue(hass, DOMAIN, issue_id)
+            return
+        # update_restart_required: non-persistent by design — a successful
+        # HA restart loads the new code and drops the issue automatically.
+        create_issue(hass, DOMAIN, issue_id)
+
+    return _handle_refresh_repairs
 
 
 def _marker_present() -> bool:
