@@ -56,6 +56,28 @@ def test_no_bare_mcp_proxy_token_in_dev_tree():
     )
 
 
+def test_stable_docs_free_of_dev_identity():
+    """DOCS.md is user-shipped and hand-maintained per flavor. The promote
+    workflow never copies it — a human carries DOCS changes over on the
+    promote PR — so guard that manual pass: stable DOCS.md must not pick up
+    the dev flavor's identity or dev-build framing, and dev DOCS.md must not
+    lose its dev-build banner to a wholesale stable copy. (The bare-token test
+    above guards only the dev tree, and the sync drift guards allowlist
+    DOCS.md entirely, so this is the only check on that path.)"""
+    stable_docs = (
+        REPO_ROOT / "homeassistant-addon-webhook-proxy" / "DOCS.md"
+    ).read_text(encoding="utf-8")
+    assert "mcp_proxy_dev" not in stable_docs, (
+        "stable DOCS.md references the dev flavor's identity — dev DOCS.md "
+        "content was likely copied over stable's on a promote PR"
+    )
+    assert "This is the **dev** build" not in stable_docs
+    dev_docs = (DEV_ADDON / "DOCS.md").read_text(encoding="utf-8")
+    assert "This is the **dev** build" in dev_docs, (
+        "dev DOCS.md lost its dev-build banner (stable DOCS.md copied over it?)"
+    )
+
+
 def test_dev_slug_and_domain():
     cfg = (DEV_ADDON / "config.yaml").read_text(encoding="utf-8")
     assert 'slug: "ha_mcp_webhook_proxy_dev"' in cfg
