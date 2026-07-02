@@ -6,6 +6,7 @@ enabling AI assistants to perform advanced operations like file management.
 
 from __future__ import annotations
 
+import difflib
 import errno
 import fnmatch
 import logging
@@ -307,6 +308,22 @@ async def _save_allowed_paths(hass: HomeAssistant, paths: list[str]) -> None:
         hass, _ALLOWED_PATHS_STORAGE_VERSION, _ALLOWED_PATHS_STORAGE_KEY
     )
     await store.async_save({"paths": paths})
+
+
+def _unified_diff(before: str, after: str, rel_path: str, max_lines: int = 200) -> str:
+    """Unified diff of a prospective write, capped for response size."""
+    lines = list(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"{rel_path} (before)",
+            tofile=f"{rel_path} (after)",
+        )
+    )
+    if len(lines) > max_lines:
+        omitted = len(lines) - max_lines
+        lines = lines[:max_lines] + [f"... diff truncated ({omitted} more lines)\n"]
+    return "".join(lines)
 
 
 def _unauthorized_response(service_name: str, **extra: Any) -> dict[str, Any]:
@@ -1365,6 +1382,10 @@ def _build_edit_yaml_config_handler(
                     ),
                 }
 
+            diff_text = _unified_diff(
+                raw_content if target_exists else "", new_content, rel_path
+            )
+
             # Create parent directories if needed (for new package files).
             # mkdir(exist_ok=True) is idempotent so no pre-check is required.
             await hass.async_add_executor_job(
@@ -1396,6 +1417,8 @@ def _build_edit_yaml_config_handler(
                 "yaml_path": yaml_path,
                 "size": stat.st_size,
                 "modified": modified_dt.isoformat(),
+                "written": True,
+                "diff": diff_text,
             }
 
             # Surface the post-edit action required to activate the change

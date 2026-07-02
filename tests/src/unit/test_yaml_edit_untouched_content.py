@@ -213,3 +213,63 @@ class TestRoundTripGuard:
         assert "outside the requested edit" in result["error"]
         # File must be untouched.
         assert cfg.read_text() == ISSUE_1720_CONFIG
+
+
+class TestDiffInResponse:
+    """Every write response carries a unified diff of the actual change."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_success_response_includes_diff_and_written(
+        self, tmp_path, hass, call_factory
+    ):
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(handler(_add_utility_meter_call(call_factory)))
+
+        assert result["success"] is True, result
+        assert result["written"] is True
+        assert "+utility_meter:" in result["diff"]
+        assert "(before)" in result["diff"] and "(after)" in result["diff"]
+
+    def test_pure_add_diff_has_no_removals(self, tmp_path, hass, call_factory):
+        """With width + indent-style preservation, adding a new key to an
+        HA-docs-style file must not touch any existing line."""
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(handler(_add_utility_meter_call(call_factory)))
+
+        removals = [
+            line
+            for line in result["diff"].splitlines()
+            if line.startswith("-") and not line.startswith("---")
+        ]
+        assert removals == [], result["diff"]
+
+    def test_diff_is_truncated_for_huge_changes(self, tmp_path, hass, call_factory):
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text("default_config:\n")
+        big = "\n".join(f"meter_{i}:\n  source: sensor.s{i}" for i in range(300))
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "configuration.yaml",
+                        "action": "add",
+                        "yaml_path": "utility_meter",
+                        "content": big,
+                    }
+                )
+            )
+        )
+
+        assert result["success"] is True, result
+        assert "diff truncated" in result["diff"]
+        assert len(result["diff"].splitlines()) <= 210
