@@ -43,14 +43,20 @@ def _extract_field_info(annotation: ast.expr | None) -> dict:
         return {}
     info: dict = {}
 
-    if isinstance(annotation, ast.Subscript) and isinstance(annotation.value, ast.Attribute) and annotation.value.attr == "Annotated":
+    if (
+        isinstance(annotation, ast.Subscript)
+        and isinstance(annotation.value, ast.Attribute)
+        and annotation.value.attr == "Annotated"
+    ):
         slice_node = annotation.slice
         if isinstance(slice_node, ast.Tuple) and slice_node.elts:
             info["type"] = ast.unparse(slice_node.elts[0])
             for elt in slice_node.elts[1:]:
                 if isinstance(elt, ast.Call):
                     for kw in elt.keywords:
-                        if kw.arg == "description" and isinstance(kw.value, ast.Constant):
+                        if kw.arg == "description" and isinstance(
+                            kw.value, ast.Constant
+                        ):
                             info["description"] = kw.value.value
                         elif kw.arg == "default" and isinstance(kw.value, ast.Constant):
                             info["default"] = kw.value.value
@@ -89,7 +95,11 @@ def extract_tools() -> list[dict]:
                 # Pattern 2: @tool(name="ha_*") — class method pattern
                 if isinstance(func, ast.Name) and func.id == "tool":
                     for kw in dec.keywords:
-                        if kw.arg == "name" and isinstance(kw.value, ast.Constant) and str(kw.value.value).startswith("ha_"):
+                        if (
+                            kw.arg == "name"
+                            and isinstance(kw.value, ast.Constant)
+                            and str(kw.value.value).startswith("ha_")
+                        ):
                             tool_dec = dec
                             tool_name = str(kw.value.value)
                             break
@@ -110,7 +120,11 @@ def extract_tools() -> list[dict]:
 
             for kw in dec.keywords:
                 if kw.arg == "tags" and isinstance(kw.value, ast.Set):
-                    tags = {str(elt.value) for elt in kw.value.elts if isinstance(elt, ast.Constant)}
+                    tags = {
+                        str(elt.value)
+                        for elt in kw.value.elts
+                        if isinstance(elt, ast.Constant)
+                    }
                 elif kw.arg == "annotations" and isinstance(kw.value, ast.Dict):
                     for k, v in zip(kw.value.keys, kw.value.values, strict=True):
                         if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
@@ -145,15 +159,17 @@ def extract_tools() -> list[dict]:
                 if required:
                     input_schema["required"] = required
 
-            tools.append({
-                "name": tool_name,
-                "title": title,
-                "description": ast.get_docstring(node) or "",
-                "inputSchema": input_schema,
-                "annotations": annotations,
-                "tags": sorted(tags),
-                "source_file": f.name,
-            })
+            tools.append(
+                {
+                    "name": tool_name,
+                    "title": title,
+                    "description": ast.get_docstring(node) or "",
+                    "inputSchema": input_schema,
+                    "annotations": annotations,
+                    "tags": sorted(tags),
+                    "source_file": f.name,
+                }
+            )
 
     # Detect duplicate tool names
     seen: dict[str, str] = {}
@@ -185,18 +201,24 @@ def generate_docs_section(tools: list[dict]) -> str:
         "",
         f"The add-on provides {len(tools)}+ MCP tools for controlling Home Assistant:",
         "",
-        "> **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an \"unknown tool\" error until the next stable release.",
+        '> **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.',
         "",
     ]
     if any("beta" in t["tags"] for t in tools):
-        lines.extend([
-            "> Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.",
-            "",
-        ])
+        lines.extend(
+            [
+                "> Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.",
+                "",
+            ]
+        )
     for cat in sorted(categories):
         lines.append(f"### {cat}")
         for tool in sorted(categories[cat], key=lambda t: t["name"]):
-            desc = tool["description"].split("\n")[0].strip() if tool["description"] else ""
+            desc = (
+                tool["description"].split("\n")[0].strip()
+                if tool["description"]
+                else ""
+            )
             entry = f"- `{tool['name']}`"
             if "beta" in tool["tags"]:
                 entry += " **(beta — dev channel only)**"
@@ -231,8 +253,12 @@ def update_docs(tools: list[dict], *, content: str | None = None) -> str:
         re.DOTALL,
     )
     updated = pattern.sub(new_section, docs)
-    updated = re.sub(r"\bprovides \d+\+ tools\b", f"provides {len(tools)}+ tools", updated)
-    updated = re.sub(r"\bcatalog \(~\d+ tools\b", f"catalog (~{len(tools)} tools", updated)
+    updated = re.sub(
+        r"\bprovides \d+\+ tools\b", f"provides {len(tools)}+ tools", updated
+    )
+    updated = re.sub(
+        r"\bcatalog \(~\d+ tools\b", f"catalog (~{len(tools)} tools", updated
+    )
     assert DOCS_START_MARKER in updated and DOCS_END_MARKER in updated
     return updated
 
@@ -253,7 +279,7 @@ def generate_readme_table(tools: list[dict]) -> str:
     lines = [
         README_START_MARKER,
         "",
-        f'<summary><b>Complete Tool List ({len(tools)} tools)</b></summary>',
+        f"<summary><b>Complete Tool List ({len(tools)} tools)</b></summary>",
         "",
         "| Category | Tools |",
         "|----------|-------|",
@@ -295,7 +321,10 @@ def update_readme(tools: list[dict], *, content: str | None = None) -> str:
         if old_pattern.search(readme):
             readme = old_pattern.sub(new_block, readme)
         else:
-            print("WARNING: Could not find tool table markers in README.md", file=sys.stderr)
+            print(
+                "WARNING: Could not find tool table markers in README.md",
+                file=sys.stderr,
+            )
             return readme
 
     readme = re.sub(r"tools-[^-]+-blue", f"tools-{count}-blue", readme)
@@ -329,8 +358,12 @@ def check_sync(tools: list[dict]) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Extract MCP tool metadata (AST-based, no runtime deps)")
-    parser.add_argument("--check", action="store_true", help="CI mode: check sync without writing")
+    parser = argparse.ArgumentParser(
+        description="Extract MCP tool metadata (AST-based, no runtime deps)"
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="CI mode: check sync without writing"
+    )
     args = parser.parse_args()
 
     tools = extract_tools()
@@ -341,7 +374,10 @@ def main() -> None:
         if check_sync(tools):
             print("All files in sync.")
         else:
-            print("\nRun 'python scripts/extract_tools.py' to regenerate.", file=sys.stderr)
+            print(
+                "\nRun 'python scripts/extract_tools.py' to regenerate.",
+                file=sys.stderr,
+            )
             sys.exit(1)
     else:
         TOOLS_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)

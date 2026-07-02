@@ -60,10 +60,11 @@ def extract_tool_decorators(file_path: Path) -> list[dict]:
         for m in re.finditer(pattern, content, re.DOTALL)
     ]
 
-    # Pattern 2: @tool(name="ha_*", ...) — class method pattern
-    class_pattern = (
-        r'@tool\(\s*\n?\s*name="(ha_\w+)"[,\s]*([^)]*)\)\s*(?:@\w+\s*)*async def \w+'
-    )
+    # Pattern 2: @tool(name="ha_*", ...) — class method pattern.
+    # Uses (.*?) non-greedy (DOTALL) so ) inside annotation strings (e.g.
+    # "title": "Get Device (incl. ...)" ) don't prematurely close the match.
+    # Decorator-skip allows single-level parens like @with_auto_backup(...).
+    class_pattern = r'@tool\(\s*\n?\s*name="(ha_\w+)"[,\s]*(.*?)\)\s*(?:@\w+(?:\([^()]*\))?\s*)*async def \w+'
     tools.extend(
         _parse_decorator_args(
             f'name="{m.group(1)}", {m.group(2)}', m.group(1), file_path.name

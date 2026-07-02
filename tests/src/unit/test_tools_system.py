@@ -395,6 +395,255 @@ class TestFetchZwaveNetwork:
         assert result["nodes"][0]["node_id"] == 1
 
 
+class TestFetchThreadNetwork:
+    """``_fetch_thread_network`` calls ``otbr/info`` and summarizes each border
+    router (channel, extended_pan_id, border_agent_id) keyed by extended
+    address — mirrors the Z-Wave/ZHA never-raise section convention."""
+
+    def _thread_ws_client(self, info_resp):
+        """ws_client whose send_command('otbr/info') returns ``info_resp``."""
+        ws = MagicMock()
+
+        async def _send(command, **kwargs):
+            if command == "otbr/info":
+                return info_resp
+            return {"success": False, "error": {"message": "Unknown command."}}
+
+        ws.send_command = AsyncMock(side_effect=_send)
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_summarizes_border_routers(self):
+        """A loaded OTBR maps to one border-router summary with the three
+        documented fields, keyed by its extended address."""
+        ws = self._thread_ws_client(
+            {
+                "success": True,
+                "result": {
+                    "f00dcafef00dcafe": {
+                        "active_dataset_tlvs": "0e08...",
+                        "border_agent_id": "deadbeefdeadbeef",
+                        "channel": 15,
+                        "extended_address": "f00dcafef00dcafe",
+                        "extended_pan_id": "abcdef0123456789",
+                        "url": "http://core-silabs-multiprotocol:8081",
+                    }
+                },
+            }
+        )
+        result = await SystemTools._fetch_thread_network(ws)
+
+        sent = [call.args[0] for call in ws.send_command.call_args_list]
+        assert "otbr/info" in sent
+        assert "error" not in result
+        assert result["count"] == 1
+        br = result["border_routers"][0]
+        assert br["extended_address"] == "f00dcafef00dcafe"
+        assert br["channel"] == 15
+        assert br["extended_pan_id"] == "abcdef0123456789"
+        assert br["border_agent_id"] == "deadbeefdeadbeef"
+
+    @pytest.mark.asyncio
+    async def test_not_loaded_surfaces_error(self):
+        """``otbr/info`` answers success=false (code not_loaded) when no OTBR is
+        configured; the section surfaces the message as an error sub-dict."""
+        ws = self._thread_ws_client(
+            {
+                "success": False,
+                "error": {"code": "not_loaded", "message": "No OTBR API loaded"},
+            }
+        )
+        result = await SystemTools._fetch_thread_network(ws)
+
+        assert result["count"] == 0
+        assert result["border_routers"] == []
+        assert "No OTBR API loaded" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_ws_exception_captured_as_error(self):
+        """Exceptions during the WS call are caught and surfaced via ``error``."""
+        ws = AsyncMock()
+        ws.send_command.side_effect = RuntimeError("ws disconnect")
+
+        result = await SystemTools._fetch_thread_network(ws)
+
+        assert result["count"] == 0
+        assert "ws disconnect" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_fatal_cancellation_propagates_not_embedded(self):
+        """A CancelledError must unwind, not demote to a section error — guards
+        the ``_reraise_if_fatal`` gate."""
+        ws = AsyncMock()
+        ws.send_command.side_effect = asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await SystemTools._fetch_thread_network(ws)
+
+
+class TestFetchMatterNetwork:
+    """``_fetch_matter_network`` resolves the matter config entry via
+    ``config_entries/get`` and returns a lightweight presence summary."""
+
+    def _matter_ws_client(self, entries_resp):
+        """ws_client whose send_command('config_entries/get') returns
+        ``entries_resp``."""
+        ws = MagicMock()
+
+        async def _send(command, **kwargs):
+            if command == "config_entries/get":
+                return entries_resp
+            return {"success": False, "error": {"message": "Unknown command."}}
+
+        ws.send_command = AsyncMock(side_effect=_send)
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_resolves_matter_entry(self):
+        """The matter entry is selected by domain and reduced to
+        {config_entry_id, state, title}. Pins the canonical (underscore)
+        command name like the zwave helper test."""
+        ws = self._matter_ws_client(
+            {
+                "success": True,
+                "result": [
+                    {
+                        "domain": "hue",
+                        "entry_id": "hue1",
+                        "state": "loaded",
+                        "title": "Hue",
+                    },
+                    {
+                        "domain": "matter",
+                        "entry_id": "m1",
+                        "state": "loaded",
+                        "title": "Matter Server",
+                    },
+                ],
+            }
+        )
+        result = await SystemTools._fetch_matter_network(ws)
+
+        sent = [call.args[0] for call in ws.send_command.call_args_list]
+        assert "config_entries/get" in sent
+        assert "config/entries/get" not in sent
+        assert result == {
+            "config_entry_id": "m1",
+            "state": "loaded",
+            "title": "Matter Server",
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_matter_entry_returns_not_found(self):
+        """No matter entry → the documented not-found error sub-dict."""
+        ws = self._matter_ws_client(
+            {"success": True, "result": [{"domain": "hue", "entry_id": "hue1"}]}
+        )
+        result = await SystemTools._fetch_matter_network(ws)
+
+        assert result == {"error": "Matter integration not found"}
+
+    @pytest.mark.asyncio
+    async def test_ws_exception_captured_as_error(self):
+        """Exceptions during the WS call are caught and surfaced via ``error``."""
+        ws = AsyncMock()
+        ws.send_command.side_effect = RuntimeError("ws disconnect")
+
+        result = await SystemTools._fetch_matter_network(ws)
+
+        assert "ws disconnect" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_fatal_cancellation_propagates_not_embedded(self):
+        """A CancelledError must unwind, not demote to a section error."""
+        ws = AsyncMock()
+        ws.send_command.side_effect = asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await SystemTools._fetch_matter_network(ws)
+
+
+class TestGetSystemHealthThreadMatterWiring:
+    """``ha_get_system_health`` wires the thread_network / matter_network
+    include sections into the concurrent gather and the WS-unavailable branch,
+    mirroring the zwave_network plumbing."""
+
+    @pytest.mark.asyncio
+    async def test_both_sections_populated_when_requested(self):
+        client = MagicMock()
+        tools = SystemTools(client)
+        mock_thread = AsyncMock(return_value={"border_routers": [], "count": 0})
+        mock_matter = AsyncMock(
+            return_value={"config_entry_id": "m1", "state": "loaded", "title": "M"}
+        )
+
+        with (
+            _patch_health_info_baseline() as (_, ws_client),
+            patch.object(SystemTools, "_fetch_thread_network", new=mock_thread),
+            patch.object(SystemTools, "_fetch_matter_network", new=mock_matter),
+        ):
+            result = await tools.ha_get_system_health(
+                include="thread_network,matter_network"
+            )
+
+        assert result["thread_network"] == {"border_routers": [], "count": 0}
+        assert result["matter_network"]["config_entry_id"] == "m1"
+        mock_thread.assert_awaited_once()
+        mock_matter.assert_awaited_once()
+        ws_client.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unrequested_sections_not_called(self):
+        client = MagicMock()
+        tools = SystemTools(client)
+        mock_thread = AsyncMock()
+        mock_matter = AsyncMock()
+
+        with (
+            _patch_health_info_baseline(),
+            patch.object(
+                SystemTools,
+                "_fetch_repairs",
+                new=AsyncMock(return_value={"issues": [], "count": 0}),
+            ),
+            patch.object(SystemTools, "_fetch_thread_network", new=mock_thread),
+            patch.object(SystemTools, "_fetch_matter_network", new=mock_matter),
+        ):
+            result = await tools.ha_get_system_health(include="repairs")
+
+        assert "thread_network" not in result
+        assert "matter_network" not in result
+        mock_thread.assert_not_awaited()
+        mock_matter.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sections_reported_unavailable_when_ws_fails(self):
+        """With the health WS baseline down but a REST section also requested,
+        thread_network/matter_network carry the {error} sub-dict shape and a
+        summary warning rather than crashing the tool."""
+        client = MagicMock()
+        client.check_config = AsyncMock(return_value={"result": "valid"})
+        tools = SystemTools(client)
+
+        with patch.object(
+            SystemTools,
+            "_fetch_health_info",
+            new=AsyncMock(side_effect=ToolError("system_health WebSocket down")),
+        ):
+            result = await tools.ha_get_system_health(
+                include="thread_network,matter_network,config_check"
+            )
+
+        assert result["success"] is True
+        assert result["baseline_available"] is False
+        assert "error" in result["thread_network"]
+        assert "error" in result["matter_network"]
+        assert any(
+            "thread_network" in w or "matter_network" in w
+            for w in result.get("warnings", [])
+        )
+
+
 class TestGetSystemHealthGather:
     """``ha_get_system_health`` runs optional sections concurrently via ``asyncio.gather``.
 

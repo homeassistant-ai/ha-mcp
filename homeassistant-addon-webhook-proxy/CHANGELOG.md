@@ -3,6 +3,84 @@
 <!-- version list -->
 
 
+## v1.2.3 (2026-07-01)
+
+### Added
+
+- Refuse to start when the other Webhook Proxy flavor is already running (stable refuses
+  if the dev add-on `ha_mcp_webhook_proxy_dev` is running, and vice versa). Both flavors
+  register the same root OAuth `/authorize` and `/token` routes, so only one may run at a
+  time; the add-on now logs a clear error and raises a notification instead of colliding.
+- Fail the OAuth integration setup loudly (a clear `ConfigEntryError`) if the other flavor
+  already owns the root `/authorize` and `/token` views in this Home Assistant instance,
+  instead of silently shadowing them — Home Assistant keeps those views bound until it
+  restarts, even after the other add-on is stopped.
+- Prompt for a Home Assistant restart when OAuth is enabled. Enabling OAuth needs a full
+  HA restart to bind the root `/authorize`/`/token` views (restarting the add-on is not
+  enough), so the integration now raises a Repair with a click-to-restart button and the
+  option text says so. Disabling OAuth needs no restart.
+
+### Fixed
+
+- Correct the inbound-request debug-logging startup message: it claimed requests are
+  logged to Home Assistant's log "NOT this addon log", but they are now mirrored into the
+  add-on log too.
+- Harden OAuth setup: create the signing-key and credential files with `0600` in the
+  `open()` syscall (closing a brief chmod-after-write race), unregister the webhook if
+  OAuth setup fails so no dangling registration is left behind, and defensively reject a
+  non-object JWT payload instead of raising `AttributeError`.
+
+
+## v1.2.2 (2026-06-29)
+
+### Fixed
+
+- Remove the `/` from the add-on name ("Nabu Casa / Webhook Proxy for HA MCP" ->
+  "Nabu Casa - Webhook Proxy for HA MCP"). Home Assistant Supervisor builds the
+  pre-update backup filename from the add-on name and validates it against
+  `^[^/]+\.tar$`, so the slash made "Update" with "Create backup before update"
+  enabled fail with `does not match regular expression` (issue #1707).
+
+### Documentation
+
+- Correct the "Log inbound requests" option description. It still said requests
+  are logged to the Home Assistant log "NOT this addon log", which contradicts
+  the v1.2.1 mirroring — the lines now appear in this addon's own log as well
+  (issue #1708).
+
+
+## v1.2.1 (2026-06-28)
+
+### Added
+
+- Mirror inbound-request debug lines into the addon's own log. When "Log
+  inbound requests" is on, the lines that were previously only visible in the
+  Home Assistant log (Settings → System → Logs) now also appear on the addon's
+  Log tab, so you can confirm a client is reaching the server without leaving
+  the addon page.
+
+### Fixed
+
+- Log a shutdown reason and run cleanup on a Supervisor stop. The addon now
+  handles `SIGTERM`/`SIGINT`, so stopping it unregisters the webhook (as the
+  docs describe) and records why it exited, instead of being killed mid-loop
+  with no log line and the webhook left registered.
+
+- Append a "fully restart Home Assistant" hint to the OAuth stale-registration
+  errors (`invalid_client` and the browser "Invalid client id" page). The OAuth
+  HTTP views only refresh on a full HA restart, so a regenerate / OAuth toggle /
+  reinstall can otherwise leave a stale error with no obvious fix. (Client-side
+  protocol errors and the upstream 502/500 paths don't get the hint — a restart
+  isn't the fix there.)
+
+### Documentation
+
+- Warn that the Claude.ai connector must be deleted and re-created when OAuth
+  is toggled on/off or the webhook URL changes — Claude.ai caches the
+  authentication mode and URL per connector, so reusing the old one fails (for
+  example `invalid client id` on the consent page).
+
+
 ## v1.2.0 (2026-06-15)
 
 ### Added

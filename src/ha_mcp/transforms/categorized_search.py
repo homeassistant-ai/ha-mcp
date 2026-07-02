@@ -73,6 +73,10 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
 # Tool name patterns that indicate delete/remove operations
 _DELETE_PATTERNS = ("_remove_", "_delete_")
 
+# Capability tier a tool falls into — shared by the call-proxy routing and
+# the settings-UI capability badges. See ``categorize_capability``.
+Capability = Literal["read", "write", "delete"]
+
 
 class SearchKeywordsTransform(Transform):
     """Adjust BM25 search keywords in tool descriptions.
@@ -153,19 +157,35 @@ def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
     }
 
 
-def _categorize_tool(tool: Tool) -> str:
-    """Categorize a tool as read, write, or delete based on annotations and name."""
-    annotations = tool.annotations
-    if annotations and annotations.readOnlyHint:
+def categorize_capability(
+    name: str, *, read_only: bool, destructive: bool
+) -> Capability:
+    """Categorize a tool as ``read``, ``write``, or ``delete``.
+
+    Derived from the MCP annotations (``readOnlyHint``/``destructiveHint``):
+    read-only tools are ``read``; destructive tools whose name matches
+    ``_remove_``/``_delete_`` are ``delete``; everything else (including
+    non-destructive, non-read-only tools) is ``write`` — ``write`` is the
+    fallback bucket, not a subset of the destructive set. Shared by the
+    categorized-search call proxies and the settings-UI capability badges so
+    the two surfaces always agree on a tool's category.
+    """
+    if read_only:
         return "read"
     # A tool is 'delete' only if it's destructive AND its name suggests deletion
-    if (
-        annotations
-        and annotations.destructiveHint
-        and any(pattern in tool.name for pattern in _DELETE_PATTERNS)
-    ):
+    if destructive and any(pattern in name for pattern in _DELETE_PATTERNS):
         return "delete"
     return "write"
+
+
+def _categorize_tool(tool: Tool) -> Capability:
+    """Categorize a Tool as read, write, or delete based on annotations and name."""
+    annotations = tool.annotations
+    return categorize_capability(
+        tool.name,
+        read_only=bool(annotations and annotations.readOnlyHint),
+        destructive=bool(annotations and annotations.destructiveHint),
+    )
 
 
 class CategorizedSearchTransform(BM25SearchTransform):
@@ -273,7 +293,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
 
     async def _render_results(self, tools: Sequence[Tool]) -> list[dict[str, Any]]:
         """Serialize search results with ``execute_via`` hints."""
-        proxy_map = {
+        proxy_map: dict[Capability, str] = {
             "read": self._call_read_name,
             "write": self._call_write_name,
             "delete": self._call_delete_name,
@@ -292,7 +312,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
     def _make_categorized_proxy(
         self,
         proxy_name: str,
-        category: Literal["read", "write", "delete"],
+        category: Capability,
         annotations: ToolAnnotations,
         description: str,
     ) -> Tool:
@@ -393,7 +413,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 # so no initial sentinel value is needed.
                 correct_proxy = ""
                 if name in transform._read_tools:
-                    actual_category = "read"
+                    actual_category: Capability = "read"
                     correct_proxy = transform._call_read_name
                 elif name in transform._write_tools:
                     actual_category = "write"

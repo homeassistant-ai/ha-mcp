@@ -19,7 +19,53 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import yaml
 
-PROXY_ADDON_DIR = "homeassistant-addon-webhook-proxy"
+WEBHOOK_PROXY_VARIANTS = {
+    "stable": {
+        "key": "stable",
+        "addon_dir": "homeassistant-addon-webhook-proxy",
+        "component": "mcp_proxy",
+        "domain": "mcp_proxy",
+        "slug": "ha_mcp_webhook_proxy",
+        "oauth_base": "/api/mcp_proxy/oauth",
+        "config_file": "/config/.mcp_proxy_config.json",
+        "inbound_log": "/config/.mcp_proxy_inbound.log",
+        "oauth_marker": "/config/.mcp_proxy_oauth_restart_required",
+        "sibling_base": "ha_mcp_webhook_proxy_dev",
+        "mutex_id": "mcp_proxy_mutex",
+    },
+    "dev": {
+        "key": "dev",
+        "addon_dir": "homeassistant-addon-webhook-proxy-dev",
+        "component": "mcp_proxy_dev",
+        "domain": "mcp_proxy_dev",
+        "slug": "ha_mcp_webhook_proxy_dev",
+        "oauth_base": "/api/mcp_proxy_dev/oauth",
+        "config_file": "/config/.mcp_proxy_dev_config.json",
+        "inbound_log": "/config/.mcp_proxy_dev_inbound.log",
+        "oauth_marker": "/config/.mcp_proxy_dev_oauth_restart_required",
+        "sibling_base": "ha_mcp_webhook_proxy",
+        "mutex_id": "mcp_proxy_dev_mutex",
+    },
+}
+
+# Rebound per-variant by the autouse `_webhook_proxy_variant` fixture below.
+PROXY_ADDON_DIR = WEBHOOK_PROXY_VARIANTS["stable"]["addon_dir"]
+CURRENT = WEBHOOK_PROXY_VARIANTS["stable"]
+
+
+@pytest.fixture(
+    autouse=True,
+    params=list(WEBHOOK_PROXY_VARIANTS.values()),
+    ids=lambda v: v["key"],
+)
+def _webhook_proxy_variant(request, monkeypatch):
+    """Rebind PROXY_ADDON_DIR/CURRENT so every test in this module runs once
+    per addon flavor (stable, dev). monkeypatch auto-reverts after each test."""
+    variant = request.param
+    mod = sys.modules[__name__]
+    monkeypatch.setattr(mod, "PROXY_ADDON_DIR", variant["addon_dir"])
+    monkeypatch.setattr(mod, "CURRENT", variant)
+    return variant
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +76,9 @@ PROXY_ADDON_DIR = "homeassistant-addon-webhook-proxy"
 def _import_start():
     """Import the webhook proxy start.py as a module."""
     start_path = os.path.join(PROXY_ADDON_DIR, "start.py")
-    spec = importlib.util.spec_from_file_location("webhook_proxy_start", start_path)
+    spec = importlib.util.spec_from_file_location(
+        f"webhook_proxy_start_{CURRENT['key']}", start_path
+    )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -164,23 +212,28 @@ def _import_mcp_proxy(preload_oauth=None):
     """Import the mcp_proxy package's __init__.py with HA imports stubbed.
 
     `preload_oauth`: pre-register a specific oauth module under the
-    relative-import name (`mcp_proxy_init.oauth`). Without this, the
-    integration's `from .oauth import ...` calls would load a fresh oauth
-    module pointing at /config — fine for production, useless for tests.
+    relative-import name (`mcp_proxy_init_<variant>.oauth`). Without this,
+    the integration's `from .oauth import ...` calls would load a fresh
+    oauth module pointing at /config — fine for production, useless for
+    tests. The module name is suffixed with the active variant key so
+    stable/dev imports never share (or clobber) each other's sys.modules
+    entry.
     """
     _install_runtime_stubs()
-    init_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "__init__.py")
-    sys.modules.pop("mcp_proxy_init", None)
-    sys.modules.pop("mcp_proxy_init.oauth", None)
+    component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
+    init_path = os.path.join(component_dir, "__init__.py")
+    mod_name = f"mcp_proxy_init_{CURRENT['key']}"
+    sys.modules.pop(mod_name, None)
+    sys.modules.pop(f"{mod_name}.oauth", None)
     spec = importlib.util.spec_from_file_location(
-        "mcp_proxy_init",
+        mod_name,
         init_path,
-        submodule_search_locations=[os.path.join(PROXY_ADDON_DIR, "mcp_proxy")],
+        submodule_search_locations=[component_dir],
     )
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["mcp_proxy_init"] = mod
+    sys.modules[mod_name] = mod
     if preload_oauth is not None:
-        sys.modules["mcp_proxy_init.oauth"] = preload_oauth
+        sys.modules[f"{mod_name}.oauth"] = preload_oauth
     spec.loader.exec_module(mod)
     return mod
 
@@ -189,21 +242,44 @@ def _import_oauth(tmp_secret_dir=None):
     """Import the oauth submodule, optionally redirecting the secret file
     to a tmp dir so tests don't need root or write access to /config.
 
-    Registers in sys.modules under both `mcp_proxy_oauth` (so test patches
-    targeting that name resolve) and the module returned can be passed to
-    `_import_mcp_proxy(preload_oauth=...)` so the integration's relative
-    import resolves to the same instance.
+    Registers in sys.modules under `mcp_proxy_oauth_<variant>` (so test
+    patches targeting that name resolve) and the module returned can be
+    passed to `_import_mcp_proxy(preload_oauth=...)` so the integration's
+    relative import resolves to the same instance.
     """
     _install_runtime_stubs()
-    oauth_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "oauth.py")
-    sys.modules.pop("mcp_proxy_oauth", None)
-    spec = importlib.util.spec_from_file_location("mcp_proxy_oauth", oauth_path)
+    oauth_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "oauth.py")
+    mod_name = f"mcp_proxy_oauth_{CURRENT['key']}"
+    sys.modules.pop(mod_name, None)
+    spec = importlib.util.spec_from_file_location(mod_name, oauth_path)
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["mcp_proxy_oauth"] = mod
+    sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     if tmp_secret_dir is not None:
         mod.SECRET_FILE = Path(tmp_secret_dir) / ".mcp_proxy_oauth_secret"
     return mod
+
+
+def _bind_repairs(mod, tmp_marker_dir):
+    """Load the repairs submodule and bind it as `<mod.__name__>.repairs` so
+    the integration's `from .repairs import ...` (evaluated inside
+    async_setup_entry at call time) resolves to THIS instance. The marker file
+    is redirected into `tmp_marker_dir` so tests never touch /config, and the
+    returned module can be patched (e.g. `create_issue`, `_write_marker`)
+    before calling async_setup_entry — the `from .repairs import ...` reads the
+    module attributes at execution time, so patches take effect.
+    """
+    repairs_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "repairs.py")
+    submod_name = f"{mod.__name__}.repairs"
+    sys.modules.pop(submod_name, None)
+    spec = importlib.util.spec_from_file_location(submod_name, repairs_path)
+    repairs = importlib.util.module_from_spec(spec)
+    sys.modules[submod_name] = repairs
+    spec.loader.exec_module(repairs)
+    repairs.RESTART_MARKER_FILE = (
+        Path(tmp_marker_dir) / ".mcp_proxy_oauth_restart_required"
+    )
+    return repairs
 
 
 # ---------------------------------------------------------------------------
@@ -221,11 +297,13 @@ class TestWebhookProxyStructure:
             assert os.path.exists(path), f"Missing required file: {f}"
 
     def test_mcp_proxy_integration_exists(self):
-        int_dir = os.path.join(PROXY_ADDON_DIR, "mcp_proxy")
+        int_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
         required = ["__init__.py", "config_flow.py", "manifest.json", "strings.json"]
         for f in required:
             path = os.path.join(int_dir, f)
-            assert os.path.exists(path), f"Missing integration file: mcp_proxy/{f}"
+            assert os.path.exists(path), (
+                f"Missing integration file: {CURRENT['component']}/{f}"
+            )
 
     def test_config_yaml_valid(self):
         with open(f"{PROXY_ADDON_DIR}/config.yaml") as f:
@@ -235,7 +313,7 @@ class TestWebhookProxyStructure:
         for field in required_fields:
             assert field in config, f"Missing required field: {field}"
 
-        assert config["slug"] == "ha_mcp_webhook_proxy"
+        assert config["slug"] == CURRENT["slug"]
         assert config["hassio_api"] is True
         assert config["homeassistant_api"] is True
         assert config["hassio_role"] == "manager"
@@ -305,7 +383,7 @@ class TestWebhookProxyStructure:
         `_install_integration` correctly detects updates."""
         with open(f"{PROXY_ADDON_DIR}/config.yaml") as f:
             addon_version = yaml.safe_load(f)["version"]
-        with open(f"{PROXY_ADDON_DIR}/mcp_proxy/manifest.json") as f:
+        with open(f"{PROXY_ADDON_DIR}/{CURRENT['component']}/manifest.json") as f:
             manifest_version = json.load(f)["version"]
         assert addon_version == manifest_version, (
             "Addon config.yaml version and integration manifest.json "
@@ -320,10 +398,10 @@ class TestWebhookProxyStructure:
         assert "image" not in config
 
     def test_manifest_json_valid(self):
-        with open(f"{PROXY_ADDON_DIR}/mcp_proxy/manifest.json") as f:
+        with open(f"{PROXY_ADDON_DIR}/{CURRENT['component']}/manifest.json") as f:
             manifest = json.load(f)
 
-        assert manifest["domain"] == "mcp_proxy"
+        assert manifest["domain"] == CURRENT["domain"]
         assert manifest["config_flow"] is True
         assert "webhook" in manifest["dependencies"]
 
@@ -540,6 +618,159 @@ class TestAddonDiscovery:
 
         assert slug == "ha_mcp"
         assert ip == "172.30.33.1"
+
+
+class TestMutexRefusal:
+    """_refuse_if_sibling_running is the startup guard that keeps the dev and
+    stable Webhook Proxy flavors from both owning HA's root OAuth routes."""
+
+    @pytest.fixture
+    def start(self):
+        return _import_start()
+
+    def _sibling_addon(self, state):
+        # Supervisor hash-prefixes third-party slugs; the guard matches by the
+        # "_<base>" suffix, so exercise that shape rather than a bare slug.
+        return {"slug": f"abc123_{CURRENT['sibling_base']}", "state": state}
+
+    def test_refuses_and_notifies_when_sibling_started(self, start):
+        api_calls = []
+
+        def fake_api(method, path, data=None):
+            api_calls.append((method, path, data))
+            return {}
+
+        with (
+            patch.object(
+                start,
+                "_supervisor_get",
+                return_value={"addons": [self._sibling_addon("started")]},
+            ),
+            patch.object(start, "_ha_core_api", side_effect=fake_api),
+        ):
+            assert start._refuse_if_sibling_running() is True
+
+        creates = [
+            data
+            for method, path, data in api_calls
+            if method == "POST" and path == "/services/persistent_notification/create"
+        ]
+        assert len(creates) == 1
+        assert creates[0]["notification_id"] == CURRENT["mutex_id"]
+
+    def test_no_refuse_when_sibling_stopped(self, start):
+        api_calls = []
+        with (
+            patch.object(
+                start,
+                "_supervisor_get",
+                return_value={"addons": [self._sibling_addon("stopped")]},
+            ),
+            patch.object(
+                start, "_ha_core_api", side_effect=lambda *a, **k: api_calls.append(a)
+            ),
+        ):
+            assert start._refuse_if_sibling_running() is False
+        assert api_calls == []
+
+    def test_no_refuse_when_addon_list_empty(self, start):
+        api_calls = []
+        with (
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+            patch.object(
+                start, "_ha_core_api", side_effect=lambda *a, **k: api_calls.append(a)
+            ),
+        ):
+            assert start._refuse_if_sibling_running() is False
+        assert api_calls == []
+
+    def test_fail_open_loudly_when_supervisor_unreachable(self, start, capsys):
+        """When the Supervisor /addons query can't be resolved (always None),
+        the guard fails OPEN (returns False → starts anyway) after a bounded
+        retry, but NOT silently: it logs a loud error so the bypass is visible.
+        time.sleep is neutralized so the retry backoff doesn't actually wait."""
+        sup = MagicMock(return_value=None)
+        sleep = MagicMock()
+        api_calls = []
+        with (
+            patch.object(start, "_supervisor_get", sup),
+            patch.object(start.time, "sleep", sleep),
+            patch.object(
+                start, "_ha_core_api", side_effect=lambda *a, **k: api_calls.append(a)
+            ),
+        ):
+            assert start._refuse_if_sibling_running() is False
+
+        # Bounded retry: 3 attempts, sleeping only between them (not after the
+        # last), so the loop is provably finite.
+        assert sup.call_count == 3
+        assert sleep.call_count == 2
+        # Fail-open is loud, and posts no mutex notification (we didn't refuse).
+        assert "Could not query the Supervisor /addons list" in capsys.readouterr().err
+        assert api_calls == []
+
+
+class TestMainDismissesMutexBanners:
+    """On a clean start (sibling absent) main() dismisses BOTH its own mutex
+    notification and the sibling flavor's, so a stale 'refused to start' banner
+    from either flavor clears once the user resolves the conflict here."""
+
+    def _run_main_to_keepalive(self, tmp_path):
+        start = _import_start()
+        options_dir = tmp_path / "data"
+        options_dir.mkdir()
+        # Skip discovery via the mcp_server_url override; OAuth + debug off so
+        # main() takes the plain success path straight to the dismiss loop.
+        (options_dir / "options.json").write_text(
+            json.dumps(
+                {"mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa"}
+            )
+        )
+        config_path = tmp_path / "proxy_config.json"
+
+        def path_factory(arg):
+            if arg == "/data/options.json":
+                return options_dir / "options.json"
+            if arg == "/data":
+                return options_dir
+            if arg == CURRENT["config_file"]:
+                return config_path
+            return Path(arg)
+
+        api_calls = []
+
+        def fake_api(method, path, data=None):
+            api_calls.append((method, path, data))
+            return {}
+
+        with (
+            patch.object(start, "Path", side_effect=path_factory),
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+            patch.object(start, "_ha_core_api", side_effect=fake_api),
+            patch.object(start, "_install_integration", return_value=(False, False)),
+            patch.object(start, "_ensure_config_entry", return_value=True),
+            patch.object(
+                start, "_install_shutdown_handlers", return_value={"reason": None}
+            ),
+            patch.object(start, "_health_check", return_value=True),
+            patch.object(start, "_shutdown_cleanup"),
+            # Break out of the keep-alive loop on its first sleep; main() catches
+            # KeyboardInterrupt and shuts down cleanly (returns 0).
+            patch.object(start.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            rc = start.main()
+        return rc, api_calls, start
+
+    def test_clean_start_dismisses_own_and_sibling_banner(self, tmp_path):
+        rc, api_calls, start = self._run_main_to_keepalive(tmp_path)
+        assert rc == 0
+        dismissed = [
+            data["notification_id"]
+            for method, path, data in api_calls
+            if path == "/services/persistent_notification/dismiss"
+        ]
+        assert start.MUTEX_NOTIFICATION_ID in dismissed
+        assert start.SIBLING_MUTEX_NOTIFICATION_ID in dismissed
 
 
 class TestSecretPathDiscovery:
@@ -1167,7 +1398,8 @@ class TestOAuthOffPreservesBehavior:
             "webhook_id": "mcp_test_webhook_id_12345",
         }
         # Wipe any stale import
-        sys.modules.pop("mcp_proxy_init.oauth", None)
+        oauth_submodule_name = f"mcp_proxy_init_{CURRENT['key']}.oauth"
+        sys.modules.pop(oauth_submodule_name, None)
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
@@ -1176,8 +1408,9 @@ class TestOAuthOffPreservesBehavior:
             await mod.async_setup_entry(hass, MagicMock())
 
         # The submodule name follows from the parent's package name
-        # ("mcp_proxy_init"). If it ever appears here, the OFF path imported it.
-        assert "mcp_proxy_init.oauth" not in sys.modules
+        # ("mcp_proxy_init_<variant>"). If it ever appears here, the OFF path
+        # imported it.
+        assert oauth_submodule_name not in sys.modules
 
     async def test_blank_creds_raises_config_entry_error(self, mod, hass):
         """Blank creds in an oauth section signal a config bug — the user
@@ -1193,6 +1426,7 @@ class TestOAuthOffPreservesBehavior:
         with (
             patch.object(mod, "_read_config", return_value=proxy_config),
             patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
             pytest.raises(_FakeConfigEntryError) as exc_info,
         ):
@@ -1200,6 +1434,9 @@ class TestOAuthOffPreservesBehavior:
 
         assert "client_id and/or client_secret is blank" in str(exc_info.value)
         assert mod.DOMAIN not in hass.data
+        # The webhook we registered above is torn down so we don't leave an
+        # unauthenticated endpoint live after OAuth setup bails.
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
         # Session was opened then closed cleanly so we don't leak it on the
         # failure path.
         session.close.assert_awaited_once()
@@ -1545,6 +1782,101 @@ class TestDebugLogging:
         assert webhook_id[:6] in caplog.text
 
 
+class TestInboundLogMirror:
+    """Issue #1694: inbound debug lines are mirrored into the addon log.
+
+    The integration appends each inbound line to INBOUND_LOG_FILE; the addon's
+    keep-alive loop tails that file and echoes new lines to its own stdout so
+    they show up in the addon log, not only in Settings -> System -> Logs.
+    """
+
+    def test_append_inbound_log_writes_and_caps(self, tmp_path):
+        mod = _import_mcp_proxy()
+        log_file = tmp_path / "inbound.log"
+        with (
+            patch.object(mod, "INBOUND_LOG_FILE", log_file),
+            patch.object(mod, "_INBOUND_LOG_CAP", 200),
+        ):
+            for i in range(100):
+                mod._append_inbound_log(f"MCP Proxy [inbound]: line number {i}")
+            # Capped to bound growth, and the most recent line survives intact.
+            assert log_file.stat().st_size <= 200
+            assert log_file.read_text().splitlines()[-1].endswith("line number 99")
+
+    def test_append_inbound_log_swallows_oserror(self, tmp_path):
+        """A read-only / missing /config must not turn a debug write into a
+        propagating error (it runs in the executor, fire-and-forget)."""
+        mod = _import_mcp_proxy()
+        bad = tmp_path / "missing-dir" / "inbound.log"  # parent doesn't exist
+        with patch.object(mod, "INBOUND_LOG_FILE", bad):
+            mod._append_inbound_log("x")  # must not raise
+
+    async def test_handle_webhook_mirrors_inbound_line(self, tmp_path):
+        """A debug-on request dispatches the inbound line to the executor, which
+        lands in INBOUND_LOG_FILE for the addon to tail."""
+        mod = _import_mcp_proxy()
+        log_file = tmp_path / "inbound.log"
+
+        def fake_executor(func, *args):
+            func(*args)  # run the append synchronously for the test
+            return MagicMock()
+
+        hass = MagicMock()
+        hass.async_add_executor_job = MagicMock(side_effect=fake_executor)
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+                "debug_logging": True,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.remote = "203.0.113.4"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("stop")
+        )
+        with patch.object(mod, "INBOUND_LOG_FILE", log_file):
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+
+        text = log_file.read_text()
+        assert "[inbound]" in text
+        assert "203.0.113.4" in text
+
+    def test_emit_new_inbound_lines_tails_file(self, tmp_path):
+        """The addon tail emits only whole lines, holds a partial for the next
+        poll, never duplicates, and resets when the file is rotated."""
+        start = _import_start()
+        log_file = tmp_path / "inbound.log"
+        emitted: list[str] = []
+        with (
+            patch.object(start, "INBOUND_LOG_FILE", log_file),
+            patch.object(start, "log_info", side_effect=emitted.append),
+        ):
+            state = {"offset": 0}
+            start._emit_new_inbound_lines(state)  # no file yet
+            assert emitted == []
+
+            log_file.write_bytes(b"line A\nline B\npartial")
+            start._emit_new_inbound_lines(state)
+            assert emitted == ["line A", "line B"]  # partial held back
+
+            with log_file.open("ab") as fh:
+                fh.write(b" done\n")
+            emitted.clear()
+            start._emit_new_inbound_lines(state)
+            assert emitted == ["partial done"]  # completed, not re-emitted
+
+            log_file.write_bytes(b"fresh\n")  # truncation/rotation
+            emitted.clear()
+            start._emit_new_inbound_lines(state)
+            assert emitted == ["fresh"]
+
+
 class TestOAuthProvider:
     """Direct unit tests against the OAuthProvider class."""
 
@@ -1711,6 +2043,29 @@ class TestOAuthProvider:
         )
         assert provider2.validate_access_token(token) is True
 
+    def test_validly_signed_non_dict_payload_rejected(self, tmp_path):
+        """A token whose HMAC is valid but whose JSON body is NOT an object
+        (e.g. a list or scalar) must be rejected, not crash the `.get(...)`
+        access in _validate_token. Build the token exactly like _issue_token
+        does but with a list body, signed with the provider's real key."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
+        import hashlib
+        import hmac as _hmac
+
+        body = oauth._b64url_encode(json.dumps([1, 2, 3]).encode())
+        sig = _hmac.new(
+            provider._signing_key, body.encode("ascii"), hashlib.sha256
+        ).digest()
+        token = f"{body}.{oauth._b64url_encode(sig)}"
+        assert provider.validate_access_token(token) is False
+
 
 class TestOAuthSetupEntry:
     """async_setup_entry creates and registers an OAuthProvider when the
@@ -1737,9 +2092,14 @@ class TestOAuthSetupEntry:
         self, hass, tmp_path
     ):
         # Pre-load the oauth module with a tmp secret file, then bind it as
-        # mcp_proxy_init.oauth so the integration's relative import finds it.
+        # mcp_proxy_init_<variant>.oauth so the integration's relative import
+        # finds it.
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
         mod = _import_mcp_proxy(preload_oauth=oauth)
+        # Boot-time setup (is_running False): the first registration binds the
+        # root views cleanly and takes the marker-clear path, so this test
+        # doesn't touch the real /config marker via the mid-session write path.
+        hass.is_running = False
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
             "webhook_id": "mcp_test",
@@ -1760,6 +2120,351 @@ class TestOAuthSetupEntry:
         assert provider.client_id == "client-1234567890ABCDEF"
         # 4 OAuth views registered
         assert hass.http.register_view.call_count == 4
+        # Successful OAuth setup records that THIS flavor owns the root routes,
+        # so the sibling flavor refuses loudly instead of shadowing them.
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
+
+    async def test_provider_init_failure_unregisters_and_raises(self, hass, tmp_path):
+        """When the OAuth provider can't be constructed (e.g. the signing key
+        can't be loaded), the user explicitly opted into auth, so we refuse to
+        start: raise ConfigEntryError AND tear down the webhook registered
+        above so no unauthenticated endpoint is left live, and close the
+        session so it isn't leaked."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+        session = MagicMock()
+        session.close = AsyncMock()
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            patch.object(
+                oauth, "load_or_create_secret", side_effect=RuntimeError("boom")
+            ),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "Failed to enable OAuth" in str(exc_info.value)
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
+        session.close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
+
+    async def test_sibling_flavor_owns_oauth_routes_refuses_loudly(
+        self, hass, tmp_path
+    ):
+        """If the OTHER flavor already registered the root OAuth /authorize +
+        /token views in this HA instance (the shared marker names its domain),
+        we refuse LOUDLY (ConfigEntryError) instead of silently shadowing its
+        routes — HA can't share or release those root views, and our provider
+        uses a different signing key. Covers the sibling add-on being stopped
+        but its views still bound."""
+        mod = _import_mcp_proxy()
+        sibling_domain = "mcp_proxy_dev" if mod.DOMAIN == "mcp_proxy" else "mcp_proxy"
+        hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = sibling_domain
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+        session = MagicMock()
+        session.close = AsyncMock()
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "already owns" in str(exc_info.value)
+        # Refused before creating our provider: webhook torn down, session
+        # closed, our DOMAIN not stored, and the sibling's marker left intact.
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
+        session.close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == sibling_domain
+
+    async def test_sibling_claims_routes_during_secret_load_refuses(
+        self, hass, tmp_path
+    ):
+        """TOCTOU guard: the pre-await owner check can pass (no owner yet) and
+        the sibling flavor's concurrently-setting-up entry can then register
+        and claim the root routes while this entry is suspended in the
+        load_or_create_secret executor await. The post-await re-check must see
+        the sibling's claim and refuse loudly instead of registering shadowed
+        duplicate views."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        sibling_domain = "mcp_proxy_dev" if mod.DOMAIN == "mcp_proxy" else "mcp_proxy"
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+        session = MagicMock()
+        session.close = AsyncMock()
+
+        def sibling_claims_then_returns_key():
+            # Runs inside the executor await — the suspension window in which
+            # the sibling's setup can interleave on the event loop.
+            hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = sibling_domain
+            return b"k" * 32
+
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            patch.object(
+                oauth,
+                "load_or_create_secret",
+                side_effect=sibling_claims_then_returns_key,
+            ),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "claimed" in str(exc_info.value)
+        # Same teardown contract as the pre-await guard: webhook torn down,
+        # session closed, no views registered, our DOMAIN not stored, and the
+        # sibling's claim left intact.
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
+        session.close.assert_awaited_once()
+        hass.http.register_view.assert_not_called()
+        assert mod.DOMAIN not in hass.data
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == sibling_domain
+
+
+class TestOAuthRestartRepairTrigger:
+    """async_setup_entry surfaces the restart Repair when OAuth is enabled
+    MID-SESSION (hass.is_running is True), because HA only binds the root
+    /authorize + /token views cleanly at startup. On a boot-time setup
+    (hass.is_running False), or with OAuth off, it clears any stale
+    marker/issue instead — no restart is needed."""
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+        h.http = MagicMock()
+        h.http.register_view = MagicMock()
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        return h
+
+    @staticmethod
+    def _oauth_config():
+        return {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+
+    async def test_oauth_enabled_mid_session_raises_restart_repair(
+        self, hass, tmp_path
+    ):
+        """Mid-session enable: the marker is written and the Repair issue is
+        created; the clear path must NOT run."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        repairs = _bind_repairs(mod, tmp_path)
+        hass.is_running = True
+        with (
+            patch.object(mod, "_read_config", return_value=self._oauth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_clear_marker") as mock_clear,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            # _write_marker runs for real, writing the redirected tmp marker.
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert repairs.RESTART_MARKER_FILE.exists()
+        mock_create_issue.assert_called_once_with(hass, mod.DOMAIN)
+        mock_clear.assert_not_called()
+        mock_delete.assert_not_called()
+
+    async def test_oauth_enabled_during_boot_clears_marker(self, hass, tmp_path):
+        """Boot-time enable (views bind cleanly): the stale marker is cleared,
+        the issue is deleted, and NO restart Repair is created."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        repairs = _bind_repairs(mod, tmp_path)
+        hass.is_running = False
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
+        with (
+            patch.object(mod, "_read_config", return_value=self._oauth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_write_marker") as mock_write,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            # _clear_marker runs for real, deleting the redirected tmp marker.
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert not repairs.RESTART_MARKER_FILE.exists()
+        mock_delete.assert_called_once_with(hass, mod.DOMAIN)
+        mock_create_issue.assert_not_called()
+        mock_write.assert_not_called()
+
+    async def test_oauth_off_clears_marker(self, hass, tmp_path):
+        """No oauth section: even mid-session (is_running True) this clears the
+        stale marker/issue and never creates a restart Repair."""
+        mod = _import_mcp_proxy()
+        repairs = _bind_repairs(mod, tmp_path)
+        hass.is_running = True
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_write_marker") as mock_write,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert not repairs.RESTART_MARKER_FILE.exists()
+        mock_delete.assert_called_once_with(hass, mod.DOMAIN)
+        mock_create_issue.assert_not_called()
+        mock_write.assert_not_called()
+
+    async def test_same_flavor_reload_reuses_views_no_restart(self, hass, tmp_path):
+        """Mid-session reload of OUR OWN entry with the SAME OAuth identity
+        (route owner already == DOMAIN AND the bound-view fingerprint matches
+        the current creds + signing key, is_running True): setup PROCEEDS
+        without the sibling 'already owns' raise, does NOT re-register the root
+        views (HA can't re-bind them mid-session), and clears any stale
+        marker/issue instead of raising a restart Repair — OAuth is already
+        live. This is the FIX for the spurious restart Repair on every benign
+        mid-session reload."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        repairs = _bind_repairs(mod, tmp_path)
+        hass.is_running = True
+        # Pin the signing key so the fingerprint of the bound views is
+        # computable, then seed a MATCHING fingerprint — the "reload with the
+        # same identity" case that must reuse the views without a restart.
+        fixed_key = b"k" * 32
+        creds = self._oauth_config()["oauth"]
+        # We already registered the root OAuth views earlier this session, bound
+        # to the SAME identity we're now reloading with.
+        hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = mod.DOMAIN
+        hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = mod._oauth_route_fingerprint(
+            creds["client_id"], creds["client_secret"], fixed_key
+        )
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
+        with (
+            patch.object(mod, "_read_config", return_value=self._oauth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(oauth, "load_or_create_secret", return_value=fixed_key),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_write_marker") as mock_write,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            # _clear_marker runs for real, deleting the redirected tmp marker.
+            result = await mod.async_setup_entry(hass, MagicMock())
+
+        # Setup proceeded (no "already owns" raise); provider still stored and
+        # the webhook was NOT torn down.
+        assert result is True
+        assert hass.data[mod.DOMAIN]["oauth"] is not None
+        mock_unreg.assert_not_called()
+        # The 4 root views are NOT re-registered on a same-flavor reload.
+        assert hass.http.register_view.call_count == 0
+        # Ownership marker + bound-view fingerprint stay ours (unchanged).
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
+        assert hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] == (
+            mod._oauth_route_fingerprint(
+                creds["client_id"], creds["client_secret"], fixed_key
+            )
+        )
+        # No restart Repair: clear path taken (marker cleared, issue deleted).
+        assert not repairs.RESTART_MARKER_FILE.exists()
+        mock_delete.assert_called_once_with(hass, mod.DOMAIN)
+        mock_create_issue.assert_not_called()
+        mock_write.assert_not_called()
+
+    async def test_same_flavor_reload_creds_changed_raises_restart(
+        self, hass, tmp_path
+    ):
+        """Mid-session reload of OUR OWN entry after the OAuth creds/key were
+        REGENERATED (route owner == DOMAIN but the bound-view fingerprint no
+        longer matches the reloaded identity, is_running True): the live root
+        views still serve the OLD identity while the webhook now validates
+        against the NEW one, so no client can obtain a token the webhook
+        accepts. Setup must PROCEED (no 'already owns' raise), must NOT
+        re-register the root views (HA can't re-bind them mid-session), and must
+        take the restart path (write marker + create Repair, no clear) so the
+        user is prompted to restart HA to activate the new credentials — the
+        credential-regeneration bug this fixes."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        repairs = _bind_repairs(mod, tmp_path)
+        hass.is_running = True
+        # We own the routes, but the bound views were registered with a
+        # DIFFERENT (now-stale) identity than the creds we're reloading with.
+        hass.data[mod.OAUTH_ROUTE_OWNER_KEY] = mod.DOMAIN
+        hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] = "stale-fingerprint"
+        with (
+            patch.object(mod, "_read_config", return_value=self._oauth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_clear_marker") as mock_clear,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            # _write_marker runs for real, writing the redirected tmp marker.
+            result = await mod.async_setup_entry(hass, MagicMock())
+
+        # Setup proceeded (no "already owns" raise); provider stored, webhook
+        # NOT torn down.
+        assert result is True
+        assert hass.data[mod.DOMAIN]["oauth"] is not None
+        mock_unreg.assert_not_called()
+        # The root views are NOT re-registered (HA can't re-bind mid-session).
+        assert hass.http.register_view.call_count == 0
+        # Ownership marker stays ours; the stale fingerprint is left in place so
+        # a later boot-time setup re-registers and refreshes it.
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
+        assert hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] == "stale-fingerprint"
+        # Restart Repair path: marker written + issue created, clear NOT taken.
+        assert repairs.RESTART_MARKER_FILE.exists()
+        mock_create_issue.assert_called_once_with(hass, mod.DOMAIN)
+        mock_clear.assert_not_called()
+        mock_delete.assert_not_called()
 
 
 class TestOAuthWebhookHandler:
@@ -1937,6 +2642,74 @@ class TestResolveOAuthCreds:
         assert "Could not read existing OAuth creds" in capsys.readouterr().err
 
 
+class TestOAuthFilePermissions:
+    """The signing-key and creds files must land at 0600 even on an OVERWRITE
+    (os.open only applies the mode on CREATE, so a plain overwrite of a
+    pre-existing wider file would NOT re-restrict it — the atomic temp+replace
+    helper guarantees 0600 on both first-create and regenerate). When the
+    filesystem can't honor a restricted create (tmpfs / non-POSIX), both paths
+    fall back to a best-effort plain write AND warn rather than failing."""
+
+    def _secret_file(self, tmp_path):
+        # Reflect each flavor's REAL default basename (dev's is
+        # .mcp_proxy_dev_oauth_secret), not the stable literal.
+        return tmp_path / f".{CURRENT['component']}_oauth_secret"
+
+    def test_secret_file_created_0600(self, tmp_path):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        oauth.SECRET_FILE = self._secret_file(tmp_path)
+        oauth.load_or_create_secret()
+        assert oauth.SECRET_FILE.exists()
+        assert oct(oauth.SECRET_FILE.stat().st_mode & 0o777) == "0o600"
+
+    def test_secret_file_rerestricted_on_overwrite(self, tmp_path):
+        """Regression for the core fix: a pre-existing WIDER (0644) short/invalid
+        key file gets re-restricted to 0600 when regenerated — the old
+        os.open(O_CREAT) reused the wide mode on overwrite and left it readable."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        secret_file = self._secret_file(tmp_path)
+        oauth.SECRET_FILE = secret_file
+        # Short (invalid) existing key at wide perms → forces regeneration.
+        secret_file.write_bytes(b"short")
+        os.chmod(secret_file, 0o644)
+        oauth.load_or_create_secret()
+        assert oct(secret_file.stat().st_mode & 0o777) == "0o600"
+
+    def test_secret_falls_back_and_warns_on_oserror(self, tmp_path, caplog):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        oauth.SECRET_FILE = self._secret_file(tmp_path)
+        with (
+            patch.object(oauth.os, "open", side_effect=OSError("no mode bits")),
+            caplog.at_level(logging.WARNING),
+        ):
+            secret = oauth.load_or_create_secret()
+        # Persisted via the plain-write fallback...
+        assert oauth.SECRET_FILE.read_bytes() == secret
+        assert len(secret) == 32
+        # ...and the degradation was warned about, not swallowed.
+        assert any("restricted permissions" in r.getMessage() for r in caplog.records)
+
+    def test_creds_file_created_0600(self, tmp_path):
+        start = _import_start()
+        start._resolve_oauth_creds(tmp_path, "", "")
+        creds_file = tmp_path / "oauth_creds.json"
+        assert creds_file.exists()
+        assert oct(creds_file.stat().st_mode & 0o777) == "0o600"
+
+    def test_creds_falls_back_and_warns_on_oserror(self, tmp_path, capsys):
+        start = _import_start()
+        with patch.object(start.os, "open", side_effect=OSError("no mode bits")):
+            cid, sec = start._resolve_oauth_creds(tmp_path, "", "")
+        creds_file = tmp_path / "oauth_creds.json"
+        # Fallback plain-write still persisted VALID creds (not ("", "")).
+        assert cid.startswith("hamcp-")
+        assert len(sec) >= 32
+        stored = json.loads(creds_file.read_text())
+        assert stored["client_id"] == cid
+        assert stored["client_secret"] == sec
+        assert "wider permissions than intended" in capsys.readouterr().err
+
+
 class TestStartOAuthValidation:
     """start.py-level validation: enable_oauth=true triggers credential
     resolution; only the length check on a user-supplied client_id can
@@ -1959,7 +2732,16 @@ class TestStartOAuthValidation:
     def _run_main_with_options(self, tmp_path, **opts):
         start = _import_start()
         path_factory = self._patched_path(tmp_path, **opts)
-        with patch.object(start, "Path", side_effect=path_factory):
+        # main() calls _refuse_if_sibling_running() first, which now retries the
+        # Supervisor /addons query with a time.sleep() backoff on failure. Pin a
+        # benign "no siblings" response so the mutex guard passes instantly with
+        # no network call, and neutralize the backoff sleep, so this test stays
+        # fast and hermetic (no ~4s hang, no real Supervisor HTTP call in CI).
+        with (
+            patch.object(start, "Path", side_effect=path_factory),
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+            patch.object(start.time, "sleep", return_value=None),
+        ):
             return start.main()
 
     def test_short_user_supplied_client_id_rejected(self, tmp_path, capsys):
@@ -2051,10 +2833,10 @@ class TestStartInstallIntegration:
 
         # Patch the two Path calls inside _install_integration
         def path_factory(arg):
-            if arg == "/opt/mcp_proxy":
+            if arg == f"/opt/{CURRENT['component']}":
                 return src
-            if arg == "/config/custom_components/mcp_proxy":
-                return dst_parent / "mcp_proxy"
+            if arg == f"/config/custom_components/{CURRENT['component']}":
+                return dst_parent / CURRENT["component"]
             if arg == "/config/custom_components":
                 return dst_parent
             return Path(arg)
@@ -2064,7 +2846,7 @@ class TestStartInstallIntegration:
 
         assert first_install is True
         assert version_changed is False
-        assert (dst_parent / "mcp_proxy" / "manifest.json").exists()
+        assert (dst_parent / CURRENT["component"] / "manifest.json").exists()
 
     def test_version_changed_when_versions_differ(self, tmp_path):
         start = _import_start()
@@ -2073,14 +2855,16 @@ class TestStartInstallIntegration:
         (src / "manifest.json").write_text('{"version": "1.0.3-beta.1"}')
         dst_parent = tmp_path / "dst-parent"
         dst_parent.mkdir()
-        (dst_parent / "mcp_proxy").mkdir()
-        (dst_parent / "mcp_proxy" / "manifest.json").write_text('{"version": "1.0.2"}')
+        (dst_parent / CURRENT["component"]).mkdir()
+        (dst_parent / CURRENT["component"] / "manifest.json").write_text(
+            '{"version": "1.0.2"}'
+        )
 
         def path_factory(arg):
-            if arg == "/opt/mcp_proxy":
+            if arg == f"/opt/{CURRENT['component']}":
                 return src
-            if arg == "/config/custom_components/mcp_proxy":
-                return dst_parent / "mcp_proxy"
+            if arg == f"/config/custom_components/{CURRENT['component']}":
+                return dst_parent / CURRENT["component"]
             if arg == "/config/custom_components":
                 return dst_parent
             return Path(arg)
@@ -2098,16 +2882,16 @@ class TestStartInstallIntegration:
         (src / "manifest.json").write_text('{"version": "1.0.3-beta.1"}')
         dst_parent = tmp_path / "dst-parent"
         dst_parent.mkdir()
-        (dst_parent / "mcp_proxy").mkdir()
-        (dst_parent / "mcp_proxy" / "manifest.json").write_text(
+        (dst_parent / CURRENT["component"]).mkdir()
+        (dst_parent / CURRENT["component"] / "manifest.json").write_text(
             '{"version": "1.0.3-beta.1"}'
         )
 
         def path_factory(arg):
-            if arg == "/opt/mcp_proxy":
+            if arg == f"/opt/{CURRENT['component']}":
                 return src
-            if arg == "/config/custom_components/mcp_proxy":
-                return dst_parent / "mcp_proxy"
+            if arg == f"/config/custom_components/{CURRENT['component']}":
+                return dst_parent / CURRENT["component"]
             if arg == "/config/custom_components":
                 return dst_parent
             return Path(arg)
@@ -2129,15 +2913,15 @@ class TestStartInstallIntegration:
         (src / "manifest.json").write_text('{"version": "1.0.3-beta.1"}')
         dst_parent = tmp_path / "dst-parent"
         dst_parent.mkdir()
-        (dst_parent / "mcp_proxy").mkdir()
+        (dst_parent / CURRENT["component"]).mkdir()
         # Corrupted JSON
-        (dst_parent / "mcp_proxy" / "manifest.json").write_text("not json{{{")
+        (dst_parent / CURRENT["component"] / "manifest.json").write_text("not json{{{")
 
         def path_factory(arg):
-            if arg == "/opt/mcp_proxy":
+            if arg == f"/opt/{CURRENT['component']}":
                 return src
-            if arg == "/config/custom_components/mcp_proxy":
-                return dst_parent / "mcp_proxy"
+            if arg == f"/config/custom_components/{CURRENT['component']}":
+                return dst_parent / CURRENT["component"]
             if arg == "/config/custom_components":
                 return dst_parent
             return Path(arg)
@@ -2148,7 +2932,7 @@ class TestStartInstallIntegration:
         assert first_install is False
         assert version_changed is False
         # Repaired install — files are copied
-        assert (dst_parent / "mcp_proxy" / "manifest.json").exists()
+        assert (dst_parent / CURRENT["component"] / "manifest.json").exists()
 
 
 # ===========================================================================
@@ -2245,7 +3029,7 @@ class TestProtectedResourceView:
             "https://legit.example/api/webhook/mcp_webhook_id_aaaa"
         )
         assert body["authorization_servers"] == [
-            "https://legit.example/api/mcp_proxy/oauth"
+            f"https://legit.example{CURRENT['oauth_base']}"
         ]
         assert body["bearer_methods_supported"] == ["header"]
 
@@ -2262,7 +3046,7 @@ class TestAuthorizationServerView:
             await view.get(request)
 
         body = json_resp.call_args.args[0]
-        assert body["issuer"].endswith("/api/mcp_proxy/oauth")
+        assert body["issuer"].endswith(CURRENT["oauth_base"])
         # Authorize/token endpoints live at the root path of the host so
         # that clients constructing them from the resource host (Claude.ai)
         # find them.
@@ -2394,6 +3178,165 @@ class TestAuthorizeViewGet:
         assert "&lt;script&gt;" in html
 
 
+class TestRestartHintOnErrors:
+    """Issue #1694: the 'fully restart Home Assistant' hint is appended ONLY to
+    the stale-OAuth-registration errors (invalid_client / invalid client_id) a
+    restart actually unsticks — it is opt-in per call, not on every error."""
+
+    def test_text_error_hint_is_opt_in(self, tmp_path):
+        oauth = _import_oauth(tmp_path)
+        # Default: no hint (a client-side request mistake).
+        with patch.object(oauth.web, "Response") as resp_ctor:
+            oauth._text_error(400, "unsupported_response_type")
+        assert "restart Home Assistant" not in resp_ctor.call_args.kwargs.get(
+            "text", ""
+        )
+        # Opt-in: the stale-registration case carries the hint.
+        with patch.object(oauth.web, "Response") as resp_ctor:
+            oauth._text_error(400, "invalid client_id", restart_hint=True)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "invalid client_id" in text
+        assert "restart Home Assistant" in text
+
+    def test_json_error_hint_is_opt_in(self, tmp_path):
+        oauth = _import_oauth(tmp_path)
+        # Default: client-side protocol error, no error_description hint.
+        with patch.object(oauth.web, "json_response") as jr:
+            oauth._json_error("invalid_grant", 400)
+        assert "error_description" not in jr.call_args.args[0]
+        # Opt-in: invalid_client carries the hint.
+        with patch.object(oauth.web, "json_response") as jr:
+            oauth._json_error("invalid_client", 401, restart_hint=True)
+        payload = jr.call_args.args[0]
+        assert payload["error"] == "invalid_client"
+        assert "restart Home Assistant" in payload["error_description"]
+
+    async def test_invalid_client_id_browser_message_has_hint(self, tmp_path):
+        """The user's exact case: a wrong client_id at /authorize produces a
+        browser 400 whose text tells them to fully restart HA."""
+        oauth, provider = _provider_for_view_tests(tmp_path)
+        view = oauth.AuthorizeView(provider)
+        request = _make_view_request(
+            query={
+                "response_type": "code",
+                "client_id": "not-the-configured-id",
+                "redirect_uri": "https://claude.ai/cb",
+                "code_challenge": "X" * 43,
+                "code_challenge_method": "S256",
+                "state": "s",
+            }
+        )
+        with patch.object(oauth.web, "Response") as resp_ctor:
+            await view.get(request)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "invalid client_id" in text
+        assert "restart Home Assistant" in text
+
+
+class TestShutdownAndWebhookErrors:
+    """Issue #1694 follow-ups: the SIGTERM/SIGINT → cleanup contract (the
+    headline shutdown fix) and the restart hint on the webhook handler's
+    502/500 responses."""
+
+    def test_initial_tail_offset(self, tmp_path):
+        start = _import_start()
+        log_file = tmp_path / "inbound.log"
+        with patch.object(start, "INBOUND_LOG_FILE", log_file):
+            assert start._initial_tail_offset() == 0  # no file
+            log_file.write_bytes(b"hello\n")
+            assert start._initial_tail_offset() == 6  # end of existing file
+
+    def test_install_shutdown_handlers_records_reason_and_raises(self):
+        import signal
+
+        start = _import_start()
+        old = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
+        try:
+            reason = start._install_shutdown_handlers()
+            assert reason == {"reason": None}
+            handler = signal.getsignal(signal.SIGTERM)
+            with pytest.raises(KeyboardInterrupt):
+                handler(signal.SIGTERM, None)
+            assert reason["reason"] == "SIGTERM"
+        finally:
+            signal.signal(signal.SIGTERM, old[0])
+            signal.signal(signal.SIGINT, old[1])
+
+    def test_shutdown_cleanup_resets_handlers_unlinks_and_logs(self, tmp_path):
+        import signal
+
+        start = _import_start()
+        log_file = tmp_path / "inbound.log"
+        log_file.write_text("x\n")
+        old = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
+        logs: list[str] = []
+        try:
+            with (
+                patch.object(start, "INBOUND_LOG_FILE", log_file),
+                patch.object(start, "_remove_config_entry") as rm,
+                patch.object(start, "log_info", side_effect=logs.append),
+            ):
+                start._shutdown_cleanup("SIGTERM")
+            rm.assert_called_once()
+            assert not log_file.exists()  # mirror file dropped
+            assert any("reason: SIGTERM" in m for m in logs)
+            # Handlers restored to default so a second signal can't abort cleanup.
+            assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+        finally:
+            signal.signal(signal.SIGTERM, old[0])
+            signal.signal(signal.SIGINT, old[1])
+
+    async def test_webhook_502_has_no_restart_hint(self):
+        mod = _import_mcp_proxy()
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=mod.aiohttp.ClientError("down")
+        )
+        with patch.object(mod.web, "Response") as resp_ctor:
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "upstream unavailable" in text
+        # Scoped out: a restart won't fix a downed upstream MCP server.
+        assert "restart Home Assistant" not in text
+
+    async def test_webhook_500_has_no_restart_hint(self):
+        mod = _import_mcp_proxy()
+        hass = MagicMock()
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test_webhook_id_12345",
+                "session": MagicMock(),
+                "oauth": None,
+            }
+        }
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(
+            side_effect=RuntimeError("boom")
+        )
+        with patch.object(mod.web, "Response") as resp_ctor:
+            await mod._handle_webhook(hass, "mcp_test_webhook_id_12345", request)
+        text = resp_ctor.call_args.kwargs.get("text", "")
+        assert "internal error" in text
+        # Scoped out: a restart won't fix a proxy bug.
+        assert "restart Home Assistant" not in text
+
+
 class TestAuthorizeViewPost:
     @pytest.fixture
     def setup(self, tmp_path):
@@ -2491,7 +3434,9 @@ class TestTokenView:
 
         kwargs = resp_ctor.call_args.kwargs
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_client"}
+        assert body["error"] == "invalid_client"
+        # Stale-registration case keeps the restart hint.
+        assert "restart Home Assistant" in body["error_description"]
         assert kwargs.get("status") == 401
         assert (
             kwargs.get("headers", {}).get("WWW-Authenticate")
@@ -2511,7 +3456,7 @@ class TestTokenView:
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_client"}
+        assert body["error"] == "invalid_client"
 
     async def test_unsupported_grant_type(self, setup):
         oauth, provider, view = setup
@@ -2528,7 +3473,9 @@ class TestTokenView:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
         kwargs = resp_ctor.call_args.kwargs
-        assert body == {"error": "unsupported_grant_type"}
+        assert body["error"] == "unsupported_grant_type"
+        # Client-side protocol error: no restart hint.
+        assert "error_description" not in body
         assert kwargs.get("status") == 400
 
     async def test_authorization_code_missing_fields(self, setup):
@@ -2545,7 +3492,7 @@ class TestTokenView:
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_request"}
+        assert body["error"] == "invalid_request"
 
     async def test_authorization_code_full_round_trip(self, setup):
         oauth, provider, view = setup
@@ -2622,7 +3569,7 @@ class TestTokenView:
         with patch.object(oauth.web, "json_response") as resp_ctor:
             await view.post(request)
         body = resp_ctor.call_args.args[0]
-        assert body == {"error": "invalid_grant"}
+        assert body["error"] == "invalid_grant"
 
 
 class TestPkceLengthEnforcement:
@@ -2802,11 +3749,12 @@ class TestRepairsModule:
     @pytest.fixture
     def repairs(self, tmp_path):
         _install_runtime_stubs()
-        repairs_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "repairs.py")
-        sys.modules.pop("mcp_proxy_repairs", None)
-        spec = importlib.util.spec_from_file_location("mcp_proxy_repairs", repairs_path)
+        repairs_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "repairs.py")
+        mod_name = f"mcp_proxy_repairs_{CURRENT['key']}"
+        sys.modules.pop(mod_name, None)
+        spec = importlib.util.spec_from_file_location(mod_name, repairs_path)
         mod = importlib.util.module_from_spec(spec)
-        sys.modules["mcp_proxy_repairs"] = mod
+        sys.modules[mod_name] = mod
         spec.loader.exec_module(mod)
         # Redirect the marker file into the test's tmp dir
         mod.RESTART_MARKER_FILE = tmp_path / ".mcp_proxy_oauth_restart_required"
@@ -2833,7 +3781,7 @@ class TestRepairsModule:
         from homeassistant.helpers import issue_registry
 
         hass = MagicMock()
-        repairs.maybe_create_issue(hass, "mcp_proxy")
+        repairs.maybe_create_issue(hass, CURRENT["domain"])
         issue_registry.async_create_issue.assert_not_called()
 
     def test_maybe_create_issue_fires_when_marker_present(self, repairs):
@@ -2842,11 +3790,11 @@ class TestRepairsModule:
         issue_registry.async_create_issue.reset_mock()
         repairs.RESTART_MARKER_FILE.write_text("test")
         hass = MagicMock()
-        repairs.maybe_create_issue(hass, "mcp_proxy")
+        repairs.maybe_create_issue(hass, CURRENT["domain"])
         issue_registry.async_create_issue.assert_called_once()
         # Domain + issue_id are positional args after hass
         call_args = issue_registry.async_create_issue.call_args
-        assert call_args.args[1] == "mcp_proxy"
+        assert call_args.args[1] == CURRENT["domain"]
         assert call_args.args[2] == "oauth_restart_required"
         assert call_args.kwargs.get("is_fixable") is True
 
@@ -2856,50 +3804,50 @@ class TestRepairsModule:
         issue_registry.async_delete_issue.reset_mock()
         repairs.RESTART_MARKER_FILE.write_text("test")
         hass = MagicMock()
-        repairs.clear_issue(hass, "mcp_proxy")
+        repairs.clear_issue(hass, CURRENT["domain"])
         assert not repairs.RESTART_MARKER_FILE.exists()
         issue_registry.async_delete_issue.assert_called_once_with(
-            hass, "mcp_proxy", "oauth_restart_required"
+            hass, CURRENT["domain"], "oauth_restart_required"
         )
 
 
 class TestRepairsFlowSubmit:
-    """The repair card's Submit button must call homeassistant.restart
-    AND clear the marker file. A typo in either side ships silently —
-    if the service name is wrong, restart doesn't happen and the user
-    is stuck on the card; if the marker isn't cleared, the card re-fires
-    on the next boot."""
+    """The repair card's Submit button must call homeassistant.restart with
+    blocking=True (so a failed config check surfaces as a flow error instead of
+    being swallowed) and must NOT clear the marker — if the restart aborts, the
+    marker has to survive so the Repair persists. A wrong service name would
+    leave the user stuck on the card; a premature marker-clear would drop the
+    Repair on an aborted restart."""
 
     @pytest.fixture
     def repairs(self, tmp_path):
         _install_runtime_stubs()
-        repairs_path = os.path.join(PROXY_ADDON_DIR, "mcp_proxy", "repairs.py")
-        sys.modules.pop("mcp_proxy_repairs", None)
-        spec = importlib.util.spec_from_file_location("mcp_proxy_repairs", repairs_path)
+        repairs_path = os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "repairs.py")
+        mod_name = f"mcp_proxy_repairs_{CURRENT['key']}"
+        sys.modules.pop(mod_name, None)
+        spec = importlib.util.spec_from_file_location(mod_name, repairs_path)
         mod = importlib.util.module_from_spec(spec)
-        sys.modules["mcp_proxy_repairs"] = mod
+        sys.modules[mod_name] = mod
         spec.loader.exec_module(mod)
         mod.RESTART_MARKER_FILE = tmp_path / ".mcp_proxy_oauth_restart_required"
         return mod
 
-    async def test_confirm_with_input_calls_restart_and_clears_marker(self, repairs):
+    async def test_confirm_with_input_calls_restart_and_leaves_marker(self, repairs):
         repairs.RESTART_MARKER_FILE.write_text("test")
         flow = repairs.OAuthRestartRepairFlow()
         hass = MagicMock()
         hass.services.async_call = AsyncMock()
-
-        async def fake_executor(func, *args):
-            return func(*args)
-
-        hass.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         flow.hass = hass
         flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
 
         await flow.async_step_confirm({})
 
-        assert not repairs.RESTART_MARKER_FILE.exists()
+        # The fix flow must NOT clear the marker: if the restart aborts it has
+        # to survive so the Repair persists; a successful restart's boot-time
+        # setup clears it once OAuth is actually live.
+        assert repairs.RESTART_MARKER_FILE.exists()
         hass.services.async_call.assert_awaited_once_with(
-            "homeassistant", "restart", {}, blocking=False
+            "homeassistant", "restart", {}, blocking=True
         )
 
     async def test_confirm_without_input_shows_form(self, repairs):
@@ -2917,7 +3865,7 @@ class TestStringsJSONIssueKeys:
     localized text."""
 
     def test_issue_translation_keys_match_repair_flow(self):
-        with open(f"{PROXY_ADDON_DIR}/mcp_proxy/strings.json") as f:
+        with open(f"{PROXY_ADDON_DIR}/{CURRENT['component']}/strings.json") as f:
             strings = json.load(f)
 
         assert "oauth_restart_required" in strings.get("issues", {})
@@ -2927,6 +3875,52 @@ class TestStringsJSONIssueKeys:
         confirm = issue.get("fix_flow", {}).get("step", {}).get("confirm", {})
         assert confirm.get("title")
         assert confirm.get("description")
+
+
+class TestAsyncSetupBootMarker:
+    """async_setup runs on every HA boot. When the restart marker is present
+    (left by the addon's fail-closed gate OR a prior mid-session OAuth enable),
+    it must surface the Repair via maybe_create_issue; with no marker it must
+    create no issue."""
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        return h
+
+    async def test_marker_present_creates_issue(self, hass, tmp_path):
+        mod = _import_mcp_proxy()
+        repairs = _bind_repairs(mod, tmp_path)
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "oauth_enabled"}')
+        from homeassistant.helpers import issue_registry
+
+        issue_registry.async_create_issue.reset_mock()
+        # No DOMAIN key in config → skip the YAML-migration branch.
+        result = await mod.async_setup(hass, {})
+
+        assert result is True
+        issue_registry.async_create_issue.assert_called_once()
+        call_args = issue_registry.async_create_issue.call_args
+        assert call_args.args[1] == mod.DOMAIN
+        assert call_args.args[2] == "oauth_restart_required"
+        assert call_args.kwargs.get("is_fixable") is True
+
+    async def test_marker_absent_creates_no_issue(self, hass, tmp_path):
+        mod = _import_mcp_proxy()
+        _bind_repairs(mod, tmp_path)  # marker redirected to tmp, never written
+        from homeassistant.helpers import issue_registry
+
+        issue_registry.async_create_issue.reset_mock()
+        result = await mod.async_setup(hass, {})
+
+        assert result is True
+        issue_registry.async_create_issue.assert_not_called()
 
 
 class TestProbeOAuthActive:
@@ -2955,31 +3949,63 @@ class TestProbeOAuthActive:
             assert start._probe_oauth_active() is True
 
     def test_probe_returns_false_when_endpoint_404s(self, start):
-        # _ha_core_api returns None on HTTPError — that's the 404 case
+        # _ha_core_api returns None on HTTPError — that's the 404 case. Because
+        # this gates a destructive teardown, the probe retries (bounded) before
+        # giving up; time.sleep is neutralized so the retry backoff doesn't wait.
+        sleep = MagicMock()
         with (
             patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
             patch.object(start, "_ha_core_api", return_value=None),
+            patch.object(start.time, "sleep", sleep),
         ):
             assert start._probe_oauth_active() is False
+        # 3 attempts, sleeping only between them (not after the last).
+        assert sleep.call_count == 2
 
     def test_probe_returns_false_when_response_is_not_json_dict(self, start):
+        sleep = MagicMock()
         with (
             patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
             patch.object(start, "_ha_core_api", return_value="not a dict"),
+            patch.object(start.time, "sleep", sleep),
         ):
             assert start._probe_oauth_active() is False
+        assert sleep.call_count == 2
 
     def test_probe_returns_false_when_authorization_servers_missing(self, start):
         # A different endpoint accidentally exists at the same URL
+        sleep = MagicMock()
         with (
             patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
             patch.object(start, "_ha_core_api", return_value={"unrelated": "data"}),
+            patch.object(start.time, "sleep", sleep),
         ):
             assert start._probe_oauth_active() is False
+        assert sleep.call_count == 2
 
     def test_probe_returns_false_when_manifest_unreadable(self, start):
-        with patch.object(start, "_read_integration_domain", return_value=None):
+        sleep = MagicMock()
+        with (
+            patch.object(start, "_read_integration_domain", return_value=None),
+            patch.object(start.time, "sleep", sleep),
+        ):
             assert start._probe_oauth_active() is False
+        assert sleep.call_count == 2
+
+    def test_probe_returns_true_on_transient_then_active(self, start):
+        """A single transient failure (None) must NOT trigger the destructive
+        path: the probe retries and returns True once the endpoint reports
+        active on a later attempt."""
+        sleep = MagicMock()
+        results = [None, {"authorization_servers": ["https://h/oauth"]}]
+        with (
+            patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
+            patch.object(start, "_ha_core_api", side_effect=results),
+            patch.object(start.time, "sleep", sleep),
+        ):
+            assert start._probe_oauth_active() is True
+        # Slept once between the transient failure and the successful retry.
+        assert sleep.call_count == 1
 
     def test_probe_uses_manifest_domain_for_url(self, start):
         """The probe URL is derived from the source manifest's domain so
@@ -3024,6 +4050,10 @@ class TestOAuthSetupEntryRegistersExpectedViews:
     async def test_registers_all_four_oauth_endpoints(self, hass, tmp_path):
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
         mod = _import_mcp_proxy(preload_oauth=oauth)
+        # Boot-time setup (is_running False) exercises the first-registration
+        # clear path rather than the mid-session write path (which would touch
+        # the real /config marker).
+        hass.is_running = False
         proxy_config = {
             "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
             "webhook_id": "mcp_test",
@@ -3046,8 +4076,8 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         # those URLs from the resource host without consulting the
         # authorization-server metadata document.
         assert registered_urls == {
-            "/api/mcp_proxy/oauth/protected-resource",
-            "/api/mcp_proxy/oauth/authorization-server",
+            f"{CURRENT['oauth_base']}/protected-resource",
+            f"{CURRENT['oauth_base']}/authorization-server",
             "/authorize",
             "/token",
         }
@@ -3074,4 +4104,4 @@ class TestUnauthorizedResponseShape:
         ww = kwargs["headers"]["WWW-Authenticate"]
         # Pinned base means evil.example is NOT in the metadata URL
         assert "evil.example" not in ww
-        assert "https://legit.example/api/mcp_proxy/oauth/protected-resource" in ww
+        assert f"https://legit.example{CURRENT['oauth_base']}/protected-resource" in ww

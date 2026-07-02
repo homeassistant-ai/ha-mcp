@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-84-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-85-blue" alt="95+ Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -34,13 +34,35 @@
 
 ## 🚀 Get Started
 
-### Full guide to get you started with Claude Desktop (~10 min)
-
-*No paid subscription required.* Click on your operating system:
+**Set up for your operating system** — you'll pick **Local (Claude Desktop)** or the **Home Assistant App** on the setup page:
 
 <p>
-<a href="https://homeassistant-ai.github.io/ha-mcp/guide-macos/"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup Guide for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/guide-linux/"><img src="https://img.shields.io/badge/Setup_Guide_for_Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Setup Guide for Linux" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/guide-windows/"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup Guide for Windows" height="120"></a>
+<a href="https://homeassistant-ai.github.io/ha-mcp/setup/#easy-macos"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/setup/#easy-linux"><img src="https://img.shields.io/badge/Setup_Guide_for_Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Setup for Linux" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/setup/#easy-windows"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup for Windows" height="120"></a>
 </p>
+
+Prefer to set it up by hand? The detailed paths are below.
+
+### 🏠 Recommended: Home Assistant App (add-on)
+
+Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access token to manage, works with Claude Desktop, Claude.ai, ChatGPT and any other MCP client, and can stay on your local network or be configured for remote / HTTP access.
+
+1. Add the repository to your Home Assistant instance:
+
+   [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
+
+   If that opens the App Store without an add-repository dialog (a [known Home Assistant issue](https://github.com/home-assistant/my.home-assistant.io/issues/698)), add it manually: **App Store → ⋮ → Repositories**, then paste `https://github.com/homeassistant-ai/ha-mcp`.
+
+2. Install **"Home Assistant MCP Server"** from the App Store and click **Start**. *(Home Assistant 2026.2 renamed "Add-ons" to "Apps"; on older versions this is the Add-on Store.)*
+3. Open the **Logs** tab to find your unique MCP URL
+4. Connect your AI client to that URL — **no token or credential setup needed**
+
+[Full add-on documentation →](homeassistant-addon/DOCS.md)
+
+> ⚠️ **Two ways to run ha-mcp — don't mix them.** The add-on above is the recommended path. The local **stdio** path below runs ha-mcp on your own computer; it is more advanced, has fewer features, and is behind most connection problems. If you use the add-on, your Claude Desktop config points at the add-on URL through `mcp-proxy` with **no token** — do **not** also keep a local `uvx ha-mcp@latest` entry (with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`) in your Claude Desktop config. Running both at once is a known cause of connection hangs.
+
+### 💻 Run locally with Claude Desktop (stdio · advanced)
+
+*No paid subscription required.* This runs ha-mcp on your own machine over stdio.
 
 ### Quick install (~5 min)
 
@@ -98,23 +120,6 @@ Anthropic doesn't ship Claude Desktop for Linux, so pick one path:
 4. Ask Claude: **"Can you see my Home Assistant?"**
 
 You're now connected to the demo environment! [Connect your own Home Assistant →](https://homeassistant-ai.github.io/ha-mcp/guide-windows/#step-6-connect-your-home-assistant)
-
-</details>
-
-<details>
-<summary><b>🏠 Home Assistant OS (Add-on)</b></summary>
-
-1. Add the repository to your Home Assistant instance:
-
-   [![Add Repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp)
-
-2. Install **"Home Assistant MCP Server"** from the Add-on Store and wait for it to complete
-3. Click **Start**, then open the **Logs** tab to find your unique MCP URL
-4. Configure your AI client with that URL
-
-No token or credential setup needed — the add-on connects to Home Assistant automatically.
-
-[Full add-on documentation →](homeassistant-addon/DOCS.md)
 
 </details>
 
@@ -179,7 +184,7 @@ Spend less time configuring, more time enjoying your smart home.
 <details>
 <!-- TOOLS_TABLE_START -->
 
-<summary><b>Complete Tool List (84 tools)</b></summary>
+<summary><b>Complete Tool List (85 tools)</b></summary>
 
 | Category | Tools |
 |----------|-------|
@@ -202,6 +207,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **History & Statistics** | `ha_get_automation_traces`, `ha_get_history`, `ha_get_logs` |
 | **Integrations** | `ha_get_integration`, `ha_get_system_health`, `ha_set_integration_enabled` |
 | **Labels & Categories** | `ha_config_get_category`, `ha_config_get_label`, `ha_config_remove_category`, `ha_config_remove_label`, `ha_config_set_category`, `ha_config_set_label` |
+| **Matter** | `ha_manage_radio` |
 | **Scenes** | `ha_config_get_scene`, `ha_config_remove_scene`, `ha_config_set_scene` |
 | **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
 | **Search & Discovery** | `ha_get_overview`, `ha_get_state`, `ha_search` |

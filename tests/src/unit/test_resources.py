@@ -136,7 +136,7 @@ class TestPyprojectPackageData:
         """settings.js and settings.css must be declared for both the wheel
         (pyproject package-data) and the sdist (MANIFEST.in).
 
-        settings_ui.py reads both files at import time, and the HA add-on's
+        settings_ui/__init__.py reads both files at import time, and the HA add-on's
         Dockerfile copies only the installed .venv -- so the files reach the
         add-on solely via wheel package-data. A future edit dropping either
         entry would break 100% of installs at import, invisible to the unit
@@ -173,7 +173,11 @@ class TestPyprojectPackageData:
         pyproject = pyproject_path.read_text()
         manifest = manifest_path.read_text()
 
-        for asset in ("settings.js", "settings.css"):
+        for asset in (
+            "settings_ui/settings.html",
+            "settings_ui/settings.js",
+            "settings_ui/settings.css",
+        ):
             assert f'"{asset}"' in pyproject, (
                 f"pyproject.toml package-data must list {asset} (wheel + add-on rely on it)"
             )

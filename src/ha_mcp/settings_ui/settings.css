@@ -1,0 +1,891 @@
+  :root {
+    color-scheme: dark;
+
+    /* HA dark theme palette */
+    --bg: #111111;
+    --surface: #1c1c1c;
+    --surface-hover: #272727;
+    --text: #e1e1e1;
+    --text-secondary: rgba(255, 255, 255, 0.54);
+    --accent: #03a9f4;
+    --accent-hover: #29b6f6;
+    --accent-text: #7dd3f0;
+    --border: rgba(255, 255, 255, 0.12);
+    --disabled-bg: rgba(255, 255, 255, 0.05);
+    --danger: #cf6679;
+    --success: #67ac5c;
+    --warning: #ffb347;
+
+    /* Semantic tokens */
+    --ok-bg: rgba(103, 172, 92, 0.15);
+    --badge-readonly-bg: rgba(3, 169, 244, 0.12);
+    --badge-readonly-text: #7dd3f0;
+    --badge-write-bg: rgba(255, 179, 71, 0.12);
+    --badge-write-text: #ffc777;
+    --badge-destructive-bg: rgba(207, 102, 121, 0.12);
+    --badge-destructive-text: #ef9aa7;
+    --badge-mandatory-bg: rgba(103, 172, 92, 0.12);
+    --badge-mandatory-text: #67ac5c;
+    --danger-border: rgba(207, 102, 121, 0.4);
+    --danger-text: #cf6679;
+    --danger-hover-bg: rgba(207, 102, 121, 0.1);
+    --danger-soft-bg: rgba(207, 102, 121, 0.12);
+    --danger-soft-text: #cf6679;
+    --field-locked-bg: rgba(255, 179, 71, 0.12);
+    --field-locked-text: #ffb347;
+    --diff-add: #67ac5c;
+    --diff-rem: #cf6679;
+    --diff-hdr: #7dd3f0;
+    --code-bg: #0a0a0a;
+    --save-note-bg: rgba(255, 179, 71, 0.08);
+
+    /* App toolbar */
+    --header-bg: #455a64;
+    --header-text: #ffffff;
+    --header-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+
+    /* Cards */
+    --card-shadow: none;
+    --card-border: 1px solid rgba(255, 255, 255, 0.12);
+
+    /* Switch — mirrors HA's ha-switch (webawesome): 48x24 track, 18px thumb */
+    --switch-w: 48px; --switch-h: 24px; --switch-thumb: 18px;
+    --switch-track-off: rgba(255, 255, 255, 0.12);
+    --switch-track-off-border: rgba(255, 255, 255, 0.30);
+    --switch-thumb-off: #c7c7c7;
+    --switch-track-on: var(--accent);
+    --switch-thumb-on: #ffffff;
+    /* Radio / checkbox (Material) idle ring */
+    --control-idle: rgba(255, 255, 255, 0.45);
+    /* Text fields / selects — HA's MDC filled style: faint fill + bottom line */
+    --field-fill: rgba(255, 255, 255, 0.06);
+    --field-fill-hover: rgba(255, 255, 255, 0.10);
+    --field-line: rgba(255, 255, 255, 0.42);
+    /* ha-alert leading icons (mdi information-outline / alert-outline),
+       used as ::before masks on the notice bars. */
+    --icon-info: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z'/></svg>");
+    --icon-warning: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12,2L1,21H23M12,6L19.53,19H4.47M11,10V14H13V10M11,16V18H13V16'/></svg>");
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: Roboto, 'Noto Sans', 'Helvetica Neue', Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    font-size: 14px;
+  }
+
+  /* ── APP TOOLBAR ─────────────────────────────────────────────────────── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    height: 56px;
+    background: var(--header-bg);
+    color: var(--header-text);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    box-shadow: var(--header-shadow);
+    flex-shrink: 0;
+  }
+  .header-inner { display: flex; align-items: center; gap: 12px; }
+  .header-icon { width: 24px; height: 24px; opacity: 0.87; flex-shrink: 0; }
+  .header h1 {
+    font-size: 1.25rem;
+    font-weight: 400;
+    color: var(--header-text);
+    white-space: nowrap;
+  }
+  .header-actions { display: flex; align-items: center; gap: 12px; }
+
+  /* ── STATUS LIVE REGIONS ─────────────────────────────────────────────── */
+  /* The old grey status pills are gone (HA doesn't park a persistent chip
+     next to a button). The .status spans stay in the DOM as visually-hidden
+     ARIA live regions so screen readers still announce save/load outcomes;
+     the visible channel is the HA-style toast below. */
+  .status {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+
+  /* ── TOAST (HA ha-toast / showToast) ─────────────────────────────────── */
+  /* One snackbar at a time, bottom-center, auto-dismiss. Fixed dark surface
+     in both themes (HA toasts use the inverse surface). */
+  #ha-toast-region {
+    position: fixed; left: 0; right: 0; bottom: 24px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    z-index: 1000; pointer-events: none; padding: 0 16px;
+  }
+  .ha-toast {
+    pointer-events: auto;
+    display: inline-flex; align-items: center; gap: 16px;
+    max-width: min(90vw, 560px);
+    padding: 14px 16px; border-radius: 8px;
+    background: #2b2b2b; color: #fff;
+    font-size: 0.875rem; line-height: 1.4;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+    animation: ha-toast-in 0.2s ease;
+  }
+  .ha-toast.leaving { animation: ha-toast-out 0.2s ease forwards; }
+  .ha-toast-msg { flex: 1; }
+  .ha-toast-dismiss {
+    flex-shrink: 0; background: transparent; border: none;
+    color: var(--accent-hover); cursor: pointer;
+    font-size: 1.1rem; line-height: 1; padding: 2px 4px; border-radius: 4px;
+    font-family: inherit;
+  }
+  .ha-toast-dismiss:hover { background: rgba(255, 255, 255, 0.1); }
+  @keyframes ha-toast-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes ha-toast-out {
+    to { opacity: 0; transform: translateY(12px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ha-toast, .ha-toast.leaving { animation: none; }
+    *, *::before, *::after { transition-duration: 0.01ms !important; }
+  }
+
+  /* ── MAIN CONTENT AREA ───────────────────────────────────────────────── */
+  main {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 16px 32px;
+  }
+
+  /* ── SKIP LINK ───────────────────────────────────────────────────────── */
+  .skip-link {
+    position: absolute; left: 8px; top: -56px; z-index: 200;
+    padding: 8px 16px; border-radius: 4px; font-size: 0.875rem; font-weight: 500;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    transition: top 0.15s;
+  }
+  .skip-link:focus { top: 8px; outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── VERSION FOOTER ──────────────────────────────────────────────────── */
+  .version-footer {
+    max-width: 1280px; margin: 32px auto 0; padding: 12px 0; font-size: 0.75rem;
+    color: var(--text-secondary); text-align: center;
+    border-top: 1px solid var(--border); opacity: 0.7;
+  }
+
+  /* ── SEARCH ──────────────────────────────────────────────────────────── */
+  .search {
+    width: 100%; padding: 8px 16px; border-radius: 4px;
+    border: 1px solid var(--border); border-bottom-width: 2px;
+    background: var(--surface); color: var(--text);
+    font-size: 1rem; font-family: inherit;
+    margin-bottom: 16px; outline: none;
+    transition: border-color 0.15s;
+  }
+  .search:focus { border-color: var(--accent); }
+
+  /* ── TABS ────────────────────────────────────────────────────────────── */
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    margin: 0 -16px;
+    padding: 0 16px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    padding: 0 16px; height: 48px;
+    border: none; background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.875rem; font-weight: 500; font-family: inherit;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+  }
+  .tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .panel { display: none; padding-top: 16px; }
+  .panel.active { display: block; }
+
+  /* ── ALERTS (HA ha-alert) ────────────────────────────────────────────── */
+  /* Faithful to ha-alert: a full background tinted to 12% of the type color,
+     rounded, with a leading mdi icon. info = blue, warning = amber. */
+  .ha-alert {
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 10px 14px; margin-bottom: 16px;
+    border-radius: 8px; font-size: 0.875rem; line-height: 1.5; color: var(--text);
+  }
+  .ha-alert-icon { width: 22px; height: 22px; flex-shrink: 0; margin-top: 1px; }
+  .ha-alert-body { flex: 1; min-width: 0; }
+  .ha-alert-info { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .ha-alert-info .ha-alert-icon { color: var(--accent); }
+  .ha-alert-warning { background: color-mix(in srgb, var(--warning) 14%, transparent); }
+  .ha-alert-warning .ha-alert-icon { color: var(--warning); }
+
+  /* ── NOTICES (ha-alert style) ────────────────────────────────────────── */
+  /* Same ha-alert look as .ha-alert: full type-tinted background, rounded,
+     with a leading mdi icon. The icon is drawn with a CSS ::before mask so
+     these keep their existing ids/classes (the restart flow + tests rely on
+     them) without needing inline <svg> markup. */
+  /* Icon sits in an absolute left gutter so the text flows as a normal
+     full-width block (a bare text node in a flex row doesn't grow, which
+     left the copy cramped around the inline <code>/<strong> bits). */
+  .readonly-notice, .pin-notice, .restart-notice {
+    position: relative;
+    padding: 10px 16px 10px 48px;
+    border: 0; border-radius: 8px;
+    font-size: 0.875rem; line-height: 1.5; color: var(--text);
+  }
+  .readonly-notice::before, .pin-notice::before, .restart-notice::before {
+    content: ""; position: absolute; left: 14px; top: 11px;
+    width: 22px; height: 22px;
+    -webkit-mask: no-repeat center / contain; mask: no-repeat center / contain;
+  }
+  .readonly-notice {
+    margin-bottom: 16px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .readonly-notice::before {
+    background-color: var(--accent);
+    -webkit-mask-image: var(--icon-info); mask-image: var(--icon-info);
+  }
+  .pin-notice {
+    margin-bottom: 12px; display: none;
+    background: color-mix(in srgb, var(--warning) 14%, transparent);
+  }
+  .pin-notice.show { display: block; }
+  .pin-notice::before {
+    background-color: var(--warning);
+    -webkit-mask-image: var(--icon-warning); mask-image: var(--icon-warning);
+  }
+  .restart-notice {
+    margin-bottom: 12px; display: none;
+    background: color-mix(in srgb, var(--warning) 14%, transparent);
+  }
+  .restart-notice.show { display: flex; align-items: center; gap: 12px; }
+  .restart-notice::before {
+    background-color: var(--warning);
+    -webkit-mask-image: var(--icon-warning); mask-image: var(--icon-warning);
+  }
+  .restart-notice-text { flex: 1; }
+
+  /* ── BUTTONS ─────────────────────────────────────────────────────────── */
+  /* HA's ha-button (webawesome): pill radius, sentence case (NOT uppercase),
+     ~40px tall, medium weight. */
+  .restart-btn {
+    padding: 0 20px; height: 40px; border-radius: 9999px; border: none;
+    background: var(--accent); color: #fff;
+    font-family: inherit; font-weight: 500; font-size: 0.875rem;
+    cursor: pointer; flex-shrink: 0; transition: background 0.15s;
+  }
+  .restart-btn:hover { background: var(--accent-hover); }
+  .restart-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+
+  .danger-btn {
+    padding: 0 20px; height: 40px; border-radius: 9999px;
+    border: 1px solid var(--danger-border);
+    background: transparent; color: var(--danger-text);
+    font-family: inherit; font-weight: 500; font-size: 0.875rem;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .danger-btn:hover { background: var(--danger-hover-bg); }
+  .danger-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+
+  /* Secondary / outlined pill (e.g. "Clear custom colors") */
+  .a11y-reset {
+    padding: 0 16px; height: 36px; border-radius: 9999px;
+    border: 1px solid var(--border); background: transparent; color: var(--text);
+    font-family: inherit; font-weight: 500; font-size: 0.875rem; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .a11y-reset:hover { background: var(--surface-hover); }
+
+  /* ── TOOL GROUPS (cards) ─────────────────────────────────────────────── */
+  .group {
+    background: var(--surface);
+    border-radius: 12px;
+    margin-bottom: 8px;
+    overflow: hidden;
+    border: var(--card-border);
+    box-shadow: var(--card-shadow);
+  }
+  .group-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 16px; height: 48px;
+    cursor: pointer; user-select: none; gap: 12px;
+    transition: background 0.1s;
+  }
+  .group-header:hover { background: var(--surface-hover); }
+  .group-header-left { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .group-name { font-size: 0.875rem; font-weight: 500; letter-spacing: 0.01em; }
+  .group-count { font-size: 0.75rem; color: var(--text-secondary); }
+  .group-chevron {
+    transition: transform 0.2s; color: var(--text-secondary);
+    display: inline-block; width: 12px;
+  }
+  .group-chevron.open { transform: rotate(90deg); }
+  .group-master { flex-shrink: 0; }
+  .group-tools { display: none; border-top: 1px solid var(--border); }
+  .group-tools.open { display: block; }
+
+  /* ── INDIVIDUAL TOOLS ────────────────────────────────────────────────── */
+  .tool {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+  }
+  .tool:last-child { border-bottom: none; }
+  .tool:hover { background: var(--surface-hover); }
+  .tool.hidden { display: none; }
+  .tool.env-pinned .tool-name { color: var(--text-secondary); }
+  .tool-info { flex: 1; min-width: 0; }
+  .tool-name { font-size: 0.875rem; font-weight: 500; }
+  .tool-meta { font-size: 0.75rem; color: var(--text-secondary); margin-top: 1px; }
+  .tool-desc {
+    font-size: 0.75rem; color: var(--text-secondary); margin-top: 1px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* ── BADGES ──────────────────────────────────────────────────────────── */
+  .badge {
+    display: inline-block; font-size: 0.7rem;
+    padding: 1px 6px; border-radius: 4px;
+    margin-left: 6px; font-weight: 500;
+  }
+  .badge.readonly  { background: var(--badge-readonly-bg);     color: var(--badge-readonly-text); }
+  .badge.write     { background: var(--badge-write-bg);        color: var(--badge-write-text); }
+  .badge.destructive { background: var(--badge-destructive-bg); color: var(--badge-destructive-text); }
+  .badge.mandatory { background: var(--badge-mandatory-bg);    color: var(--badge-mandatory-text); }
+  .badge.unknown   { background: var(--surface-hover);         color: var(--text-secondary); }
+
+  /* ── TOGGLE GROUPS & SWITCH ──────────────────────────────────────────── */
+  .tool-toggles { display: flex; gap: 16px; align-items: center; }
+  .toggle-group {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    font-size: 0.7rem; color: var(--text-secondary);
+  }
+  .toggle-group.disabled-toggle { opacity: 0.38; }
+
+  /* Switch — replicates HA's ha-switch: a 48x24 track with a 1px border and
+     an 18px thumb (3px inset) that travels 24px. Off = quiet gray fill +
+     border + muted thumb; on = primary fill + white thumb. */
+  .switch { position: relative; display: inline-block; width: var(--switch-w); height: var(--switch-h); }
+  .switch input[type="checkbox"] { opacity: 0; width: 0; height: 0; margin: 0; }
+  .slider {
+    position: absolute; cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: var(--switch-track-off);
+    border: 1px solid var(--switch-track-off-border);
+    border-radius: calc(var(--switch-h) / 2);
+    transition: background 0.2s, border-color 0.2s;
+  }
+  .slider::before {
+    position: absolute; content: "";
+    height: var(--switch-thumb); width: var(--switch-thumb);
+    /* 2px inset, not 3px: the ::before is measured from the track's padding
+       edge (inside its 1px border), so on a 24px track an 18px thumb centers
+       at (24 - 2*1border - 18)/2 = 2px. 3px would sit 1px high. */
+    left: 2px; top: 2px;
+    background: var(--switch-thumb-off); border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+  input:checked + .slider {
+    background: var(--switch-track-on);
+    border-color: var(--switch-track-on);
+  }
+  input:checked + .slider::before {
+    transform: translateX(calc(var(--switch-w) - var(--switch-thumb) - 6px));
+    background: var(--switch-thumb-on);
+  }
+  input:disabled + .slider { cursor: not-allowed; opacity: 0.38; }
+  .switch input:focus-visible + .slider {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+
+  /* Radio & checkbox — Material look (HA uses ha-radio / ha-checkbox). Native
+     controls are restyled with appearance:none so they match the page instead
+     of the browser default. The switch's hidden checkbox is excluded by the
+     higher-specificity .switch rule above. */
+  input[type="radio"],
+  input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none;
+    width: 18px; height: 18px; margin: 0; flex-shrink: 0;
+    border: 2px solid var(--control-idle);
+    background: transparent; cursor: pointer;
+    display: inline-grid; place-content: center;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  input[type="radio"] { border-radius: 50%; }
+  input[type="checkbox"] { border-radius: 3px; }
+  input[type="radio"]::before {
+    content: ""; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent); transform: scale(0); transition: transform 0.15s;
+  }
+  input[type="checkbox"]::before {
+    content: ""; width: 10px; height: 10px;
+    /* checkmark via clip-path */
+    clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+    background: #fff; transform: scale(0); transition: transform 0.15s;
+  }
+  input[type="radio"]:checked,
+  input[type="checkbox"]:checked { border-color: var(--accent); }
+  input[type="checkbox"]:checked { background: var(--accent); }
+  input[type="radio"]:checked::before,
+  input[type="checkbox"]:checked::before { transform: scale(1); }
+  input[type="radio"]:focus-visible,
+  input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input[type="radio"]:disabled,
+  input[type="checkbox"]:disabled { opacity: 0.38; cursor: not-allowed; }
+
+  .disabled-by-note { font-size: 0.7rem; color: var(--warning); margin-top: 2px; font-style: italic; }
+
+  /* ── SUMMARY CHIPS ───────────────────────────────────────────────────── */
+  .summary {
+    display: flex; gap: 8px; padding: 0 0 16px;
+    font-size: 0.75rem; color: var(--text-secondary); flex-wrap: wrap;
+  }
+  .summary span {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 4px 12px; border-radius: 16px;
+  }
+
+  /* ── READ ONLY MODE ROW ──────────────────────────────────────────────── */
+  #readOnlyModeRow {
+    background: var(--surface); border: var(--card-border);
+    border-radius: 12px; padding: 12px 16px; margin-bottom: 16px;
+  }
+
+  /* ── SERVER SETTINGS FEATURES ────────────────────────────────────────── */
+  .features-sub {
+    font-size: 0.75rem; color: var(--text-secondary);
+    margin-bottom: 12px; line-height: 1.5;
+  }
+  .feature-row {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; padding: 14px 0; border-top: 1px solid var(--border);
+  }
+  .feature-row:first-of-type { border-top: none; }
+  .feature-info { flex: 1; min-width: 0; }
+  .feature-name { font-size: 0.875rem; font-weight: 500; }
+  .feature-help {
+    font-size: 0.75rem; color: var(--text-secondary);
+    margin-top: 4px; line-height: 1.5;
+  }
+  .feature-help code {
+    background: var(--code-bg); padding: 1px 5px; border-radius: 3px;
+    font-size: 0.7rem; font-family: 'Roboto Mono', 'Courier New', monospace;
+  }
+  .feature-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px; font-style: italic; }
+  .feature-control { flex-shrink: 0; display: flex; align-items: center; }
+  .feature-control input[type="number"] {
+    width: 64px; padding: 4px 8px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); font-size: 0.875rem; font-family: inherit;
+  }
+  .feature-control input[type="number"]:disabled { opacity: 0.38; cursor: not-allowed; }
+  .feature-row.locked .feature-name { color: var(--text-secondary); }
+
+  .feature-row.beta-master-row { font-weight: 600; padding-top: 20px; border-top: 2px solid var(--border); margin-top: 8px; }
+  .feature-row.beta-master-row .feature-help { font-weight: 400; }
+  .feature-row.beta-sub { padding-left: 32px; position: relative; }
+  .feature-row.beta-sub::before { content: ""; position: absolute; left: 12px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.beta-sub.dimmed { opacity: 0.38; }
+  .feature-row.beta-sub.dimmed input { cursor: not-allowed; }
+  .feature-row.codemode-sub { padding-left: 56px; position: relative; }
+  .feature-row.codemode-sub::before { content: ""; position: absolute; left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.codemode-sub.dimmed { opacity: 0.38; }
+  .feature-row.codemode-sub.dimmed input { cursor: not-allowed; }
+  .feature-row.yaml-packages-sub { padding-left: 56px; position: relative; }
+  .feature-row.yaml-packages-sub::before { content: ""; position: absolute; left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .feature-row.yaml-packages-sub.dimmed { opacity: 0.38; }
+  .feature-row.yaml-packages-sub.dimmed input { cursor: not-allowed; }
+
+  /* ── ADVANCED SETTINGS ───────────────────────────────────────────────── */
+  .adv-section-title {
+    font-size: 0.75rem; font-weight: 500; color: var(--text-secondary);
+    margin: 24px 0 4px; text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .adv-section-title.beta-section-title {
+    color: var(--warning); font-size: 0.8rem; margin-top: 32px;
+    padding-top: 16px; border-top: 1px solid rgba(255, 179, 71, 0.3);
+  }
+  .adv-save-note {
+    background: var(--save-note-bg); border-left: 3px solid var(--warning);
+    border-radius: 0 4px 4px 0; padding: 10px 14px; margin: 12px 0;
+    color: var(--text); font-size: 0.875rem; line-height: 1.5;
+  }
+  .adv-save-note strong { color: var(--warning); }
+  .adv-save-row { display: flex; align-items: center; gap: 12px; margin: 16px 0; padding: 8px 0; }
+  .adv-save-btn {
+    padding: 0 24px; height: 40px; font-size: 0.875rem; font-weight: 500; font-family: inherit;
+    border: none; border-radius: 9999px; background: var(--accent); color: #fff;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .adv-save-btn:hover { background: var(--accent-hover); }
+  .adv-save-btn:active { filter: brightness(0.9); }
+  .adv-save-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+  .adv-section { border-top: 1px solid var(--border); }
+  .adv-section.dimmed { opacity: 0.38; }
+  .adv-section.dimmed input,
+  .adv-section.dimmed select { cursor: not-allowed; }
+  .adv-section-title.dimmed { opacity: 0.38; }
+  .adv-section-note { font-size: 0.72rem; color: var(--text-secondary); margin: 4px 0 8px; line-height: 1.5; }
+  .adv-row {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; padding: 12px 0; border-top: 1px solid var(--border);
+  }
+  .adv-row:first-child { border-top: none; }
+  .adv-row.locked .adv-name { color: var(--text-secondary); }
+  .adv-info { flex: 1; min-width: 0; }
+  .adv-name { font-size: 0.875rem; font-weight: 500; }
+  .adv-help { font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; line-height: 1.5; }
+  .adv-help code {
+    background: var(--code-bg); padding: 1px 5px; border-radius: 3px;
+    font-size: 0.7rem; font-family: 'Roboto Mono', 'Courier New', monospace;
+  }
+  .adv-locked-note { font-size: 0.72rem; color: var(--warning); margin-top: 4px; font-style: italic; }
+  .adv-control { flex-shrink: 0; display: flex; align-items: center; }
+  .adv-control input[type="text"],
+  .adv-control input[type="number"],
+  .adv-control select {
+    padding: 4px 8px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); font-size: 0.875rem; font-family: inherit; min-width: 120px;
+  }
+  .adv-control input:disabled,
+  .adv-control select:disabled { opacity: 0.38; cursor: not-allowed; }
+  .adv-control input[type="checkbox"]:disabled { opacity: 0.38; cursor: not-allowed; }
+
+  /* ── BACKUPS ─────────────────────────────────────────────────────────── */
+  .backup-filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .backup-filters input {
+    padding: 6px 12px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-family: inherit; font-size: 0.875rem;
+  }
+  .backup-filters input:focus { border-color: var(--accent); outline: none; }
+  .backup-filters button {
+    padding: 0 16px; height: 36px; border-radius: 9999px; border: 1px solid var(--border);
+    background: transparent; color: var(--text); font-family: inherit; font-size: 0.875rem; cursor: pointer;
+  }
+  .backup-filters button:hover { background: var(--surface-hover); }
+  .backup-filters button.danger { background: var(--danger-soft-bg); color: var(--danger-soft-text); }
+  .backup-state {
+    background: var(--surface); border: var(--card-border); border-radius: 12px;
+    padding: 12px 16px; margin-bottom: 12px; font-size: 0.875rem;
+    color: var(--text-secondary); display: flex; gap: 16px; flex-wrap: wrap;
+  }
+  .backup-state span { display: inline-block; }
+  .backup-state strong { color: var(--text); }
+  .backup-row {
+    background: var(--surface); border: var(--card-border); border-radius: 12px;
+    padding: 12px 16px; margin-bottom: 6px; display: flex; align-items: center; gap: 12px;
+  }
+  .backup-row-info { flex: 1; min-width: 0; }
+  .backup-row-name { font-size: 0.875rem; font-weight: 500; word-break: break-all; }
+  .backup-row-meta { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
+  .backup-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .backup-row-actions button {
+    padding: 0 14px; height: 32px; border-radius: 9999px; border: none;
+    background: var(--accent); color: #fff; font-family: inherit;
+    font-size: 0.8125rem; font-weight: 500; cursor: pointer;
+  }
+  .backup-row-actions button:hover { background: var(--accent-hover); }
+  .backup-row-actions button.danger { background: var(--danger); }
+  .backup-row-actions button.secondary { background: var(--surface-hover); color: var(--text); }
+  .backup-empty {
+    padding: 32px; text-align: center; color: var(--text-secondary); font-size: 0.875rem;
+    background: var(--surface); border: 1px dashed var(--border); border-radius: 12px;
+  }
+  .backup-config {
+    background: var(--surface); border: var(--card-border); border-radius: 12px;
+    padding: 16px; margin-bottom: 12px;
+  }
+  .backup-config-form { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  .backup-field { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .backup-field-label { min-width: 200px; font-size: 0.875rem; font-weight: 500; }
+  .backup-field-control input[type="number"] {
+    width: 120px; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-family: inherit;
+  }
+  .backup-field-control input[type="number"]:disabled { opacity: 0.38; cursor: not-allowed; }
+  .backup-field-locked {
+    background: var(--field-locked-bg); color: var(--field-locked-text);
+    font-size: 0.75rem; padding: 2px 8px; border-radius: 12px;
+  }
+  .backup-field-help { font-size: 0.75rem; color: var(--text-secondary); flex-basis: 100%; margin-left: 200px; }
+  .backup-config-actions {
+    display: flex; align-items: center; gap: 12px;
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+  }
+  .backup-config-actions button {
+    padding: 0 20px; height: 40px; border-radius: 9999px; border: none;
+    background: var(--accent); color: #fff; font-family: inherit;
+    font-size: 0.875rem; font-weight: 500; cursor: pointer;
+  }
+  .backup-config-actions button:hover { background: var(--accent-hover); }
+  .backup-config-actions button:disabled { opacity: 0.38; cursor: not-allowed; }
+
+  /* ── MODAL ───────────────────────────────────────────────────────────── */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
+    display: none; align-items: center; justify-content: center; z-index: 100; padding: 16px;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: var(--surface); border: var(--card-border); border-radius: 12px;
+    max-width: 900px; width: 100%; max-height: 90vh; display: flex; flex-direction: column;
+    box-shadow: 0 24px 38px rgba(0, 0, 0, 0.4);
+  }
+  .modal-header {
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .modal-title { font-size: 1rem; font-weight: 500; word-break: break-all; }
+  .modal-close {
+    background: transparent; border: none; color: var(--text-secondary);
+    font-size: 1.25rem; cursor: pointer; padding: 0;
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal-close:hover { background: var(--surface-hover); }
+  .modal-body { flex: 1; overflow: auto; padding: 16px 20px; }
+  .modal-body pre {
+    background: var(--code-bg); padding: 12px; border-radius: 4px;
+    font-size: 0.8rem; overflow: auto; line-height: 1.5;
+  }
+  .diff-add { color: var(--diff-add); }
+  .diff-rem { color: var(--diff-rem); }
+  .diff-hdr { color: var(--diff-hdr); }
+
+  /* ── TOOL SECURITY POLICIES ──────────────────────────────────────────── */
+  .policy-rule-card {
+    background: var(--surface); border: var(--card-border); border-radius: 12px;
+    padding: 14px 16px; margin: 8px 0;
+  }
+  .policy-rule-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .policy-rule-header strong { font-size: 0.9375rem; font-weight: 500; }
+  .policy-rule-remove {
+    background: transparent; border: none; color: var(--text-secondary); cursor: pointer;
+    font-size: 1.1rem; padding: 0; width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .policy-rule-remove:hover { color: var(--danger); background: var(--surface-hover); }
+  .policy-predicate-list { list-style: none; padding: 0; margin: 6px 0; }
+  .policy-predicate-row { padding: 4px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .policy-predicate-row code {
+    background: var(--code-bg); padding: 3px 8px; border-radius: 4px;
+    font-size: 0.8rem; color: var(--text); font-family: 'Roboto Mono', 'Courier New', monospace;
+  }
+  .policy-predicate-row button {
+    background: transparent; border: none; color: var(--accent);
+    cursor: pointer; font-size: 0.8rem; font-family: inherit; padding: 2px 4px;
+  }
+  .policy-predicate-row button:hover { text-decoration: underline; }
+  .policy-add-predicate {
+    background: transparent; border: 1px dashed var(--border); color: var(--accent);
+    padding: 6px 12px; border-radius: 4px; cursor: pointer;
+    font-size: 0.875rem; font-family: inherit; margin-top: 4px;
+  }
+  .policy-add-predicate:hover { background: var(--surface-hover); }
+  .policy-predicate-form {
+    background: var(--bg); padding: 12px; margin: 6px 0;
+    border: 1px dashed var(--border); border-radius: 4px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .policy-predicate-form .policy-form-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .policy-predicate-form .policy-form-label { min-width: 90px; color: var(--text-secondary); font-size: 0.8rem; }
+  .policy-predicate-form select,
+  .policy-predicate-form input {
+    padding: 5px 8px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 0.875rem; font-family: inherit;
+  }
+  .policy-predicate-form input.policy-predicate-path-custom { min-width: 200px; }
+  .policy-predicate-form input.policy-predicate-value { min-width: 220px; font-family: 'Roboto Mono', 'Courier New', monospace; }
+  .policy-predicate-form .policy-form-hint { font-size: 0.75rem; color: var(--text-secondary); padding-left: 96px; margin-top: -4px; }
+  .policy-predicate-form-error { color: var(--danger); font-size: 0.78rem; width: 100%; margin-top: 4px; }
+  .policy-rule-lifetime { margin: 10px 0; font-size: 0.875rem; color: var(--text-secondary); }
+  .policy-rule-lifetime input {
+    width: 64px; padding: 4px 8px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); font-size: 0.875rem; font-family: inherit; margin: 0 6px;
+  }
+  .policy-save-status { margin-left: 10px; font-size: 0.8rem; color: var(--text-secondary); }
+
+  /* ── ACCESSIBILITY TAB ───────────────────────────────────────────────── */
+  .a11y-section {
+    background: var(--surface); border: var(--card-border); border-radius: 12px;
+    padding: 16px; margin-bottom: 12px;
+  }
+  .a11y-section-title { font-size: 0.9375rem; font-weight: 500; margin-bottom: 4px; }
+  .a11y-section-help { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 12px; }
+  .a11y-options { display: flex; flex-wrap: wrap; gap: 8px; }
+  fieldset.a11y-options { border: 0; padding: 0; margin: 0; min-inline-size: auto; }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+  .a11y-option {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border: 1px solid var(--border); border-radius: 16px;
+    cursor: pointer; font-size: 0.875rem; font-family: inherit;
+    background: var(--bg); user-select: none;
+  }
+  .a11y-option:hover { background: var(--surface-hover); }
+  .a11y-option:has(input:checked) {
+    border-color: var(--accent); color: var(--accent-text);
+    background: rgba(3, 169, 244, 0.08);
+  }
+  .a11y-option input { accent-color: var(--accent); }
+  .a11y-preset-chip {
+    width: 22px; height: 22px; border-radius: 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.7rem; font-weight: 600; border: 1px solid var(--border); flex-shrink: 0;
+  }
+  .a11y-preset-chip[data-chip="dark"]     { background: #111111; color: #e1e1e1; }
+  .a11y-preset-chip[data-chip="light"]    { background: #fafafa; color: #212121; }
+  .a11y-preset-chip[data-chip="auto"]     { background: linear-gradient(135deg, #111111 50%, #fafafa 50%); color: #888; }
+  .a11y-preset-chip[data-chip="paper"]    { background: #f4ede0; color: #1d1d1f; }
+  .a11y-preset-chip[data-chip="gray"]     { background: #d4d6da; color: #1d1d1f; }
+  .a11y-preset-chip[data-chip="contrast"] { background: #ffffff; color: #000000; font-weight: 800; border-color: #000; }
+  .a11y-swatches { display: flex; flex-wrap: wrap; gap: 12px; }
+  .a11y-swatch { display: inline-flex; align-items: center; gap: 8px; font-size: 0.875rem; }
+  .a11y-swatch input[type="color"] {
+    width: 40px; height: 28px; border: 1px solid var(--border);
+    border-radius: 4px; padding: 2px; background: var(--surface); cursor: pointer;
+  }
+  .a11y-contrast-warning { color: var(--warning); font-size: 0.8rem; margin-top: 10px; }
+
+  /* ── THEME CONTROL (in header) ───────────────────────────────────────── */
+  .theme-control { display: inline-flex; align-items: center; gap: 6px; }
+  .theme-control-label { font-size: 0.75rem; color: var(--header-text); opacity: 0.7; }
+  .theme-toggle {
+    background: color-mix(in srgb, var(--header-text) 12%, transparent);
+    color: var(--header-text);
+    border: 1px solid color-mix(in srgb, var(--header-text) 25%, transparent);
+    border-radius: 4px;
+    padding: 4px 8px; font-size: 0.8rem; font-family: inherit; cursor: pointer;
+  }
+  /* The closed control sits on the header and uses the header text colour, so
+     it stays legible whether the header is dark (dark theme) or light (light
+     theme). The native <option> popup follows the page color-scheme, not the
+     header, so pin it to the surface palette; that keeps the options legible
+     in every theme regardless of the header text colour. */
+  .theme-toggle option { background: var(--surface); color: var(--text); }
+  .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── LIGHT THEME ─────────────────────────────────────────────────────── */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #fafafa;
+    /* Light header to match the original UI — the #1695 redesign left the
+       header dark (#455a64) in both themes, which looked out of place in
+       light mode. A white header + hairline divider matches the page. */
+    --header-bg: #ffffff;
+    --header-text: #212121;
+    --header-shadow: 0 1px 0 var(--border);
+    --surface: #ffffff;
+    --surface-hover: #f5f5f5;
+    --text: #212121;
+    --text-secondary: rgba(0, 0, 0, 0.54);
+    --accent: #03a9f4;
+    --accent-hover: #0288d1;
+    --accent-text: #0277bd;
+    --border: rgba(0, 0, 0, 0.12);
+    --disabled-bg: rgba(0, 0, 0, 0.05);
+    --danger: #db4437;
+    --success: #43a047;
+    --warning: #f57c00;
+    --ok-bg: rgba(67, 160, 71, 0.12);
+    --badge-readonly-bg: rgba(3, 169, 244, 0.12);  --badge-readonly-text: #0277bd;
+    --badge-write-bg: rgba(245, 124, 0, 0.12); --badge-write-text: #c75b00;
+    --badge-destructive-bg: rgba(219, 68, 55, 0.1); --badge-destructive-text: #c62828;
+    --badge-mandatory-bg: rgba(67, 160, 71, 0.12);  --badge-mandatory-text: #2e7d32;
+    --danger-border: rgba(219, 68, 55, 0.5); --danger-text: #c62828;
+    --danger-hover-bg: rgba(219, 68, 55, 0.08);
+    --danger-soft-bg: rgba(219, 68, 55, 0.08); --danger-soft-text: #c62828;
+    --field-locked-bg: rgba(245, 124, 0, 0.1); --field-locked-text: #e65100;
+    --diff-add: #2e7d32; --diff-rem: #c62828; --diff-hdr: #0277bd;
+    --code-bg: #f5f5f5;
+    --save-note-bg: rgba(245, 124, 0, 0.08);
+    --card-shadow: 0 2px 2px 0 rgba(0,0,0,.14), 0 3px 1px -2px rgba(0,0,0,.12), 0 1px 5px 0 rgba(0,0,0,.2);
+    --card-border: none;
+    --switch-track-off: rgba(0, 0, 0, 0.09);
+    --switch-track-off-border: rgba(0, 0, 0, 0.30);
+    --switch-thumb-off: #ffffff;
+    --control-idle: rgba(0, 0, 0, 0.40);
+    --field-fill: rgba(0, 0, 0, 0.05);
+    --field-fill-hover: rgba(0, 0, 0, 0.09);
+    --field-line: rgba(0, 0, 0, 0.42);
+  }
+  :root[data-theme="light"] .slider::before { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
+  :root[data-theme="light"] .tab:hover { background: rgba(0,0,0,0.04); }
+  :root[data-theme="light"][data-shade="paper"] { --bg: #f4ede0; }
+  :root[data-theme="light"][data-shade="gray"]  { --bg: #d4d6da; }
+  :root[data-theme="light"][data-shade="pure"]  { --bg: #ffffff; }
+
+  /* ── HIGH CONTRAST ───────────────────────────────────────────────────── */
+  :root[data-contrast="high"] body { font-weight: 500; }
+  :root[data-contrast="high"][data-theme="dark"] {
+    --text: #ffffff; --text-secondary: #e0e0e0;
+    --border: rgba(255,255,255,0.4); --accent: #4dd0e1;
+  }
+  :root[data-contrast="high"][data-theme="light"] {
+    --text: #000000; --text-secondary: #1a1a1a;
+    --border: rgba(0,0,0,0.4); --accent: #006064;
+  }
+
+  /* ── FILLED TEXT FIELDS & SELECTS (HA ha-textfield / ha-select) ───────── */
+  /* HA uses MDC "filled" fields: a faint fill, rounded top corners, and a
+     bottom line that turns primary on focus (no full outline box). Placed
+     last so it overrides the earlier outlined-box rules. The focus accent is
+     a box-shadow (not a thicker border) to avoid a 1px layout shift. */
+  .search,
+  .adv-control input[type="text"],
+  .adv-control input[type="number"],
+  .adv-control select,
+  .feature-control input[type="number"],
+  .backup-field-control input[type="number"],
+  .backup-filters input,
+  .policy-predicate-form input,
+  .policy-predicate-form select,
+  .policy-rule-lifetime input,
+  .policy-remember-minutes {
+    background: var(--field-fill);
+    border: none;
+    border-bottom: 1px solid var(--field-line);
+    border-radius: 4px 4px 0 0;
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  }
+  .search:hover,
+  .adv-control input[type="text"]:hover,
+  .adv-control input[type="number"]:hover,
+  .adv-control select:hover,
+  .feature-control input[type="number"]:hover,
+  .backup-field-control input[type="number"]:hover,
+  .backup-filters input:hover,
+  .policy-predicate-form input:hover,
+  .policy-predicate-form select:hover,
+  .policy-rule-lifetime input:hover,
+  .policy-remember-minutes:hover {
+    background: var(--field-fill-hover);
+  }
+  .search:focus,
+  .adv-control input[type="text"]:focus,
+  .adv-control input[type="number"]:focus,
+  .adv-control select:focus,
+  .feature-control input[type="number"]:focus,
+  .backup-field-control input[type="number"]:focus,
+  .backup-filters input:focus,
+  .policy-predicate-form input:focus,
+  .policy-predicate-form select:focus,
+  .policy-rule-lifetime input:focus,
+  .policy-remember-minutes:focus {
+    outline: none;
+    background: var(--field-fill-hover);
+    border-bottom-color: var(--accent);
+    box-shadow: inset 0 -1px 0 0 var(--accent);
+  }

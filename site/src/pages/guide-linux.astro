@@ -39,6 +39,11 @@ const scriptsBase = 'https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/m
       </div>
     </header>
 
+    <!-- Not the app (add-on) -->
+    <div class="bg-blue-900/20 border border-blue-700/50 rounded-xl p-4 mb-8">
+      <p class="text-blue-200/90 text-sm"><strong class="text-blue-300">This is the local (stdio) setup.</strong> ha-mcp runs on this computer and talks to Claude directly. You do <strong>not</strong> need the Home Assistant App (add-on) for this, and this config does not use it &mdash; don't set up both. Running Home Assistant OS and prefer to run ha-mcp inside HA with no access token to manage? Use the <a href={withBase('/guide-addon')} class="underline hover:text-white">App (add-on) guide</a> instead.</p>
+    </div>
+
     <!-- Step 1 (shared) -->
     <section class="guide-step mb-8">
       <div class="step-header">

@@ -30,6 +30,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -79,6 +80,53 @@ MAX_PENDING_CODES = 1000
 # misconfiguration if a future caller forgets the up-front check.
 MIN_CLIENT_ID_LEN = 16
 
+# Appended ONLY to the stale-OAuth-registration errors (invalid_client /
+# invalid client_id) via the _text_error/_json_error restart_hint flag. The OAuth
+# provider's HTTP views are bound at register_views() time and HA can't
+# re-register / drop them mid-session, so a client-id regenerate / OAuth toggle /
+# reinstall only takes effect on a full HA restart — the case this targets
+# (issue #1694). Deliberately NOT added to client-side protocol errors
+# (invalid_grant / invalid_request / unsupported_grant_type) or the webhook
+# 502/500 paths, where a restart is not the fix. (The webhook itself is
+# re-registered on reload; only the OAuth views need the restart.)
+RESTART_HINT = (
+    "If this persists, fully restart Home Assistant "
+    "(Settings -> System -> Restart) — not just the add-on or the integration."
+)
+
+
+def _text_error(
+    status: int, message: str, *, restart_hint: bool = False
+) -> web.Response:
+    """Plain-text error response.
+
+    ``restart_hint`` appends ``RESTART_HINT`` — set it only for the
+    stale-OAuth-registration cases (``invalid client_id``) a full HA restart
+    actually unsticks, not for client-side request mistakes.
+    """
+    text = f"{message}. {RESTART_HINT}" if restart_hint else message
+    return web.Response(status=status, text=text)
+
+
+def _json_error(
+    error: str,
+    status: int,
+    headers: dict[str, str] | None = None,
+    *,
+    restart_hint: bool = False,
+) -> web.Response:
+    """OAuth JSON error response.
+
+    ``restart_hint`` carries ``RESTART_HINT`` in ``error_description`` — set it
+    only for the stale-registration case (``invalid_client``), not for
+    client-side protocol errors (``invalid_grant`` / ``invalid_request`` /
+    ``unsupported_grant_type``) where a restart is not the fix.
+    """
+    body = {"error": error}
+    if restart_hint:
+        body["error_description"] = RESTART_HINT
+    return web.json_response(body, status=status, headers=headers)
+
 
 class _PendingCode(TypedDict):
     """Shape of an entry in OAuthProvider._codes. TypedDict so a typo on
@@ -97,6 +145,42 @@ def _b64url_encode(raw: bytes) -> str:
 def _b64url_decode(s: str) -> bytes:
     pad = "=" * (-len(s) % 4)
     return base64.urlsafe_b64decode(s + pad)
+
+
+def _atomic_write_0600(path: Path, data: bytes) -> bool:
+    """Write ``data`` to ``path`` with 0600, atomically and race-free.
+
+    Writes to a sibling temp file created 0600 (the mode is applied by the
+    ``open()`` syscall, so there is no chmod-after-write window), then
+    ``os.replace()``s it over ``path``. Because the replace is atomic and the
+    temp was 0600 from creation, ``path`` is never observable with the new
+    bytes at wider-than-0600 permissions — on first create OR on an
+    overwrite/regenerate. Returns True on success; returns False if the
+    restricted-mode create OR the subsequent write/replace failed — i.e. on
+    ANY OSError, whether the filesystem can't honor restricted mode (tmpfs /
+    non-POSIX) or a genuine I/O error occurred (full disk, EACCES, read-only
+    fs). A False therefore doesn't prove it was only the mode: the caller's
+    plain-write fallback also fails on a hard I/O error, so its "wider
+    permissions" warning must not be treated as certain.
+    """
+    tmp = path.with_name(f"{path.name}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                # Best-effort temp cleanup — if unlink fails the stale ".tmp"
+                # is harmless and the caller's fallback path still runs.
+                pass
+            raise
+        return True
+    except OSError:
+        return False
 
 
 def load_or_create_secret() -> bytes:
@@ -126,19 +210,19 @@ def load_or_create_secret() -> bytes:
         )
     new_secret = secrets.token_bytes(32)
     SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SECRET_FILE.write_bytes(new_secret)
-    try:
-        SECRET_FILE.chmod(0o600)
-    except OSError as e:
-        # Filesystem doesn't support chmod (tmpfs / non-POSIX) — secret
-        # ends up world-readable in /config. Warn so an operator with an
-        # unusual /config mount knows the HMAC key isn't perm-restricted.
+    if not _atomic_write_0600(SECRET_FILE, new_secret):
+        # False = the restricted-mode create OR the write/replace failed (any
+        # OSError: tmpfs / non-POSIX that can't honor 0600, or a hard I/O error
+        # like a full disk / EACCES / read-only fs). Fall back to a plain
+        # write: on a mode-only limitation it succeeds (the secret may end up
+        # world-readable in /config — hence the warning); on a hard I/O error
+        # it raises and propagates.
+        SECRET_FILE.write_bytes(new_secret)
         _LOGGER.warning(
-            "MCP Proxy OAuth: could not chmod 0600 the signing key file "
-            "at %s (%s: %s). The key may have wider permissions than intended.",
+            "MCP Proxy OAuth: could not create the signing key file with "
+            "restricted permissions at %s. The key may have wider permissions "
+            "than intended.",
             SECRET_FILE,
-            type(e).__name__,
-            e,
         )
     return new_secret
 
@@ -289,6 +373,8 @@ class OAuthProvider:
         try:
             payload = json.loads(_b64url_decode(body))
         except (ValueError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
             return False
         if payload.get("kind") != expected_kind:
             return False
@@ -546,7 +632,7 @@ class AuthorizeView(HomeAssistantView):
         if action == "deny":
             return self._redirect_with(redirect_uri, error="access_denied", state=state)
         if action != "approve":
-            return web.Response(status=400, text="invalid action")
+            return _text_error(400, "invalid action")
 
         code = self._provider.issue_code(redirect_uri, code_challenge)
         if code is None:
@@ -571,21 +657,17 @@ class AuthorizeView(HomeAssistantView):
         identical validation — the POST path explicitly re-validates the
         hidden form fields rather than trusting them."""
         if response_type != "code":
-            return web.Response(status=400, text="unsupported_response_type")
+            return _text_error(400, "unsupported_response_type")
         if code_challenge_method != "S256":
-            return web.Response(
-                status=400, text="invalid code_challenge_method (S256 required)"
-            )
+            return _text_error(400, "invalid code_challenge_method (S256 required)")
         if not _PKCE_CHALLENGE_RE.match(code_challenge):
-            return web.Response(
-                status=400, text="invalid code_challenge (must be 43-char base64url)"
+            return _text_error(
+                400, "invalid code_challenge (must be 43-char base64url)"
             )
         if client_id != self._provider.client_id:
-            return web.Response(status=400, text="invalid client_id")
+            return _text_error(400, "invalid client_id", restart_hint=True)
         if not _is_valid_redirect_uri(redirect_uri):
-            return web.Response(
-                status=400, text="redirect_uri must be an https:// URL with a host"
-            )
+            return _text_error(400, "redirect_uri must be an https:// URL with a host")
         return None
 
 
@@ -623,10 +705,11 @@ class TokenView(HomeAssistantView):
         form = dict(await request.post())
         client_id, client_secret = self._extract_client_creds(request, form)
         if not self._provider.authenticate_client(client_id, client_secret):
-            return web.json_response(
-                {"error": "invalid_client"},
-                status=401,
+            return _json_error(
+                "invalid_client",
+                401,
                 headers={"WWW-Authenticate": 'Basic realm="MCP Proxy OAuth"'},
+                restart_hint=True,
             )
 
         grant_type = form.get("grant_type", "")
@@ -634,16 +717,16 @@ class TokenView(HomeAssistantView):
             return await self._handle_authorization_code(form)
         if grant_type == "refresh_token":
             return await self._handle_refresh(form)
-        return web.json_response({"error": "unsupported_grant_type"}, status=400)
+        return _json_error("unsupported_grant_type", 400)
 
     async def _handle_authorization_code(self, form: dict) -> web.Response:
         code = str(form.get("code", ""))
         redirect_uri = str(form.get("redirect_uri", ""))
         code_verifier = str(form.get("code_verifier", ""))
         if not (code and redirect_uri and code_verifier):
-            return web.json_response({"error": "invalid_request"}, status=400)
+            return _json_error("invalid_request", 400)
         if not self._provider.consume_code(code, redirect_uri, code_verifier):
-            return web.json_response({"error": "invalid_grant"}, status=400)
+            return _json_error("invalid_grant", 400)
         return web.json_response(
             {
                 "access_token": self._provider.issue_access_token(),
@@ -656,7 +739,7 @@ class TokenView(HomeAssistantView):
     async def _handle_refresh(self, form: dict) -> web.Response:
         refresh = str(form.get("refresh_token", ""))
         if not refresh or not self._provider.validate_refresh_token(refresh):
-            return web.json_response({"error": "invalid_grant"}, status=400)
+            return _json_error("invalid_grant", 400)
         return web.json_response(
             {
                 "access_token": self._provider.issue_access_token(),

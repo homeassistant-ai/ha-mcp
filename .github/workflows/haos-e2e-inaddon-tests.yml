@@ -91,8 +91,13 @@ jobs:
             while IFS= read -r f; do
               [ -z "$f" ] && continue
               case "$f" in
+                # Markdown docs inside the addon / component dirs are user-facing
+                # docs (DOCS.md, README, CHANGELOG), not bake inputs — they don't
+                # change what the suite tests, so they skip like any other docs.
+                homeassistant-addon/*.md|homeassistant-addon-dev/*.md|homeassistant-addon-webhook-proxy/*.md|custom_components/ha_mcp_tools/*.md)
+                  continue ;;
                 # Bake inputs / addon dirs are baked into the qcow2 / shipped —
-                # their docs change what the suite tests, so they count as code.
+                # their non-doc files change what the suite tests, so they count as code.
                 homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
                   run=true; break ;;
                 # Pure docs / website do not, on their own, warrant the suite.
@@ -145,7 +150,7 @@ jobs:
 
       - name: Restore image from cache
         id: restore-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
@@ -254,6 +259,10 @@ jobs:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           HAOS_TEST_MODE: inaddon
+          # Feeds conftest's HACS token injection (qcow2 pre-boot edit)
+          # so HACS repo adds don't hit the unauthenticated shared-IP
+          # GitHub rate limit — the recurring HACS-install flake.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HAOS + addon diagnostics from booted qcow2 (always)
         if: always()
@@ -320,6 +329,11 @@ jobs:
             cat "$outdir/config.yaml" || true
           done
           ls -laR /tmp/haos-inaddon-diagnostics/ || true
+          # The HACS token injection (conftest pre-boot edit) puts GITHUB_TOKEN
+          # into core.config_entries inside the extracted storage.tar files.
+          # Redact them (fail-closed: an unredactable tar is deleted) so no
+          # credential persists into the downloadable artifact.
+          python3 scripts/redact_diagnostics_secrets.py /tmp/haos-inaddon-diagnostics
 
       - name: Upload HAOS inaddon diagnostics
         if: always()

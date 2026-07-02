@@ -63,6 +63,11 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "_assemble_overview_response",
                 "base_response",
             ),
+            # Keys assigned in the three fetch helpers that ha_get_overview
+            # delegates to after the class-based refactor.
+            ("tools/tools_search.py", "_fetch_system_info", "result"),
+            ("tools/tools_search.py", "_fetch_notifications", "result"),
+            ("tools/tools_search.py", "_fetch_repairs", "result"),
         ],
         "return_harvest": [],
     },
@@ -546,12 +551,22 @@ def test_entities_branch_emissions_are_either_stripped_or_documented() -> None:
     from ha_mcp.tools.tools_search import _ENTITIES_BRANCH_SKIP_KEYS
 
     markers = frozenset({"results", "total_matches"})
-    emitted = _harvest_marker_dicts(
-        "tools/tools_search.py", "ha_search_entities", markers
-    )
+    # _ha_search_entities is a dispatcher; response-shaped dicts live in
+    # its sub-methods.  Scan each one and union the results.
+    emitted: set[str] = set()
+    for fn in (
+        "_search_regular",
+        "_search_domain_only",
+        "_search_area_with_query",
+        "_search_area_only_populated",
+        "_search_area_only",
+        "_exact_match_search",
+        "_normalize_regular_search_result",
+    ):
+        emitted |= _harvest_marker_dicts("tools/tools_search.py", fn, markers)
     assert emitted, (
-        "harvested no response-shaped dicts from ha_search_entities — the "
-        "marker set ({'results', 'total_matches'}) may need updating"
+        "harvested no response-shaped dicts from entity search sub-methods — "
+        "the marker set ({'results', 'total_matches'}) may need updating"
     )
 
     ha_search_spec = next(s for s in TOOL_SPECS if s["tool"] == "ha_search")
@@ -579,9 +594,9 @@ def test_harvester_finds_dismissed_repair_count_in_ha_get_overview() -> None:
     case for ``ha_get_overview`` would still pass — both sides of the diff
     would shrink in lockstep. Pin the find here so regressions surface.
     """
-    keys = _harvest_var_keys("tools/tools_search.py", "ha_get_overview", "result")
+    keys = _harvest_var_keys("tools/tools_search.py", "_fetch_repairs", "result")
     assert "dismissed_repair_count" in keys, (
-        "AST harvest of `ha_get_overview` lost `dismissed_repair_count`. "
+        "AST harvest of `_fetch_repairs` lost `dismissed_repair_count`. "
         "The regression-catch guarantee this test file provides is broken."
     )
     documented = _extract_documented_keys("tools/tools_search.py", "ha_get_overview")

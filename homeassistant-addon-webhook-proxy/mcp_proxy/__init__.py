@@ -17,9 +17,11 @@ by the proxy addon's startup script. No manual configuration is needed — the
 addon creates the config entry automatically via the HA API.
 """
 
+import hashlib
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -46,6 +48,34 @@ _LOGGER_LEVEL_RAISED = False
 DOMAIN = "mcp_proxy"
 CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
 
+# Inbound-request mirror file. When "Log inbound requests" is on we append each
+# inbound debug line here in addition to logging it to Home Assistant, so the
+# Webhook Proxy addon (a separate process) can tail it and surface the same
+# lines in the addon log. Path kept in sync with start.py:INBOUND_LOG_FILE.
+INBOUND_LOG_FILE = Path("/config/.mcp_proxy_inbound.log")
+# Cap the mirror file so it can't grow without bound; trim to the last half
+# when exceeded. 256 KiB keeps plenty of recent history at ~100 bytes/line.
+_INBOUND_LOG_CAP = 256 * 1024
+# Serializes writes to INBOUND_LOG_FILE: HA dispatches _append_inbound_log to a
+# multi-worker executor pool, so concurrent inbound requests could interleave
+# the append + the cap's read-modify-write trim without this lock.
+_LOG_WRITE_LOCK = threading.Lock()
+
+# Shared HA-instance marker (SAME literal in both flavors — deliberately
+# domain-neutral so both read the same key) recording which flavor's DOMAIN
+# registered the root OAuth /authorize + /token views. Lets the second flavor
+# fail loudly on a cross-flavor collision instead of silently shadowing. NOT
+# cleared on unload: HA can't unregister the HTTP views until it restarts, so
+# the ownership marker must outlive the config entry too.
+OAUTH_ROUTE_OWNER_KEY = "webhook_proxy_oauth_route_owner"
+
+# Fingerprint of the OAuth identity (client id/secret + signing key) currently
+# bound to the root /authorize + /token views. Lets a mid-session credential
+# regeneration be detected: the bound views can't be re-registered until an HA
+# restart, so if the fingerprint changed we must prompt for one instead of
+# silently serving mismatched views. Same literal in both flavors.
+OAUTH_ROUTE_KEY_FINGERPRINT = "webhook_proxy_oauth_route_key_fingerprint"
+
 # ha-mcp generates a 22-char base64url token after `/private_`. We accept >=16
 # as a sanity floor — a truncated/corrupted ha-mcp config yields a shorter
 # token, which is the failure mode this length check exists to catch.
@@ -60,6 +90,19 @@ CONFIG_SCHEMA = vol.Schema(
     {vol.Optional(DOMAIN): vol.Any(None, dict)},
     extra=vol.ALLOW_EXTRA,
 )
+
+
+def _oauth_route_fingerprint(
+    client_id: str, client_secret: str, signing_key: bytes
+) -> str:
+    """Stable fingerprint of the OAuth identity bound to the root views."""
+    h = hashlib.sha256()
+    h.update(client_id.encode())
+    h.update(b"\0")
+    h.update(client_secret.encode())
+    h.update(b"\0")
+    h.update(signing_key)
+    return h.hexdigest()
 
 
 def _validate_target_url(target_url: str) -> tuple[bool, str]:
@@ -93,8 +136,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     If the user has an old `mcp_proxy:` entry in configuration.yaml,
     auto-migrate to a config entry so the YAML line can be removed.
 
-    Also runs the boot-time repair-issue check: if the addon left a
-    "needs HA restart for OAuth" marker file behind, surface it as a
+    Also runs the boot-time repair-issue check: if a "needs HA restart
+    for OAuth" marker file was left behind (by the add-on's fail-closed
+    gate or the integration's mid-session OAuth enable), surface it as a
     Repair card with a click-to-restart fix flow. See repairs.py for
     the full lifecycle.
     """
@@ -244,17 +288,42 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # registration fails — we fail loudly via ConfigEntryError. The user
     # explicitly opted into auth; silently falling back to no-auth would
     # leave them with an open endpoint they think is locked.
+    oauth_restart_needed = False
     oauth_section = proxy_config.get("oauth")
     if isinstance(oauth_section, dict):
         client_id = str(oauth_section.get("client_id", ""))
         client_secret = str(oauth_section.get("client_secret", ""))
         if not client_id or not client_secret:
+            # OAuth setup failed — unregister the webhook we registered above so
+            # we don't leave an unauthenticated endpoint live.
+            async_unregister(hass, webhook_id)
             await session.close()
             raise ConfigEntryError(
                 "OAuth was enabled in the addon but client_id and/or "
                 "client_secret is blank in /config/.mcp_proxy_config.json. "
                 "Restart the Webhook Proxy addon to regenerate the config "
                 "file, or turn off Enable OAuth in the addon configuration."
+            )
+        # Root-route collision guard. The OAuth provider registers /authorize
+        # and /token at the HA ROOT (claude.ai builds <host>/authorize from the
+        # host root). HA cannot unregister HTTP views until it restarts, and
+        # aiohttp lets the first-registered path win — a later duplicate is
+        # silently shadowed. So if the OTHER webhook-proxy flavor already owns
+        # these routes in this HA instance, registering ours would be shadowed
+        # (its provider has a different signing key, so nothing it serves would
+        # validate here). Fail LOUDLY instead. This also covers the sibling
+        # being *stopped* but its views still bound (see OAUTH_ROUTE_OWNER_KEY).
+        route_owner = hass.data.get(OAUTH_ROUTE_OWNER_KEY)
+        if route_owner is not None and route_owner != DOMAIN:
+            async_unregister(hass, webhook_id)
+            await session.close()
+            raise ConfigEntryError(
+                f"The other Webhook Proxy flavor ('{route_owner}') already owns "
+                "the root OAuth /authorize and /token routes in this Home "
+                "Assistant instance, and Home Assistant cannot release them "
+                "until it restarts. Stop that add-on and RESTART Home Assistant, "
+                "then start this one. Only one Webhook Proxy flavor can serve "
+                "OAuth at a time."
             )
         public_base_url = proxy_config.get("public_base_url")
         if not isinstance(public_base_url, str) or not public_base_url:
@@ -264,6 +333,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             # Filesystem I/O — must run off the event loop.
             signing_key = await hass.async_add_executor_job(load_or_create_secret)
+            # That executor await is a suspension point: the sibling flavor's
+            # concurrently-setting-up entry can register and claim the root
+            # routes while this one is suspended, which the pre-await guard
+            # above cannot see (TOCTOU). Re-read the owner now — everything
+            # from this read to the ownership-marker write below runs
+            # synchronously on the event loop, so no further interleave is
+            # possible and the claim-or-refuse is atomic.
+            route_owner = hass.data.get(OAUTH_ROUTE_OWNER_KEY)
+            if route_owner is not None and route_owner != DOMAIN:
+                async_unregister(hass, webhook_id)
+                await session.close()
+                raise ConfigEntryError(
+                    f"The other Webhook Proxy flavor ('{route_owner}') claimed "
+                    "the root OAuth /authorize and /token routes while this "
+                    "entry was setting up, and Home Assistant cannot release "
+                    "them until it restarts. Stop that add-on and RESTART Home "
+                    "Assistant, then start this one. Only one Webhook Proxy "
+                    "flavor can serve OAuth at a time."
+                )
             oauth_provider = OAuthProvider(
                 hass=hass,
                 client_id=client_id,
@@ -272,12 +360,54 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 signing_key=signing_key,
                 public_base_url=public_base_url,
             )
-            oauth_provider.register_views()
+            fingerprint = _oauth_route_fingerprint(
+                client_id, client_secret, signing_key
+            )
+            bound_fp = hass.data.get(OAUTH_ROUTE_KEY_FINGERPRINT)
+            if route_owner == DOMAIN and bound_fp == fingerprint:
+                # Reload of our own entry with the SAME credentials + key: the
+                # root views are already bound and current. Reuse them (HA can't
+                # re-register mid-session; re-registering would only pile up
+                # shadowed duplicates). OAuth is live — no restart.
+                _LOGGER.debug(
+                    "MCP Proxy: root OAuth views already bound with the current "
+                    "credentials this session; reusing them (no restart)."
+                )
+            elif route_owner == DOMAIN:
+                # Reload of our own entry but the credentials/key CHANGED
+                # (regenerated) mid-session. HA can't re-bind the root views
+                # until a restart, so the live /authorize + /token still use the
+                # OLD identity while the webhook now expects the NEW one — clients
+                # can't obtain a token the webhook accepts. Surface the restart
+                # Repair; leave the stored fingerprint on the OLD (still-bound)
+                # value so a boot-time setup re-registers and updates it.
+                _LOGGER.warning(
+                    "MCP Proxy: OAuth credentials changed but the bound root "
+                    "views still use the previous ones — a Home Assistant "
+                    "restart is required to activate the new credentials."
+                )
+                oauth_restart_needed = True
+            else:
+                # First registration this HA session.
+                oauth_provider.register_views()
+                hass.data[OAUTH_ROUTE_OWNER_KEY] = DOMAIN
+                hass.data[OAUTH_ROUTE_KEY_FINGERPRINT] = fingerprint
+                # A first registration happening mid-session isn't live until a
+                # full HA restart; flag it. At HA boot it binds cleanly.
+                oauth_restart_needed = hass.is_running
+        except ConfigEntryError:
+            # The post-await collision re-check above already tore down (webhook
+            # unregistered, session closed) — re-raise as-is so the generic
+            # handler below doesn't re-wrap the message and tear down twice.
+            raise
         except Exception as err:
             _LOGGER.exception(
                 "MCP Proxy: failed to initialise OAuth provider (%s)",
                 type(err).__name__,
             )
+            # OAuth setup failed — unregister the webhook we registered above so
+            # we don't leave an unauthenticated endpoint live.
+            async_unregister(hass, webhook_id)
             await session.close()
             raise ConfigEntryError(
                 f"Failed to enable OAuth on the MCP webhook: {err}. "
@@ -293,16 +423,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN] = hass_data
 
-    # If we got here, the integration is set up and (if OAuth is configured)
-    # the OAuth provider's views are registered. Either way, any prior
-    # "needs HA restart for OAuth" marker is now stale — clear it so the
-    # Repair card disappears. Marker cleanup is filesystem I/O so it runs
-    # in the executor; the issue-registry call is synchronous and safe on
-    # the event loop.
-    from .repairs import _clear_marker, _delete_issue_only
+    # The integration is set up. If OAuth was (re)configured on a mid-session
+    # setup, its root views aren't live until a full HA restart, so surface the
+    # HACS-style restart Repair; otherwise (OAuth off, or set up cleanly during
+    # HA boot) any prior "needs HA restart for OAuth" marker is now stale, so
+    # clear it. Marker writes/cleanup are filesystem I/O and run in the
+    # executor; the issue-registry calls are synchronous and safe on the loop.
+    from .repairs import _clear_marker, _delete_issue_only, _write_marker, create_issue
 
-    await hass.async_add_executor_job(_clear_marker)
-    _delete_issue_only(hass, DOMAIN)
+    if oauth_restart_needed:
+        # OAuth was (re)configured on a mid-session setup — it isn't live until
+        # a full HA restart. Surface the HACS-style restart Repair (+ marker so
+        # it survives to the next boot). A boot-time setup takes the else branch
+        # and clears it once OAuth is genuinely active.
+        await hass.async_add_executor_job(_write_marker)
+        create_issue(hass, DOMAIN)
+    else:
+        # OAuth off, or set up during HA boot (views bound cleanly) — no restart
+        # needed; clear any stale marker/issue.
+        await hass.async_add_executor_job(_clear_marker)
+        _delete_issue_only(hass, DOMAIN)
 
     return True
 
@@ -318,6 +458,45 @@ def _read_config() -> dict | None:
         return None
     data: dict | None = json.loads(CONFIG_FILE.read_text())
     return data
+
+
+def _append_inbound_log(line: str) -> None:
+    """Append one inbound-debug line to the mirror file the addon tails.
+
+    Capped: when the file grows past ``_INBOUND_LOG_CAP`` it is trimmed to its
+    last half (dropping the now-partial first line) so it can't grow without
+    bound. Best-effort — swallows its own ``OSError`` (e.g. a read-only
+    ``/config``) so a mirror failure never surfaces as an unretrieved executor
+    exception. Blocking filesystem I/O — call via ``hass.async_add_executor_job``.
+    """
+    try:
+        with _LOG_WRITE_LOCK:
+            with INBOUND_LOG_FILE.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            if INBOUND_LOG_FILE.stat().st_size > _INBOUND_LOG_CAP:
+                data = INBOUND_LOG_FILE.read_bytes()[-(_INBOUND_LOG_CAP // 2) :]
+                nl = data.find(b"\n")
+                if nl != -1:
+                    data = data[nl + 1 :]
+                INBOUND_LOG_FILE.write_bytes(data)
+    except OSError as e:
+        _LOGGER.debug("MCP Proxy: inbound mirror write failed: %s", e)
+
+
+async def _debug_log(hass: HomeAssistant, message: str) -> None:
+    """Log an inbound-request debug line to Home Assistant AND mirror it to the
+    addon log file (``INBOUND_LOG_FILE``) so it surfaces in the Webhook Proxy
+    addon log too, not only in Settings -> System -> Logs.
+
+    The mirror write is dispatched to the executor fire-and-forget: it runs off
+    the event loop and we deliberately don't await it, so an opt-in debug log
+    never adds latency to (or fails) the proxied request. ``_append_inbound_log``
+    swallows its own ``OSError`` (the only realistic failure here, since the
+    message is controlled ASCII), so the unawaited future does not carry an
+    exception in practice.
+    """
+    _LOGGER.info("%s", message)
+    hass.async_add_executor_job(_append_inbound_log, message)
 
 
 async def _handle_webhook(
@@ -340,12 +519,10 @@ async def _handle_webhook(
         # the logged source.
         source = request.remote or "unknown"
         has_auth = "present" if request.headers.get("Authorization") else "absent"
-        _LOGGER.info(
-            "MCP Proxy [inbound]: %s %s from %s (Authorization header: %s)",
-            request.method,
-            masked_path,
-            source,
-            has_auth,
+        await _debug_log(
+            hass,
+            f"MCP Proxy [inbound]: {request.method} {masked_path} from {source} "
+            f"(Authorization header: {has_auth})",
         )
 
     # OAuth gate. When OAuth isn't configured, `oauth_provider` is None and
@@ -354,9 +531,10 @@ async def _handle_webhook(
     oauth_provider = data.get("oauth")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
         if debug:
-            _LOGGER.info(
+            await _debug_log(
+                hass,
                 "MCP Proxy [inbound]: -> 401 Unauthorized (no/invalid OAuth "
-                "bearer; expected for the initial discovery probe)"
+                "bearer; expected for the initial discovery probe)",
             )
         from .oauth import build_unauthorized_response
 
@@ -392,10 +570,10 @@ async def _handle_webhook(
             content_type = upstream_resp.headers.get("Content-Type", "")
 
             if debug:
-                _LOGGER.info(
-                    "MCP Proxy [inbound]: -> upstream responded %s (%s)",
-                    upstream_resp.status,
-                    content_type or "no content-type",
+                await _debug_log(
+                    hass,
+                    f"MCP Proxy [inbound]: -> upstream responded "
+                    f"{upstream_resp.status} ({content_type or 'no content-type'})",
                 )
 
             # Common headers for both streaming and non-streaming

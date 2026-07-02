@@ -25,7 +25,7 @@ const { title } = Astro.props;
       // from localStorage with safe defaults. Auto is the default (#1574
       // review: follow the OS preference out of the box); Dark stays one
       // click away as a preset.
-      // Same logic as in src/ha_mcp/settings_ui.py head — both surfaces use
+      // Same logic as in src/ha_mcp/settings_ui/__init__.py head — both surfaces use
       // the same localStorage key names interpreted identically, but storage
       // is per-origin, so each surface keeps its own saved values. Any change
       // here must be mirrored there (and vice versa) or the surfaces drift
@@ -111,7 +111,7 @@ const { title } = Astro.props;
       // attributes. The Layout head anti-FOUC script already set the initial
       // attributes; this module keeps them in sync for the rest of the
       // session and persists user changes. The block from `const PREFS` to
-      // `const APPLY` must stay logically identical to src/ha_mcp/settings.js
+      // `const APPLY` must stay logically identical to src/ha_mcp/settings_ui/settings.js
       // (comments and formatting may differ) — enforced by
       // tests/src/unit/test_anti_fouc_parity.py.
       (function bindAccessibilityPrefs() {

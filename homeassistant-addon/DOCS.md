@@ -4,7 +4,7 @@ AI assistant integration for Home Assistant via Model Context Protocol (MCP).
 
 ## About
 
-This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 84+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
+This add-on enables AI assistants (Claude, ChatGPT, etc.) to control your Home Assistant installation through the Model Context Protocol (MCP). It provides 85+ tools for device control, automation management, entity search, calendars, todo lists, dashboards, backup/restore, history/statistics, camera snapshots, and system queries.
 
 **Key Features:**
 - **Zero Configuration** - Automatically discovers Home Assistant connection
@@ -50,15 +50,14 @@ Full features and documentation: https://github.com/homeassistant-ai/ha-mcp
 
 ### <details><summary><b>📱 Claude Desktop</b></summary>
 
-Claude Desktop requires a proxy to connect to HTTP MCP servers. Install **mcp-proxy** first:
+Claude Desktop talks to MCP servers over stdio, so it reaches the add-on through **mcp-proxy**, run automatically via `uvx`. That only needs **uv** on the computer running Claude Desktop:
 
 ```bash
-# Install mcp-proxy
-uv tool install mcp-proxy
-# or
-pipx install mcp-proxy
-# or (macOS)
-brew install mcp-proxy
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+winget install --id=astral-sh.uv -e
 ```
 
 Then add to your Claude Desktop configuration file:
@@ -73,18 +72,18 @@ Then add to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "home-assistant": {
-      "command": "mcp-proxy",
-      "args": ["--transport", "streamablehttp", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
+      "command": "uvx",
+      "args": ["mcp-proxy", "--transport", "streamablehttp", "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw"]
     }
   }
 }
 ```
 
-Replace the URL in `args` with the one from your add-on logs.
+Replace the URL in `args` with the one from your add-on logs. No token goes here — the add-on handles authentication behind the secret path in the URL.
 
 **Restart Claude Desktop** after saving the configuration.
 
-**How it works:** mcp-proxy converts the HTTP endpoint to stdio that Claude Desktop can use.
+**How it works:** `uvx` runs mcp-proxy, which converts the add-on's HTTP endpoint to the stdio Claude Desktop expects.
 
 </details>
 
@@ -285,7 +284,7 @@ Requires add-on restart to take effect.
 
 **Default:** `false`
 
-Replaces the full tool catalog (~84 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
+Replaces the full tool catalog (~85 tools) with search-based discovery (~4 proxy tools). When enabled, tools are found via `ha_search_tools` and executed through categorized proxies (read/write/delete).
 
 > ⚠️ **Do NOT enable this if you use Claude in Sonnet or Opus modes.** Those models run their own built-in tool search / deferred tools, which conflicts with ha-mcp's — running both at once does not work. To use ha-mcp's tool search with Claude, disable Claude's built-in tool search first; otherwise leave this off.
 
@@ -475,7 +474,7 @@ If the add-on is slow or unresponsive:
 
 <!-- ADDON_TOOLS_START -->
 
-The add-on provides 84+ MCP tools for controlling Home Assistant:
+The add-on provides 85+ MCP tools for controlling Home Assistant:
 
 > **Note:** This list is regenerated from the `master` branch on every push, but the add-on image you have installed only updates on stable releases (biweekly, Wednesdays 10:00 UTC). A tool listed below may not yet be present in your installed runtime. If so, calling it returns an "unknown tool" error until the next stable release.
 
@@ -572,6 +571,9 @@ The add-on provides 84+ MCP tools for controlling Home Assistant:
 - `ha_config_remove_label` — Delete a Home Assistant label.
 - `ha_config_set_category` — Create or update a Home Assistant category.
 - `ha_config_set_label` — Create or update a Home Assistant label.
+
+### Matter
+- `ha_manage_radio` — Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.
 
 ### Scenes
 - `ha_config_get_scene` — Retrieve Home Assistant scene configuration.

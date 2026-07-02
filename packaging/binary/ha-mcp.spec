@@ -37,16 +37,15 @@ for dir_name in stdlib_dirs:
     if os.path.exists(dir_path):
         datas.append((dir_path, dir_name))
 
-# settings_ui.py reads settings.js and settings.css via Path(__file__).parent
-# at import, so a missing file would build a working-looking but broken binary.
-# collect_all('ha_mcp') below also picks them up via package-data, but add them
-# explicitly and WITHOUT an existence guard: both are mandatory, so let the
-# build fail loudly if either is absent rather than ship a broken binary
+# settings_ui/__init__.py reads settings.html, settings.js and settings.css via
+# Path(__file__).parent at import, so a missing file would build a working-looking
+# but broken binary. collect_all('ha_mcp') below also picks them up via package-data,
+# but add them explicitly and WITHOUT an existence guard: all three are mandatory, so
+# let the build fail loudly if any is absent rather than ship a broken binary
 # (PyInstaller dedups the duplicate datas entries).
-_settings_js = os.path.join(PROJECT_ROOT, 'src', 'ha_mcp', 'settings.js')
-datas.append((_settings_js, 'ha_mcp'))
-_settings_css = os.path.join(PROJECT_ROOT, 'src', 'ha_mcp', 'settings.css')
-datas.append((_settings_css, 'ha_mcp'))
+_settings_ui_dir = os.path.join(PROJECT_ROOT, 'src', 'ha_mcp', 'settings_ui')
+for _asset in ('settings.html', 'settings.js', 'settings.css'):
+    datas.append((os.path.join(_settings_ui_dir, _asset), 'ha_mcp/settings_ui'))
 
 binaries = []
 hiddenimports = []

@@ -81,8 +81,13 @@ jobs:
             while IFS= read -r f; do
               [ -z "$f" ] && continue
               case "$f" in
+                # Markdown docs inside the addon / component dirs are user-facing
+                # docs (DOCS.md, README, CHANGELOG), not bake inputs — they don't
+                # change what the suite tests, so they skip like any other docs.
+                homeassistant-addon/*.md|homeassistant-addon-dev/*.md|homeassistant-addon-webhook-proxy/*.md|custom_components/ha_mcp_tools/*.md)
+                  continue ;;
                 # Bake inputs / addon dirs are baked into the qcow2 / shipped —
-                # their docs change what the suite tests, so they count as code.
+                # their non-doc files change what the suite tests, so they count as code.
                 homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
                   run=true; break ;;
                 # Pure docs / website do not, on their own, warrant the suite.
@@ -143,7 +148,7 @@ jobs:
 
       - name: Restore image from cache
         id: restore-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
@@ -211,7 +216,7 @@ jobs:
         # doesn't save, see the block comment at the same position in
         # ``haos-e2e-inaddon-tests.yml``.
         if: steps.restore-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: /tmp/haos-test-image.qcow2
           key: ${{ steps.key.outputs.cache-key }}
@@ -252,6 +257,10 @@ jobs:
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
+          # Feeds conftest's HACS token injection (qcow2 pre-boot edit)
+          # so HACS repo adds don't hit the unauthenticated shared-IP
+          # GitHub rate limit — the recurring HACS-install flake.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract HA diagnostics from booted qcow2 (always)
         # First lists what's actually present in /supervisor/homeassistant
@@ -284,6 +293,11 @@ jobs:
           ls -la /tmp/haos-diagnostics/ || true
           echo '--- config dir listing ---'
           cat /tmp/haos-diagnostics/config-dir-listing.txt || true
+          # The HACS token injection (conftest pre-boot edit) puts GITHUB_TOKEN
+          # into core.config_entries inside the extracted storage.tar. Redact
+          # it (fail-closed: an unredactable tar is deleted) so no credential
+          # persists into the downloadable artifact.
+          python3 scripts/redact_diagnostics_secrets.py /tmp/haos-diagnostics
 
       - name: Upload HAOS diagnostics
         if: always()

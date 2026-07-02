@@ -56,10 +56,11 @@ const withBase = (path: string) => {
           <p class="text-slate-400 text-sm mt-2">You can also use ha-mcp with other AI clients. See the <a href={withBase('/setup')} class="text-blue-400 hover:underline">Setup Wizard</a> for 15+ supported clients.</p>
         </div>
 
-        <div class="faq-item">
-          <h3 class="text-lg font-medium text-white mb-2">Do I need the Home Assistant Add-on?</h3>
-          <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA add-on is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). The add-on is only needed if you want to run ha-mcp inside your Home Assistant OS environment.</p>
-          <p class="text-slate-400 text-sm mt-2">If you <em>do</em> run the add-on, you don't also need <code class="bg-slate-800 px-1 rounded">uvx</code> — that would be a second, separate instance. HTTP-native clients (Codex, Cursor, Windsurf, Claude Code) connect straight to the add-on's URL, no proxy needed. One caveat: as of early 2026, Codex's HTTP MCP support has a <a href="https://github.com/openai/codex/issues/11284" class="text-blue-400 hover:underline">known initialization bug</a> where it loads no tools; if you hit that, run ha-mcp locally over stdio with <code class="bg-slate-800 px-1 rounded">uvx</code> instead.</p>
+        <div class="faq-item" id="app-vs-stdio">
+          <h3 class="text-lg font-medium text-white mb-2">Do I need the Home Assistant App?</h3>
+          <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA app is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). The app is only needed if you want to run ha-mcp inside your Home Assistant OS environment.</p>
+          <p class="text-slate-400 text-sm mt-2">If you <em>do</em> run the app, you don't also need <code class="bg-slate-800 px-1 rounded">uvx</code> — that would be a second, separate instance. HTTP-native clients (Codex, Cursor, Windsurf, Claude Code) connect straight to the app's URL, no proxy needed. One caveat: as of early 2026, Codex's HTTP MCP support has a <a href="https://github.com/openai/codex/issues/11284" class="text-blue-400 hover:underline">known initialization bug</a> where it loads no tools; if you hit that, run ha-mcp locally over stdio with <code class="bg-slate-800 px-1 rounded">uvx</code> instead.</p>
+          <p class="text-slate-400 text-sm mt-2"><strong class="text-amber-300">Don't run both for the same client.</strong> If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> with <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code> is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses <code class="bg-slate-800 px-1 rounded">uvx mcp-proxy</code> with the app's URL and <strong>no</strong> token.</p>
         </div>
 
         <div class="faq-item">
@@ -110,7 +111,7 @@ const withBase = (path: string) => {
           <p class="text-slate-300">ha-mcp ships a web settings page where you can enable, disable, and pin individual MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests. How you reach it depends on how ha-mcp is running:</p>
           <ul class="list-disc pl-6 text-slate-300 mt-3 space-y-2">
             <li><strong>Claude Desktop / Claude Code / any stdio install (<code class="bg-slate-800 px-1 rounded">uvx ha-mcp</code>):</strong> a localhost settings server spawns automatically alongside the MCP process. The easiest way to find the URL is to <strong>ask the AI</strong> something like <em>"how do I open the ha-mcp settings page?"</em> — the URL is included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response. You can also read it directly from <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/ui.url</code> (Windows: <code class="bg-slate-800 px-1 rounded">%USERPROFILE%\.ha-mcp\ui.url</code>). The URL is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path generated when the settings server starts.</li>
-            <li><strong>HA Add-on:</strong> easiest is the <strong>"Open Web UI"</strong> button on the add-on page (served over Home Assistant ingress — no secret needed). For direct or remote access outside the HA UI, the page lives behind the add-on's secret path: <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code>. Find <code class="bg-slate-800 px-1 rounded">&lt;secret-path&gt;</code> in the add-on's <strong>Configuration</strong> tab ("Secret path override") or in <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>. The bare <code class="bg-slate-800 px-1 rounded">:9583/settings</code> without the secret path is rejected for non-ingress callers.</li>
+            <li><strong>HA App:</strong> easiest is the <strong>"Open Web UI"</strong> button on the app page (served over Home Assistant ingress — no secret needed). For direct or remote access outside the HA UI, the page lives behind the app's secret path: <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code>. Find <code class="bg-slate-800 px-1 rounded">&lt;secret-path&gt;</code> in the app's <strong>Configuration</strong> tab ("Secret path override") or in <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>. The bare <code class="bg-slate-800 px-1 rounded">:9583/settings</code> without the secret path is rejected for non-ingress callers.</li>
             <li><strong><code class="bg-slate-800 px-1 rounded">ha-mcp-web</code> / Docker (HTTP):</strong> append <code class="bg-slate-800 px-1 rounded">/settings</code> to your MCP secret-path URL. The default <code class="bg-slate-800 px-1 rounded">MCP_SECRET_PATH</code> is <code class="bg-slate-800 px-1 rounded">/mcp</code>, so the page is at <code class="bg-slate-800 px-1 rounded">http://&lt;host&gt;:8086/mcp/settings</code>; if you set a custom secret path, use that instead (e.g. <code class="bg-slate-800 px-1 rounded">http://&lt;host&gt;:8086/private_xxx/settings</code>).</li>
             <li><strong>Remote (Cloudflare Tunnel / reverse proxy):</strong> same as Docker/HTTP — the page sits under your secret path wherever the MCP endpoint is reachable, e.g. <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/&lt;secret-path&gt;/settings</code>.</li>
           </ul>
@@ -213,7 +214,7 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
 
         <div class="faq-item" id="uv-tls-interception">
           <h3 class="text-lg font-medium text-white mb-2">uvx fails with <code class="bg-slate-800 px-1 rounded">invalid peer certificate: UnknownIssuer</code></h3>
-          <p class="text-slate-300 mb-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> can't download ha-mcp (or <code class="bg-slate-800 px-1 rounded">mcp-proxy</code>, if you connect to the add-on through it) and the log shows a certificate error fetching from PyPI, the failure is in <code class="bg-slate-800 px-1 rounded">uv</code>'s package download — it never reaches Home Assistant:</p>
+          <p class="text-slate-300 mb-3">If <code class="bg-slate-800 px-1 rounded">uvx</code> can't download ha-mcp (or <code class="bg-slate-800 px-1 rounded">mcp-proxy</code>, if you connect to the app through it) and the log shows a certificate error fetching from PyPI, the failure is in <code class="bg-slate-800 px-1 rounded">uv</code>'s package download — it never reaches Home Assistant:</p>
           <pre class="code-block mb-3"><code>Failed to fetch: https://pypi.org/simple/ha-mcp/
   invalid peer certificate: UnknownIssuer</code></pre>
           <p class="text-slate-300 mb-3">In Claude Desktop this often shows up as the server briefly connecting, then "transport closed unexpectedly" — <code class="bg-slate-800 px-1 rounded">uvx</code> exits when it can't fetch the package.</p>
@@ -232,7 +233,7 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
     }
   }
 }`}</code></pre>
-          <p class="text-slate-400 text-sm mt-3">Connecting to the HA add-on through <code class="bg-slate-800 px-1 rounded">uvx mcp-proxy</code> instead? Add the same <code class="bg-slate-800 px-1 rounded">UV_NATIVE_TLS=1</code> entry to that config's <code class="bg-slate-800 px-1 rounded">env</code> block. The equivalent <code class="bg-slate-800 px-1 rounded">--native-tls</code> flag also works, but it is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come before the package name. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1506" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1506</a>.</p>
+          <p class="text-slate-400 text-sm mt-3">Connecting to the HA app through <code class="bg-slate-800 px-1 rounded">uvx mcp-proxy</code> instead? Add the same <code class="bg-slate-800 px-1 rounded">UV_NATIVE_TLS=1</code> entry to that config's <code class="bg-slate-800 px-1 rounded">env</code> block. The equivalent <code class="bg-slate-800 px-1 rounded">--native-tls</code> flag also works, but it is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come before the package name. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1506" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1506</a>.</p>
         </div>
 
         <div class="faq-item">
@@ -301,13 +302,13 @@ source ~/.zshrc
         </div>
 
         <div class="faq-item" id="webhook-proxy">
-          <h3 class="text-lg font-medium text-white mb-2">Can't connect remotely? Try the Webhook Proxy add-on</h3>
-          <p class="text-slate-300 mb-3">If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the <strong>Webhook Proxy add-on</strong> may be a simpler alternative.</p>
+          <h3 class="text-lg font-medium text-white mb-2">Can't connect remotely? Try the Webhook Proxy app</h3>
+          <p class="text-slate-300 mb-3">If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the <strong>Webhook Proxy app</strong> may be a simpler alternative.</p>
           <p class="text-slate-300 mb-3">Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have <strong>Nabu Casa</strong> or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.</p>
           <ol class="text-slate-300 space-y-2 list-decimal list-inside mb-3">
-            <li>Install the <strong>MCP Server add-on</strong> and the <strong>Webhook Proxy add-on</strong> from the add-on store</li>
+            <li>Install the <strong>MCP Server app</strong> and the <strong>Webhook Proxy app</strong> from the app store</li>
             <li>Start the webhook proxy and restart Home Assistant when prompted</li>
-            <li>Copy the webhook URL from the add-on logs</li>
+            <li>Copy the webhook URL from the app logs</li>
             <li>Use that URL in your MCP client configuration</li>
           </ol>
           <p class="text-slate-400 text-sm">See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/784" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#784</a> for an example where this resolved a TLS connection issue.</p>
@@ -315,7 +316,7 @@ source ~/.zshrc
 
         <div class="faq-item" id="webhook-proxy-security">
           <h3 class="text-lg font-medium text-white mb-2">Webhook Proxy: securing the URL</h3>
-          <p class="text-slate-300 mb-3">By default the Webhook Proxy add-on registers an <strong>unauthenticated</strong> webhook endpoint. The webhook URL itself is the shared secret — anyone with the full URL can reach your MCP server, which exposes powerful Home Assistant control. Treat the URL like a password.</p>
+          <p class="text-slate-300 mb-3">By default the Webhook Proxy app registers an <strong>unauthenticated</strong> webhook endpoint. The webhook URL itself is the shared secret — anyone with the full URL can reach your MCP server, which exposes powerful Home Assistant control. Treat the URL like a password.</p>
           <p class="text-slate-300 font-medium mb-1">Don't share the URL</p>
           <ul class="text-slate-300 space-y-1 list-disc list-inside mb-3">
             <li>Avoid pasting it into screenshots, log paste-bins, public configs, or chat transcripts.</li>
@@ -324,20 +325,21 @@ source ~/.zshrc
           </ul>
           <p class="text-slate-300 font-medium mb-1">Rotating the URL if it leaks</p>
           <ol class="text-slate-300 space-y-1 list-decimal list-inside mb-3">
-            <li>Stop the Webhook Proxy add-on.</li>
-            <li>Delete <code class="bg-slate-800 px-1 rounded">/data/webhook_id.txt</code> from the add-on's filesystem (e.g. via SSH/Terminal add-on).</li>
-            <li>Start the add-on. A new webhook ID and URL are generated on first launch.</li>
-            <li>Copy the new URL from the add-on logs into your MCP client(s). The old URL stops working immediately.</li>
+            <li>Stop the Webhook Proxy app.</li>
+            <li>Delete <code class="bg-slate-800 px-1 rounded">/data/webhook_id.txt</code> from the app's filesystem (e.g. via SSH/Terminal app).</li>
+            <li>Start the app. A new webhook ID and URL are generated on first launch.</li>
+            <li>Copy the new URL from the app logs into your MCP client(s). The old URL stops working immediately.</li>
           </ol>
+          <p class="text-slate-300 mb-3"><strong>Reinstalling the app also changes the URL.</strong> Uninstalling wipes the app's <code class="bg-slate-800 px-1 rounded">/data</code> (where <code class="bg-slate-800 px-1 rounded">webhook_id.txt</code> lives), so the next start generates a fresh webhook ID and overwrites <code class="bg-slate-800 px-1 rounded">/config/.mcp_proxy_config.json</code> with it. Update your MCP client — and re-add the Claude.ai connector — with the new URL afterwards.</p>
           <p class="text-slate-300 font-medium mb-1">Optional: Enable OAuth (Beta)</p>
-          <p class="text-slate-300 mb-3">For a real auth layer on top of the URL secret, the Webhook Proxy add-on (v1.1.0 and later) ships an optional OAuth 2.1 mode. Toggle <strong>Show unused optional configuration options</strong>, turn <strong>Enable OAuth (Beta)</strong> on, leave Client ID and Client Secret blank, and restart the add-on. The add-on generates a strong Client ID and Client Secret on first start, persists them at <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code>, and prints them in the add-on log.</p>
-          <p class="text-slate-300 mb-3">In Claude.ai, expand the connector's <strong>Advanced settings</strong> when adding it and paste the Client ID and Client Secret from the add-on log into the OAuth fields. Claude.ai handles the rest of the OAuth handshake automatically. When the toggle is off, the webhook URL behaves exactly as before with no auth check.</p>
+          <p class="text-slate-300 mb-3">For a real auth layer on top of the URL secret, the Webhook Proxy app (v1.1.0 and later) ships an optional OAuth 2.1 mode. Toggle <strong>Show unused optional configuration options</strong>, turn <strong>Enable OAuth (Beta)</strong> on, leave Client ID and Client Secret blank, and restart the app. The app generates a strong Client ID and Client Secret on first start, persists them at <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code>, and prints them in the app log.</p>
+          <p class="text-slate-300 mb-3">In Claude.ai, expand the connector's <strong>Advanced settings</strong> when adding it and paste the Client ID and Client Secret from the app log into the OAuth fields. Claude.ai handles the rest of the OAuth handshake automatically. When the toggle is off, the webhook URL behaves exactly as before with no auth check.</p>
           <p class="text-slate-300 font-medium mb-1">OAuth flow end-to-end</p>
           <ol class="text-slate-300 space-y-1 list-decimal list-inside mb-3">
             <li>Claude.ai redirects your browser to <code class="bg-slate-800 px-1 rounded">https://&lt;host&gt;/authorize?...</code> with PKCE parameters.</li>
-            <li>The add-on serves a consent page showing the redirect destination — verify it's Claude.ai's callback URL.</li>
-            <li>Click <strong>Allow</strong>. The add-on issues a one-time auth code and redirects back to Claude.ai.</li>
-            <li>Claude.ai exchanges the code at <code class="bg-slate-800 px-1 rounded">https://&lt;host&gt;/token</code> using your Client ID + Client Secret + the PKCE verifier. The add-on returns a 1-hour access token and a 30-day refresh token, both HMAC-signed.</li>
+            <li>The app serves a consent page showing the redirect destination — verify it's Claude.ai's callback URL.</li>
+            <li>Click <strong>Allow</strong>. The app issues a one-time auth code and redirects back to Claude.ai.</li>
+            <li>Claude.ai exchanges the code at <code class="bg-slate-800 px-1 rounded">https://&lt;host&gt;/token</code> using your Client ID + Client Secret + the PKCE verifier. The app returns a 1-hour access token and a 30-day refresh token, both HMAC-signed.</li>
             <li>From then on Claude.ai sends every MCP request with <code class="bg-slate-800 px-1 rounded">Authorization: Bearer &lt;token&gt;</code>; expired access tokens are refreshed automatically.</li>
           </ol>
           <p class="text-slate-300 font-medium mb-1">The Client Secret is the real security boundary</p>
@@ -345,10 +347,12 @@ source ~/.zshrc
           <p class="text-slate-300 mb-3"><strong>Treat the Client Secret like a password.</strong> Don't paste it into screenshots, support threads, or public configs. If you suspect it has leaked — or want a clean slate after sharing logs for debugging — rotate it immediately. After rotation, any tokens issued under the old credentials stop refreshing, forcing the client to redo OAuth.</p>
           <p class="text-slate-300 font-medium mb-1">Rotating OAuth credentials</p>
           <ul class="text-slate-300 space-y-1 list-disc list-inside mb-3">
-            <li><strong>From the addon UI (recommended):</strong> turn on <strong>Regenerate OAuth Credentials on Next Start</strong>, save, restart the add-on. The add-on wipes the stored credentials, generates fresh ones, prints them in the log, and auto-clears the regenerate toggle. Update your MCP client to match. Takes ~30 seconds.</li>
+            <li><strong>From the app UI (recommended):</strong> turn on <strong>Regenerate OAuth Credentials on Next Start</strong>, save, restart the app. The app wipes the stored credentials, generates fresh ones, prints them in the log, and auto-clears the regenerate toggle. Update your MCP client to match. Takes ~30 seconds.</li>
             <li><strong>Custom values:</strong> type new strings into the Client ID and Client Secret fields and restart — your values override the stored file.</li>
-            <li><strong>Filesystem:</strong> stop the addon, delete <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code>, start the addon. Equivalent to the UI option but requires SSH/Terminal access.</li>
+            <li><strong>Filesystem:</strong> stop the app, delete <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code>, start the app. Equivalent to the UI option but requires SSH/Terminal access.</li>
           </ul>
+          <p class="text-slate-300 font-medium mb-1">Getting "Invalid client id" — or OAuth/credential changes not taking effect</p>
+          <p class="text-slate-300 mb-3">The OAuth provider's HTTP views are bound into Home Assistant's HTTP layer when the integration first loads, and HA can't re-register or drop them on a config reload (the webhook endpoint itself re-registers on reload — it's specifically the OAuth views). So toggling OAuth on/off, regenerating credentials, or reinstalling the app only takes effect after a <strong>full Home Assistant restart</strong> (Settings → System → Restart) — reloading the integration or restarting the app is not enough. After restarting, delete and re-add the Claude.ai connector with the current URL (and current Client ID/Secret, if OAuth is on).</p>
           <p class="text-slate-400 text-sm">Beta status: the OAuth flow is built against the MCP 2025-06-18 spec and tested with Claude.ai. Other clients' OAuth coverage may vary. Report issues on GitHub.</p>
         </div>
 
@@ -406,7 +410,7 @@ source ~/.zshrc
           <h3 class="text-lg font-medium text-white mb-2">Keep ha-mcp-web running in the background</h3>
           <p class="text-slate-300 mb-3">To run the ha-mcp HTTP server detached from the terminal so it survives logout:</p>
           <pre class="code-block"><code>nohup uvx --from ha-mcp@latest ha-mcp-web &gt; /dev/null 2&gt;&amp;1 &amp;</code></pre>
-          <p class="text-slate-400 text-sm mt-3"><code class="bg-slate-800 px-1 rounded">nohup</code> detaches the process from the terminal and redirects output to <code class="bg-slate-800 px-1 rounded">/dev/null</code>. The trailing <code class="bg-slate-800 px-1 rounded">&amp;</code> sends it to the background. For more robust setups (auto-restart on crash, start on boot), use <strong>systemd</strong> or the <strong>Home Assistant add-on</strong> instead.</p>
+          <p class="text-slate-400 text-sm mt-3"><code class="bg-slate-800 px-1 rounded">nohup</code> detaches the process from the terminal and redirects output to <code class="bg-slate-800 px-1 rounded">/dev/null</code>. The trailing <code class="bg-slate-800 px-1 rounded">&amp;</code> sends it to the background. For more robust setups (auto-restart on crash, start on boot), use <strong>systemd</strong> or the <strong>Home Assistant app</strong> instead.</p>
         </div>
 
         <div class="faq-item" id="docker-port">

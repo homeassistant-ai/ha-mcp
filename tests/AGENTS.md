@@ -45,8 +45,9 @@ Other available helpers: `wait_for_entity_state()`, `wait_for_condition()`, `wai
 
 ## JS Behaviour Testing (`tests/js/`, `tests/src/unit/_js_harness.py`)
 
-Every rendered `<script>` body in the repo (`src/ha_mcp/settings_ui.py`,
-`src/ha_mcp/auth/consent_form.py`, every `.astro` page under `site/src/`)
+Every rendered `<script>` body in the repo (`src/ha_mcp/settings_ui/` — page
+HTML in `settings.html`, client JS in `settings.js`;
+`src/ha_mcp/auth/consent_form.py`; every `.astro` page under `site/src/`)
 gets parse coverage automatically via
 `tests/src/unit/test_rendered_scripts_parse.py`. The discovery walker in
 `_js_harness.py::discover_script_surfaces` picks up new surfaces on its
@@ -74,6 +75,10 @@ The harness fakes `setTimeout` / `setInterval` / `Date.now` on a virtual clock, 
 Astro `<script>` blocks without `define:vars` / `is:inline` are TypeScript by default — pass `language="ts"` to `run_script`. For Astro pages needing wizard data, use `extract_astro_frontmatter_vars` + `astro_vars_prelude` to inject production data.
 
 CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/node_modules/` get clean skips.
+
+**Transient UI + the fake clock:** timed UI (e.g. the save toast, ~4s auto-dismiss) is gone from `result.dom` by capture time because the virtual clock fast-forwards. Stamp state into a `data-` attribute *inside* `invoke` to read it live. Avoid substring false-positives too — `"ha-toast" in result.dom` matches the always-present `#ha-toast-region`; assert the specific variant class.
+
+**Config-dir isolation:** settings / feature-flag unit tests read the real data dir via `get_global_settings()`. A dev `ha-mcp-web` server that wrote to `~/.ha-mcp` pollutes them (e.g. a beta toggle flips `enable_beta_features`, breaking the beta-gate test). Run with `HA_MCP_CONFIG_DIR=$(mktemp -d)` to isolate — how CI stays clean.
 
 When adding a new UI surface:
 - Python-rendered HTML: register the renderer in `_js_harness.py::_PY_RENDERERS`.

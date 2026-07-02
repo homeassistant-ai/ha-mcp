@@ -257,3 +257,24 @@ class TestAddonStructure:
                 "needs a non-empty `description` (Supervisor renders it "
                 "as the help tooltip under the toggle)"
             )
+
+    def test_addon_names_are_backup_filename_safe(self):
+        r"""No add-on ``name`` may contain ``/``.
+
+        Home Assistant Supervisor builds the pre-update backup filename from
+        the add-on name (spaces -> underscores, other characters kept) and
+        validates it against ``^[^/]+\.tar$``. A ``/`` in the name therefore
+        makes "Update" with "Create backup before update" enabled crash with
+        ``does not match regular expression`` (issue #1707). Covers every
+        ``homeassistant-addon*`` flavour so a new add-on can't reintroduce it.
+        """
+        configs = sorted(_REPO_ROOT.glob("homeassistant-addon*/config.yaml"))
+        assert configs, "no add-on config.yaml files found to validate"
+        for config_path in configs:
+            name = yaml.safe_load(config_path.read_text())["name"]
+            assert "/" not in name, (
+                f"{config_path.parent.name}: add-on name {name!r} contains "
+                r"'/', which breaks the Supervisor pre-update backup filename "
+                r"(^[^/]+\.tar$, issue #1707). Use a different separator "
+                "such as '-'."
+            )

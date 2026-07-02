@@ -1021,14 +1021,12 @@ def _register_entity_tools_and_capture(mock_client):
     mock_mcp = MagicMock()
     captured: dict[str, Any] = {}
 
-    def fake_tool(**kwargs):
-        def decorator(fn):
-            captured[fn.__name__] = fn
-            return fn
+    def capture_add_tool(method):
+        fmcp = getattr(method, "__fastmcp__", None)
+        name = (fmcp.name if fmcp else None) or method.__name__
+        captured[name] = method
 
-        return decorator
-
-    mock_mcp.tool = fake_tool
+    mock_mcp.add_tool = capture_add_tool
     register_entity_tools(mock_mcp, mock_client)
     return captured
 
@@ -1094,14 +1092,12 @@ def _register_registry_tools_and_capture(mock_client):
     mock_mcp = MagicMock()
     captured: dict[str, Any] = {}
 
-    def fake_tool(**kwargs):
-        def decorator(fn):
-            captured[fn.__name__] = fn
-            return fn
+    def capture_add_tool(method):
+        fmcp = getattr(method, "__fastmcp__", None)
+        name = (fmcp.name if fmcp else None) or method.__name__
+        captured[name] = method
 
-        return decorator
-
-    mock_mcp.tool = fake_tool
+    mock_mcp.add_tool = capture_add_tool
     register_registry_tools(mock_mcp, mock_client)
     return captured
 

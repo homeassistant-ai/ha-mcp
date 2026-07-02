@@ -187,7 +187,7 @@ def test_validate_registries_rejects_beta_field_not_in_feature_flags(
 # file, so both the attribute forms (``os.environ[...]`` / ``os.getenv``)
 # and the ``from os import environ, getenv`` forms — including ``as``
 # aliases — are caught. Registry-driven reads (``os.environ.get(var)``
-# with a non-literal argument, as in ``config.py`` / ``settings_ui.py``)
+# with a non-literal argument, as in ``config.py`` / ``settings_ui/__init__.py``)
 # carry no literal to inspect and are correctly skipped — those iterate
 # the registries themselves.
 
@@ -373,7 +373,7 @@ def test_every_advanced_field_has_a_settings_js_label() -> None:
     drift (issue #1538 added three rows that initially lacked entries)."""
     import re
 
-    js = (_package_dir() / "settings.js").read_text(encoding="utf-8")
+    js = (_package_dir() / "settings_ui" / "settings.js").read_text(encoding="utf-8")
     m = re.search(r"const ADVANCED_FIELD_META = \{(.*?)\n\};", js, re.S)
     assert m, "ADVANCED_FIELD_META object not found in settings.js"
     meta_keys = set(

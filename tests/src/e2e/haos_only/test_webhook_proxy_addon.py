@@ -63,7 +63,7 @@ LOG = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.haos_only]
 
-WEBHOOK_PROXY_NAME = "Nabu Casa / Webhook Proxy for HA MCP"
+WEBHOOK_PROXY_NAME = "Nabu Casa - Webhook Proxy for HA MCP"
 WEBHOOK_PROXY_SLUG = "local_ha_mcp_webhook_proxy"
 DEV_ADDON_SLUG = "local_ha_mcp_dev"
 
@@ -463,8 +463,17 @@ async def test_webhook_id_persists_across_restart(
             )
             await asyncio.sleep(_STATE_POLL_INTERVAL)
             continue
-        # Only consider log lines emitted after the pre-restart snapshot.
-        new_section = post_log[len(pre_log) :]
+        # The Supervisor add-on log usually appends across a restart, but it can
+        # also reset (fresh container stdout) or rotate, leaving post_log no
+        # longer prefixed by the pre-restart snapshot. Slicing by the pre-restart
+        # length would then yield "" and miss the freshly re-logged webhook line
+        # (now at the front of the reset log), timing out the poll spuriously.
+        # Trust the slice only while post_log still starts with the pre-restart
+        # snapshot (append case); otherwise the log reset, so search all of it.
+        if post_log.startswith(pre_log):
+            new_section = post_log[len(pre_log) :]
+        else:
+            new_section = post_log
         post_id = _extract_webhook_id(new_section)
         if post_id:
             break
@@ -512,36 +521,44 @@ async def test_webhook_endpoint_registered_in_ha_core(
     registered_url = f"{base_url}/api/webhook/{webhook_id}"
     unregistered_url = f"{base_url}/api/webhook/definitely-not-registered-xyz"
 
-    registered_resp = await asyncio.to_thread(
-        requests.post, registered_url, headers=headers, timeout=10
-    )
     unregistered_resp = await asyncio.to_thread(
         requests.post, unregistered_url, headers=headers, timeout=10
     )
 
-    differs = (
-        registered_resp.status_code != unregistered_resp.status_code
-        or registered_resp.content != unregistered_resp.content
-        or registered_resp.headers.get("Content-Type")
-        != unregistered_resp.headers.get("Content-Type")
-    )
-    assert differs, (
-        "Registered webhook response is identical to unregistered "
-        f"({registered_resp.status_code} == {unregistered_resp.status_code}, "
-        f"len={len(registered_resp.content)} == "
-        f"{len(unregistered_resp.content)}). mcp_proxy may not have "
-        "registered the webhook on first start."
-    )
-    # Additional positive-signal check: HA's default-for-unregistered
-    # returns 200 with an empty body. If a future HA change starts
-    # returning a non-empty body for unknown webhooks (e.g. echoing the
-    # path), ``differs`` above could pass on incidental content drift
-    # without proving the integration actually handled the request.
-    # Anchor on registered-has-content as the positive signal.
-    assert len(registered_resp.content) > 0, (
-        f"Registered webhook returned an empty body ({registered_resp.status_code}). "
-        "mcp_proxy's handler should produce a response — empty body "
-        "suggests the integration's webhook isn't actually serving."
+    # HA registers the webhook inside the integration's async_setup_entry, which
+    # can finish a moment after start.py logs the URL (the readiness signal the
+    # fixture waits on) — especially under CI load. Probe in a bounded poll
+    # instead of once, so a registration that lands slightly late isn't a
+    # spurious failure. The non-empty-body requirement is the positive signal:
+    # HA answers an unknown webhook with 200 and an empty body, so "differs from
+    # the baseline AND has content" proves the integration handled the request
+    # even if a future HA change makes unknown webhooks echo some content.
+    def _registered_and_serving(reg: Any) -> bool:
+        return (
+            reg.status_code != unregistered_resp.status_code
+            or reg.content != unregistered_resp.content
+            or reg.headers.get("Content-Type")
+            != unregistered_resp.headers.get("Content-Type")
+        ) and len(reg.content) > 0
+
+    registered_resp: Any = None
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        registered_resp = await asyncio.to_thread(
+            requests.post, registered_url, headers=headers, timeout=10
+        )
+        if _registered_and_serving(registered_resp):
+            break
+        await asyncio.sleep(1.0)
+
+    assert registered_resp is not None and _registered_and_serving(registered_resp), (
+        "Registered webhook stayed identical to the unregistered baseline after "
+        f"polling 30s (status "
+        f"{registered_resp.status_code if registered_resp else 'n/a'} vs "
+        f"{unregistered_resp.status_code}, len "
+        f"{len(registered_resp.content) if registered_resp else 0} vs "
+        f"{len(unregistered_resp.content)}). mcp_proxy did not register and serve "
+        "the webhook on first start."
     )
 
 
@@ -626,13 +643,17 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
                 await asyncio.sleep(_STATE_POLL_INTERVAL)
                 continue
             last_status = resp.status_code
-            if last_status in (401, 403, 404):
+            # Require the OAuth challenge (401; 403 tolerated) as proof the gate
+            # is actively enforcing. A 404 means the webhook is unregistered /
+            # broken (invalid target_url or a fail-closed teardown), NOT that
+            # OAuth rejected the request, so it must not count as "gated".
+            if last_status in (401, 403):
                 gated = True
                 break
             await asyncio.sleep(_STATE_POLL_INTERVAL)
 
         assert gated, (
-            "enable_oauth=true did not close the webhook within "
+            "enable_oauth=true did not return a 401 OAuth challenge within "
             f"{_STATE_POLL_TIMEOUT}s of addon restart. Last status: "
             f"{last_status} (baseline was {baseline_resp.status_code}). "
             "PR #1184 fail-closed gate may have regressed."

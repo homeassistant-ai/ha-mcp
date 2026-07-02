@@ -44,12 +44,15 @@ from testcontainers.core.container import DockerContainer
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_runtime
 
+from doomed_run import DoomedRunDetector
 from fastmcp import Client
 from haos_runtime import (
     HA_MCP_DEV_ADDON_SLUG,
     HA_MCP_WEBHOOK_PROXY_ADDON_SLUG,
     HAOS_IMAGE_ENV,
     boot_haos_qemu,
+    inject_hacs_token,
+    inject_hacs_token_in_qcow2,
     is_haos_backend_selected,
     is_haos_inaddon_mode,
     login_for_token,
@@ -166,6 +169,36 @@ def pytest_collection_modifyitems(config, items):
         # skipping on every testcontainer e2e-tests.yml run.
         elif "external_only" in keywords and inaddon:
             item.add_marker(skip_external_only)
+
+
+# Fail fast on a doomed run, on EVERY e2e lane (this conftest is shared by the
+# testcontainer / external-HAOS / inaddon suites, so the hook guards all three).
+# A Supervisor add-on-update flake did exactly this on PR #1699: all 997 inaddon
+# tests ERRORed at setup (0 passed, 0 failed) while the run ground on 11m39s
+# producing nothing but errors. DoomedRunDetector aborts once it sees 50
+# consecutive setup/teardown errors with zero call-phase pass/fail between them;
+# a genuine pass/fail resets the streak, so real failures still run through in
+# full (this is NOT --maxfail). The detector logic is unit-tested in
+# tests/src/unit/test_doomed_run.py.
+#
+# Under xdist, pytest_runtest_logreport fires in EACH process — the controller
+# (which receives every worker's reports) AND each worker for its own tests — so
+# every process keeps its own module-global detector; the streak is per-process,
+# not global. That is fine: a doomed run errors on every process, so whichever
+# reaches 50 first calls pytest.exit and ends the session (validated under -n2:
+# a 150-test all-error run aborts at 50 in ~2s).
+_doomed_detector = DoomedRunDetector()
+
+
+def pytest_runtest_logreport(report):
+    if _doomed_detector.record(report.when, report.outcome):
+        pytest.exit(
+            f"Aborting: {_doomed_detector.streak} consecutive setup/teardown "
+            f"errors with no test passing or failing — the run is doomed by a "
+            f"systemic setup failure (e.g. add-on/container setup). Failing fast "
+            f"instead of grinding through the suite.",
+            returncode=1,
+        )
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -343,7 +376,6 @@ def _refresh_recorder_timestamps(
 
 def _setup_config_permissions(config_path: Path) -> None:
     """Set up proper permissions for Home Assistant config directory."""
-    import os
     import stat
 
     # Set directory permissions recursively
@@ -376,8 +408,6 @@ def _ensure_hacs_frontend(initial_state_path: Path) -> None:
     on the lock and exit when the winner releases it.
     """
     import tarfile
-    import urllib.error
-    import urllib.request
 
     def _is_valid_frontend(path: Path) -> bool:
         """Best-effort check that ``path`` holds a complete HACS frontend.
@@ -685,7 +715,6 @@ def _wait_for_ha_api_ready(
     integration's ``async_setup_entry`` has completed lives in
     ``_wait_for_core_state_running`` below.
     """
-    import requests as _requests
 
     # Wall-clock-bound polling: ``for attempt in range(timeout)`` would let a
     # single slow request (5s HTTP timeout) plus the 1s sleep stretch each
@@ -695,12 +724,12 @@ def _wait_for_ha_api_ready(
     start_time = time.monotonic()
     while time.monotonic() - start_time < timeout:
         try:
-            response = _requests.get(f"{base_url}/api/", timeout=5, headers=headers)
+            response = requests.get(f"{base_url}/api/", timeout=5, headers=headers)
             if response.status_code == 200:
                 elapsed = int(time.monotonic() - start_time)
                 logger.info(f"🏠 Home Assistant API ready after {elapsed}s")
                 return True
-        except _requests.exceptions.RequestException:
+        except requests.exceptions.RequestException:
             # Boot-phase polling: HA API not up yet — retry until timeout (#1266).
             pass
         time.sleep(1)
@@ -729,10 +758,9 @@ def _snapshot_config_entries(
     endpoint and never fire. The endpoint hit is best-effort
     instrumentation, not a hard requirement.
     """
-    import requests as _requests
 
     try:
-        resp = _requests.get(
+        resp = requests.get(
             f"{base_url}/api/config/config_entries/entry",
             timeout=timeout,
             headers=headers,
@@ -751,7 +779,7 @@ def _snapshot_config_entries(
             1 for e in entries if isinstance(e, dict) and e.get("state") == "loaded"
         )
         return loaded, total, True
-    except (_requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+    except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
         logger.debug(f"snapshot_config_entries: {type(exc).__name__}: {exc}")
         return 0, 0, False
 
@@ -794,13 +822,12 @@ def _wait_for_core_state_running(
     ``CoreState.RUNNING`` was set, and a follow-up gate would be
     justified.
     """
-    import requests as _requests
 
     start_time = time.monotonic()
     last_state = "<no response>"
     while time.monotonic() - start_time < timeout:
         try:
-            response = _requests.get(
+            response = requests.get(
                 f"{base_url}/api/core/state", timeout=2, headers=headers
             )
             if response.status_code == 200:
@@ -835,7 +862,7 @@ def _wait_for_core_state_running(
                 # in the timeout ``pytest.fail`` message instead of the
                 # initial ``"<no response>"``.
                 last_state = f"HTTP {response.status_code}"
-        except (_requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+        except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
             last_state = type(exc).__name__
             logger.debug(f"core_state check failed: {exc}")
         time.sleep(1)
@@ -886,14 +913,13 @@ def _dump_ha_readiness_diagnostics(
     visible even with default filtering.
     """
     import docker as _docker
-    import requests as _requests
 
     logger.warning(f"📋 readiness diagnostics dump ({label}):")
 
     # /api/services snapshot — distinguishes "domain absent" from
     # "request errored at timeout edge".
     try:
-        svc_resp = _requests.get(f"{base_url}/api/services", timeout=5, headers=headers)
+        svc_resp = requests.get(f"{base_url}/api/services", timeout=5, headers=headers)
         if svc_resp.status_code == 200:
             domains = sorted(
                 {s.get("domain") for s in svc_resp.json() if s.get("domain")}
@@ -916,7 +942,7 @@ def _dump_ha_readiness_diagnostics(
     # Distinguishes "HA never imported the entry" from "HA imported but
     # async_setup_entry raised".
     try:
-        entries_resp = _requests.get(
+        entries_resp = requests.get(
             f"{base_url}/api/config/config_entries/entry",
             timeout=5,
             headers=headers,
@@ -1216,6 +1242,11 @@ def ha_container_with_fresh_config(request):
         # path's _refresh_recorder_timestamps). Must run before boot
         # because HA Core takes an exclusive lock on the DB.
         refresh_recorder_in_qcow2(image_path)
+        # Authenticate HACS with the CI GitHub token (parity with the
+        # testcontainer path's injection below) so HACS repo adds don't
+        # ride the shared-IP 60 req/h unauthenticated GitHub budget —
+        # the long-standing HACS-install flake. Must run before boot.
+        inject_hacs_token_in_qcow2(image_path)
         # Inaddon mode: overwrite the baked addon source with PR's current
         # source + bump config.yaml version so Supervisor detects an
         # update-available on next boot. The Supervisor WS API trigger
@@ -1504,11 +1535,8 @@ def ha_container_with_fresh_config(request):
         storage_file = config_path / ".storage" / "core.config_entries"
         if storage_file.exists():
             ce_data = json.loads(storage_file.read_text())
-            for entry in ce_data.get("data", {}).get("entries", []):
-                if entry.get("domain") == "hacs":
-                    entry["data"] = {"token": github_token}
-                    logger.info("Injected GITHUB_TOKEN into HACS config entry")
-                    break
+            if inject_hacs_token(ce_data, github_token):
+                logger.info("Injected GITHUB_TOKEN into HACS config entry")
             storage_file.write_text(json.dumps(ce_data, indent=2))
 
     # Install custom components from repo source
@@ -1927,7 +1955,6 @@ async def stdio_mcp_client(
     serialization issues. Without this fixture, stdio-only regressions
     can land green on CI.
     """
-    import os
 
     from fastmcp.client.transports import StdioTransport
 

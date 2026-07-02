@@ -32,9 +32,13 @@ configuration:
       there. Claude.ai will then complete the OAuth handshake automatically
       when adding the connector.
 
-      BETA: this is a beta feature. Restart the addon after changing this
-      option. When this is off the webhook URL works exactly as before with
-      no auth check.
+      Enabling OAuth requires a full Home Assistant restart (Settings ->
+      System -> Restart) to take effect — restarting the add-on alone is NOT
+      enough, because Home Assistant only binds the OAuth authorize/token
+      endpoints cleanly at startup. After you enable this, a Repair
+      notification will appear with a button to restart Home Assistant.
+      Disabling OAuth does NOT require a restart. When this is off the webhook
+      URL works exactly as before with no auth check.
   oauth_client_id:
     name: OAuth Client ID (auto-generated if blank)
     description: |
@@ -70,12 +74,13 @@ configuration:
   debug_logging:
     name: Log inbound requests (Beta)
     description: |
-      Logs every request that reaches this webhook to the Home Assistant log
-      (Settings -> System -> Logs, filter for "mcp_proxy") — NOT this addon
-      log, because requests hit Home Assistant directly rather than passing
-      through this addon. Each line shows the method, a masked webhook path,
-      the source address, whether an Authorization header was present, and the
-      upstream response status.
+      Logs every request that reaches this webhook. The lines appear in this
+      addon's own log (below) AND in the Home Assistant log (Settings ->
+      System -> Logs, filter for "mcp_proxy"). The webhook is served inside
+      Home Assistant rather than this addon, so the integration logs each
+      request there and the addon mirrors those lines into this log. Each line
+      shows the method, a masked webhook path, the source address, whether an
+      Authorization header was present, and the upstream response status.
 
       Use this to confirm whether your MCP client (e.g. Claude.ai) is actually
       reaching the server: turn it on, restart the addon, try to connect from

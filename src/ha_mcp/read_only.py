@@ -131,14 +131,39 @@ def _custom_tool_write(args: dict[str, Any]) -> str | None:
     return "sandbox code execution"
 
 
+def _radio_write(args: dict[str, Any]) -> str | None:
+    action = args.get("action")
+    # Reads (allowed): per-node diagnostics, the integration/network summary,
+    # the active reachability probe, a single Zigbee cluster-attribute read, and
+    # the Thread dataset listing. Everything else is a write — commission/add,
+    # remove, reinterview, firmware, fabric/credential/channel/network changes,
+    # plus the two actions that LOOK read-ish but are not: zigbee network_backup
+    # (creates a backup artifact + key material, like ha_manage_backup's blocked
+    # snapshot create) and thread discover_routers (kicks off a long-running
+    # mDNS scan). A missing action fails closed.
+    if action in (
+        "diagnostics",
+        "network_status",
+        "ping",
+        "cluster_read",
+        "list_datasets",
+    ):
+        return None
+    return f"action={action!r}"
+
+
 # Mixed read/write tools whose read surface has no pure-read duplicate
 # (verified per tool: ha_get_addon cannot proxy-read addon-internal
 # APIs; energy prefs and assist pipelines are reachable only through
 # these tools; edit-backup listing exists nowhere else; the saved-tools
-# cache is only listable here). Everything NOT in this table and not
-# ``readOnlyHint=True`` is hidden and blocked outright.
+# cache is only listable here; ha_manage_radio's 'ping' probe, 'cluster_read'
+# and 'list_datasets' have no pure-read duplicate elsewhere, while its
+# 'diagnostics'/'network_status' reads mirror ha_get_device /
+# ha_get_system_health but stay reachable here mid-management). Everything
+# NOT in this table and not ``readOnlyHint=True`` is hidden and blocked
+# outright.
 #
-# ``MANDATORY_TOOLS`` (settings_ui.py) intentionally needs no special
+# ``MANDATORY_TOOLS`` (settings_ui/__init__.py) intentionally needs no special
 # case here: every mandatory tool is either ``readOnlyHint=True`` or
 # present in this table (``ha_manage_backup``). The e2e test
 # ``test_real_catalog_mandatory_tools_stay_available``
@@ -167,6 +192,13 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
     "ha_manage_custom_tool": ReadOnlyExemption(
         _custom_tool_write,
         "listing saved tools (list_saved=True)",
+    ),
+    "ha_manage_radio": ReadOnlyExemption(
+        _radio_write,
+        "node diagnostics ('diagnostics'), the integration/network summary "
+        "('network_status'), the active reachability probe ('ping'), a Zigbee "
+        "cluster-attribute read ('cluster_read'), and the Thread dataset "
+        "listing ('list_datasets')",
     ),
 }
 

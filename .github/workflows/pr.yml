@@ -11,7 +11,7 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.6.3"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.6.4"
   # Disable Testcontainers' Ryuk reaper: it has been reported to leave
   # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
   # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
@@ -106,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.26-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
@@ -173,7 +173,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.26-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -186,7 +186,7 @@ jobs:
       run: uv sync --dev
 
     - name: Run ruff check
-      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ scripts/
+      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ scripts/
 
     - name: Run ruff format check on changed Python files
       run: |
@@ -220,7 +220,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.26-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
@@ -237,7 +237,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.26-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -250,6 +250,7 @@ jobs:
       run: |
         uv run mypy src/ custom_components/ homeassistant-addon/ scripts/
         uv run mypy homeassistant-addon-webhook-proxy/
+        uv run mypy homeassistant-addon-webhook-proxy-dev/
 
   # Fast unit tests (no Docker, no HA instance needed)
   unit-tests:
@@ -257,7 +258,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.21-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.11.26-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -267,7 +268,7 @@ jobs:
       # Node.js" was the network download, not the extract. apt-get
       # install still runs (unpack is fast); we're just skipping the
       # download leg on cache hit.
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: /var/cache/apt/archives
         key: apt-trixie-git-nodejs-npm-v1
@@ -297,7 +298,7 @@ jobs:
       # Lockfile-keyed so a dependency bump invalidates cleanly. `npm ci`
       # is still safe to run on cache hit (it short-circuits when the
       # tree already matches the lockfile).
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: tests/js/node_modules
         key: tests-js-node-modules-${{ hashFiles('tests/js/package-lock.json') }}
@@ -310,6 +311,15 @@ jobs:
 
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+
+    - name: Run add-on structure tests
+      # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
+      # the backup-filename-safe name guard, #1707) — previously these ran
+      # nowhere in CI. Excludes test_addon_startup.py, which spins up real
+      # Docker containers (testcontainers) this lint/unit runner doesn't have.
+      run: >-
+        uv run pytest tests/addon/ -n auto --tb=short -v
+        --ignore=tests/addon/test_addon_startup.py
 
   # Comprehensive E2E validation for all PRs
   e2e-validation:
@@ -355,7 +365,7 @@ jobs:
 
     - name: Cache HA Docker image
       id: cache-ha-image
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: /tmp/ha-image.tar
         key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}

@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import sys
 import time
@@ -66,6 +67,110 @@ def log_error(message: str) -> None:
 MCP_ADDON_SLUG_SUFFIXES = ["_ha_mcp", "_ha_mcp_dev"]
 # Also try exact slugs for official repo installs
 MCP_ADDON_EXACT_SLUGS = ["ha_mcp", "ha_mcp_dev"]
+
+# ---------------------------------------------------------------------------
+# Mutual exclusion (dev vs stable webhook proxy)
+# ---------------------------------------------------------------------------
+# The webhook-proxy add-on installs a webhook + (optional) OAuth views into HA.
+# The OAuth provider registers /authorize and /token at the HA ROOT, which two
+# live integrations cannot both own. The dev and stable flavors are otherwise
+# fully isolated (separate domain, files, /data), but they must never run at the
+# same time. On startup each refuses if its sibling is already running.
+#
+# This is the STABLE flavor: its sibling is the dev add-on. Supervisor prefixes
+# third-party slugs with a repo hash (e.g. "abc123_ha_mcp_webhook_proxy_dev"),
+# so we match by exact slug or "_<base>" suffix. The leading underscore in the
+# suffix keeps the stable base from matching a dev slug (which ends in "_dev").
+#
+# The refusal is deliberately UNCONDITIONAL: it fires whenever the sibling is
+# running, even if OAuth is off on both flavors (it does not track per-flavor
+# OAuth state). Simplicity and safety are chosen over precision — the only cost
+# of the broad guard is refusing a pair that happens not to collide today.
+SIBLING_SLUG_BASE = "ha_mcp_webhook_proxy_dev"
+MUTEX_NOTIFICATION_ID = "mcp_proxy_mutex"
+# The sibling flavor's own mutex notification id, dismissed on our clean start
+# so a stale "refused to start" banner it raised doesn't linger once the user
+# has resolved the conflict in this flavor's favor.
+SIBLING_MUTEX_NOTIFICATION_ID = "mcp_proxy_dev_mutex"
+SIBLING_LABEL = "Webhook Proxy (Dev)"
+
+
+def _sibling_is_running(addons: list[dict], sibling_base: str) -> bool:
+    """True if an installed add-on whose slug is `sibling_base` (exact) or ends
+    in `_<sibling_base>` (hash-prefixed install) is in state 'started'."""
+    for addon in addons:
+        slug = addon.get("slug", "")
+        if (slug == sibling_base or slug.endswith("_" + sibling_base)) and addon.get(
+            "state"
+        ) == "started":
+            return True
+    return False
+
+
+def _refuse_if_sibling_running() -> bool:
+    """Return True (caller must exit) if the sibling webhook-proxy add-on is
+    running. Logs the reason and raises a self-clearing HA notification."""
+    # This guard protects a real root-route collision, so retry a few times on
+    # a transient Supervisor error (both add-ons booting at once, 10s API
+    # timeout) before giving up.
+    data = None
+    for attempt in range(3):
+        data = _supervisor_get("/addons")
+        if data is not None:
+            break
+        if attempt < 2:
+            time.sleep(2)
+    if data is None:
+        # Could not determine whether the sibling is running. Fail OPEN (start
+        # anyway) but LOUDLY (log the bypass) — this add-on-level Supervisor
+        # check is only an early convenience guard. The authoritative backstop
+        # lives in the integration: it records which flavor owns the root OAuth
+        # /authorize + /token views (a shared hass.data marker) and refuses to
+        # set up with a ConfigEntryError if the sibling already owns them, so a
+        # real collision fails loudly there instead of silently shadowing — even
+        # when the sibling add-on is stopped but its views are still bound (HA
+        # keeps HTTP views until a restart).
+        log_error(
+            "Could not query the Supervisor /addons list to check whether the "
+            f"'{SIBLING_LABEL}' add-on is running. Starting anyway, but if both "
+            "Webhook Proxy flavors run they collide on the OAuth /authorize and "
+            "/token routes — verify the other flavor is stopped."
+        )
+        return False
+    addons = data.get("addons", [])
+    if not _sibling_is_running(addons, SIBLING_SLUG_BASE):
+        return False
+    log_error("=" * 70)
+    log_error(f"  The '{SIBLING_LABEL}' add-on is currently running.")
+    log_error("  The dev and stable Webhook Proxy add-ons cannot run at the")
+    log_error("  same time (they would both try to own the OAuth /authorize")
+    log_error("  and /token routes in Home Assistant).")
+    log_error(f"  Stop the '{SIBLING_LABEL}' add-on, then start this one.")
+    log_error("=" * 70)
+    _ha_core_api(
+        "POST",
+        "/services/persistent_notification/create",
+        {
+            "title": "MCP Webhook Proxy: only one flavor can run",
+            "message": (
+                f"The **{SIBLING_LABEL}** add-on is running, so this add-on "
+                "refused to start. The dev and stable Webhook Proxy add-ons "
+                "cannot run at the same time. Stop the other one, then start "
+                "this add-on again."
+            ),
+            "notification_id": MUTEX_NOTIFICATION_ID,
+        },
+    )
+    return True
+
+
+# Inbound-request mirror file. The mcp_proxy integration (which runs inside
+# Home Assistant, where the webhook actually executes) appends each inbound
+# debug line here when "Log inbound requests" is on; this addon tails the file
+# and echoes new lines to its own log so they're visible in the addon log too,
+# not only in Settings -> System -> Logs. Path kept in sync with
+# mcp_proxy/__init__.py:INBOUND_LOG_FILE.
+INBOUND_LOG_FILE = Path("/config/.mcp_proxy_inbound.log")
 
 
 def _supervisor_get(path: str) -> dict | None:
@@ -373,6 +478,42 @@ def _clear_regenerate_toggle(current_config: dict) -> bool:
     return _supervisor_post("/addons/self/options", {"options": new_options})
 
 
+def _atomic_write_0600(path: Path, data: bytes) -> bool:
+    """Write ``data`` to ``path`` with 0600, atomically and race-free.
+
+    Writes to a sibling temp file created 0600 (the mode is applied by the
+    ``open()`` syscall, so there is no chmod-after-write window), then
+    ``os.replace()``s it over ``path``. Because the replace is atomic and the
+    temp was 0600 from creation, ``path`` is never observable with the new
+    bytes at wider-than-0600 permissions — on first create OR on an
+    overwrite/regenerate. Returns True on success; returns False if the
+    restricted-mode create OR the subsequent write/replace failed — i.e. on
+    ANY OSError, whether the filesystem can't honor restricted mode (tmpfs /
+    non-POSIX) or a genuine I/O error occurred (full disk, EACCES, read-only
+    fs). A False therefore doesn't prove it was only the mode: the caller's
+    plain-write fallback also fails on a hard I/O error, so its "wider
+    permissions" warning must not be treated as certain.
+    """
+    tmp = path.with_name(f"{path.name}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                # Best-effort temp cleanup — if unlink fails the stale ".tmp"
+                # is harmless and the caller's fallback path still runs.
+                pass
+            raise
+        return True
+    except OSError:
+        return False
+
+
 def _resolve_oauth_creds(
     data_dir: Path, configured_id: str, configured_secret: str
 ) -> tuple[str, str]:
@@ -424,13 +565,24 @@ def _resolve_oauth_creds(
     if needs_write:
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
-            creds_file.write_text(
-                json.dumps({"client_id": final_id, "client_secret": final_secret})
+            creds_json = json.dumps(
+                {"client_id": final_id, "client_secret": final_secret}
             )
-            try:
-                creds_file.chmod(0o600)
-            except OSError:
-                pass  # tmpfs / non-POSIX filesystems may not support chmod
+            if not _atomic_write_0600(creds_file, creds_json.encode("utf-8")):
+                # False = the restricted-mode create OR the write/replace
+                # failed (any OSError: tmpfs / non-POSIX that can't honor 0600,
+                # or a hard I/O error like a full disk / EACCES / read-only fs).
+                # Fall back to a plain write: on a mode-only limitation it
+                # succeeds (the creds may be wider than 0600 — hence the
+                # warning); on a hard I/O error it raises too and the outer
+                # OSError guard handles it. (The sibling signing-key path warns
+                # on the same degradation.)
+                creds_file.write_text(creds_json)
+                log_error(
+                    f"Could not create the OAuth creds file with restricted "
+                    f"permissions at {creds_file}. The credentials may have "
+                    f"wider permissions than intended."
+                )
         except OSError as e:
             log_error(f"Failed to persist OAuth creds ({type(e).__name__}): {e}")
             return "", ""
@@ -463,14 +615,9 @@ def _read_integration_domain() -> str | None:
     """Read the integration's domain from the source manifest.
 
     Used by the OAuth probe to construct the metadata URL without
-    hard-coding `mcp_proxy` here — the dev fork-variant of the addon
-    overrides the domain (e.g. `mcp_proxy_dev`), and this function
-    keeps the probe consistent with whichever variant is installed.
+    hard-coding `mcp_proxy` here.
     """
     src_manifest = Path("/opt/mcp_proxy/manifest.json")
-    if not src_manifest.exists():
-        # Dev fork-variant places the integration source at /opt/mcp_proxy_dev
-        src_manifest = Path("/opt/mcp_proxy_dev/manifest.json")
     try:
         domain = json.loads(src_manifest.read_text()).get("domain")
     except (OSError, json.JSONDecodeError) as e:
@@ -479,7 +626,7 @@ def _read_integration_domain() -> str | None:
     return domain if isinstance(domain, str) else None
 
 
-def _probe_oauth_active() -> bool:
+def _probe_oauth_active(attempts: int = 3, delay: int = 2) -> bool:
     """Probe the OAuth protected-resource metadata endpoint.
 
     Returns True only if HA serves the metadata URL — which means the
@@ -491,12 +638,25 @@ def _probe_oauth_active() -> bool:
     config entry against the OLD module's `async_setup_entry`, which
     has no OAuth gate, and the webhook would serve unauthenticated
     requests despite the user's "OAuth ENABLED" line in the log.
+
+    This gates a destructive action (tearing down a working webhook and
+    demanding a restart), so a single transient HA-API hiccup or a
+    momentarily unreadable manifest must not trigger it. Retry up to
+    ``attempts`` times with a short sleep between tries, returning True the
+    moment the endpoint reports active. Only an active response
+    short-circuits; the fail-closed default (absent → False) still holds
+    once every attempt is exhausted. Mirrors the bounded retries in
+    `_refuse_if_sibling_running` and `_ensure_config_entry`.
     """
-    domain = _read_integration_domain()
-    if not domain:
-        return False
-    result = _ha_core_api("GET", f"/{domain}/oauth/protected-resource")
-    return isinstance(result, dict) and "authorization_servers" in result
+    for attempt in range(attempts):
+        domain = _read_integration_domain()
+        if domain:
+            result = _ha_core_api("GET", f"/{domain}/oauth/protected-resource")
+            if isinstance(result, dict) and "authorization_servers" in result:
+                return True
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    return False
 
 
 def _install_integration() -> IntegrationInstall:
@@ -723,6 +883,95 @@ def _health_check(target_url: str) -> bool:
         return False
 
 
+def _emit_new_inbound_lines(state: dict[str, int]) -> None:
+    """Echo new lines from the integration's inbound-request mirror file to
+    this addon's log.
+
+    The webhook runs inside Home Assistant, so the integration logs inbound
+    requests there, not in this addon. It also appends each line to
+    ``INBOUND_LOG_FILE``; this tails that file so the same lines show up in the
+    addon log. ``state["offset"]`` tracks the byte position consumed so far.
+    Only whole lines are emitted; a trailing partial line is left for the next
+    poll. Best-effort — any filesystem (``OSError``) error is swallowed so
+    mirroring never disrupts the keep-alive loop.
+    """
+    try:
+        if not INBOUND_LOG_FILE.exists():
+            return
+        offset = state.get("offset", 0)
+        with INBOUND_LOG_FILE.open("rb") as fh:
+            size = fh.seek(0, 2)
+            if offset > size:
+                # File was truncated/rotated by the integration — restart. Reset
+                # the stored offset too, otherwise a truncated file with no
+                # newline yet keeps re-reading from 0 on every poll.
+                offset = 0
+                state["offset"] = 0
+            if offset == size:
+                return
+            fh.seek(offset)
+            data = fh.read()
+        last_nl = data.rfind(b"\n")
+        if last_nl == -1:
+            return  # no complete line buffered yet
+        state["offset"] = offset + last_nl + 1
+        for line in data[: last_nl + 1].decode("utf-8", errors="replace").splitlines():
+            if line.strip():
+                log_info(line)
+    except OSError:
+        return
+
+
+def _initial_tail_offset() -> int:
+    """Byte offset to start tailing the inbound mirror from — the end of the
+    file, so startup doesn't replay history. Guarded: a stat() failure
+    (permissions, or the file vanishing between exists() and stat()) must not
+    crash startup."""
+    try:
+        return INBOUND_LOG_FILE.stat().st_size if INBOUND_LOG_FILE.exists() else 0
+    except OSError as e:
+        log_error(f"Could not stat inbound log file ({type(e).__name__}): {e}")
+        return 0
+
+
+def _install_shutdown_handlers() -> dict[str, str | None]:
+    """Install SIGTERM/SIGINT handlers and return the shared shutdown-reason
+    dict. A Supervisor "stop" sends SIGTERM; without a handler the process was
+    killed mid-loop, so the cleanup never ran (the webhook was left registered)
+    and nothing logged why it exited. The handler raises KeyboardInterrupt so an
+    in-progress time.sleep() returns immediately (PEP 475 would otherwise resume
+    it)."""
+    shutdown_reason: dict[str, str | None] = {"reason": None}
+
+    def _on_signal(signum: int, _frame: object) -> None:
+        shutdown_reason["reason"] = signal.Signals(signum).name
+        raise KeyboardInterrupt
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, _on_signal)
+    return shutdown_reason
+
+
+def _shutdown_cleanup(reason: str | None) -> None:
+    """Clean shutdown: restore default signal handling first so a second signal
+    can't abort cleanup, log why we exited, remove the config entry to
+    unregister the webhook (keeping the config + component files so the next
+    start needs no HA restart), and drop the inbound mirror file.
+
+    On full uninstall the user may still need to manually remove
+    /config/custom_components/mcp_proxy/, /config/.mcp_proxy_config.json, and
+    /config/.mcp_proxy_inbound.log, then restart HA."""
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, signal.SIG_DFL)
+    log_info(f"Shutting down (reason: {reason or 'unknown'})...")
+    _remove_config_entry()
+    try:
+        INBOUND_LOG_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        log_error(f"Could not remove inbound log file ({type(e).__name__}): {e}")
+    log_info("Webhook proxy stopped.")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -730,6 +979,10 @@ def _health_check(target_url: str) -> bool:
 
 def main() -> int:
     log_info("Starting Webhook Proxy for HA MCP...")
+
+    # Refuse to start if the sibling (dev/stable) webhook proxy is running.
+    if _refuse_if_sibling_running():
+        return 1
 
     # Read config
     config_file = Path("/data/options.json")
@@ -1158,47 +1411,73 @@ def main() -> int:
     if debug_logging:
         log_info("")
         log_info("  Inbound request debug logging is ON.")
-        log_info("    Every request hitting this webhook is logged to the Home")
-        log_info("    Assistant log (Settings → System → Logs, filter 'mcp_proxy'),")
-        log_info("    NOT this addon log — requests reach Home Assistant directly,")
-        log_info("    not this addon. Use it to confirm your MCP client is actually")
-        log_info("    reaching the server.")
+        log_info("    Every request hitting this webhook is mirrored here in the")
+        log_info("    addon log (it also appears in Home Assistant's log). Use it")
+        log_info("    to confirm your MCP client is actually reaching the server.")
     log_info("=" * 70)
     log_info("")
 
-    # Keep-alive loop with periodic health check
+    # Install SIGTERM/SIGINT handlers so a Supervisor "stop" shuts down through
+    # the cleanup below instead of being killed mid-loop.
+    shutdown_reason = _install_shutdown_handlers()
+
+    # Clear any stale "refused to start" mutex banner from a prior blocked
+    # start — both our own id and the sibling's (the user may have resolved the
+    # conflict by keeping THIS flavor, leaving the sibling's banner up).
+    # persistent_notification/dismiss is a no-op for an absent id and returns a
+    # (non-None) result; a None result means a real HA API error, so surface it
+    # since a failed dismiss leaves a stale banner on a healthy add-on.
+    for _note_id in (MUTEX_NOTIFICATION_ID, SIBLING_MUTEX_NOTIFICATION_ID):
+        if (
+            _ha_core_api(
+                "POST",
+                "/services/persistent_notification/dismiss",
+                {"notification_id": _note_id},
+            )
+            is None
+        ):
+            log_error(
+                f"Could not dismiss the '{_note_id}' mutex notification; if a "
+                "'refused to start' banner is showing it may need manual dismissal."
+            )
+
+    # Keep-alive loop. A short poll interval keeps inbound-log mirroring
+    # responsive when "Log inbound requests" is on; the MCP-server health
+    # check runs on its own ~60s cadence regardless of the poll interval.
     log_info("Entering keep-alive loop (health check every 60s)...")
+    inbound_tail: dict[str, int] = {"offset": _initial_tail_offset()}
     consecutive_failures = 0
-    while True:
-        try:
-            time.sleep(60)
-        except KeyboardInterrupt:
-            log_info("Shutting down...")
-            break
+    last_health = 0.0
+    try:
+        while True:
+            if debug_logging:
+                _emit_new_inbound_lines(inbound_tail)
 
-        if _health_check(target_url):
-            if consecutive_failures > 0:
-                log_info("MCP server is reachable again")
-            consecutive_failures = 0
-        else:
-            consecutive_failures += 1
-            if consecutive_failures == 1:
-                log_error(f"MCP server unreachable: {target_url}")
-            elif consecutive_failures % 5 == 0:
-                log_error(
-                    f"MCP server still unreachable after {consecutive_failures} checks"
-                )
+            now = time.monotonic()
+            if now - last_health >= 60:
+                last_health = now
+                if _health_check(target_url):
+                    if consecutive_failures > 0:
+                        log_info("MCP server is reachable again")
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+                    if consecutive_failures == 1:
+                        log_error(f"MCP server unreachable: {target_url}")
+                    elif consecutive_failures % 5 == 0:
+                        log_error(
+                            "MCP server still unreachable after "
+                            f"{consecutive_failures} checks"
+                        )
 
-    # Cleanup on stop: remove config entry to unregister the webhook (stops
-    # proxying), but keep the config file and custom component files so the
-    # next start doesn't require an HA restart. The webhook_id persists in
-    # /data/webhook_id.txt so the URL stays the same across stop/start.
-    #
-    # On full uninstall, the user may need to manually remove
-    # /config/custom_components/mcp_proxy/ and
-    # /config/.mcp_proxy_config.json, then restart HA.
-    _remove_config_entry()
-    log_info("Webhook proxy stopped.")
+            time.sleep(3 if debug_logging else 30)
+    except KeyboardInterrupt:
+        # SIGINT in environments where it still raises directly, rather than
+        # going through the installed handler (which already set a reason).
+        if shutdown_reason["reason"] is None:
+            shutdown_reason["reason"] = "KeyboardInterrupt"
+
+    _shutdown_cleanup(shutdown_reason["reason"])
     return 0
 
 

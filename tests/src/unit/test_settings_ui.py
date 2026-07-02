@@ -438,7 +438,7 @@ class TestRouteRegistration:
 
 class TestFaviconSuppression:
     """The page carries an empty-data-URI `<link rel="icon">` so the browser
-    never requests /favicon.ico (rationale at the `<link>` in settings_ui.py).
+    never requests /favicon.ico (rationale at the `<link>` in settings_ui/__init__.py).
     """
 
     def test_settings_html_head_suppresses_favicon_request(self) -> None:
@@ -481,10 +481,11 @@ class TestAccessibilityMarkup:
             assert f'aria-labelledby="tab-{name}"' in _SETTINGS_HTML
 
     def test_status_regions_are_live(self) -> None:
+        # The advanced-settings save-status spans were removed when those
+        # fields moved to auto-save (feedback is now the toast). The
+        # remaining status spans stay as ARIA live regions.
         for span_id in (
             "status",
-            "advSaveStatusTop",
-            "advSaveStatus",
             "backupConfigStatus",
             "policy-global-save-status",
         ):
@@ -517,7 +518,7 @@ class TestSettingsJsExtraction:
 
         Both sides derive from the same in-memory _SETTINGS_JS, so this does
         NOT prove the on-disk file is what ships — the sentinel-substitution
-        ImportError guard in settings_ui.py is the real file<->Python sync
+        ImportError guard in settings_ui/__init__.py is the real file<->Python sync
         check, and the packaging tests assert the file is distributed. What
         this locks is the inline embedding itself: that injection produced
         exactly one inline <script> and that _SETTINGS_JS carries no stray
@@ -573,7 +574,7 @@ class TestSettingsCssExtraction:
         """Round-trip guard for the CSS, mirroring the <script> body test.
 
         Both sides derive from the same in-memory _SETTINGS_CSS (the
-        FileNotFoundError->ImportError guard in settings_ui.py covers a
+        OSError->ImportError guard in settings_ui/__init__.py covers a
         missing file); this locks that injection produced exactly one inline
         <style> block and that _SETTINGS_CSS carries no stray </style> (see
         test_settings_css_has_no_closing_style_tag).
@@ -2474,6 +2475,278 @@ class TestEnvPinnedTools:
         body = json.loads(resp.body)
         assert body["read_only_exempt"] == sorted(READ_ONLY_EXEMPT_TOOLS)
         assert "ha_manage_backup" in body["read_only_exempt"]
+
+
+class TestGetHandlersAddonLiveOptions:
+    """Add-on GET handlers surface LIVE /data/options.json values.
+
+    Regression guard: before this fix the feature-flags and advanced GET
+    handlers displayed boot-time env values, so editing the add-on
+    Configuration tab (or the web UI) without a restart left the page
+    showing stale values. Add-on-synced / schema-backed fields must now
+    reflect the latest SAVED options value (active after restart), and any
+    fetch failure must fall back to the boot-env value rather than crash or
+    blank the field.
+    """
+
+    @pytest.mark.asyncio
+    async def test_features_addon_surface_live_options(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")  # boot-time value
+        _reset_global_settings()
+
+        async def fake_fetch(_verify_ssl):
+            # options.json edited since boot: tool search now on.
+            return {"enable_tool_search": True}, None
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_feature_flags"](MagicMock())
+        body = json.loads(resp.body)
+        row = body["flags"]["enable_tool_search"]
+        assert row["value"] is True  # live options win over stale boot-env
+        assert row["origin"] == "addon"
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_advanced_addon_surface_live_options(self, monkeypatch):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")  # boot-time value
+        monkeypatch.setenv("HA_VERIFY_SSL", "true")  # boot-time value
+        _reset_global_settings()
+
+        async def fake_fetch(_verify_ssl):
+            return {"backup_hint": "weak", "verify_ssl": False}, None
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        backup_row = next(f for f in body["fields"] if f["field"] == "backup_hint")
+        verify_row = next(f for f in body["fields"] if f["field"] == "verify_ssl")
+        assert backup_row["value"] == "weak"  # live options win
+        assert verify_row["value"] is False
+        # origin/editable semantics are unchanged by the live-value surfacing.
+        assert backup_row["origin"] == "addon"
+        assert backup_row["editable"] is True
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_advanced_addon_falls_back_to_boot_env_on_fetch_error(
+        self, monkeypatch
+    ):
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import (
+            _SupervisorOptionsError,
+            build_settings_handlers,
+        )
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("BACKUP_HINT", "normal")  # boot-time value
+        _reset_global_settings()
+
+        async def fake_fetch(_verify_ssl):
+            return {}, _SupervisorOptionsError.transport("supervisor unreachable")
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        assert resp.status_code == 200  # never crashes on fetch failure
+        body = json.loads(resp.body)
+        backup_row = next(f for f in body["fields"] if f["field"] == "backup_hint")
+        assert backup_row["value"] == "normal"  # boot-env fallback, never blank
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_features_addon_falls_back_to_boot_env_on_fetch_error(
+        self, monkeypatch
+    ):
+        """Feature-flags GET mirrors the advanced handler: a Supervisor
+        options fetch failure falls back to the boot-env value rather than
+        crashing or blanking the flag."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import (
+            _SupervisorOptionsError,
+            build_settings_handlers,
+        )
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")  # boot-time value
+        _reset_global_settings()
+
+        async def fake_fetch(_verify_ssl):
+            return {}, _SupervisorOptionsError.transport("supervisor unreachable")
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_feature_flags"](MagicMock())
+        assert resp.status_code == 200  # never crashes on fetch failure
+        body = json.loads(resp.body)
+        row = body["flags"]["enable_tool_search"]
+        assert row["value"] is False  # boot-env fallback, not blanked
+        assert row["origin"] == "addon"
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_advanced_non_addon_origin_not_overridden_by_live_options(
+        self, monkeypatch
+    ):
+        """ADVANCED fields keep the origin=="addon" gate — their origin is
+        structural via ADDON_SYNCED_ADVANCED_FIELDS. A non-addon-synced
+        advanced field present in the Supervisor options payload must NOT be
+        overridden (it isn't Supervisor-managed, so the live value is noise)."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        # fuzzy_threshold is NOT in ADDON_SYNCED_ADVANCED_FIELDS -> origin
+        # resolves to "default" (env unset, override file empty), so the live
+        # value must be ignored even though it appears in the payload.
+        monkeypatch.delenv("FUZZY_THRESHOLD", raising=False)
+        monkeypatch.setattr("ha_mcp.config._read_feature_flag_override_file", dict)
+        _reset_global_settings()
+
+        async def fake_fetch(_verify_ssl):
+            return {"fuzzy_threshold": 99}, None
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_advanced_settings"](MagicMock())
+        body = json.loads(resp.body)
+        row = next(f for f in body["fields"] if f["field"] == "fuzzy_threshold")
+        assert row["origin"] == "default"  # not addon-synced
+        assert row["value"] == 60  # pydantic default, NOT live-options 99
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_features_default_origin_surfaces_live_options(self, monkeypatch):
+        """Codex P2: a feature flag saved in the add-on Config tab BEFORE a
+        restart is already in Supervisor live options, but its env var was not
+        written at this boot so the origin is "default"/"file" (not "addon").
+        The fresh saved value must still be surfaced — the staleness fix targets
+        exactly this case, so the guard widened from origin=="addon" to "any
+        flag in live_options whose origin isn't env"."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        # Master beta flag: env var unset in addon mode -> origin "default".
+        monkeypatch.delenv("ENABLE_BETA_FEATURES", raising=False)
+        monkeypatch.setattr("ha_mcp.config._read_feature_flag_override_file", dict)
+        _reset_global_settings()
+
+        async def fake_fetch(_verify_ssl):
+            return {"enable_beta_features": True}, None  # saved, not yet restarted
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_feature_flags"](MagicMock())
+        body = json.loads(resp.body)
+        row = body["flags"]["enable_beta_features"]
+        assert row["origin"] == "default"  # env var not written at this boot
+        assert row["value"] is True  # live (saved) value wins over stale default
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_features_env_origin_not_overridden_by_live_options(
+        self, monkeypatch
+    ):
+        """An explicitly env-pinned feature flag (origin "env") stays locked to
+        its env value even when a stale value is present in live options — the
+        user must unset the env var to change it (the `origin != "env"` part of
+        the widened guard)."""
+        from ha_mcp import config as ha_config
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        monkeypatch.setenv("ENABLE_TOOL_SEARCH", "false")  # boot/env value
+        _reset_global_settings()
+
+        # In add-on mode the real origin logic returns "addon" for non-master
+        # flags, so pin this field's origin to "env" directly to exercise the
+        # guard's env-pin branch in isolation.
+        real_origin = ha_config.get_feature_flag_origin
+
+        def fake_origin(env_name):
+            if env_name == "ENABLE_TOOL_SEARCH":
+                return "env"
+            return real_origin(env_name)
+
+        monkeypatch.setattr("ha_mcp.config.get_feature_flag_origin", fake_origin)
+
+        async def fake_fetch(_verify_ssl):
+            return {"enable_tool_search": True}, None  # stale live value
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        server = MagicMock()
+        server.settings.verify_ssl = True
+        handlers = build_settings_handlers(server=server)
+        resp = await handlers["get_feature_flags"](MagicMock())
+        body = json.loads(resp.body)
+        row = body["flags"]["enable_tool_search"]
+        assert row["origin"] == "env"
+        assert row["value"] is False  # env-pinned; live value ignored
+        _reset_global_settings()
+
+    @pytest.mark.asyncio
+    async def test_live_addon_options_skips_fetch_outside_addon(self, monkeypatch):
+        """_live_addon_options short-circuits to {} (no Supervisor fetch)
+        outside add-on mode / with no live server, so the GET handlers just
+        use boot-env values."""
+        from ha_mcp.config import _reset_global_settings
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)  # not in add-on
+        _reset_global_settings()
+
+        called: list[bool] = []
+
+        async def fake_fetch(_verify_ssl):
+            called.append(True)
+            return {}, None
+
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._supervisor_fetch_current_options", fake_fetch
+        )
+        # server=None is the second short-circuit condition; both hold here.
+        handlers = build_settings_handlers(server=None)
+        resp = await handlers["get_feature_flags"](MagicMock())
+        assert resp.status_code == 200
+        assert called == [], "Supervisor options must not be fetched outside add-on"
+        _reset_global_settings()
 
 
 class TestAdvancedSettingsEndpoints:
