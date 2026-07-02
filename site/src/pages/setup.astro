@@ -283,7 +283,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 
       <!-- HA OS App quick option -->
       <div class="flex flex-wrap items-center justify-center gap-3 mb-8">
-        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="inline-flex" title="Add the ha-mcp app repository to your Home Assistant (HA OS)">
+        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener noreferrer" class="inline-flex" title="Add the ha-mcp app repository to your Home Assistant (HA OS)">
           <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add ha-mcp app repository to your Home Assistant" height="36" />
         </a>
       </div>
@@ -2057,7 +2057,7 @@ ingress:
             <div><code class="bg-slate-800 px-1 rounded">opencode mcp debug home-assistant</code> <span class="text-slate-400">— diagnose connection issues</span></div>
             <div class="mt-2 text-slate-400"><strong>OpenCode config quirks:</strong> The top-level key is <code class="bg-slate-800 px-1 rounded">mcp</code> (not <code class="bg-slate-800 px-1 rounded">mcpServers</code>). Local servers use a single <code class="bg-slate-800 px-1 rounded">command</code> array — there is no separate <code class="bg-slate-800 px-1 rounded">args</code> field. Environment variables go under <code class="bg-slate-800 px-1 rounded">environment</code> (not <code class="bg-slate-800 px-1 rounded">env</code>).</div>
             <div class="mt-2 text-slate-400"><strong>Config file path override:</strong> Set <code class="bg-slate-800 px-1 rounded">OPENCODE_CONFIG=/path/to/file.json</code> to load a custom config file location.</div>
-            <div class="mt-2 text-slate-400"><strong>Config precedence:</strong> A project-level <code class="bg-slate-800 px-1 rounded">opencode.json</code> overrides the global <code class="bg-slate-800 px-1 rounded">~/.config/opencode/opencode.json</code>. See the <a href="https://opencode.ai/docs/config/#precedence-order" class="text-blue-400 hover:underline" target="_blank" rel="noopener">OpenCode precedence docs</a> for full details.</div>
+            <div class="mt-2 text-slate-400"><strong>Config precedence:</strong> A project-level <code class="bg-slate-800 px-1 rounded">opencode.json</code> overrides the global <code class="bg-slate-800 px-1 rounded">~/.config/opencode/opencode.json</code>. See the <a href="https://opencode.ai/docs/config/#precedence-order" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">OpenCode precedence docs</a> for full details.</div>
             <div class="mt-2 text-slate-400"><strong>Custom headers &amp; secret interpolation:</strong> Use <code class="bg-slate-800 px-1 rounded">{env:VAR}</code> in header values — OpenCode reads the env var at runtime without storing it in the file. Example: <code class="bg-slate-800 px-1 rounded">"Authorization": "Bearer {env:HA_TOKEN}"</code>.</div>
             <div class="mt-2 text-slate-400"><strong>Suppressing auto-OAuth:</strong> OpenCode handles OAuth via Dynamic Client Registration automatically on remote endpoints. Add <code class="bg-slate-800 px-1 rounded">"oauth": false</code> to the server entry to opt out.</div>
             <div class="mt-2 text-slate-400"><strong>Tool namespacing:</strong> ha-mcp tools appear as <code class="bg-slate-800 px-1 rounded">home-assistant_*</code> in OpenCode. You can enable or disable the namespace per-agent via OpenCode's per-agent namespace toggles.</div>
@@ -2299,7 +2299,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
             <p><strong class="text-slate-300">Usage:</strong> In Quick AI and AI Chat, type <code class="bg-slate-800 px-1 rounded">@home-assistant</code> to invoke the server.</p>
             <p><strong class="text-slate-300">Deeplink install:</strong> You can also install via <code class="bg-slate-800 px-1 rounded">raycast://mcp/install?&lt;config-json-percent-encoded&gt;</code> as an alternative to the UI.</p>
             ${!isStdio ? '<p><strong class="text-slate-300">HTTP transport:</strong> Enable HTTP in AI Settings. Use <code class="bg-slate-800 px-1 rounded">httpHeaders: { Authorization: "Bearer &lt;token&gt;" }</code> for authenticated servers.</p>' : ''}
-            <p><a href="https://manual.raycast.com/model-context-protocol" class="text-blue-400 hover:underline" target="_blank" rel="noopener">Raycast MCP docs →</a></p>
+            <p><a href="https://manual.raycast.com/model-context-protocol" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">Raycast MCP docs →</a></p>
           </div>
         </div>`;
       } else if (state.client.id === 'open-webui') {
@@ -2327,8 +2327,8 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
               <li>Local network: <code class="bg-slate-800 px-1 rounded">http://192.168.1.100:8086/mcp</code></li>
               <li>Cloudflare tunnel: <code class="bg-slate-800 px-1 rounded">https://your-tunnel.trycloudflare.com/secret_abc123</code></li>
             </ul>
-            <p class="mt-1">For stdio-based servers, use <a href="https://github.com/open-webui/mcpo" class="text-blue-400 hover:underline" target="_blank" rel="noopener">mcpo</a> proxy to bridge stdio to HTTP.</p>
-            <p><a href="https://docs.openwebui.com/features/mcp/" class="text-blue-400 hover:underline" target="_blank" rel="noopener">Open WebUI MCP docs →</a></p>
+            <p class="mt-1">For stdio-based servers, use <a href="https://github.com/open-webui/mcpo" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">mcpo</a> proxy to bridge stdio to HTTP.</p>
+            <p><a href="https://docs.openwebui.com/features/mcp/" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">Open WebUI MCP docs →</a></p>
           </div>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
             <p class="text-amber-300 text-sm font-medium">Using a smaller or local LLM (Ollama, etc.)?</p>
@@ -2337,7 +2337,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
               <li>Enable tool search (app option <code class="bg-amber-900/30 px-1 rounded">enable_tool_search</code>, or <code class="bg-amber-900/30 px-1 rounded">ENABLE_TOOL_SEARCH=true</code>): the full catalog is deferred behind a search interface so tools load on demand instead of all at once.</li>
               <li>Raise your model's context window above the default (in Ollama, <code class="bg-amber-900/30 px-1 rounded">num_ctx</code>) so the tool definitions and your conversation fit.</li>
             </ul>
-            <p class="text-amber-200/80 text-xs mt-1"><a href="https://github.com/homeassistant-ai/ha-mcp#smaller-or-local-llms-ollama-etc" target="_blank" rel="noopener" class="text-amber-300 hover:underline">Smaller or local LLM setup →</a></p>
+            <p class="text-amber-200/80 text-xs mt-1"><a href="https://github.com/homeassistant-ai/ha-mcp#smaller-or-local-llms-ollama-etc" target="_blank" rel="noopener noreferrer" class="text-amber-300 hover:underline">Smaller or local LLM setup →</a></p>
           </div>
         </div>`;
       } else if (state.client.id === 'copilot-cli') {
