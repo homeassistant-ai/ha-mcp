@@ -6,8 +6,10 @@ enabling AI assistants to perform advanced operations like file management.
 
 from __future__ import annotations
 
+import difflib
 import errno
 import fnmatch
+import hashlib
 import logging
 import os
 import posixpath
@@ -50,7 +52,7 @@ from .const import (
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
 )
-from .yaml_rt import make_yaml, yaml_dumps
+from .yaml_rt import apply_seq_indent, detect_seq_indent, make_yaml, yaml_dumps
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -113,6 +115,11 @@ SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
         vol.Optional("disabled_packages_keys", default=list): vol.All(
             cv.ensure_list, [cv.string]
         ),
+        # Two-step preview/confirm flow (#1720). Both optional with
+        # old-behavior defaults so a pre-confirm-flow server (which never
+        # sends them) still gets an immediate write.
+        vol.Optional("require_confirm", default=False): cv.boolean,
+        vol.Optional("confirm_token"): cv.string,
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
@@ -307,6 +314,64 @@ async def _save_allowed_paths(hass: HomeAssistant, paths: list[str]) -> None:
         hass, _ALLOWED_PATHS_STORAGE_VERSION, _ALLOWED_PATHS_STORAGE_KEY
     )
     await store.async_save({"paths": paths})
+
+
+def _unified_diff(before: str, after: str, rel_path: str, max_lines: int = 200) -> str:
+    """Unified diff of a prospective write, capped for response size."""
+    lines = list(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"{rel_path} (before)",
+            tofile=f"{rel_path} (after)",
+        )
+    )
+    if len(lines) > max_lines:
+        omitted = len(lines) - max_lines
+        lines = lines[:max_lines] + [f"... diff truncated ({omitted} more lines)\n"]
+    return "".join(lines)
+
+
+def _confirm_token(normalized: str, new_content: str) -> str:
+    """Stateless confirm token: hash of target path + exact bytes to write.
+
+    Re-derived on the confirm call from CURRENT disk state, so any change
+    to the file between preview and confirm invalidates the token
+    (optimistic locking, same philosophy as utils/config_hash.py).
+    """
+    return hashlib.sha256(f"{normalized}\n{new_content}".encode()).hexdigest()[:16]
+
+
+def _count_reindented_lines(diff_text: str) -> int:
+    """Count untouched lines that only changed leading whitespace.
+
+    A ``-``/``+`` pair whose stripped bodies match is a pure re-indent —
+    collateral from normalizing a mixed-style file to one sequence style
+    (ruamel supports a single style per dump). Multiset matching so
+    repeated identical lines don't over-count.
+    """
+    removed: dict[str, int] = {}
+    added: dict[str, int] = {}
+    for line in diff_text.splitlines():
+        if line.startswith("---") or line.startswith("+++"):
+            continue
+        if line.startswith("-"):
+            body = line[1:]
+            removed[body.strip()] = removed.get(body.strip(), 0) + 1
+        elif line.startswith("+"):
+            body = line[1:]
+            added[body.strip()] = added.get(body.strip(), 0) + 1
+    return sum(min(n, added.get(key, 0)) for key, n in removed.items() if key)
+
+
+def _reindent_warning(count: int) -> str:
+    """Warning text for re-indented untouched lines (see ``diff``)."""
+    return (
+        f"{count} line(s) outside the requested edit were re-indented: the "
+        "file mixes sequence-indent styles and the serializer normalizes to "
+        "the first-detected style. Values are unchanged (guarded); review "
+        "the diff if the whitespace matters."
+    )
 
 
 def _unauthorized_response(service_name: str, **extra: Any) -> dict[str, Any]:
@@ -1116,6 +1181,9 @@ def _build_edit_yaml_config_handler(
                 "file": rel_path,
                 "action": action,
                 "yaml_path": yaml_path,
+                # Verbatim whole-file write; shares the write-path response
+                # shape so ``written`` stays a reliable discriminator.
+                "written": True,
                 "size": write_meta["size"],
                 "modified": datetime.fromtimestamp(write_meta["mtime"]).isoformat(),
                 # A whole-file restore can touch any number of keys; a restart
@@ -1206,6 +1274,7 @@ def _build_edit_yaml_config_handler(
                         "error": f"File does not exist: {rel_path}",
                     }
                 data = {}
+                raw_content = ""
 
             # Pre-write backups are captured MCP-side by ha-mcp's shared
             # auto-backup layer (#1579): ha_config_set_yaml snapshots the
@@ -1321,20 +1390,35 @@ def _build_edit_yaml_config_handler(
                         }
                     del data[yaml_key]
 
-            # Serialize back to YAML
+            # Serialize back to YAML, keeping the file's dominant top-level
+            # sequence-dash style (#1720: "changed indentation I didn't ask
+            # to change"). ruamel supports only ONE sequence style per dump,
+            # so in a MIXED-style file the minority-style sequences are
+            # normalized to the first-detected style — that collateral is
+            # counted below and surfaced as a warning + visible in ``diff``.
+            seq_style = detect_seq_indent(raw_content)
+
+            def _dump() -> str:
+                ry = make_yaml()
+                apply_seq_indent(ry, seq_style)
+                return yaml_dumps(ry, data)
+
             try:
-                new_content = await hass.async_add_executor_job(
-                    lambda: yaml_dumps(make_yaml(), data)
-                )
+                new_content = await hass.async_add_executor_job(_dump)
             except YAMLError as err:
                 return {
                     "success": False,
                     "error": f"Failed to serialize YAML: {err}",
                 }
 
-            # Validate the result parses cleanly
+            # Validate the result parses cleanly AND round-trips to the
+            # same data we intend to write. The emitter must not alter any
+            # parsed value (e.g. by re-wrapping a long line inside a folded
+            # scalar, which embeds a literal newline in an untouched string
+            # — #1720); if it would, refuse to write rather than corrupt
+            # the file silently.
             try:
-                await hass.async_add_executor_job(
+                reparsed = await hass.async_add_executor_job(
                     lambda: make_yaml().load(StringIO(new_content))
                 )
             except YAMLError as err:
@@ -1342,6 +1426,51 @@ def _build_edit_yaml_config_handler(
                     "success": False,
                     "error": f"Generated YAML failed validation: {err}",
                 }
+            if reparsed != data:
+                return {
+                    "success": False,
+                    "error": (
+                        "Aborted: re-serializing the file would have altered "
+                        "content outside the requested edit (the YAML "
+                        "serializer changed at least one value elsewhere in "
+                        "the file). The file was NOT modified."
+                    ),
+                }
+
+            diff_text = _unified_diff(raw_content, new_content, rel_path)
+            reindent_count = _count_reindented_lines(diff_text)
+
+            require_confirm = bool(call.data.get("require_confirm", False))
+            supplied_token = call.data.get("confirm_token")
+            expected_token = _confirm_token(normalized, new_content)
+            if require_confirm and supplied_token != expected_token:
+                preview: dict[str, Any] = {
+                    "success": True,
+                    "preview": True,
+                    "written": False,
+                    "file": rel_path,
+                    "action": action,
+                    "yaml_path": yaml_path,
+                    "diff": diff_text,
+                    "confirm_token": expected_token,
+                    "message": (
+                        "Preview only — NOTHING was written. Review the diff "
+                        "for unintended changes outside the requested edit, "
+                        "then repeat the exact same call with confirm_token "
+                        "to apply."
+                    ),
+                }
+                if reindent_count:
+                    preview["warnings"] = [_reindent_warning(reindent_count)]
+                if supplied_token is not None:
+                    preview["confirm_token_mismatch"] = True
+                    preview["message"] = (
+                        "confirm_token did not match — the file changed "
+                        "since the preview (or the token was wrong). NOTHING "
+                        "was written. Review the fresh diff and retry with "
+                        "the new confirm_token."
+                    )
+                return preview
 
             # Create parent directories if needed (for new package files).
             # mkdir(exist_ok=True) is idempotent so no pre-check is required.
@@ -1374,7 +1503,11 @@ def _build_edit_yaml_config_handler(
                 "yaml_path": yaml_path,
                 "size": stat.st_size,
                 "modified": modified_dt.isoformat(),
+                "written": True,
+                "diff": diff_text,
             }
+            if reindent_count:
+                result["warnings"] = [_reindent_warning(reindent_count)]
 
             # Surface the post-edit action required to activate the change
             if kind == "lovelace_dashboard":
@@ -1440,6 +1573,10 @@ def _extract_yaml_subtree(content: str, yaml_path: str) -> str | None:
     """
     try:
         ry = make_yaml()
+        # The per-thread cached instance may carry a sequence style applied
+        # by a prior edit's dump on this executor thread — reset it so the
+        # snapshot never inherits another file's indentation.
+        apply_seq_indent(ry, None)
         node = ry.load(StringIO(content))
         for seg in yaml_path.split("."):
             if not isinstance(node, dict) or seg not in node:

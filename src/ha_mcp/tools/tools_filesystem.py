@@ -67,7 +67,13 @@ CALLER_TOKEN_BOOTSTRAP_SERVICE = "get_caller_token"
 # and a ``yaml_path`` arg on ``read_file``. A <0.10.0 component lacks these
 # services; the gate surfaces an actionable "update" instead of a raw
 # "service not found".
-MIN_COMPONENT_VERSION = "0.10.0"
+# 0.11.0: the confirm-flow + diff work (#1720) adds ``require_confirm`` /
+# ``confirm_token`` args to ``edit_yaml_config`` and ``diff`` / ``written``
+# response fields. The server always sends ``require_confirm`` (from
+# ENABLE_YAML_EDIT_CONFIRM, default on); a <0.11.0 component's strict
+# (PREVENT_EXTRA) schema rejects the unknown arg with a raw voluptuous
+# error — the gate surfaces an actionable "update" prompt instead.
+MIN_COMPONENT_VERSION = "0.11.0"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:

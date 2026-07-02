@@ -90,6 +90,23 @@ async def mcp_client_with_yaml_config(
         yield client
 
 
+async def call_set_yaml_confirmed(mcp: Any, args: dict[str, Any]) -> dict[str, Any]:
+    """Drive the (default-on) two-step confirm flow to completion.
+
+    The first ``ha_config_set_yaml`` call returns a no-write preview plus a
+    ``confirm_token``; repeating the identical call with that token applies
+    the edit. ``mcp`` is an :class:`MCPAssertions` instance so both calls go
+    through ``call_tool_success`` — a genuine write failure still fails the
+    test loudly. Returns the applied-write result.
+    """
+    data = await mcp.call_tool_success(TOOL_NAME, args)
+    if data.get("preview"):
+        data = await mcp.call_tool_success(
+            TOOL_NAME, {**args, "confirm_token": data["confirm_token"]}
+        )
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Feature flag / registration
 # ---------------------------------------------------------------------------
@@ -293,8 +310,8 @@ class TestYamlConfigOperations:
         content = "- sensor:\n    - name: E2E Test Sensor\n      state: 'ok'"
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "template",
                     "action": "add",
@@ -319,8 +336,8 @@ class TestYamlConfigOperations:
         )
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "knx",
                     "action": "add",
@@ -386,8 +403,8 @@ class TestYamlConfigOperations:
         """automation/script/scene each accepted in packages/*.yaml with native reload."""
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": key,
                     "action": "add",
@@ -435,8 +452,8 @@ class TestYamlConfigOperations:
         )
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "automation",
                     "action": "add",
@@ -513,8 +530,8 @@ class TestYamlConfigOperations:
         replacement = "- sensor:\n    - name: Replaced\n      state: 'v2'"
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            await mcp.call_tool_success(
-                TOOL_NAME,
+            await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "template",
                     "action": "add",
@@ -523,8 +540,8 @@ class TestYamlConfigOperations:
                 },
             )
 
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "template",
                     "action": "replace",
@@ -544,8 +561,8 @@ class TestYamlConfigOperations:
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
             # Add first
-            await mcp.call_tool_success(
-                TOOL_NAME,
+            await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "template",
                     "action": "add",
@@ -555,8 +572,8 @@ class TestYamlConfigOperations:
             )
 
             # Then remove
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "template",
                     "action": "remove",
@@ -573,8 +590,8 @@ class TestYamlConfigOperations:
 
         # First create a file with a different key
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            await mcp.call_tool_success(
-                TOOL_NAME,
+            await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "sensor",
                     "action": "add",
@@ -604,8 +621,8 @@ class TestYamlConfigOperations:
 
         # Create a file with a list value
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            await mcp.call_tool_success(
-                TOOL_NAME,
+            await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "sensor",
                     "action": "add",
@@ -652,8 +669,8 @@ class TestYamlConfigSafeguards:
         content = "- sensor:\n    - name: Config Check Test\n      state: 'ok'"
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "template",
                     "action": "add",
@@ -680,8 +697,8 @@ class TestYamlConfigSafeguards:
         content = "- sensor:\n    - name: Post Action Test\n      state: 'ok'"
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "template",
                     "action": "add",
@@ -708,8 +725,8 @@ class TestYamlConfigSafeguards:
         """shell_command key should return post_action=restart_required."""
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "shell_command",
                     "action": "add",
@@ -751,8 +768,8 @@ class TestYamlConfigCommentPreservation:
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
             # Write content with comments and !secret under 'template' key
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "template",
                     "action": "replace",
@@ -764,8 +781,8 @@ class TestYamlConfigCommentPreservation:
             assert inner.get("success") is True, f"Initial write failed: {data}"
 
             # Add a DIFFERENT key — forces full file re-parse/re-serialize
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "sensor",
                     "action": "add",
@@ -808,8 +825,8 @@ class TestYamlConfigCommentPreservation:
 
         async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
             # Create a file with !secret tag under 'template' key
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "template",
                     "action": "replace",
@@ -821,8 +838,8 @@ class TestYamlConfigCommentPreservation:
             assert inner.get("success") is True, f"Initial write failed: {data}"
 
             # Add a DIFFERENT key — forces full file round-trip
-            data = await mcp.call_tool_success(
-                TOOL_NAME,
+            data = await call_set_yaml_confirmed(
+                mcp,
                 {
                     "yaml_path": "sensor",
                     "action": "add",
@@ -876,21 +893,21 @@ class TestYamlModeDashboardRegistration:
         """
         yaml_path = f"lovelace.dashboards.{self.URL_PATH}"
 
-        add_data = await safe_call_tool(
-            mcp_client_with_yaml_config,
-            TOOL_NAME,
-            {
-                "yaml_path": yaml_path,
-                "action": "add",
-                "content": (
-                    "mode: yaml\n"
-                    "title: HA MCP Test\n"
-                    f"filename: {self.DASHBOARD_FILE}\n"
-                    "show_in_sidebar: false\n"
-                ),
-                "file": "configuration.yaml",
-            },
-        )
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            add_data = await call_set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": yaml_path,
+                    "action": "add",
+                    "content": (
+                        "mode: yaml\n"
+                        "title: HA MCP Test\n"
+                        f"filename: {self.DASHBOARD_FILE}\n"
+                        "show_in_sidebar: false\n"
+                    ),
+                    "file": "configuration.yaml",
+                },
+            )
         assert add_data.get("success") is True, add_data
         assert add_data.get("post_action") == "restart_required"
 
@@ -904,15 +921,15 @@ class TestYamlModeDashboardRegistration:
         # lovelace.mode must NOT be introduced as a sibling of dashboards
         assert "lovelace:\n  mode:" not in read["content"]
 
-        remove_data = await safe_call_tool(
-            mcp_client_with_yaml_config,
-            TOOL_NAME,
-            {
-                "yaml_path": yaml_path,
-                "action": "remove",
-                "file": "configuration.yaml",
-            },
-        )
+        async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
+            remove_data = await call_set_yaml_confirmed(
+                mcp,
+                {
+                    "yaml_path": yaml_path,
+                    "action": "remove",
+                    "file": "configuration.yaml",
+                },
+            )
         assert remove_data.get("success") is True, remove_data
 
         # Verify the entry is removed from the file (mirrors the post-add read-back).
@@ -1035,8 +1052,8 @@ class TestYamlConfigThemesIntegration:
         try:
             # Create the theme file.
             async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-                add_data = await mcp.call_tool_success(
-                    TOOL_NAME,
+                add_data = await call_set_yaml_confirmed(
+                    mcp,
                     {
                         "yaml_path": theme_name,
                         "action": "add",
@@ -1074,8 +1091,8 @@ class TestYamlConfigThemesIntegration:
             # This guarantees the themes-module count==2 assertion can never
             # observe the extra theme (sequential within-worker execution).
             async with MCPAssertions(mcp_client_with_yaml_config) as mcp:
-                remove_data = await mcp.call_tool_success(
-                    TOOL_NAME,
+                remove_data = await call_set_yaml_confirmed(
+                    mcp,
                     {
                         "yaml_path": theme_name,
                         "action": "remove",
@@ -1207,30 +1224,30 @@ class TestYamlConfigAutoBackup:
         ypath = "template"
 
         # Create the key — no prior value, so capture is skipped.
-        add = await safe_call_tool(
-            mcp,
-            TOOL_NAME,
-            {
-                "yaml_path": ypath,
-                "action": "add",
-                "content": "- sensor:\n    - name: V1\n      state: '1'",
-                "file": file,
-            },
-        )
+        async with MCPAssertions(mcp) as asserts:
+            add = await call_set_yaml_confirmed(
+                asserts,
+                {
+                    "yaml_path": ypath,
+                    "action": "add",
+                    "content": "- sensor:\n    - name: V1\n      state: '1'",
+                    "file": file,
+                },
+            )
         assert add.get("success") is True, add
 
         try:
             # Replace — captures the prior (V1) subtree as a yaml snapshot.
-            replace = await safe_call_tool(
-                mcp,
-                TOOL_NAME,
-                {
-                    "yaml_path": ypath,
-                    "action": "replace",
-                    "content": "- sensor:\n    - name: V2\n      state: '2'",
-                    "file": file,
-                },
-            )
+            async with MCPAssertions(mcp) as asserts:
+                replace = await call_set_yaml_confirmed(
+                    asserts,
+                    {
+                        "yaml_path": ypath,
+                        "action": "replace",
+                        "content": "- sensor:\n    - name: V2\n      state: '2'",
+                        "file": file,
+                    },
+                )
             assert replace.get("success") is True, replace
 
             name = await _wait_backup_name(mcp, domain="yaml", marker=marker)
@@ -1257,8 +1274,97 @@ class TestYamlConfigAutoBackup:
             assert read.get("success") is True, read
             assert "V1" in read["content"], read["content"]
         finally:
-            await safe_call_tool(
+            # Best-effort cleanup: drive the confirm flow with safe_call_tool
+            # so a preview (or a failure) can't raise out of ``finally`` and
+            # mask the real assertion error.
+            rm = await safe_call_tool(
                 mcp,
                 TOOL_NAME,
                 {"yaml_path": ypath, "action": "remove", "file": file},
             )
+            if rm.get("preview"):
+                await safe_call_tool(
+                    mcp,
+                    TOOL_NAME,
+                    {
+                        "yaml_path": ypath,
+                        "action": "remove",
+                        "file": file,
+                        "confirm_token": rm["confirm_token"],
+                    },
+                )
+
+
+# ---------------------------------------------------------------------------
+# #1720 — two-step preview/confirm flow (default ON)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.filesystem
+class TestYamlConfirmFlow:
+    """Two-step preview->confirm flow (#1720), default ON.
+
+    Exercises the wrapper flag -> service -> component preview/confirm path
+    end-to-end: the first call returns a no-write diff preview plus a
+    confirm_token, and the edit only lands when the identical call is
+    repeated with that token.
+    """
+
+    async def test_preview_then_confirm(self, mcp_client_with_yaml_config):
+        """First call previews (writes nothing); repeating with the token writes."""
+        mcp_client = mcp_client_with_yaml_config
+        fname = f"packages/confirm_{uuid.uuid4().hex[:8]}.yaml"
+        args = {
+            "file": fname,
+            "action": "add",
+            "yaml_path": "command_line",
+            "content": (
+                '- sensor:\n    name: e2e_confirm_probe\n    command: "echo 1"\n'
+            ),
+        }
+        async with MCPAssertions(mcp_client) as mcp:
+            preview = await mcp.call_tool_success(TOOL_NAME, args)
+            assert preview["preview"] is True, preview
+            assert preview["written"] is False, preview
+            assert "+command_line:" in preview["diff"], preview
+            assert preview["confirm_token"], preview
+
+            # The preview must not have touched disk (asserting NOT-success is
+            # robust whether the read fails because the file is missing or
+            # because ha_read_file isn't functional for packages).
+            read = await safe_call_tool(mcp_client, READ_TOOL, {"path": fname})
+            assert not read.get("success", False), (
+                f"preview must not write the file: {read}"
+            )
+
+            done = await mcp.call_tool_success(
+                TOOL_NAME, {**args, "confirm_token": preview["confirm_token"]}
+            )
+            assert done["written"] is True, done
+            assert "+command_line:" in done["diff"], done
+
+    async def test_wrong_token_re_previews(self, mcp_client_with_yaml_config):
+        """A bogus confirm_token re-previews (mismatch flagged) and writes nothing."""
+        mcp_client = mcp_client_with_yaml_config
+        fname = f"packages/confirm_{uuid.uuid4().hex[:8]}.yaml"
+        args = {
+            "file": fname,
+            "action": "add",
+            "yaml_path": "command_line",
+            "content": (
+                '- sensor:\n    name: e2e_confirm_probe2\n    command: "echo 1"\n'
+            ),
+        }
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                TOOL_NAME, {**args, "confirm_token": "bogus"}
+            )
+            assert result["preview"] is True, result
+            assert result["confirm_token_mismatch"] is True, result
+            assert result["written"] is False, result
+
+        # A wrong token must not have written anything either.
+        read = await safe_call_tool(mcp_client, READ_TOOL, {"path": fname})
+        assert not read.get("success", False), (
+            f"wrong-token preview must not write the file: {read}"
+        )

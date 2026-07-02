@@ -1618,10 +1618,27 @@ def ha_container_with_fresh_config(request):
     manifest_reqs = _collect_manifest_requirements(config_path)
     if manifest_reqs:
         quoted = " ".join(shlex.quote(r) for r in manifest_reqs)
+        # PyPI-first with wheels-index fallback. The image env pins
+        # PIP_EXTRA_INDEX_URL=wheels.home-assistant.io, and when that index
+        # is down pip stalls through 5 read-timeout retries per lookup —
+        # blowing the readiness budget long before HA even boots (took
+        # every E2E CI job down during the 2026-07-02 outage). All current
+        # manifest requirements ship musllinux wheels on PyPI, so attempt 1
+        # drops the extra index and forbids sdist builds (fail fast, no
+        # surprise compiles); the fallback restores the image's stock pip
+        # env for any future requirement only the wheels index carries.
+        # The ``env -u`` is load-bearing: it assumes the image pins the extra
+        # index via the PIP_EXTRA_INDEX_URL env var (true today). If that
+        # ever moves into pip.conf, attempt 1 silently reverts to hitting the
+        # wheels index — the ``||`` fallback still keeps installs working.
         container_kwargs["entrypoint"] = [
             "sh",
             "-c",
-            f"pip install --no-cache-dir {quoted} && exec /init",
+            (
+                f"(env -u PIP_EXTRA_INDEX_URL pip install --no-cache-dir "
+                f"--only-binary=:all: {quoted} "
+                f"|| pip install --no-cache-dir {quoted}) && exec /init"
+            ),
         ]
         logger.info(
             f"📦 Pre-installing {len(manifest_reqs)} custom-component "

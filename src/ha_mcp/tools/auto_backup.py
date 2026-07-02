@@ -108,6 +108,7 @@ def with_auto_backup(
     id_fn: Callable[[dict[str, Any]], str] | None = None,
     client: Any = None,
     mandatory: bool = False,
+    skip_fn: Callable[[dict[str, Any]], bool] | None = None,
 ) -> Callable[..., Any]:
     """Decorate a write/destructive tool with pre-write auto-backup capture.
 
@@ -124,6 +125,11 @@ def with_auto_backup(
 
     Backup capture is best-effort: failure logs a WARNING and the wrapped
     write proceeds regardless.
+
+    ``skip_fn`` (optional) short-circuits the whole decorator — including
+    the ``mandatory`` gate — for calls it identifies as unable to write
+    (e.g. a yaml-edit confirm-flow preview): no snapshot, no refusal, the
+    wrapped tool runs directly.
 
     ``mandatory=True`` makes auto-backup a precondition (file/YAML writes,
     #1579 — those formerly kept their own private backups). It fails the
@@ -150,6 +156,12 @@ def with_auto_backup(
     def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            # A call skip_fn identifies as unable to write (e.g. a yaml-edit
+            # confirm-flow PREVIEW, which returns a diff and writes nothing)
+            # needs no pre-write snapshot — and must not be refused by the
+            # mandatory gate either, since there is nothing to protect.
+            if skip_fn is not None and skip_fn(kwargs):
+                return await func(*args, **kwargs)
             # Settings + target resolution happen OUTSIDE the best-effort
             # ``try`` below: under ``mandatory`` a transient-tuple error from
             # ``get_global_settings`` / ``domain_fn`` / ``id_fn`` must NOT be

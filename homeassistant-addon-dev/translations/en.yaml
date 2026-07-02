@@ -77,6 +77,16 @@ configuration:
       "Enable beta features" toggle above (and in the web UI) to be
       on — otherwise this sub-flag is ignored at runtime regardless
       of its value here.
+  enable_yaml_edit_confirm:
+    name: Require confirmation for YAML edits (diff preview)
+    description: >-
+      Sub-toggle of YAML config editing, ON by default (recommended).
+      The first ha_config_set_yaml call returns a unified diff of
+      exactly what would change on disk plus a confirm token and writes
+      nothing; the edit only lands when the call is repeated with that
+      token. Exists so unintended changes outside the requested edit
+      are caught before they reach disk (issue #1720). Turn off only to
+      save one round-trip per edit.
   enable_yaml_packages_automation:
     name: Allow automation in packages/*.yaml
     description: >-

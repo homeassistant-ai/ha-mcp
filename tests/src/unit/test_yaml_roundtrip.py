@@ -20,6 +20,13 @@ sys.modules["homeassistant.helpers"] = homeassistant.helpers
 sys.modules["homeassistant.helpers.config_validation"] = (
     homeassistant.helpers.config_validation
 )
+# The package __init__ also imports these; without them this file only
+# collects cleanly when an earlier test file has already mocked them.
+sys.modules["homeassistant.components.persistent_notification"] = (
+    homeassistant.components.persistent_notification
+)
+sys.modules["homeassistant.helpers.storage"] = homeassistant.helpers.storage
+sys.modules["homeassistant.loader"] = homeassistant.loader
 
 from custom_components.ha_mcp_tools.yaml_rt import (  # noqa: E402
     _TaggedScalar,
@@ -208,3 +215,180 @@ logger:
         assert "!include_dir_named packages/" in out
         # Plain values present
         assert "name: My Home" in out
+
+
+# ---------------------------------------------------------------------------
+# Long-line re-wrapping (#1720)
+# ---------------------------------------------------------------------------
+
+
+class TestNoRewrapOfLongLines:
+    """The emitter must never introduce new line breaks on dump (#1720).
+
+    ruamel's default emitter width (~80 columns) re-wraps long lines when
+    re-serializing. Inside a ``>`` folded scalar, a new break adjacent to a
+    more-indented line becomes a LITERAL newline on re-parse — silently
+    corrupting quoted string literals (e.g. ``strftime('%a %h %d')``) in
+    blocks the edit never touched.
+    """
+
+    # Mirrors the reporter's template sensor: >-folded Jinja blocks whose
+    # long, more-indented lines contain quoted strftime format strings.
+    ISSUE_1720_YAML = """\
+template:
+  - sensor:
+      - name: reveil boolean
+        state: "ok"
+        attributes:
+          is_alarm_day_boolean: >
+            {% set selected = states('sensor.next_alarm_selector') %}
+            {% if selected == 'unavailable' %}
+              false
+            {% else %}
+              {% if (selected | as_datetime | as_local).strftime('%a %h %d') == now().strftime('%a %h %d') %}
+                    true
+              {% else %}
+                  false
+              {% endif %}
+            {% endif %}
+          chaudiere_bool: >
+            {% set selected = states('sensor.next_alarm_selector') %}
+            {% if selected == 'unavailable' %}
+              false
+            {% else %}
+              {% set alarmDate = (now() - timedelta(minutes=20)).strftime('%a %h %d') %}
+              {% set nowdate = now().strftime('%a %h %d') %}
+              {{ alarmDate == nowdate }}
+            {% endif %}
+"""
+
+    @staticmethod
+    def _attributes(data) -> dict[str, str]:
+        sensor = data["template"][0]["sensor"][0]
+        return {k: str(v) for k, v in sensor["attributes"].items()}
+
+    def test_unrelated_add_preserves_folded_scalar_values(self):
+        """Adding an unrelated top-level key must not change the parsed
+        value of any untouched folded-scalar attribute."""
+        ry, data = _load(self.ISSUE_1720_YAML)
+        before = self._attributes(data)
+
+        data["utility_meter"] = {
+            "monthly_bill_ac": {"source": "sensor.ac_power", "cycle": "monthly"}
+        }
+        out = yaml_dumps(ry, data)
+
+        after = self._attributes(make_yaml().load(StringIO(out)))
+        assert after == before
+
+    def test_long_folded_scalar_line_not_split(self):
+        """The >80-column strftime comparison line survives the dump on a
+        single physical line (no emitter-introduced fold)."""
+        ry, data = _load(self.ISSUE_1720_YAML)
+        out = yaml_dumps(ry, data)
+        assert ".strftime('%a %h %d') == now().strftime('%a %h %d') %}" in out, (
+            f"long line was re-wrapped:\n{out}"
+        )
+
+    def test_pure_roundtrip_is_semantically_stable(self):
+        """Even with no mutation at all, load→dump→load must preserve every
+        folded-scalar value."""
+        ry, data = _load(self.ISSUE_1720_YAML)
+        before = self._attributes(data)
+        out = yaml_dumps(ry, data)
+        after = self._attributes(make_yaml().load(StringIO(out)))
+        assert after == before
+
+
+# ---------------------------------------------------------------------------
+# Sequence-indent style preservation (#1720)
+# ---------------------------------------------------------------------------
+
+
+class TestSeqIndentStylePreservation:
+    """Dumps keep the file's own top-level sequence-dash style (#1720
+    follow-through: 'the tool changed indentation I did not ask for')."""
+
+    HA_DOCS_STYLE = """\
+template:
+  - sensor:
+      - name: demo
+        state: "1"
+utility_meter: {}
+"""
+
+    COMPACT_STYLE = """\
+template:
+- sensor:
+  - name: demo
+    state: "1"
+utility_meter: {}
+"""
+
+    def test_detects_ha_docs_style(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        assert detect_seq_indent(self.HA_DOCS_STYLE) == (4, 2)
+
+    def test_detects_compact_style(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        assert detect_seq_indent(self.COMPACT_STYLE) == (2, 0)
+
+    def test_detects_none_without_top_level_sequence(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        assert detect_seq_indent("homeassistant:\n  name: Home\n") is None
+
+    def test_ha_docs_style_roundtrips_byte_identical(self):
+        from custom_components.ha_mcp_tools.yaml_rt import (
+            apply_seq_indent,
+            detect_seq_indent,
+        )
+
+        ry, data = _load(self.HA_DOCS_STYLE)
+        apply_seq_indent(ry, detect_seq_indent(self.HA_DOCS_STYLE))
+        assert yaml_dumps(ry, data) == self.HA_DOCS_STYLE
+
+    def test_compact_style_roundtrips_byte_identical(self):
+        from custom_components.ha_mcp_tools.yaml_rt import (
+            apply_seq_indent,
+            detect_seq_indent,
+        )
+
+        ry, data = _load(self.COMPACT_STYLE)
+        apply_seq_indent(ry, detect_seq_indent(self.COMPACT_STYLE))
+        assert yaml_dumps(ry, data) == self.COMPACT_STYLE
+
+    def test_style_reset_between_dumps(self):
+        """make_yaml() is thread-cached — applying None must restore the
+        compact default rather than leak the previous file's style."""
+        from custom_components.ha_mcp_tools.yaml_rt import apply_seq_indent
+
+        ry, data = _load(self.COMPACT_STYLE)
+        apply_seq_indent(ry, (4, 2))
+        apply_seq_indent(ry, None)
+        assert yaml_dumps(ry, data) == self.COMPACT_STYLE
+
+
+class TestSeqIndentDetectionEdges:
+    """detect_seq_indent edge cases: interleaved comments/blanks and
+    non-matching (quoted) keys fall through safely."""
+
+    def test_detects_through_comment_and_blank_lines(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        text = "template:\n\n  # a comment before the first item\n  - sensor: []\n"
+        assert detect_seq_indent(text) == (4, 2)
+
+    def test_quoted_key_falls_back_to_next_key(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        text = '"quoted key":\n  - a\nsensor:\n- platform: rest\n'
+        assert detect_seq_indent(text) == (2, 0)
+
+    def test_key_with_inline_value_is_skipped(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        text = "name: My Home\ntemplate:\n  - sensor: []\n"
+        assert detect_seq_indent(text) == (4, 2)

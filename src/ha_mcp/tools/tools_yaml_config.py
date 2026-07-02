@@ -63,6 +63,34 @@ _YAML_PACKAGES_FLAG_BY_KEY = {
     "scene": "enable_yaml_packages_scene",
 }
 
+# Keys editable here that ALSO have a storage-mode helper equivalent.
+# Deliberately NOT blocked (git-managed YAML configs are legitimate) —
+# the response instead carries a reactive routing warning, since this
+# exact entry point (utility_meter via raw YAML when the helper tool
+# covered it) is how the #1720 corruption reached a production config.
+_HELPER_EQUIVALENT_KEYS: dict[str, str] = {
+    "template": "template",
+    "utility_meter": "utility_meter",
+    "group": "group",
+}
+
+
+def _is_preview_only_call(kwargs: dict[str, Any]) -> bool:
+    """True when this ha_config_set_yaml call can only return a preview.
+
+    With the confirm flow enabled and no ``confirm_token`` supplied, the
+    component returns a diff preview and writes nothing — so the mandatory
+    pre-write auto-backup would snapshot for an edit that never happens
+    (phantom ``scope="edits"`` entries). A settings failure returns False,
+    failing toward capturing a backup.
+    """
+    if kwargs.get("confirm_token") is not None:
+        return False
+    try:
+        return bool(get_global_settings().enable_yaml_edit_confirm)
+    except Exception:
+        return False
+
 
 def _disabled_packages_keys(settings: Any) -> list[str]:
     """Return the sorted list of PACKAGES_ONLY_YAML_KEYS whose Settings
@@ -146,6 +174,7 @@ class YamlConfigTools:
             f"{kw.get('file') or 'configuration.yaml'}::{kw.get('yaml_path') or ''}"
         ),
         mandatory=True,
+        skip_fn=_is_preview_only_call,
     )
     @log_tool_usage
     async def ha_config_set_yaml(
@@ -204,6 +233,19 @@ class YamlConfigTools:
                 ),
             ),
         ] = "configuration.yaml",
+        confirm_token: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Confirmation token from a prior preview response. When "
+                    "the YAML edit confirmation flow is enabled (default), "
+                    "the first call writes nothing and returns a unified "
+                    "diff plus confirm_token; repeat the identical call "
+                    "with that token to apply the edit."
+                ),
+            ),
+        ] = None,
         MandatoryBPS: Annotated[
             bool,
             Field(default=True),
@@ -248,6 +290,16 @@ class YamlConfigTools:
         a ``reload_service`` to call yourself); the edit is on disk but not yet
         live. Preserves YAML comments and HA tags (``!include``,
         ``!secret``) on round-trip; ``replace`` swaps the subtree as-is.
+
+        Two-step confirmation (default ON, toggle ENABLE_YAML_EDIT_CONFIRM /
+        Server Settings): the first call returns ``preview: true`` with a
+        unified ``diff`` of exactly what would change on disk and a
+        ``confirm_token`` — nothing is written. Review the diff for
+        changes outside the requested edit, then repeat the identical
+        call adding ``confirm_token`` to apply. Every applied write also
+        returns the final ``diff``. A token mismatch means the file
+        changed since the preview (or the token was wrong); use the
+        freshly returned token.
 
         ``template-guidelines.md`` ships in this response under ``skill_content``
         by default — YAML packages frequently include
@@ -348,9 +400,12 @@ class YamlConfigTools:
                 "action": action,
                 "yaml_path": yaml_path,
                 "disabled_packages_keys": disabled_keys,
+                "require_confirm": settings.enable_yaml_edit_confirm,
             }
             if content is not None:
                 service_data["content"] = content
+            if confirm_token is not None:
+                service_data["confirm_token"] = confirm_token
 
             # Call the custom component service (token injected by helper)
             result = await call_mcp_tools_service(
@@ -375,9 +430,30 @@ class YamlConfigTools:
                         '(e.g. ha_reload_core(target="themes")) or restart '
                         "Home Assistant to apply the change."
                     )
+                # themes/*.yaml guard: there the top_key is a THEME NAME, so
+                # a theme that happens to be called 'template'/'group'/
+                # 'utility_meter' must not draw the helper-routing warning.
+                if (
+                    action in ("add", "replace")
+                    and top_key in _HELPER_EQUIVALENT_KEYS
+                    and not fnmatch.fnmatch(normalized_target, "themes/*.yaml")
+                ):
+                    result.setdefault("warnings", []).append(
+                        f"Best practice: '{top_key}' has a storage-mode "
+                        f"equivalent — ha_config_set_helper(helper_type="
+                        f"'{_HELPER_EQUIVALENT_KEYS[top_key]}') — which avoids "
+                        "raw YAML file rewrites entirely. Prefer it unless "
+                        "this configuration is deliberately YAML-managed "
+                        "(e.g. git-tracked packages)."
+                    )
                 attach_skill_content(
                     result,
-                    MandatoryBPS=MandatoryBPS,
+                    # The confirm leg (token supplied) skips the bulky skill
+                    # payload: possession of a token proves the caller just
+                    # received the preview response that carried it. Preview
+                    # and single-call writes keep it — pre-write guidance is
+                    # the whole point of MandatoryBPS.
+                    MandatoryBPS=MandatoryBPS and confirm_token is None,
                     canonical_files=_YAML_SKILL_FILES,
                     referenced_files=None,
                 )

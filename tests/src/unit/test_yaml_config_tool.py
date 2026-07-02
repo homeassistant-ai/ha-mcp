@@ -520,6 +520,101 @@ async def test_theme_nested_directory(monkeypatch):
     assert _dispatch_payloads(client)[0]["file"] == "themes/custom/nested-theme.yaml"
 
 
+# ---------------------------------------------------------------------------
+# Reactive best-practice warning for helper-equivalent keys — #1720
+# ---------------------------------------------------------------------------
+
+
+async def test_helper_equivalent_key_warns(monkeypatch):
+    """add/replace on template|utility_meter|group appends a routing warning
+    that points at the storage-mode ha_config_set_helper equivalent."""
+    fn, client = await _make_tool()
+    result = await fn(
+        yaml_path="utility_meter",
+        action="add",
+        content="monthly:\n  source: sensor.energy\n",
+    )
+    assert any("ha_config_set_helper" in w for w in result.get("warnings", []))
+
+
+async def test_non_helper_key_does_not_warn(monkeypatch):
+    """A key with no storage-mode helper equivalent (command_line) must not
+    get the routing warning."""
+    fn, client = await _make_tool()
+    result = await fn(
+        yaml_path="command_line",
+        action="add",
+        content='- sensor:\n    name: x\n    command: "echo 1"\n',
+    )
+    assert not any("ha_config_set_helper" in w for w in result.get("warnings", []))
+
+
+async def test_theme_named_like_helper_key_does_not_warn(monkeypatch):
+    """In themes/*.yaml the yaml_path is a THEME NAME — a theme that happens
+    to be called 'group' must not draw the helper-routing warning."""
+    fn, client = await _make_tool()
+    result = await fn(
+        file="themes/group.yaml",
+        yaml_path="group",
+        action="add",
+        content="primary-color: '#000000'",
+    )
+    assert not any("ha_config_set_helper" in w for w in result.get("warnings", []))
+
+
+# ---------------------------------------------------------------------------
+# Two-step confirm flow plumbing (require_confirm / confirm_token) — #1720
+# ---------------------------------------------------------------------------
+
+
+async def test_require_confirm_passed_from_settings(monkeypatch):
+    """Default settings (ENABLE_YAML_EDIT_CONFIRM unset ⇒ on) ⇒ the payload
+    carries require_confirm=True, and no confirm_token when none supplied."""
+    fn, client = await _make_tool()
+    await fn(
+        yaml_path="template",
+        action="add",
+        content="- sensor: []\n",
+    )
+    payloads = _dispatch_payloads(client)
+    assert len(payloads) == 1
+    assert payloads[0]["require_confirm"] is True
+    assert "confirm_token" not in payloads[0]
+
+
+async def test_confirm_token_forwarded(monkeypatch):
+    """The confirm_token tool arg lands in the service payload verbatim."""
+    fn, client = await _make_tool()
+    await fn(
+        yaml_path="template",
+        action="add",
+        content="- sensor: []\n",
+        confirm_token="abc123",
+    )
+    payloads = _dispatch_payloads(client)
+    assert len(payloads) == 1
+    assert payloads[0]["confirm_token"] == "abc123"
+
+
+async def test_flag_off_sends_require_confirm_false(monkeypatch):
+    """ENABLE_YAML_EDIT_CONFIRM=false ⇒ payload carries require_confirm=False
+    (old single-call behavior)."""
+    from ha_mcp import config as ha_mcp_config
+
+    monkeypatch.setenv("ENABLE_YAML_EDIT_CONFIRM", "false")
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+    fn, client = await _make_tool()
+    await fn(
+        yaml_path="template",
+        action="add",
+        content="- sensor: []\n",
+    )
+    payloads = _dispatch_payloads(client)
+    assert len(payloads) == 1
+    assert payloads[0]["require_confirm"] is False
+
+
 async def test_theme_reload_failure_surfaces_warning(monkeypatch):
     """A component-side reload_error must surface as a top-level warning,
     not vanish behind success: True."""
@@ -557,3 +652,55 @@ async def test_theme_reload_failure_surfaces_warning(monkeypatch):
     assert isinstance(warnings, list) and warnings, f"warnings missing: {result}"
     assert "Reload service unavailable" in warnings[0]
     assert "frontend.reload_themes" in warnings[0]
+
+
+async def test_remove_helper_equivalent_key_does_not_warn(monkeypatch):
+    """The routing warning is for add/replace only — deleting a
+    helper-equivalent key must not suggest creating it as a helper."""
+    fn, client = await _make_tool()
+    result = await fn(yaml_path="utility_meter", action="remove")
+    assert not any("ha_config_set_helper" in w for w in result.get("warnings", []))
+
+
+async def test_confirm_leg_skips_skill_content(monkeypatch):
+    """The token-carrying confirm leg suppresses the bulky skill payload —
+    possession of a token proves the caller just received the preview that
+    carried it. Preview / single-call writes keep MandatoryBPS."""
+    attach = MagicMock()
+    monkeypatch.setattr("ha_mcp.tools.tools_yaml_config.attach_skill_content", attach)
+    fn, client = await _make_tool()
+
+    await fn(yaml_path="command_line", action="add", content="- sensor: []")
+    assert attach.call_args.kwargs["MandatoryBPS"] is True
+
+    await fn(
+        yaml_path="command_line",
+        action="add",
+        content="- sensor: []",
+        confirm_token="tok",
+    )
+    assert attach.call_args.kwargs["MandatoryBPS"] is False
+
+
+async def test_preview_only_call_skips_auto_backup(monkeypatch):
+    """With the confirm flow on (default) a token-less call cannot write, so
+    the mandatory pre-write snapshot is skipped; the confirm leg captures."""
+    from types import SimpleNamespace
+
+    snap = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "ha_mcp.tools.auto_backup.get_backup_manager",
+        lambda *_a, **_k: SimpleNamespace(maybe_snapshot=snap),
+    )
+    fn, client = await _make_tool()
+
+    await fn(yaml_path="command_line", action="add", content="- sensor: []")
+    assert snap.await_count == 0  # preview-only call → no snapshot
+
+    await fn(
+        yaml_path="command_line",
+        action="add",
+        content="- sensor: []",
+        confirm_token="tok",
+    )
+    assert snap.await_count == 1  # confirm leg captures normally

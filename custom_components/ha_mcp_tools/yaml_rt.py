@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Callable
 from io import StringIO
@@ -76,10 +77,65 @@ def _register_ha_tags() -> None:
 _register_ha_tags()
 
 
+# Effectively-infinite emitter line width. ruamel's default (~80 columns)
+# re-wraps long lines on dump; inside a ``>`` folded scalar a new wrap
+# adjacent to a more-indented line becomes a LITERAL newline on re-parse,
+# silently corrupting string literals in blocks an edit never touched
+# (#1720). Never introducing new wraps also keeps untouched long lines
+# byte-stable across edits.
+_NEVER_WRAP_WIDTH = 2**31
+
+
+# A top-level mapping key: starts at column 0, `key:` with nothing (or a
+# comment) after the colon. Quoted/exotic keys never match — detection
+# then just falls back to the default style, which is safe.
+_TOP_LEVEL_KEY_RE = re.compile(r"^[A-Za-z0-9_][^\s:]*:\s*(?:#.*)?$")
+_DASH_RE = re.compile(r"^( *)- ")
+
+# ruamel's compact defaults for block sequences (dash at the parent
+# column). Used to RESET the shared per-thread instance between dumps.
+_DEFAULT_SEQ_STYLE = (2, 0)
+
+
+def detect_seq_indent(text: str) -> tuple[int, int] | None:
+    """Detect the file's top-level block-sequence style.
+
+    Returns ``(sequence, offset)`` for ``YAML.indent()`` — derived from
+    the first list item that directly follows a top-level key — or
+    ``None`` when the file has no such sequence. Only top-level
+    sequences discriminate: nested dashes are indented in BOTH styles.
+    """
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not _TOP_LEVEL_KEY_RE.match(line):
+            continue
+        for nxt in lines[i + 1 :]:
+            if not nxt.strip() or nxt.lstrip().startswith("#"):
+                continue
+            m = _DASH_RE.match(nxt)
+            if m:
+                offset = len(m.group(1))
+                return (offset + 2, offset)
+            break  # value is not a sequence — try the next top-level key
+    return None
+
+
+def apply_seq_indent(ry: YAML, style: tuple[int, int] | None) -> None:
+    """Apply a detected sequence style (or the compact default) to *ry*.
+
+    ``make_yaml()`` instances are cached per-thread, so the style MUST be
+    (re)applied before every dump — passing ``None`` resets to the
+    default instead of leaking the previous file's style.
+    """
+    sequence, offset = style if style is not None else _DEFAULT_SEQ_STYLE
+    ry.indent(mapping=2, sequence=sequence, offset=offset)
+
+
 def _build_yaml() -> YAML:
     """Create a fresh round-trip YAML instance with HA tag support."""
     ry = YAML(typ="rt")
     ry.preserve_quotes = True
+    ry.width = _NEVER_WRAP_WIDTH
     return ry
 
 

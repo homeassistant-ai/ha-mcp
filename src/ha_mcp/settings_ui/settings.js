@@ -1511,17 +1511,21 @@ const FEATURE_META = {
     label: "Enable YAML config editing (beta)",
     help: "Beta feature, disabled by default. Allows AI assistants to add, replace, or remove top-level keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant, http, and recorder are blocked. Each edit validates YAML syntax, runs a config check, and creates an automatic backup. Changes to most keys require a full HA restart to take effect. See docs/beta.md for known limitations. Dedicated tools (automations, scripts, scenes, helpers, template sensors) should be preferred when available.",
   },
+  enable_yaml_edit_confirm: {
+    label: "Require confirmation for YAML edits (diff preview)",
+    help: "Sub-toggle of YAML config editing, ON by default (recommended). The first ha_config_set_yaml call returns a unified diff of exactly what would change on disk plus a confirm token and writes nothing; the edit only lands when the call is repeated with that token. Exists so unintended changes outside the requested edit are caught before they reach disk (issue #1720). Turn off only to save one round-trip per edit.",
+  },
   enable_yaml_packages_automation: {
     label: "Allow automation in packages/*.yaml",
-    help: "Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts yaml_path='automation' inside packages/*.yaml. When off, the wrapper rejects the call client-side AND the custom component rejects it server-side. Storage-mode tools (ha_config_set_automation) cover the UI-managed path and are unaffected. Disabled by default.",
+    help: "Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts yaml_path='automation' inside packages/*.yaml. When off, the call is rejected both client-side and server-side. The storage-mode tool (ha_config_set_automation) is unaffected. Default OFF; only takes effect when \"Enable YAML config editing\" above is also on.",
   },
   enable_yaml_packages_script: {
     label: "Allow script in packages/*.yaml",
-    help: "Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts yaml_path='script' inside packages/*.yaml. When off, the wrapper rejects the call client-side AND the custom component rejects it server-side. Storage-mode tools (ha_config_set_script) cover the UI-managed path and are unaffected. Disabled by default.",
+    help: "Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts yaml_path='script' inside packages/*.yaml. When off, the call is rejected both client-side and server-side. The storage-mode tool (ha_config_set_script) is unaffected. Default OFF; only takes effect when \"Enable YAML config editing\" above is also on.",
   },
   enable_yaml_packages_scene: {
     label: "Allow scene in packages/*.yaml",
-    help: "Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts yaml_path='scene' inside packages/*.yaml. When off, the wrapper rejects the call client-side AND the custom component rejects it server-side. Storage-mode tools (ha_config_set_scene) cover the UI-managed path and are unaffected. Disabled by default.",
+    help: "Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts yaml_path='scene' inside packages/*.yaml. When off, the call is rejected both client-side and server-side. The storage-mode tool (ha_config_set_scene) is unaffected. Default OFF; only takes effect when \"Enable YAML config editing\" above is also on.",
   },
   enable_filesystem_tools: {
     label: "Enable filesystem tools (beta)",
@@ -1551,11 +1555,14 @@ const FEATURE_META = {
 // ``config.BETA_FEATURE_FIELDS`` without duplicating the name list here.
 let BETA_SUB_FLAGS = new Set();
 
-// Sub-flags of ``enable_yaml_config_editing``. Rendered nested beneath
-// the parent in renderFeatureFlags so the dependency is visually
-// obvious. They are NOT in BETA_SUB_FLAGS — the parent is the gate,
-// and the master-off → parent-off cascade transitively covers them.
+// Sub-flags of ``enable_yaml_config_editing`` (confirm-flow toggle +
+// per-key packages gates). They ARE in BETA_SUB_FLAGS (it mirrors
+// config.BETA_FEATURE_FIELDS verbatim), but the main render pass skips
+// them via the includes() guard below, and renderYamlPackagesSubRows
+// re-renders them nested beneath their parent — so they never appear
+// as standalone beta-sub rows.
 const YAML_PACKAGES_SUB_FLAGS = [
+  'enable_yaml_edit_confirm',
   'enable_yaml_packages_automation',
   'enable_yaml_packages_script',
   'enable_yaml_packages_scene',

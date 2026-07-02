@@ -704,7 +704,9 @@ class HomeAssistantSmartMCPServer(EnhancedToolsMixin):
         "ha_config_set_yaml": (
             "Update raw YAML in configuration.yaml or packages/*.yaml "
             "via add / replace / remove on a single top-level key "
-            "(LAST RESORT).\n\n"
+            "(LAST RESORT). By default the first call returns a diff "
+            "preview plus confirm_token; repeat with confirm_token to "
+            "apply.\n\n"
             "Dedicated tools (ha_config_set_automation, "
             "ha_config_set_script, ha_config_set_scene, "
             "ha_config_set_helper) cover almost every use case and "
