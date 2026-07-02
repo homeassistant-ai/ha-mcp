@@ -43,6 +43,11 @@ options:
   enable_yaml_packages_automation: false
   enable_yaml_packages_script: false
   enable_yaml_packages_scene: false
+  # Two-step confirm flow for ha_config_set_yaml (#1720). Default ON — the
+  # first edit call returns a diff preview + confirm token and writes
+  # nothing; the edit lands only when repeated with that token. Sub-toggle
+  # of enable_yaml_config_editing; turn off only to save a round-trip.
+  enable_yaml_edit_confirm: true
   enable_filesystem_tools: false
   enable_custom_component_integration: false
   enable_dashboard_screenshot: false
@@ -67,6 +72,7 @@ schema:
   enable_yaml_packages_automation: bool?
   enable_yaml_packages_script: bool?
   enable_yaml_packages_scene: bool?
+  enable_yaml_edit_confirm: bool?
   enable_code_mode: bool?
   enable_lite_docstrings: bool?
   enable_mandatory_bps: bool?

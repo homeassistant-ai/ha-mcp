@@ -155,6 +155,17 @@ class Settings(BaseSettings):
     # files. Disabled by default; only for YAML-only features with no UI/API path.
     enable_yaml_config_editing: bool = Field(False, alias="ENABLE_YAML_CONFIG_EDITING")
 
+    # Two-step confirmation for ha_config_set_yaml (#1720). When on (the
+    # default), the first edit call returns a unified diff preview plus a
+    # confirm token and writes NOTHING; the edit lands only when repeated
+    # with that token. Sub-toggle of enable_yaml_config_editing (nested
+    # beneath it in the UI). Default ON deliberately: the diff preview is
+    # what lets the calling agent catch collateral changes before they
+    # reach disk. Listed in BETA_FEATURE_FIELDS purely for the addon-mode
+    # override path; the master-off cascade forcing it False is moot
+    # because the yaml tool itself is unregistered then.
+    enable_yaml_edit_confirm: bool = Field(True, alias="ENABLE_YAML_EDIT_CONFIRM")
+
     # Per-key gates for ``automation`` / ``script`` / ``scene`` under
     # ``packages/*.yaml``. The custom component accepts these three
     # PACKAGES_ONLY_YAML_KEYS unconditionally; ha-mcp's UI exposes a
@@ -604,6 +615,7 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
     # are name-disjoint per _validate_registries()).
     FeatureFlagField("enable_mandatory_bps", "ENABLE_MANDATORY_BPS", bool),
     FeatureFlagField("enable_yaml_config_editing", "ENABLE_YAML_CONFIG_EDITING", bool),
+    FeatureFlagField("enable_yaml_edit_confirm", "ENABLE_YAML_EDIT_CONFIRM", bool),
     # Per-key sub-gates beneath enable_yaml_config_editing. Nested in
     # the UI, dimmed when the parent is off. Also listed in
     # BETA_FEATURE_FIELDS so they follow the same master-gate +
@@ -660,6 +672,7 @@ _FEATURE_FLAG_INT_BOUNDS: dict[str, tuple[int, int]] = {
 # gate, never by the per-field iteration.
 BETA_FEATURE_FIELDS: tuple[str, ...] = (
     "enable_yaml_config_editing",
+    "enable_yaml_edit_confirm",  # Default-ON safety sub-toggle; see field comment.
     # Per-key sub-gates of enable_yaml_config_editing. Included here so
     # they ride the same master gate + addon-mode override path as the
     # other beta flags. Without this, the addon-mode short-circuit in

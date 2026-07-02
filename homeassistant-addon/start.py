@@ -211,6 +211,15 @@ _DEV_ADDON_BETA_KEYS = (
     "enable_yaml_packages_automation",
     "enable_yaml_packages_script",
     "enable_yaml_packages_scene",
+    # Default-ON confirm-flow sub-toggle of enable_yaml_config_editing
+    # (#1720). Present here only to keep parity with
+    # config.BETA_FEATURE_FIELDS (enforced by
+    # test_auto_enable_keys_match_BETA_FEATURE_FIELDS_registry). Its
+    # truthiness never meaningfully fires the master auto-enable in
+    # practice: the dev addon schema carries enable_beta_features, so the
+    # legacy fallback that consults this set is unreachable on any modern
+    # install.
+    "enable_yaml_edit_confirm",
     "enable_filesystem_tools",
     "enable_custom_component_integration",
     "enable_code_mode",
@@ -311,6 +320,13 @@ def main() -> int:
     yaml_packages_script_in_config = False  # presence flag
     enable_yaml_packages_scene = False  # default
     yaml_packages_scene_in_config = False  # presence flag
+    # Confirm-flow sub-toggle of enable_yaml_config_editing (#1720).
+    # Unlike the other beta sub-flags this defaults ON (safety feature);
+    # same presence-tracked pattern so stable installs (key absent) fall
+    # through to the standalone file/default origin chain rather than
+    # being pinned to origin='addon'.
+    enable_yaml_edit_confirm = True  # default (on)
+    yaml_edit_confirm_in_config = False  # presence flag
     enable_filesystem_tools = False  # default
     filesystem_tools_in_config = False  # presence flag
     enable_custom_component_integration = False  # default
@@ -393,6 +409,13 @@ def main() -> int:
             raw_yaml_pkg_scene = config.get("enable_yaml_packages_scene", False)
             enable_yaml_packages_scene = (
                 raw_yaml_pkg_scene if isinstance(raw_yaml_pkg_scene, bool) else False
+            )
+            yaml_edit_confirm_in_config = "enable_yaml_edit_confirm" in config
+            raw_yaml_edit_confirm = config.get("enable_yaml_edit_confirm", True)
+            enable_yaml_edit_confirm = (
+                raw_yaml_edit_confirm
+                if isinstance(raw_yaml_edit_confirm, bool)
+                else True
             )
             filesystem_tools_in_config = "enable_filesystem_tools" in config
             raw_filesystem_tools = config.get("enable_filesystem_tools", False)
@@ -545,6 +568,8 @@ def main() -> int:
         os.environ["ENABLE_YAML_PACKAGES_SCENE"] = str(
             enable_yaml_packages_scene
         ).lower()
+    if yaml_edit_confirm_in_config:
+        os.environ["ENABLE_YAML_EDIT_CONFIRM"] = str(enable_yaml_edit_confirm).lower()
     if filesystem_tools_in_config:
         os.environ["HAMCP_ENABLE_FILESYSTEM_TOOLS"] = str(
             enable_filesystem_tools
