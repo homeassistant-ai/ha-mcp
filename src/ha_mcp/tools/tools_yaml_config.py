@@ -411,7 +411,14 @@ class YamlConfigTools:
                         '(e.g. ha_reload_core(target="themes")) or restart '
                         "Home Assistant to apply the change."
                     )
-                if action in ("add", "replace") and top_key in _HELPER_EQUIVALENT_KEYS:
+                # themes/*.yaml guard: there the top_key is a THEME NAME, so
+                # a theme that happens to be called 'template'/'group'/
+                # 'utility_meter' must not draw the helper-routing warning.
+                if (
+                    action in ("add", "replace")
+                    and top_key in _HELPER_EQUIVALENT_KEYS
+                    and not fnmatch.fnmatch(normalized_target, "themes/*.yaml")
+                ):
                     result.setdefault("warnings", []).append(
                         f"Best practice: '{top_key}' has a storage-mode "
                         f"equivalent — ha_config_set_helper(helper_type="

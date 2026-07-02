@@ -549,6 +549,19 @@ async def test_non_helper_key_does_not_warn(monkeypatch):
     assert not any("ha_config_set_helper" in w for w in result.get("warnings", []))
 
 
+async def test_theme_named_like_helper_key_does_not_warn(monkeypatch):
+    """In themes/*.yaml the yaml_path is a THEME NAME — a theme that happens
+    to be called 'group' must not draw the helper-routing warning."""
+    fn, client = await _make_tool()
+    result = await fn(
+        file="themes/group.yaml",
+        yaml_path="group",
+        action="add",
+        content="primary-color: '#000000'",
+    )
+    assert not any("ha_config_set_helper" in w for w in result.get("warnings", []))
+
+
 # ---------------------------------------------------------------------------
 # Two-step confirm flow plumbing (require_confirm / confirm_token) — #1720
 # ---------------------------------------------------------------------------
