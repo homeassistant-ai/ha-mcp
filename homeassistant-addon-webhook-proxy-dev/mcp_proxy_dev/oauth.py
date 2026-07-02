@@ -315,13 +315,18 @@ class MetadataProvider(Protocol):
     """
 
     @property
-    def webhook_id(self) -> str: ...
+    def webhook_id(self) -> str:
+        """This install's private webhook id."""
 
-    def resource_url(self, base_url: str) -> str: ...
+    def resource_url(self, base_url: str) -> str:
+        """Absolute URL of the protected webhook resource under ``base_url``."""
 
-    def authorization_server_url(self, base_url: str) -> str: ...
+    def authorization_server_url(self, base_url: str) -> str:
+        """Issuer / authorization-server URL under ``base_url``."""
 
-    def base_url_for(self, request: web.Request) -> str: ...
+    def base_url_for(self, request: web.Request) -> str:
+        """Public base URL for ``request`` per the provider's policy
+        (legacy: pinned to the configured URL; ha_auth: request-host-derived)."""
 
 
 def _active_oauth_mode(provider: object) -> str | None:
