@@ -267,12 +267,32 @@ connector with the current URL (and current Client ID/Secret, if OAuth is on).
 
 ### Claude.ai says "Couldn't reach the MCP server"
 
-Two cases:
+Three cases:
 
 1. **It actually connected.** Claude.ai sometimes shows this during the initial handshake even though the connector ends up working. Check whether the connector shows as connected before assuming failure.
 2. **It genuinely can't reach the URL.** Claude.ai connects from Anthropic's servers, so the URL must be reachable from the public internet — not just your LAN. Open the remote URL on your **phone with Wi-Fi off** (cellular): if it doesn't load, the URL isn't publicly reachable (DNS / port-forward / TLS / reverse-proxy) and Claude.ai can't reach it either. To confirm whether requests are arriving at all, enable **Log inbound requests** (see [Debugging connections](#debugging-connections-log-inbound-requests)).
+3. **The URL is reachable, but your proxy blocks AI clients.** If the URL loads in a browser but the LLM still can't connect, your reverse proxy is filtering the AI client — see [Cloudflare users: browser works but the LLM can't connect](#cloudflare-users-browser-works-but-the-llm-cant-connect) below (Cloudflare's "Block AI training bots" setting and geo / country blocking are the usual causes).
 
 > **Note:** A connection working in Claude Code or a local browser but **not** in Claude.ai web is the classic signature of this — those reach your box over the LAN, while Claude.ai reaches it from the public internet.
+
+### Cloudflare users: browser works but the LLM can't connect
+
+If your remote URL goes through Cloudflare and the URL loads fine in your browser but your AI/LLM client still can't connect, check these two settings:
+
+**1. "Block AI training bots"** — the most common connection issue for Cloudflare users. Cloudflare blocks requests from AI/LLM clients by default. To disable it:
+
+1. Log in to [Cloudflare](https://dash.cloudflare.com)
+2. In the left sidebar, click **Domains**, then click **Overview**
+3. Click on the domain you use for connecting to Home Assistant
+4. On the right side of the page, find **"Control AI Crawlers"**
+5. Under **"Block AI training bots"**, open the dropdown
+6. Select **"do not block (allow crawlers)"**
+
+![Cloudflare AI Crawlers Setting](https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg)
+
+See [#783](https://github.com/homeassistant-ai/ha-mcp/issues/783) for more details.
+
+**2. Geo / country blocking** — applies to any reverse proxy, not just Cloudflare. Most AI/LLM services connect from US-based cloud infrastructure, so if you block US IP addresses (or only allow your own country), your client cannot connect. Allow your AI provider's IP ranges — Claude.ai connects from Anthropic's network, `160.79.104.0/21` (see [Anthropic's IP ranges](https://platform.claude.com/docs/en/api/ip-addresses)). Your proxy's access logs will show the blocked attempts.
 
 ## Disabling / Uninstalling
 

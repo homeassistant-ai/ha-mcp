@@ -9,6 +9,15 @@ history from before the fork.
 -->
 
 
+## v1.2.3.dev3 (2026-07-02)
+
+### Documentation
+
+- Add a "Cloudflare users" troubleshooting section to DOCS.md: disable
+  "Block AI training bots" and don't geo-block your AI provider's US IP
+  ranges (Claude.ai connects from Anthropic's network, `160.79.104.0/21`)
+
+
 ## v1.2.3.dev2 (2026-07-02)
 
 ### Added

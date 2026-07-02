@@ -222,6 +222,8 @@ Cloudflare's "Block AI training bots" feature blocks requests from AI/LLM client
 
 ![Cloudflare AI Crawlers Setting](https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg)
 
+**Also check geo / country blocking.** Most AI/LLM services connect from US-based cloud infrastructure, so if a Cloudflare WAF rule blocks US IP addresses (or only allows your own country), your client cannot connect even with AI-bot blocking disabled. Allow your AI provider's IP ranges — Claude.ai connects from Anthropic's network, `160.79.104.0/21` (see [Anthropic's IP ranges](https://platform.claude.com/docs/en/api/ip-addresses)).
+
 See [Cloudflared add-on documentation](https://github.com/brenner-tobias/addon-cloudflared/blob/main/cloudflared/DOCS.md) for advanced configuration.
 
 </details>

@@ -84,6 +84,8 @@ To disable it:
 
 See [#783](https://github.com/homeassistant-ai/ha-mcp/issues/783) for more details.
 
+**Also check geo / country blocking.** This applies to Cloudflare (WAF custom rules) and to any other reverse proxy (NGINX, Traefik, Zoraxy, etc.). Most AI/LLM services connect from US-based cloud infrastructure, so if you block US IP addresses (or only allow your own country), your client cannot connect even with AI-bot blocking disabled. Allow your AI provider's IP ranges — Claude.ai connects from Anthropic's network, `160.79.104.0/21` (see [Anthropic's IP ranges](https://platform.claude.com/docs/en/api/ip-addresses)). Your proxy's access logs will show the blocked attempts.
+
 ### macOS: "All connection attempts failed" to local Home Assistant
 
 If ha-mcp connects to the demo server but fails to reach your local Home Assistant (`192.168.x.x`, `10.x.x.x`, etc.) on macOS, the most common causes are listed below. See [#867](https://github.com/homeassistant-ai/ha-mcp/issues/867) (Local Network Privacy), [#630](https://github.com/homeassistant-ai/ha-mcp/issues/630) (env vars not reaching ha-mcp), and [#773](https://github.com/homeassistant-ai/ha-mcp/issues/773) (Python version/read-only filesystem) for related reports.
