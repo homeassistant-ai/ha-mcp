@@ -2,8 +2,10 @@ name: Webhook Proxy — Stable Guard
 
 # Stable is promote-only: a PR may not edit the stable webhook-proxy add-on
 # directly. The only exceptions are the promote workflow's own branches
-# (promote-webhook-proxy/*) and PRs explicitly tagged `allow-stable-edit`
-# (e.g. a stable-only hotfix).
+# (promote-webhook-proxy/*), PRs explicitly tagged `allow-stable-edit`
+# (e.g. a stable-only hotfix), and AGENTS.md/CLAUDE.md — the contributor doc
+# for both flavors, which has no dev-side counterpart and is never touched by
+# the promote transform.
 on:
   pull_request:
     # Include labeled/unlabeled so adding or removing `allow-stable-edit`
@@ -32,8 +34,14 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --quiet origin "$BASE_REF"
+          # AGENTS.md (+ its CLAUDE.md symlink) is exempt: it is the contributor
+          # doc for BOTH flavors, exists only in the stable tree (no dev-side
+          # counterpart), and the promote transform never touches it — guarding
+          # it would force the allow-stable-edit label on pure doc corrections.
           CHANGED=$(git diff --name-only "origin/$BASE_REF...HEAD" \
-            -- homeassistant-addon-webhook-proxy/ || true)
+            -- homeassistant-addon-webhook-proxy/ \
+            ':(exclude)homeassistant-addon-webhook-proxy/AGENTS.md' \
+            ':(exclude)homeassistant-addon-webhook-proxy/CLAUDE.md' || true)
 
           if [ -z "$CHANGED" ]; then
             echo "No changes under the stable add-on dir — nothing to guard."
