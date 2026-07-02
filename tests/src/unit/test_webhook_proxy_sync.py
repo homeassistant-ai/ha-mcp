@@ -190,14 +190,68 @@ def test_config_yaml_stage_added_for_dev_removed_for_stable():
 # NOT part of the identity transform, so the drift guards below compare them
 # against neither flavor's transform output. Hand-maintained allowlist — every
 # code / identity file (the component dir, start.py, Dockerfile, config.yaml,
-# manifest.json, translations/en.yaml) IS transformed and MUST NOT appear here;
-# a real identity-token miss must be reconciled, not hidden by padding this set.
-# Only docs live here:
-#   * AGENTS.md    — maintainer notes, stable-only (absent from the dev tree)
-#   * CLAUDE.md    — stable-only symlink to AGENTS.md (same doc, alias)
+# manifest.json, translations/en.yaml, DOCS.md) IS transformed and MUST NOT
+# appear here; a real identity-token miss must be reconciled, not hidden by
+# padding this set. Only contributor docs live here:
+#   * AGENTS.md    — maintainer notes; the full doc lives in the stable tree,
+#                    the dev tree carries a hand-written pointer stub to it
+#   * CLAUDE.md    — per-flavor symlink alias of that flavor's AGENTS.md
 #   * CHANGELOG.md — release-pipeline-synced per flavor, independent content
-#   * DOCS.md      — generated add-on docs, independent per-flavor content
-_DRIFT_ALLOWLIST = frozenset({"AGENTS.md", "CLAUDE.md", "CHANGELOG.md", "DOCS.md"})
+# DOCS.md left this list when it joined the transform (token rename + flavor
+# banner swap, see transform_docs) — the drift guards now cover it too.
+_DRIFT_ALLOWLIST = frozenset({"AGENTS.md", "CLAUDE.md", "CHANGELOG.md"})
+
+
+# ---------------------------------------------------------------------------
+# DOCS.md transform
+# ---------------------------------------------------------------------------
+
+
+def _docs_text(flavor) -> str:
+    return (REPO_ROOT / flavor.addon_dir / "DOCS.md").read_text(encoding="utf-8")
+
+
+def test_docs_banners_match_canonical():
+    """Each committed DOCS.md must carry exactly its flavor's canonical banner.
+
+    The banner is identity, owned by DOCS_BANNERS in the sync script (like the
+    start.py mutex constants). A hand edit to a committed banner without
+    updating the constant would be silently reverted at the next promote/reset
+    — fail immediately instead.
+    """
+    for flavor in (sync.STABLE, sync.DEV):
+        text = _docs_text(flavor)
+        banner = sync.DOCS_BANNERS[flavor.component]
+        assert banner in text, (
+            f"{flavor.addon_dir}/DOCS.md banner diverged from "
+            "DOCS_BANNERS in scripts/webhook_proxy_sync.py — edit them together"
+        )
+        assert len(sync._DOCS_BANNER_RE.findall(text)) == 1
+
+
+def test_transform_docs_promote_direction():
+    out = sync.transform_docs(_docs_text(sync.DEV), sync.DEV, sync.STABLE)
+    assert sync.DOCS_BANNERS["mcp_proxy"] in out
+    assert "This is the **dev** build" not in out
+    assert "mcp_proxy_dev" not in out
+
+
+def test_transform_docs_reset_direction():
+    out = sync.transform_docs(_docs_text(sync.STABLE), sync.STABLE, sync.DEV)
+    assert sync.DOCS_BANNERS["mcp_proxy_dev"] in out
+    assert "This is the **dev** build" in out
+
+
+def test_transform_docs_round_trips():
+    dev = _docs_text(sync.DEV)
+    there = sync.transform_docs(dev, sync.DEV, sync.STABLE)
+    back = sync.transform_docs(there, sync.STABLE, sync.DEV)
+    assert back == dev
+
+
+def test_transform_docs_requires_exactly_one_banner():
+    with pytest.raises(ValueError, match="exactly one"):
+        sync.transform_docs("# No banner here\n", sync.DEV, sync.STABLE)
 
 
 def _assert_committed_equals_transform(tmp_path, direction, src, dst, bump=None):

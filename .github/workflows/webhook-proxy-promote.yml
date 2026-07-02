@@ -1,8 +1,9 @@
 name: Webhook Proxy — Promote Dev to Stable
 
 # Manual promotion: copy the dev add-on onto the stable add-on (reverse-rename
-# mcp_proxy_dev -> mcp_proxy, restore stable identity) and bump stable's own
-# version line. Opens a draft PR; DOCS/AGENTS/CHANGELOG are left for a human.
+# mcp_proxy_dev -> mcp_proxy, restore stable identity, swap the DOCS.md flavor
+# banner) and bump stable's own version line. Opens a draft PR;
+# AGENTS.md/CHANGELOG.md are left for a human.
 on:
   workflow_dispatch:
     inputs:
@@ -68,9 +69,11 @@ jobs:
           \`mcp_proxy_dev\` identity back to \`mcp_proxy\`, restored the stable
           mutual-exclusion constants, and set the stable version to \`$NEW_VERSION\`.
 
-          The transform only syncs code + identity + version. \`DOCS.md\`,
-          \`AGENTS.md\`, and \`CHANGELOG.md\` are intentionally left untouched —
-          give them a manual look before merging.
+          The transform syncs code + identity + version + \`DOCS.md\` (component
+          token rename plus the flavor-banner swap; canonical banners live in
+          \`DOCS_BANNERS\` in the sync script). \`AGENTS.md\` and \`CHANGELOG.md\`
+          are intentionally left untouched — give them a manual look before
+          merging.
           EOF
           gh pr create --draft --base "$BASE_REF" --head "$BRANCH" \
             --title "chore(addon): promote webhook-proxy dev -> stable $NEW_VERSION" \

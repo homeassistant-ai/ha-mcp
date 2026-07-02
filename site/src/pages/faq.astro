@@ -396,7 +396,23 @@ source ~/.zshrc
             <li>Verify the server is reachable by visiting the MCP URL directly in your browser — you should see a response from the server (with OAuth enabled on the webhook proxy, an <code class="bg-slate-800 px-1 rounded">Unauthorized</code> response is expected and correct).</li>
             <li><strong>Reachability from Anthropic's servers:</strong> Claude.ai connects from the cloud, not your network — a URL that works in Claude Code or your browser (both on your LAN) can still be unreachable for Claude.ai web. Open the URL on your <strong>phone with Wi-Fi off</strong>; if it doesn't load, it isn't publicly reachable and Claude.ai can't reach it either.</li>
             <li><strong>Don't forget to click <em>Connect</em> on the connector</strong> — and, with OAuth enabled, click <strong>Allow</strong> on the consent page. Adding the connector alone does not complete the connection.</li>
+            <li><strong>URL works in your browser but the LLM can't connect?</strong> Your reverse proxy is filtering the AI client — see <a href="#cloudflare-blocks-llm" class="text-blue-400 hover:underline">Cloudflare: LLM can't connect</a> below (Cloudflare's "Block AI training bots" and geo/country blocking are the usual causes).</li>
           </ol>
+        </div>
+
+        <div class="faq-item" id="cloudflare-blocks-llm">
+          <h3 class="text-lg font-medium text-white mb-2">Cloudflare: LLM can't connect ("Block AI training bots" / geo-blocking)</h3>
+          <p class="text-slate-300 mb-3">If you're using Cloudflare and your LLM client can't connect to the MCP server (but visiting the URL in your browser works), Cloudflare's <strong>"Block AI training bots"</strong> setting is almost certainly the cause. This is the most common connection issue for Cloudflare users. To disable it:</p>
+          <ol class="text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Log in to <a href="https://dash.cloudflare.com" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Cloudflare</a></li>
+            <li>In the left sidebar, click <strong>Domains</strong>, then <strong>Overview</strong></li>
+            <li>Click on the domain you use for connecting to Home Assistant</li>
+            <li>On the right side of the page, find <strong>"Control AI Crawlers"</strong></li>
+            <li>Under <strong>"Block AI training bots"</strong>, open the dropdown</li>
+            <li>Select <strong>"do not block (allow crawlers)"</strong></li>
+          </ol>
+          <p class="text-slate-400 text-sm mt-3"><a href="https://homeassistant-ai.github.io/ha-mcp/images/cloudflare-ai-crawlers-setting.jpg" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Screenshot of the setting</a> — see <a href="https://github.com/homeassistant-ai/ha-mcp/issues/783" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">#783</a> for more details.</p>
+          <p class="text-slate-300 mt-3"><strong>Also check geo / country blocking.</strong> This applies to Cloudflare (WAF custom rules) and to any other reverse proxy (NGINX, Traefik, Zoraxy, etc.). Most AI/LLM services connect from US-based cloud infrastructure, so if you block US IP addresses (or only allow your own country), your client cannot connect even with AI-bot blocking disabled. Allow your AI provider's IP ranges — Claude.ai connects from Anthropic's network, <code class="bg-slate-800 px-1 rounded">160.79.104.0/21</code> (see <a href="https://platform.claude.com/docs/en/api/ip-addresses" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Anthropic's IP ranges</a>). Your proxy's access logs will show the blocked attempts.</p>
         </div>
 
         <div class="faq-item" id="quick-test">
@@ -456,13 +472,13 @@ source ~/.zshrc
           <h3 class="text-lg font-medium text-white mb-2">How do I install it?</h3>
           <p class="text-slate-300 mb-3"><strong class="text-white">Using HACS (recommended):</strong></p>
           <p class="text-slate-300 mb-3">
-            <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration" class="inline-block" target="_blank" rel="noopener">
+            <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration" class="inline-block" target="_blank" rel="noopener noreferrer">
               <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open your Home Assistant instance and open a repository inside the Home Assistant Community Store." />
             </a>
           </p>
           <p class="text-slate-300 mb-3">To add manually: open <strong class="text-white">HACS</strong> &gt; <strong class="text-white">Integrations</strong> &gt; three-dot menu &gt; <strong class="text-white">Custom repositories</strong> &gt; add <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code> (category: Integration) &gt; <strong class="text-white">Download</strong>.</p>
           <p class="text-slate-300 mb-3">After installing, restart Home Assistant. Then open <strong class="text-white">Settings</strong> &gt; <strong class="text-white">Devices &amp; Services</strong> &gt; <strong class="text-white">Add Integration</strong> and search for <strong class="text-white">HA MCP Tools</strong>.</p>
-          <p class="text-slate-300"><strong class="text-white">Manual install:</strong> Copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> from the <a href="https://github.com/homeassistant-ai/ha-mcp" class="text-blue-400 hover:underline" target="_blank">repository</a> into your HA config's <code class="bg-slate-800 px-1 rounded">custom_components/</code> directory. Restart Home Assistant, then add the integration as described above.</p>
+          <p class="text-slate-300"><strong class="text-white">Manual install:</strong> Copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> from the <a href="https://github.com/homeassistant-ai/ha-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">repository</a> into your HA config's <code class="bg-slate-800 px-1 rounded">custom_components/</code> directory. Restart Home Assistant, then add the integration as described above.</p>
         </div>
 
         <div class="faq-item">
@@ -578,15 +594,15 @@ source ~/.zshrc
       <p class="text-slate-300 mb-4">We'd love to hear how you're using ha-mcp!</p>
       <ul class="space-y-3">
         <li>
-          <a href="https://github.com/homeassistant-ai/ha-mcp/discussions" class="text-blue-400 hover:underline" target="_blank">GitHub Discussions</a>
+          <a href="https://github.com/homeassistant-ai/ha-mcp/discussions" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">GitHub Discussions</a>
           <span class="text-slate-400"> — Share how you use it, ask questions, show off your automations</span>
         </li>
         <li>
-          <a href="https://github.com/homeassistant-ai/ha-mcp/issues" class="text-blue-400 hover:underline" target="_blank">GitHub Issues</a>
+          <a href="https://github.com/homeassistant-ai/ha-mcp/issues" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">GitHub Issues</a>
           <span class="text-slate-400"> — Report bugs or request features</span>
         </li>
         <li>
-          <a href="https://community.home-assistant.io/t/brand-new-claude-ai-chatgpt-integration-ha-mcp/937847" class="text-blue-400 hover:underline" target="_blank">Home Assistant Forum</a>
+          <a href="https://community.home-assistant.io/t/brand-new-claude-ai-chatgpt-integration-ha-mcp/937847" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">Home Assistant Forum</a>
           <span class="text-slate-400"> — Community discussion thread</span>
         </li>
       </ul>

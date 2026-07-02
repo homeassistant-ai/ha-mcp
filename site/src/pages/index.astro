@@ -32,7 +32,7 @@ const withBase = (path: string) => {
         <a href={withBase('/setup')} class="px-7 py-3 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors brand-glow">
           Get Started
         </a>
-        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="flex items-center" title="Add the ha-mcp app (add-on) repository to your Home Assistant (HA OS)">
+        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener noreferrer" class="flex items-center" title="Add the ha-mcp app (add-on) repository to your Home Assistant (HA OS)">
           <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add the ha-mcp app (add-on) repository to your Home Assistant" height="40" />
         </a>
         <a href="https://github.com/homeassistant-ai/ha-mcp" class="px-7 py-3 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors">
@@ -79,11 +79,11 @@ const withBase = (path: string) => {
                 <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">3.</span> Connect your client to that URL &mdash; no token. Ask: <em class="text-white/70">"Can you see my Home Assistant?"</em></li>
               </ol>
               <div class="flex flex-col sm:flex-row md:flex-col gap-3 md:w-56 flex-shrink-0">
-                <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener" class="px-5 py-2.5 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors text-center text-sm">Add to Home Assistant</a>
+                <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener noreferrer" class="px-5 py-2.5 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors text-center text-sm">Add to Home Assistant</a>
                 <a href={withBase('/guide-addon')} class="px-5 py-2.5 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors text-center text-sm">App setup guide &rarr;</a>
               </div>
             </div>
-            <p class="text-[var(--text-muted)] text-xs mt-4">If "Add to Home Assistant" opens the App Store without an add-repository dialog (a <a href="https://github.com/home-assistant/my.home-assistant.io/issues/698" target="_blank" rel="noopener" class="underline hover:text-white">known Home Assistant issue</a>), add it manually: <strong>App Store &rarr; &#8942; &rarr; Repositories</strong>, paste <code class="bg-slate-800 px-1 rounded break-all">https://github.com/homeassistant-ai/ha-mcp</code>.</p>
+            <p class="text-[var(--text-muted)] text-xs mt-4">If "Add to Home Assistant" opens the App Store without an add-repository dialog (a <a href="https://github.com/home-assistant/my.home-assistant.io/issues/698" target="_blank" rel="noopener noreferrer" class="underline hover:text-white">known Home Assistant issue</a>), add it manually: <strong>App Store &rarr; &#8942; &rarr; Repositories</strong>, paste <code class="bg-slate-800 px-1 rounded break-all">https://github.com/homeassistant-ai/ha-mcp</code>.</p>
           </div>
         </div>
       </div>

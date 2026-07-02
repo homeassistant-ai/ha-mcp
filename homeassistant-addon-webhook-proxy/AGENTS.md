@@ -22,6 +22,24 @@ the HA config-entry domain, and `/config/custom_components/mcp_proxy`). `/data/*
 `tests/src/unit/test_webhook_proxy_dev_isolation.py` fails if any bare `mcp_proxy` token
 leaks into the dev tree.
 
+## Dev-first, promote-only
+**A PR never edits the stable tree directly in regular operation.** The
+`webhook-proxy-stable-guard` workflow blocks any PR touching
+`homeassistant-addon-webhook-proxy/` unless it comes from a `promote-webhook-proxy/*`
+branch or carries the `allow-stable-edit` label (stable-only hotfixes). Every change
+(code *and* docs) lands on the dev flavor first — with the version bump
+`webhook-proxy-dev-version-guard` enforces — gets tested on the dev channel, and
+reaches stable through the promote workflow (see Promotion below).
+
+The only exception is this file (and its `CLAUDE.md` symlink): it is the contributor
+doc for both flavors (the dev tree carries only a pointer stub to it), the promote
+transform never touches it, and the guard exempts it — edit it directly in a normal
+PR. The exemption is pinned to exactly these two paths in their doc shape (regular
+file + symlink to it); anything else at or under those names stays guarded. `DOCS.md`
+is part of the transform (token rename + flavor-banner swap) and follows the dev-first
+flow like code; `CHANGELOG.md` stays per-flavor and gets a manual entry on each
+promote PR.
+
 ## Mutual exclusion
 Both flavors install a webhook + OAuth views; the OAuth provider owns the root
 `/authorize` and `/token` routes, which two live integrations cannot share. So only one
@@ -39,8 +57,18 @@ is `started`. `start.py:_sibling_is_running` matches the sibling by exact slug o
   two files by hand.
 - Stable keeps its own independent version line and never inherits a `.devN` label.
 
-## Promotion (dev -> stable, manual)
-When the dev flavor is ready to become stable:
+## Promotion (dev -> stable)
+When the dev flavor is ready to become stable, run the `Webhook Proxy — Promote Dev to
+Stable` workflow (`workflow_dispatch`): it runs `scripts/webhook_proxy_sync.py
+--direction promote`, verifies the result with the drift guards
+(`tests/src/unit/test_webhook_proxy_sync.py`), bumps stable's own version, and opens a
+draft promote PR. The transform also carries `DOCS.md` across (component-token
+rename plus the flavor-banner swap; the canonical banners live in `DOCS_BANNERS`
+in the sync script, kept honest by `test_docs_banners_match_canonical`).
+`AGENTS.md` and `CHANGELOG.md` are left untouched — review them by hand on that
+PR (`test_stable_docs_free_of_dev_identity` backstops the banner swap so dev
+framing can never ship to stable users). What the transform does (also the
+manual fallback):
 1. Copy the changed dev files onto the stable dir.
 2. Reverse-rename `mcp_proxy_dev` -> `mcp_proxy` everywhere (the inverse of the dev
    transform): component dir `mcp_proxy_dev/` -> `mcp_proxy/`, `DOMAIN`, `/opt` path,

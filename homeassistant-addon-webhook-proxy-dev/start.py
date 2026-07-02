@@ -297,6 +297,22 @@ def _ha_core_api(
         return None
 
 
+def _request_restart_repair(issue_id: str) -> None:
+    """Ask the loaded integration to raise a click-to-restart Repair NOW.
+
+    Only in-process code can file HA repair issues, so the addon calls the
+    integration's `refresh_repairs` service. On sessions still running
+    integration code from before that service existed the call fails
+    (logged by `_ha_core_api`, returns None) — the persistent notification
+    posted alongside remains the fallback, so this is best-effort by design.
+    """
+    _ha_core_api(
+        "POST",
+        "/services/mcp_proxy_dev/refresh_repairs",
+        {"issue_id": issue_id, "action": "create"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # MCP addon auto-discovery
 # ---------------------------------------------------------------------------
@@ -1169,6 +1185,11 @@ def main() -> int:
                 "notification_id": "mcp_proxy_dev_update",
             },
         )
+        # Also raise a HACS-style click-to-restart Repair via the loaded
+        # integration (the notification alone is easy to overlook). The
+        # issue is non-persistent, so a successful restart clears it and
+        # the new code's async_setup dismisses the notification above.
+        _request_restart_repair("update_restart_required")
 
     if first_install:
         log_info("First install detected — HA restart required to load integration")
@@ -1317,6 +1338,11 @@ def main() -> int:
                 "notification_id": "mcp_proxy_dev_oauth_stale",
             },
         )
+        # Raise the click-to-restart Repair NOW via the loaded integration
+        # (marker-gated on the integration side). Without this the marker
+        # is only read at the next HA boot — i.e. the Repair card would
+        # only appear after the very restart it is meant to prompt.
+        _request_restart_repair("oauth_restart_required")
         # Wait for HA to restart, then re-create the config entry. With
         # the new code now in memory, the next async_setup_entry call
         # registers the OAuth-enforcing handler.

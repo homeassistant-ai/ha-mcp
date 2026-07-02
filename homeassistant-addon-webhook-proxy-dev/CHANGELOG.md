@@ -9,6 +9,32 @@ history from before the fork.
 -->
 
 
+## v1.2.3.dev3 (2026-07-02)
+
+### Added
+
+- Click-to-restart Repair (HACS-style) now appears the moment a restart is
+  needed, not only at the next HA boot: the integration registers a
+  `refresh_repairs` service the add-on calls when the integration files
+  were updated on disk (new `update_restart_required` issue) or OAuth was
+  enabled against stale loaded code (`oauth_restart_required`, which
+  previously surfaced only after the very restart it prompts for). The
+  stale "integration updated" notification is auto-dismissed once the new
+  code actually loads.
+
+### Fixed
+
+- Repair cards now render with proper text: the integration shipped only
+  `strings.json`, but custom integrations load runtime translations from
+  `translations/en.json`, which was missing.
+
+### Documentation
+
+- Add a "Cloudflare users" troubleshooting section to DOCS.md: disable
+  "Block AI training bots" and don't geo-block your AI provider's US IP
+  ranges (Claude.ai connects from Anthropic's network, `160.79.104.0/21`)
+
+
 ## v1.2.3.dev2 (2026-07-02)
 
 ### Added

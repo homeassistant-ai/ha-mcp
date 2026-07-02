@@ -685,6 +685,16 @@ mirror it into `homeassistant-addon/config.yaml` **in the same PR**. Assuming
 Beta-only keys are the deliberate exception — see the NOTE in
 `homeassistant-addon/config.yaml` and `docs/beta.md`.
 
+### Webhook Proxy add-on: dev-first, promote-only
+
+**Any work on the Webhook Proxy add-on must start by reading
+[`homeassistant-addon-webhook-proxy/AGENTS.md`](homeassistant-addon-webhook-proxy/AGENTS.md)**
+— it owns the full flow (flavors, versioning guard, promotion, testing).
+The short version: `homeassistant-addon-webhook-proxy/` (stable) is never
+edited directly by a PR in regular operation; every change (code *and* docs)
+lands on `homeassistant-addon-webhook-proxy-dev/` with a version bump, and
+stable is updated only via the manual promote workflow.
+
 **Docs**: https://developers.home-assistant.io/docs/add-ons
 
 ## API Research

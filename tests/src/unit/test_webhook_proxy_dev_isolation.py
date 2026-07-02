@@ -56,6 +56,27 @@ def test_no_bare_mcp_proxy_token_in_dev_tree():
     )
 
 
+def test_stable_docs_free_of_dev_identity():
+    """DOCS.md is user-shipped and carried across flavors by the sync
+    transform (token rename + flavor-banner swap). This backstops the swap
+    independently of the transform machinery: stable DOCS.md must never carry
+    the dev flavor's identity or dev-build framing, and dev DOCS.md must never
+    lose its dev-build banner — whether via a transform bug or a manual copy
+    in either direction."""
+    stable_docs = (
+        REPO_ROOT / "homeassistant-addon-webhook-proxy" / "DOCS.md"
+    ).read_text(encoding="utf-8")
+    assert "mcp_proxy_dev" not in stable_docs, (
+        "stable DOCS.md references the dev flavor's identity — dev DOCS.md "
+        "content was likely copied over stable's on a promote PR"
+    )
+    assert "This is the **dev** build" not in stable_docs
+    dev_docs = (DEV_ADDON / "DOCS.md").read_text(encoding="utf-8")
+    assert "This is the **dev** build" in dev_docs, (
+        "dev DOCS.md lost its dev-build banner (stable DOCS.md copied over it?)"
+    )
+
+
 def test_dev_slug_and_domain():
     cfg = (DEV_ADDON / "config.yaml").read_text(encoding="utf-8")
     assert 'slug: "ha_mcp_webhook_proxy_dev"' in cfg

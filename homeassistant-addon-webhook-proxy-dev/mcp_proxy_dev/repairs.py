@@ -43,11 +43,22 @@ from homeassistant.helpers import issue_registry as ir
 _LOGGER = logging.getLogger(__name__)
 
 ISSUE_ID = "oauth_restart_required"
+# Filed when the add-on refreshed the integration files on disk but HA is
+# still running the previous version's code. Deliberately NOT marker-backed
+# and NOT persistent: a successful HA restart (the fix) loads the new code
+# and drops the issue automatically; an aborted restart leaves it in place
+# for the session that still needs it.
+UPDATE_ISSUE_ID = "update_restart_required"
 RESTART_MARKER_FILE = Path("/config/.mcp_proxy_dev_oauth_restart_required")
 
 
 class OAuthRestartRepairFlow(RepairsFlow):
-    """Single-step confirmation flow that restarts Home Assistant."""
+    """Single-step confirmation flow that restarts Home Assistant.
+
+    Shared by both restart issues (`oauth_restart_required` and
+    `update_restart_required`) — the fix is identical, only the issue
+    strings differ.
+    """
 
     async def async_step_init(
         self, user_input: dict[str, str] | None = None
@@ -80,7 +91,7 @@ async def async_create_fix_flow(
     data: dict[str, Any] | None,
 ) -> RepairsFlow:
     """Factory hook called by the repairs platform to build a flow for our
-    issue. Single issue ID for now — `oauth_restart_required`."""
+    issues. Both issue IDs share the click-to-restart flow."""
     return OAuthRestartRepairFlow()
 
 
@@ -122,20 +133,22 @@ def _write_marker() -> None:
         )
 
 
-def create_issue(hass: HomeAssistant, domain: str) -> None:
-    """Create the restart Repair issue directly (does not check the marker).
+def create_issue(hass: HomeAssistant, domain: str, issue_id: str = ISSUE_ID) -> None:
+    """Create a restart Repair issue directly (does not check the marker).
     Same shape as maybe_create_issue's registration."""
     ir.async_create_issue(
         hass,
         domain,
-        ISSUE_ID,
+        issue_id,
         is_fixable=True,
         severity=ir.IssueSeverity.WARNING,
-        translation_key=ISSUE_ID,
+        translation_key=issue_id,
     )
 
 
-def _delete_issue_only(hass: HomeAssistant, domain: str) -> None:
+def _delete_issue_only(
+    hass: HomeAssistant, domain: str, issue_id: str = ISSUE_ID
+) -> None:
     """Dismiss the Repair issue without touching the marker file.
 
     Used by `async_setup_entry` after it has already cleared the marker
@@ -145,7 +158,7 @@ def _delete_issue_only(hass: HomeAssistant, domain: str) -> None:
     start.py (a separate process that manipulates the marker file directly
     without importing repairs) nor the fix flow calls it.
     """
-    ir.async_delete_issue(hass, domain, ISSUE_ID)
+    ir.async_delete_issue(hass, domain, issue_id)
 
 
 def marker_present() -> bool:
