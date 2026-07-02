@@ -521,6 +521,35 @@ async def test_theme_nested_directory(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Reactive best-practice warning for helper-equivalent keys — #1720
+# ---------------------------------------------------------------------------
+
+
+async def test_helper_equivalent_key_warns(monkeypatch):
+    """add/replace on template|utility_meter|group appends a routing warning
+    that points at the storage-mode ha_config_set_helper equivalent."""
+    fn, client = await _make_tool()
+    result = await fn(
+        yaml_path="utility_meter",
+        action="add",
+        content="monthly:\n  source: sensor.energy\n",
+    )
+    assert any("ha_config_set_helper" in w for w in result.get("warnings", []))
+
+
+async def test_non_helper_key_does_not_warn(monkeypatch):
+    """A key with no storage-mode helper equivalent (command_line) must not
+    get the routing warning."""
+    fn, client = await _make_tool()
+    result = await fn(
+        yaml_path="command_line",
+        action="add",
+        content='- sensor:\n    name: x\n    command: "echo 1"\n',
+    )
+    assert not any("ha_config_set_helper" in w for w in result.get("warnings", []))
+
+
+# ---------------------------------------------------------------------------
 # Two-step confirm flow plumbing (require_confirm / confirm_token) — #1720
 # ---------------------------------------------------------------------------
 

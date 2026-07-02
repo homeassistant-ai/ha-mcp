@@ -63,6 +63,17 @@ _YAML_PACKAGES_FLAG_BY_KEY = {
     "scene": "enable_yaml_packages_scene",
 }
 
+# Keys editable here that ALSO have a storage-mode helper equivalent.
+# Deliberately NOT blocked (git-managed YAML configs are legitimate) —
+# the response instead carries a reactive routing warning, since this
+# exact entry point (utility_meter via raw YAML when the helper tool
+# covered it) is how the #1720 corruption reached a production config.
+_HELPER_EQUIVALENT_KEYS: dict[str, str] = {
+    "template": "template",
+    "utility_meter": "utility_meter",
+    "group": "group",
+}
+
 
 def _disabled_packages_keys(settings: Any) -> list[str]:
     """Return the sorted list of PACKAGES_ONLY_YAML_KEYS whose Settings
@@ -399,6 +410,15 @@ class YamlConfigTools:
                         f"failed: {result['reload_error']}. Re-run the reload "
                         '(e.g. ha_reload_core(target="themes")) or restart '
                         "Home Assistant to apply the change."
+                    )
+                if action in ("add", "replace") and top_key in _HELPER_EQUIVALENT_KEYS:
+                    result.setdefault("warnings", []).append(
+                        f"Best practice: '{top_key}' has a storage-mode "
+                        f"equivalent — ha_config_set_helper(helper_type="
+                        f"'{_HELPER_EQUIVALENT_KEYS[top_key]}') — which avoids "
+                        "raw YAML file rewrites entirely. Prefer it unless "
+                        "this configuration is deliberately YAML-managed "
+                        "(e.g. git-tracked packages)."
                     )
                 attach_skill_content(
                     result,
