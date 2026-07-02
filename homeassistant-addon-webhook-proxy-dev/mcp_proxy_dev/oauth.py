@@ -36,7 +36,7 @@ import secrets
 import time
 from html import escape
 from pathlib import Path
-from typing import TypedDict
+from typing import Protocol, TypedDict
 from urllib.parse import urlparse
 
 from aiohttp import web
@@ -72,8 +72,8 @@ DOMAIN = "mcp_proxy_dev"
 # re-registering them (which would raise and fail the reload).
 #
 # Suffixed with DOMAIN so each add-on flavor gets its OWN top-level flag: the
-# metadata-view URLs and names are domain-specific (mcp_proxy_dev vs mcp_proxy)
-# and therefore never collide across flavors, so one flavor's flag must not
+# metadata-view URLs and names embed the flavor's DOMAIN and therefore never
+# collide across flavors, so one flavor's flag must not
 # suppress the other flavor's (non-colliding) registration if both run ha_auth
 # once this dev code promotes to stable.
 _METADATA_VIEWS_REGISTERED_KEY = (
@@ -304,6 +304,26 @@ def _build_base_url(request: web.Request, public_base_url: str | None = None) ->
     return f"{scheme}://{host}"
 
 
+class MetadataProvider(Protocol):
+    """Interface the mode-aware discovery-document views need from a provider.
+
+    Satisfied structurally by both `OAuthProvider` (legacy) and
+    `auth_native.ResourceServer` (ha_auth). The views additionally read the
+    implementation's `_hass` via ``getattr`` (see `_active_oauth_mode` /
+    `_active_provider`), which a Protocol cannot express for a private
+    attribute — both implementations carry it.
+    """
+
+    @property
+    def webhook_id(self) -> str: ...
+
+    def resource_url(self, base_url: str) -> str: ...
+
+    def authorization_server_url(self, base_url: str) -> str: ...
+
+    def base_url_for(self, request: web.Request) -> str: ...
+
+
 def _active_oauth_mode(provider: object) -> str | None:
     """Return the OAuth mode currently active for this integration.
 
@@ -327,7 +347,7 @@ def _active_oauth_mode(provider: object) -> str | None:
     return domain_data.get("oauth_mode")
 
 
-def _active_provider(bound_provider: object) -> object:
+def _active_provider(bound_provider: MetadataProvider) -> MetadataProvider:
     """Return the provider whose base-URL policy is active right now.
 
     After a live mode switch the still-bound view instances were constructed
@@ -343,7 +363,7 @@ def _active_provider(bound_provider: object) -> object:
     hass = getattr(bound_provider, "_hass", None)
     domain_data = hass.data.get(DOMAIN) if hass is not None else None
     if isinstance(domain_data, dict):
-        active = domain_data.get("oauth")
+        active: MetadataProvider | None = domain_data.get("oauth")
         if active is not None:
             return active
     return bound_provider
@@ -577,7 +597,7 @@ class ProtectedResourceMetadataView(HomeAssistantView):
     url = f"{OAUTH_BASE}/protected-resource"
     name = "mcp_proxy_dev:oauth:protected-resource"
 
-    def __init__(self, provider: OAuthProvider) -> None:
+    def __init__(self, provider: MetadataProvider) -> None:
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
@@ -611,7 +631,7 @@ class AuthorizationServerMetadataView(HomeAssistantView):
     url = f"{OAUTH_BASE}/authorization-server"
     name = "mcp_proxy_dev:oauth:authorization-server"
 
-    def __init__(self, provider: OAuthProvider) -> None:
+    def __init__(self, provider: MetadataProvider) -> None:
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
@@ -672,7 +692,7 @@ class WellKnownProtectedResourceView(ProtectedResourceMetadataView):
 
     name = "mcp_proxy_dev:oauth:wellknown-protected-resource"
 
-    def __init__(self, provider: OAuthProvider) -> None:
+    def __init__(self, provider: MetadataProvider) -> None:
         super().__init__(provider)
         # Instance-level URL: the well-known path embeds this install's
         # webhook id, which is only known at runtime.
@@ -701,7 +721,7 @@ class WellKnownAuthorizationServerMetadataView(AuthorizationServerMetadataView):
       `code_challenge_methods_supported` they otherwise never see).
     """
 
-    def __init__(self, provider: OAuthProvider, url: str, name: str) -> None:
+    def __init__(self, provider: MetadataProvider, url: str, name: str) -> None:
         super().__init__(provider)
         self.url = url
         self.name = name
@@ -944,7 +964,7 @@ class TokenView(HomeAssistantView):
 # ---------------------------------------------------------------------------
 
 
-def _metadata_views(provider: object) -> list[HomeAssistantView]:
+def _metadata_views(provider: MetadataProvider) -> list[HomeAssistantView]:
     """Build the seven discovery-document views bound to ``provider``.
 
     The canonical protected-resource + authorization-server documents, the
@@ -983,7 +1003,7 @@ def _metadata_views(provider: object) -> list[HomeAssistantView]:
     return views
 
 
-def register_metadata_views(hass: HomeAssistant, provider: object) -> None:
+def register_metadata_views(hass: HomeAssistant, provider: MetadataProvider) -> None:
     """Register ONLY the seven discovery-document views (ha_auth mode).
 
     ha_auth serves just these — Home Assistant core owns `/authorize` +
@@ -1014,7 +1034,7 @@ def register_metadata_views(hass: HomeAssistant, provider: object) -> None:
 
 
 def build_unauthorized_response(
-    request: web.Request, provider: OAuthProvider
+    request: web.Request, provider: MetadataProvider
 ) -> web.Response:
     """Build the 401 + WWW-Authenticate response that MCP clients use to
     discover the OAuth endpoints.
