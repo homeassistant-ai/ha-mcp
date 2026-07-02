@@ -35,9 +35,9 @@ The only exception is this file (and its `CLAUDE.md` symlink): it is the contrib
 doc for both flavors (the dev tree carries only a pointer stub to it), the promote
 transform never touches it, and the guard exempts it — edit it directly in a normal
 PR. The exemption is pinned to exactly these two paths in their doc shape (regular
-file + symlink to it); anything else at or under those names stays guarded. `DOCS.md` and
-`CHANGELOG.md` are also excluded from the promote transform, but they are user-shipped
-and stay guarded: they follow the dev-first flow and get a manual review/copy on each
+file + symlink to it); anything else at or under those names stays guarded. `DOCS.md`
+is part of the transform (token rename + flavor-banner swap) and follows the dev-first
+flow like code; `CHANGELOG.md` stays per-flavor and gets a manual entry on each
 promote PR.
 
 ## Mutual exclusion
@@ -62,11 +62,13 @@ When the dev flavor is ready to become stable, run the `Webhook Proxy — Promot
 Stable` workflow (`workflow_dispatch`): it runs `scripts/webhook_proxy_sync.py
 --direction promote`, verifies the result with the drift guards
 (`tests/src/unit/test_webhook_proxy_sync.py`), bumps stable's own version, and opens a
-draft promote PR. `DOCS.md`, `AGENTS.md`, and `CHANGELOG.md` are left untouched —
-review/copy them by hand on that PR; its body embeds an identity-normalized
-`DOCS.md` diff showing exactly what diverged, and
-`test_stable_docs_free_of_dev_identity` fails the PR if dev identity/framing is
-copied onto stable. What the transform does (also the manual fallback):
+draft promote PR. The transform also carries `DOCS.md` across (component-token
+rename plus the flavor-banner swap; the canonical banners live in `DOCS_BANNERS`
+in the sync script, kept honest by `test_docs_banners_match_canonical`).
+`AGENTS.md` and `CHANGELOG.md` are left untouched — review them by hand on that
+PR (`test_stable_docs_free_of_dev_identity` backstops the banner swap so dev
+framing can never ship to stable users). What the transform does (also the
+manual fallback):
 1. Copy the changed dev files onto the stable dir.
 2. Reverse-rename `mcp_proxy_dev` -> `mcp_proxy` everywhere (the inverse of the dev
    transform): component dir `mcp_proxy_dev/` -> `mcp_proxy/`, `DOMAIN`, `/opt` path,

@@ -57,13 +57,12 @@ def test_no_bare_mcp_proxy_token_in_dev_tree():
 
 
 def test_stable_docs_free_of_dev_identity():
-    """DOCS.md is user-shipped and hand-maintained per flavor. The promote
-    workflow never copies it — a human carries DOCS changes over on the
-    promote PR — so guard that manual pass: stable DOCS.md must not pick up
-    the dev flavor's identity or dev-build framing, and dev DOCS.md must not
-    lose its dev-build banner to a wholesale stable copy. (The bare-token test
-    above guards only the dev tree, and the sync drift guards allowlist
-    DOCS.md entirely, so this is the only check on that path.)"""
+    """DOCS.md is user-shipped and carried across flavors by the sync
+    transform (token rename + flavor-banner swap). This backstops the swap
+    independently of the transform machinery: stable DOCS.md must never carry
+    the dev flavor's identity or dev-build framing, and dev DOCS.md must never
+    lose its dev-build banner — whether via a transform bug or a manual copy
+    in either direction."""
     stable_docs = (
         REPO_ROOT / "homeassistant-addon-webhook-proxy" / "DOCS.md"
     ).read_text(encoding="utf-8")

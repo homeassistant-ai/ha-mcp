@@ -253,6 +253,59 @@ def apply_dockerfile_labels(text: str, dst: Flavor) -> str:
     return text
 
 
+# The one flavor-specific DOCS.md section, keyed by component. Everything else
+# in DOCS.md is shared user documentation that the transform carries across
+# (with the component token renamed); this block is each flavor's own identity
+# wording and is swapped wholesale, like the start.py mutex constants.
+# test_docs_banners_match_canonical keeps the committed files honest against
+# these constants between syncs.
+_DOCS_BANNER_RE = re.compile(r"^## Only one .*?(?=^## )", re.M | re.S)
+
+DOCS_BANNERS = {
+    "mcp_proxy": (
+        "## Only one Webhook Proxy flavor runs at a time\n"
+        "\n"
+        "This add-on and its development counterpart, **Nabu Casa - Webhook Proxy for HA MCP\n"
+        "(Dev)**, cannot run at the same time — they would collide over Home Assistant's root\n"
+        "OAuth `/authorize` and `/token` routes. If you start this add-on while the **(Dev)**\n"
+        "add-on is running, it refuses to start (a clear error in the add-on log plus a Home\n"
+        "Assistant notification). Stop the (Dev) add-on first; the notification clears\n"
+        "automatically on the next clean start.\n"
+        "\n"
+    ),
+    "mcp_proxy_dev": (
+        "## Only one flavor runs at a time (dev vs stable)\n"
+        "\n"
+        "This is the **dev** build. It is fully isolated from the stable Webhook Proxy add-on\n"
+        "(separate integration, webhook URL, and OAuth credentials), but the two **cannot run at\n"
+        "the same time** — they would collide over Home Assistant's root OAuth `/authorize` and\n"
+        "`/token` routes. If you start this add-on while the stable **Webhook Proxy for HA MCP**\n"
+        "add-on is running, it refuses to start (a clear error in the add-on log plus a Home\n"
+        "Assistant notification). Stop the stable add-on first; the notification clears\n"
+        "automatically on the next clean start.\n"
+        "\n"
+    ),
+}
+
+
+def transform_docs(src_text: str, src: Flavor, dst: Flavor) -> str:
+    """Transform DOCS.md across flavors: token rename + flavor-banner swap.
+
+    DOCS.md is shared user documentation; only the "Only one flavor runs at a
+    time" section is flavor-specific, so after the component-token rename it
+    is replaced with the destination's canonical block (DOCS_BANNERS).
+    """
+    renamed = rename_tokens(src_text, src.component, dst.component)
+    # Lambda replacement: the banner is literal text, not a regex template.
+    swapped, n = _DOCS_BANNER_RE.subn(lambda _m: DOCS_BANNERS[dst.component], renamed)
+    if n != 1:
+        raise ValueError(
+            f"expected exactly one '## Only one …' banner section in "
+            f"{src.addon_dir}/DOCS.md, found {n}"
+        )
+    return swapped
+
+
 def apply_manifest(text: str, dst: Flavor, version: str) -> str:
     """Set ``domain``/``name``/``version`` in the component manifest.json."""
     text = re.sub(
@@ -389,6 +442,14 @@ def sync(direction: str, bump: str | None = None, root: Path = REPO_ROOT) -> str
     shutil.copy2(src_dir / "Dockerfile", dst_dir / "Dockerfile")
     shutil.copy2(
         src_dir / "translations" / "en.yaml", dst_dir / "translations" / "en.yaml"
+    )
+
+    # DOCS.md joins the transform: shared content is carried across (token-
+    # renamed) and the flavor-specific banner section is swapped to the
+    # destination's canonical wording — no manual carry-over pass.
+    docs_src = (src_dir / "DOCS.md").read_text(encoding="utf-8")
+    (dst_dir / "DOCS.md").write_text(
+        transform_docs(docs_src, src, dst), encoding="utf-8"
     )
 
     # 2. Blanket token rename on the copied code + Dockerfile + translations.

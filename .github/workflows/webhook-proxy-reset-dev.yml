@@ -1,8 +1,9 @@
 name: Webhook Proxy — Reset Dev from Stable
 
 # Manual reset: overwrite the dev add-on with the current stable code
-# (forward-rename mcp_proxy -> mcp_proxy_dev, restore dev identity) and set a
-# strictly-increasing dev version. Opens a draft PR.
+# (forward-rename mcp_proxy -> mcp_proxy_dev, restore dev identity, swap the
+# DOCS.md flavor banner) and set a strictly-increasing dev version. Opens a
+# draft PR.
 on:
   workflow_dispatch:
 
@@ -61,9 +62,10 @@ jobs:
           mutual-exclusion constants, and set the dev version to \`$NEW_VERSION\`
           (always strictly increasing).
 
-          The transform only syncs code + identity + version. \`DOCS.md\` and
-          \`CHANGELOG.md\` are intentionally left untouched — give them a manual
-          look before merging.
+          The transform syncs code + identity + version + \`DOCS.md\` (component
+          token rename plus the flavor-banner swap). \`CHANGELOG.md\` and the
+          contributor docs are intentionally left untouched — give them a
+          manual look before merging.
           EOF
           gh pr create --draft --base "$BASE_REF" --head "$BRANCH" \
             --title "chore(addon-dev): reset dev from stable ($NEW_VERSION)" \
