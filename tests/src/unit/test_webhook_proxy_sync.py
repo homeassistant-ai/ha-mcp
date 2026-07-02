@@ -193,8 +193,9 @@ def test_config_yaml_stage_added_for_dev_removed_for_stable():
 # manifest.json, translations/en.yaml) IS transformed and MUST NOT appear here;
 # a real identity-token miss must be reconciled, not hidden by padding this set.
 # Only docs live here:
-#   * AGENTS.md    — maintainer notes, stable-only (absent from the dev tree)
-#   * CLAUDE.md    — stable-only symlink to AGENTS.md (same doc, alias)
+#   * AGENTS.md    — maintainer notes; the full doc lives in the stable tree,
+#                    the dev tree carries a hand-written pointer stub to it
+#   * CLAUDE.md    — per-flavor symlink alias of that flavor's AGENTS.md
 #   * CHANGELOG.md — release-pipeline-synced per flavor, independent content
 #   * DOCS.md      — generated add-on docs, independent per-flavor content
 _DRIFT_ALLOWLIST = frozenset({"AGENTS.md", "CLAUDE.md", "CHANGELOG.md", "DOCS.md"})
