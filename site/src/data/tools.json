@@ -1572,7 +1572,7 @@
           "default": null
         },
         "initial": {
-          "type": "Annotated[str | int | None, Field(description='Initial value for the helper (input_select, input_text, input_boolean, input_datetime, counter)', default=None)]",
+          "type": "Annotated[str | int | None, Field(description=_INITIAL_PARAM_DESCRIPTION, default=None)]",
           "default": null
         },
         "mode": {
