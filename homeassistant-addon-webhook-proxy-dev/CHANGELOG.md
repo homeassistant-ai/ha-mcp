@@ -9,6 +9,23 @@ history from before the fork.
 -->
 
 
+## v1.2.3.dev2 (2026-07-02)
+
+### Added
+
+- Serve the OAuth metadata at the RFC 8414 / RFC 9728 / OIDC well-known
+  locations (issue #1714): the authorization-server document at
+  `/.well-known/oauth-authorization-server/api/mcp_proxy_dev/oauth` (plus the
+  `openid-configuration` variants), and the protected-resource document at the
+  path-scoped `/.well-known/oauth-protected-resource/api/webhook/<id>`.
+  Captured live against claude.ai: the path-scoped document is its first
+  fallback probe when the 401's `WWW-Authenticate` pointer is missing, and a
+  valid authorization-server document at the well-known path overrides a
+  previously mis-cached (HA-core) per-URL client config — healing a broken
+  connector with no client-side action. Purely additive routes; HA core's
+  root well-known endpoints are untouched.
+
+
 ## v1.2.2 (2026-06-29)
 
 ### Fixed

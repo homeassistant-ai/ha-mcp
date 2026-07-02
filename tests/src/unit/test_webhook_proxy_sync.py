@@ -10,11 +10,29 @@ a clean tree) is guaranteed by the acceptance gate in the build spec, not here.
 """
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SYNC_PATH = REPO_ROOT / "scripts" / "webhook_proxy_sync.py"
+
+# The committed-tree drift guards below are SYNC-POINT invariants, not
+# development-time invariants: PRs land on the DEV flavor only (the stable
+# guard blocks direct stable edits), so dev intentionally runs AHEAD of stable
+# between promotes, and the two committed trees are only supposed to be
+# identity-equal right after the promote/reset transform has run. Those
+# workflows set WEBHOOK_PROXY_TREES_SYNCED=1 and run this file as the
+# transform's acceptance gate; in regular per-PR CI the drift guards skip
+# (every pure transform-engine test above them still runs everywhere).
+_sync_point_only = pytest.mark.skipif(
+    os.environ.get("WEBHOOK_PROXY_TREES_SYNCED") != "1",
+    reason="committed-tree drift guards apply only at promote/reset sync "
+    "points (WEBHOOK_PROXY_TREES_SYNCED=1); the dev flavor intentionally "
+    "runs ahead of stable between promotes",
+)
 
 
 def _load_sync():
@@ -270,8 +288,9 @@ def _assert_committed_equals_transform(tmp_path, direction, src, dst, bump=None)
     )
 
 
+@_sync_point_only
 def test_committed_dev_equals_reset_transform_of_stable(tmp_path):
-    """Drift guard: the committed dev tree MUST equal reset(stable) — the
+    """Sync-point drift guard: the committed dev tree MUST equal reset(stable) — the
     identity transform applied to the committed stable tree — modulo the version
     lines and the hand-maintained doc allowlist. Any silent divergence between
     the two hand-maintained copies (a stable fix not mirrored into dev, or an
@@ -283,8 +302,9 @@ def test_committed_dev_equals_reset_transform_of_stable(tmp_path):
     _assert_committed_equals_transform(tmp_path, "reset", sync.STABLE, sync.DEV)
 
 
+@_sync_point_only
 def test_committed_stable_equals_promote_transform_of_dev(tmp_path):
-    """Reverse drift guard: the committed stable tree MUST equal promote(dev) —
+    """Sync-point reverse drift guard: the committed stable tree MUST equal promote(dev) —
     the inverse identity transform applied to the committed dev tree — modulo
     the version lines and the hand-maintained doc allowlist. Mirrors the reset
     drift guard for the promote direction, confirming the reverse transform

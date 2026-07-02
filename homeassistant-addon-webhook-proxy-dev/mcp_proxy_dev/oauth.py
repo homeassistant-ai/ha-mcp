@@ -311,6 +311,10 @@ class OAuthProvider:
     def client_id(self) -> str:
         return self._client_id
 
+    @property
+    def webhook_id(self) -> str:
+        return self._webhook_id
+
     def client_id_masked(self) -> str:
         if len(self._client_id) <= 4:
             return "***"
@@ -330,13 +334,42 @@ class OAuthProvider:
     # -----------------------------------------------------------------
 
     def register_views(self) -> None:
-        """Register the OAuth endpoints with HA's HTTP layer."""
-        for view in (
+        """Register the OAuth endpoints with HA's HTTP layer.
+
+        Besides the four core views, the metadata documents are also served
+        at the RFC 8414 / RFC 9728 / OIDC-discovery well-known locations —
+        see the WellKnown* view docstrings for the live-captured client
+        behavior (issue #1714) that makes those locations load-bearing.
+        """
+        views: list[HomeAssistantView] = [
             ProtectedResourceMetadataView(self),
             AuthorizationServerMetadataView(self),
             AuthorizeView(self),
             TokenView(self),
+            WellKnownProtectedResourceView(self),
+        ]
+        for url, name in (
+            (
+                f"/.well-known/oauth-authorization-server{OAUTH_BASE}",
+                "mcp_proxy_dev:oauth:wellknown-as-rfc8414",
+            ),
+            (
+                f"/.well-known/openid-configuration{OAUTH_BASE}",
+                "mcp_proxy_dev:oauth:wellknown-oidc-prefixed",
+            ),
+            (
+                f"{OAUTH_BASE}/.well-known/openid-configuration",
+                "mcp_proxy_dev:oauth:wellknown-oidc-suffixed",
+            ),
+            (
+                f"{OAUTH_BASE}/.well-known/oauth-authorization-server",
+                "mcp_proxy_dev:oauth:wellknown-as-suffixed",
+            ),
         ):
+            views.append(
+                WellKnownAuthorizationServerMetadataView(self, url=url, name=name)
+            )
+        for view in views:
             self._hass.http.register_view(view)
 
     # -----------------------------------------------------------------
@@ -532,6 +565,60 @@ class AuthorizationServerMetadataView(HomeAssistantView):
                 ],
             }
         )
+
+
+class WellKnownProtectedResourceView(ProtectedResourceMetadataView):
+    """RFC 9728 §3.1 path-scoped Protected Resource Metadata.
+
+    Same document as `ProtectedResourceMetadataView`, served at the
+    well-known location derived from the webhook resource URL
+    (`/.well-known/oauth-protected-resource/api/webhook/<id>`). Captured
+    live in issue #1714: when the 401's `WWW-Authenticate`
+    `resource_metadata` pointer is missing (stripped by a proxy in front,
+    or a transient setup window), this path is claude.ai's FIRST fallback
+    probe — and when it 404s the client falls through to the HOST-ROOT
+    `/.well-known/oauth-protected-resource`, which HA core itself serves
+    whenever it can resolve an external URL, steering the flow into
+    HA-core native OAuth (`/auth/authorize`) where the proxy's client_id
+    can never work. Serving this view keeps discovery on the proxy even
+    without the pointer.
+    """
+
+    name = "mcp_proxy_dev:oauth:wellknown-protected-resource"
+
+    def __init__(self, provider: OAuthProvider) -> None:
+        super().__init__(provider)
+        # Instance-level URL: the well-known path embeds this install's
+        # webhook id, which is only known at runtime.
+        self.url = (
+            f"/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
+        )
+
+
+class WellKnownAuthorizationServerMetadataView(AuthorizationServerMetadataView):
+    """RFC 8414 / OIDC-discovery locations for the AS metadata document.
+
+    Same document as `AuthorizationServerMetadataView`, registered at the
+    well-known URLs MCP clients actually probe for the issuer
+    `<base>/api/mcp_proxy_dev/oauth` (request sequence captured live in
+    issue #1714). Two findings make these load-bearing:
+
+    * claude.ai caches a per-URL authorization config; when discovery ran
+      once against a URL while the pointer was missing, the cached (wrong,
+      HA-core) config survives connector delete/re-create and overrides
+      every later pointer-based re-discovery — UNLESS the AS metadata
+      resolves at these locations, in which case the fresh document
+      overrides the cache and the connector heals with no client action.
+    * A fresh URL survives these 404ing only via the client's
+      origin-default `/authorize`+`/token` fallback; serving the real
+      document removes that fragility (and gives PKCE-capable clients the
+      `code_challenge_methods_supported` they otherwise never see).
+    """
+
+    def __init__(self, provider: OAuthProvider, url: str, name: str) -> None:
+        super().__init__(provider)
+        self.url = url
+        self.name = name
 
 
 class AuthorizeView(HomeAssistantView):

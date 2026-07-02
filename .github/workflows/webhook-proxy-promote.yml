@@ -26,8 +26,8 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install ruff + pytest
+        run: pip install ruff pytest
 
       - name: Run the promote transform in place
         id: promote
@@ -38,6 +38,14 @@ jobs:
           NEW=$(python3 scripts/webhook_proxy_sync.py --direction promote --bump "$BUMP")
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
           echo "New stable version: $NEW"
+
+      # The committed-tree drift guards are sync-point invariants: they skip in
+      # per-PR CI (dev intentionally runs ahead of stable between promotes) and
+      # run HERE, right after the transform, as its acceptance gate.
+      - name: Verify transform exactness (drift guards)
+        env:
+          WEBHOOK_PROXY_TREES_SYNCED: "1"
+        run: python3 -m pytest tests/src/unit/test_webhook_proxy_sync.py -q
 
       - name: Commit on a branch and open a draft PR
         env:
