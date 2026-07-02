@@ -520,6 +520,59 @@ async def test_theme_nested_directory(monkeypatch):
     assert _dispatch_payloads(client)[0]["file"] == "themes/custom/nested-theme.yaml"
 
 
+# ---------------------------------------------------------------------------
+# Two-step confirm flow plumbing (require_confirm / confirm_token) — #1720
+# ---------------------------------------------------------------------------
+
+
+async def test_require_confirm_passed_from_settings(monkeypatch):
+    """Default settings (ENABLE_YAML_EDIT_CONFIRM unset ⇒ on) ⇒ the payload
+    carries require_confirm=True, and no confirm_token when none supplied."""
+    fn, client = await _make_tool()
+    await fn(
+        yaml_path="template",
+        action="add",
+        content="- sensor: []\n",
+    )
+    payloads = _dispatch_payloads(client)
+    assert len(payloads) == 1
+    assert payloads[0]["require_confirm"] is True
+    assert "confirm_token" not in payloads[0]
+
+
+async def test_confirm_token_forwarded(monkeypatch):
+    """The confirm_token tool arg lands in the service payload verbatim."""
+    fn, client = await _make_tool()
+    await fn(
+        yaml_path="template",
+        action="add",
+        content="- sensor: []\n",
+        confirm_token="abc123",
+    )
+    payloads = _dispatch_payloads(client)
+    assert len(payloads) == 1
+    assert payloads[0]["confirm_token"] == "abc123"
+
+
+async def test_flag_off_sends_require_confirm_false(monkeypatch):
+    """ENABLE_YAML_EDIT_CONFIRM=false ⇒ payload carries require_confirm=False
+    (old single-call behavior)."""
+    from ha_mcp import config as ha_mcp_config
+
+    monkeypatch.setenv("ENABLE_YAML_EDIT_CONFIRM", "false")
+    monkeypatch.setattr(ha_mcp_config, "_settings", None)
+
+    fn, client = await _make_tool()
+    await fn(
+        yaml_path="template",
+        action="add",
+        content="- sensor: []\n",
+    )
+    payloads = _dispatch_payloads(client)
+    assert len(payloads) == 1
+    assert payloads[0]["require_confirm"] is False
+
+
 async def test_theme_reload_failure_surfaces_warning(monkeypatch):
     """A component-side reload_error must surface as a top-level warning,
     not vanish behind success: True."""

@@ -204,6 +204,19 @@ class YamlConfigTools:
                 ),
             ),
         ] = "configuration.yaml",
+        confirm_token: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Confirmation token from a prior preview response. When "
+                    "the YAML edit confirmation flow is enabled (default), "
+                    "the first call writes nothing and returns a unified "
+                    "diff plus confirm_token; repeat the identical call "
+                    "with that token to apply the edit."
+                ),
+            ),
+        ] = None,
         MandatoryBPS: Annotated[
             bool,
             Field(default=True),
@@ -248,6 +261,15 @@ class YamlConfigTools:
         a ``reload_service`` to call yourself); the edit is on disk but not yet
         live. Preserves YAML comments and HA tags (``!include``,
         ``!secret``) on round-trip; ``replace`` swaps the subtree as-is.
+
+        Two-step confirmation (default ON, toggle ENABLE_YAML_EDIT_CONFIRM /
+        Server Settings): the first call returns ``preview: true`` with a
+        unified ``diff`` of exactly what would change on disk and a
+        ``confirm_token`` — nothing is written. Review the diff for
+        changes outside the requested edit, then repeat the identical
+        call adding ``confirm_token`` to apply. Every applied write also
+        returns the final ``diff``. A token mismatch means the file
+        changed since the preview; use the freshly returned token.
 
         ``template-guidelines.md`` ships in this response under ``skill_content``
         by default — YAML packages frequently include
@@ -348,9 +370,12 @@ class YamlConfigTools:
                 "action": action,
                 "yaml_path": yaml_path,
                 "disabled_packages_keys": disabled_keys,
+                "require_confirm": settings.enable_yaml_edit_confirm,
             }
             if content is not None:
                 service_data["content"] = content
+            if confirm_token:
+                service_data["confirm_token"] = confirm_token
 
             # Call the custom component service (token injected by helper)
             result = await call_mcp_tools_service(
