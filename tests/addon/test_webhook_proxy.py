@@ -2067,6 +2067,29 @@ class TestOAuthProvider:
         assert provider.validate_access_token(token) is False
 
 
+def _wellknown_oauth_urls(oauth_mod, webhook_id):
+    """Extra well-known metadata URLs a flavor registers (issue #1714), or an
+    empty set when the flavor doesn't ship them yet.
+
+    Feature-DETECTED from the oauth module rather than recorded in
+    WEBHOOK_PROXY_VARIANTS: the promote workflow mechanically copies dev's
+    code onto stable without touching tests, so a static per-variant flag
+    would go stale (and fail CI) at the exact moment stable gains the
+    feature. Detection keeps the expectation in lockstep with the code under
+    test in both flavors.
+    """
+    if not hasattr(oauth_mod, "WellKnownAuthorizationServerMetadataView"):
+        return set()
+    base = oauth_mod.OAUTH_BASE
+    return {
+        f"/.well-known/oauth-protected-resource/api/webhook/{webhook_id}",
+        f"/.well-known/oauth-authorization-server{base}",
+        f"/.well-known/openid-configuration{base}",
+        f"{base}/.well-known/openid-configuration",
+        f"{base}/.well-known/oauth-authorization-server",
+    }
+
+
 class TestOAuthSetupEntry:
     """async_setup_entry creates and registers an OAuthProvider when the
     config has an oauth section with non-empty creds."""
@@ -2118,8 +2141,10 @@ class TestOAuthSetupEntry:
         provider = hass.data[mod.DOMAIN]["oauth"]
         assert provider is not None
         assert provider.client_id == "client-1234567890ABCDEF"
-        # 4 OAuth views registered
-        assert hass.http.register_view.call_count == 4
+        # 4 core OAuth views, plus the well-known metadata variants on flavors
+        # that ship them (feature-detected — see _wellknown_oauth_urls).
+        expected_views = 4 + len(_wellknown_oauth_urls(oauth, "mcp_test"))
+        assert hass.http.register_view.call_count == expected_views
         # Successful OAuth setup records that THIS flavor owns the root routes,
         # so the sibling flavor refuses loudly instead of shadowing them.
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
@@ -3058,6 +3083,66 @@ class TestAuthorizationServerView:
         assert "S256" in body["code_challenge_methods_supported"]
         assert "client_secret_basic" in body["token_endpoint_auth_methods_supported"]
         assert "client_secret_post" in body["token_endpoint_auth_methods_supported"]
+
+
+class TestWellKnownMetadataViews:
+    """The RFC 8414 / RFC 9728 / OIDC well-known variants (issue #1714) must
+    serve documents identical to the canonical metadata views, at the exact
+    URLs claude.ai was captured probing. Skips on flavors that don't ship the
+    views yet."""
+
+    @staticmethod
+    def _skip_unless_shipped(oauth):
+        if not hasattr(oauth, "WellKnownAuthorizationServerMetadataView"):
+            pytest.skip("flavor does not ship the well-known metadata views yet")
+
+    async def test_path_scoped_prm_embeds_webhook_id_and_matches_canonical(
+        self, tmp_path
+    ):
+        oauth, provider = _provider_for_view_tests(
+            tmp_path, public_base_url="https://legit.example"
+        )
+        self._skip_unless_shipped(oauth)
+        view = oauth.WellKnownProtectedResourceView(provider)
+        # RFC 9728 §3.1: the well-known path is derived from the resource URL,
+        # so it must embed this install's actual webhook id.
+        assert view.url == (
+            "/.well-known/oauth-protected-resource/api/webhook/mcp_webhook_id_aaaa"
+        )
+        request = _make_view_request(headers={"Host": "ignored"})
+        with patch.object(oauth.web, "json_response") as json_resp:
+            await view.get(request)
+        wellknown_body = json_resp.call_args.args[0]
+        with patch.object(oauth.web, "json_response") as json_resp:
+            await oauth.ProtectedResourceMetadataView(provider).get(request)
+        assert wellknown_body == json_resp.call_args.args[0]
+
+    async def test_wellknown_as_variants_match_canonical_document(self, tmp_path):
+        oauth, provider = _provider_for_view_tests(
+            tmp_path, public_base_url="https://legit.example"
+        )
+        self._skip_unless_shipped(oauth)
+        request = _make_view_request(headers={"Host": "ignored"})
+        with patch.object(oauth.web, "json_response") as json_resp:
+            await oauth.AuthorizationServerMetadataView(provider).get(request)
+        canonical = json_resp.call_args.args[0]
+        base = oauth.OAUTH_BASE
+        for url in (
+            f"/.well-known/oauth-authorization-server{base}",
+            f"/.well-known/openid-configuration{base}",
+            f"{base}/.well-known/openid-configuration",
+            f"{base}/.well-known/oauth-authorization-server",
+        ):
+            view = oauth.WellKnownAuthorizationServerMetadataView(
+                provider, url=url, name=f"test:{url}"
+            )
+            assert view.url == url
+            with patch.object(oauth.web, "json_response") as json_resp:
+                await view.get(request)
+            assert json_resp.call_args.args[0] == canonical
+        # No DCR: the proxy has fixed credentials, so the document must not
+        # advertise a registration endpoint (clients would try it and fail).
+        assert "registration_endpoint" not in canonical
 
 
 class TestAuthorizeViewGet:
@@ -4047,7 +4132,7 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
         return h
 
-    async def test_registers_all_four_oauth_endpoints(self, hass, tmp_path):
+    async def test_registers_expected_oauth_endpoints(self, hass, tmp_path):
         oauth = _import_oauth(tmp_secret_dir=tmp_path)
         mod = _import_mcp_proxy(preload_oauth=oauth)
         # Boot-time setup (is_running False) exercises the first-registration
@@ -4074,13 +4159,16 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         }
         # Authorize/token live at the root because Claude.ai constructs
         # those URLs from the resource host without consulting the
-        # authorization-server metadata document.
-        assert registered_urls == {
+        # authorization-server metadata document. Flavors that ship the
+        # issue-#1714 well-known metadata variants register those too
+        # (feature-detected — see _wellknown_oauth_urls).
+        expected = {
             f"{CURRENT['oauth_base']}/protected-resource",
             f"{CURRENT['oauth_base']}/authorization-server",
             "/authorize",
             "/token",
-        }
+        } | _wellknown_oauth_urls(oauth, "mcp_test")
+        assert registered_urls == expected
 
 
 class TestUnauthorizedResponseShape:
