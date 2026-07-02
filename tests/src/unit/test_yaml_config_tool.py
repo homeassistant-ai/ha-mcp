@@ -652,3 +652,55 @@ async def test_theme_reload_failure_surfaces_warning(monkeypatch):
     assert isinstance(warnings, list) and warnings, f"warnings missing: {result}"
     assert "Reload service unavailable" in warnings[0]
     assert "frontend.reload_themes" in warnings[0]
+
+
+async def test_remove_helper_equivalent_key_does_not_warn(monkeypatch):
+    """The routing warning is for add/replace only — deleting a
+    helper-equivalent key must not suggest creating it as a helper."""
+    fn, client = await _make_tool()
+    result = await fn(yaml_path="utility_meter", action="remove")
+    assert not any("ha_config_set_helper" in w for w in result.get("warnings", []))
+
+
+async def test_confirm_leg_skips_skill_content(monkeypatch):
+    """The token-carrying confirm leg suppresses the bulky skill payload —
+    possession of a token proves the caller just received the preview that
+    carried it. Preview / single-call writes keep MandatoryBPS."""
+    attach = MagicMock()
+    monkeypatch.setattr("ha_mcp.tools.tools_yaml_config.attach_skill_content", attach)
+    fn, client = await _make_tool()
+
+    await fn(yaml_path="command_line", action="add", content="- sensor: []")
+    assert attach.call_args.kwargs["MandatoryBPS"] is True
+
+    await fn(
+        yaml_path="command_line",
+        action="add",
+        content="- sensor: []",
+        confirm_token="tok",
+    )
+    assert attach.call_args.kwargs["MandatoryBPS"] is False
+
+
+async def test_preview_only_call_skips_auto_backup(monkeypatch):
+    """With the confirm flow on (default) a token-less call cannot write, so
+    the mandatory pre-write snapshot is skipped; the confirm leg captures."""
+    from types import SimpleNamespace
+
+    snap = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "ha_mcp.tools.auto_backup.get_backup_manager",
+        lambda *_a, **_k: SimpleNamespace(maybe_snapshot=snap),
+    )
+    fn, client = await _make_tool()
+
+    await fn(yaml_path="command_line", action="add", content="- sensor: []")
+    assert snap.await_count == 0  # preview-only call → no snapshot
+
+    await fn(
+        yaml_path="command_line",
+        action="add",
+        content="- sensor: []",
+        confirm_token="tok",
+    )
+    assert snap.await_count == 1  # confirm leg captures normally

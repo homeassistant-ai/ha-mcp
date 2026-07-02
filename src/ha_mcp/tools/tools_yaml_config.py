@@ -75,6 +75,23 @@ _HELPER_EQUIVALENT_KEYS: dict[str, str] = {
 }
 
 
+def _is_preview_only_call(kwargs: dict[str, Any]) -> bool:
+    """True when this ha_config_set_yaml call can only return a preview.
+
+    With the confirm flow enabled and no ``confirm_token`` supplied, the
+    component returns a diff preview and writes nothing — so the mandatory
+    pre-write auto-backup would snapshot for an edit that never happens
+    (phantom ``scope="edits"`` entries). A settings failure returns False,
+    failing toward capturing a backup.
+    """
+    if kwargs.get("confirm_token") is not None:
+        return False
+    try:
+        return bool(get_global_settings().enable_yaml_edit_confirm)
+    except Exception:
+        return False
+
+
 def _disabled_packages_keys(settings: Any) -> list[str]:
     """Return the sorted list of PACKAGES_ONLY_YAML_KEYS whose Settings
     flag is currently False.
@@ -157,6 +174,7 @@ class YamlConfigTools:
             f"{kw.get('file') or 'configuration.yaml'}::{kw.get('yaml_path') or ''}"
         ),
         mandatory=True,
+        skip_fn=_is_preview_only_call,
     )
     @log_tool_usage
     async def ha_config_set_yaml(
@@ -280,7 +298,8 @@ class YamlConfigTools:
         changes outside the requested edit, then repeat the identical
         call adding ``confirm_token`` to apply. Every applied write also
         returns the final ``diff``. A token mismatch means the file
-        changed since the preview; use the freshly returned token.
+        changed since the preview (or the token was wrong); use the
+        freshly returned token.
 
         ``template-guidelines.md`` ships in this response under ``skill_content``
         by default — YAML packages frequently include
@@ -385,7 +404,7 @@ class YamlConfigTools:
             }
             if content is not None:
                 service_data["content"] = content
-            if confirm_token:
+            if confirm_token is not None:
                 service_data["confirm_token"] = confirm_token
 
             # Call the custom component service (token injected by helper)
@@ -429,7 +448,12 @@ class YamlConfigTools:
                     )
                 attach_skill_content(
                     result,
-                    MandatoryBPS=MandatoryBPS,
+                    # The confirm leg (token supplied) skips the bulky skill
+                    # payload: possession of a token proves the caller just
+                    # received the preview response that carried it. Preview
+                    # and single-call writes keep it — pre-write guidance is
+                    # the whole point of MandatoryBPS.
+                    MandatoryBPS=MandatoryBPS and confirm_token is None,
                     canonical_files=_YAML_SKILL_FILES,
                     referenced_files=None,
                 )

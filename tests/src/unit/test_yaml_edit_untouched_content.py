@@ -351,3 +351,131 @@ class TestConfirmFlow:
 
         assert result["written"] is True
         assert "monthly_bill_ac" in cfg.read_text()
+
+
+def _remove_template_call(call_factory, token=None):
+    data = {
+        "file": "configuration.yaml",
+        "action": "remove",
+        "yaml_path": "template",
+        "require_confirm": True,
+    }
+    if token is not None:
+        data["confirm_token"] = token
+    return call_factory(data)
+
+
+class TestConfirmFlowRemove:
+    """remove — the most destructive action — must preview like add/replace."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_remove_previews_without_writing(self, tmp_path, hass, call_factory):
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)
+
+        handler = _build_edit_yaml_config_handler(hass)
+        preview = self._run(handler(_remove_template_call(call_factory)))
+
+        assert preview["preview"] is True, preview
+        assert preview["written"] is False
+        assert "-template:" in preview["diff"]
+        assert cfg.read_text() == ISSUE_1720_CONFIG  # nothing removed
+
+    def test_remove_confirm_applies(self, tmp_path, hass, call_factory):
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)
+        handler = _build_edit_yaml_config_handler(hass)
+
+        preview = self._run(handler(_remove_template_call(call_factory)))
+        result = self._run(
+            handler(_remove_template_call(call_factory, token=preview["confirm_token"]))
+        )
+
+        assert result["written"] is True, result
+        assert "template:" not in cfg.read_text()
+
+
+# Mixed sequence-indent styles: ruamel supports only one style per dump, so
+# the minority style is normalized to the first-detected one — the handler
+# must SURFACE that (warning + diff), never let it pass silently (#1720).
+MIXED_STYLE_CONFIG = """\
+binary_sensor:
+  - platform: template
+    sensors: {}
+sensor:
+- platform: rest
+- platform: template
+"""
+
+
+class TestMixedStyleReindent:
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_mixed_style_add_warns_about_reindent(self, tmp_path, hass, call_factory):
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(MIXED_STYLE_CONFIG)
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(handler(_add_utility_meter_call(call_factory)))
+
+        assert result["success"] is True, result
+        assert result["written"] is True
+        # minority-style block normalized to the dominant (4, 2) style...
+        assert "  - platform: rest" in cfg.read_text()
+        # ...and the collateral is surfaced, not silent
+        assert any("re-indented" in w for w in result.get("warnings", []))
+
+    def test_uniform_style_add_has_no_reindent_warning(
+        self, tmp_path, hass, call_factory
+    ):
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(handler(_add_utility_meter_call(call_factory)))
+
+        assert result["success"] is True, result
+        assert not any("re-indented" in w for w in result.get("warnings", []))
+
+    def test_style_does_not_leak_across_calls(self, tmp_path, hass, call_factory):
+        """Two edits on one (thread-cached) instance: the second file keeps
+        ITS OWN style, not the first file's."""
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)  # HA-docs style -> (4, 2)
+        pkg = Path(tmp_path) / "packages" / "compact.yaml"
+        pkg.parent.mkdir(parents=True)
+        pkg.write_text("sensor:\n- platform: rest\n")  # compact -> (2, 0)
+
+        handler = _build_edit_yaml_config_handler(hass)
+        first = self._run(handler(_add_utility_meter_call(call_factory)))
+        assert first["success"] is True, first
+        second = self._run(
+            handler(
+                call_factory(
+                    {
+                        "file": "packages/compact.yaml",
+                        "action": "add",
+                        "yaml_path": "binary_sensor",
+                        "content": "- platform: template\n  sensors: {}\n",
+                    }
+                )
+            )
+        )
+
+        assert second["success"] is True, second
+        assert "- platform: rest" in pkg.read_text().splitlines()  # still col 0
+
+
+def test_extract_yaml_subtree_ignores_leaked_style():
+    """The backup-snapshot subtree extractor must not inherit a sequence
+    style a prior edit applied to the thread-cached YAML instance."""
+    from custom_components.ha_mcp_tools import _extract_yaml_subtree
+    from custom_components.ha_mcp_tools.yaml_rt import apply_seq_indent, make_yaml
+
+    content = "sensor:\n- platform: rest\n- platform: template\n"
+    baseline = _extract_yaml_subtree(content, "sensor")
+    apply_seq_indent(make_yaml(), (4, 2))  # simulate a prior styled dump
+    assert _extract_yaml_subtree(content, "sensor") == baseline

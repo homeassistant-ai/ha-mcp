@@ -342,6 +342,38 @@ def _confirm_token(normalized: str, new_content: str) -> str:
     return hashlib.sha256(f"{normalized}\n{new_content}".encode()).hexdigest()[:16]
 
 
+def _count_reindented_lines(diff_text: str) -> int:
+    """Count untouched lines that only changed leading whitespace.
+
+    A ``-``/``+`` pair whose stripped bodies match is a pure re-indent —
+    collateral from normalizing a mixed-style file to one sequence style
+    (ruamel supports a single style per dump). Multiset matching so
+    repeated identical lines don't over-count.
+    """
+    removed: dict[str, int] = {}
+    added: dict[str, int] = {}
+    for line in diff_text.splitlines():
+        if line.startswith("---") or line.startswith("+++"):
+            continue
+        if line.startswith("-"):
+            body = line[1:]
+            removed[body.strip()] = removed.get(body.strip(), 0) + 1
+        elif line.startswith("+"):
+            body = line[1:]
+            added[body.strip()] = added.get(body.strip(), 0) + 1
+    return sum(min(n, added.get(key, 0)) for key, n in removed.items() if key)
+
+
+def _reindent_warning(count: int) -> str:
+    """Warning text for re-indented untouched lines (see ``diff``)."""
+    return (
+        f"{count} line(s) outside the requested edit were re-indented: the "
+        "file mixes sequence-indent styles and the serializer normalizes to "
+        "the first-detected style. Values are unchanged (guarded); review "
+        "the diff if the whitespace matters."
+    )
+
+
 def _unauthorized_response(service_name: str, **extra: Any) -> dict[str, Any]:
     """Structured 'unauthorized' response.
 
@@ -1149,6 +1181,9 @@ def _build_edit_yaml_config_handler(
                 "file": rel_path,
                 "action": action,
                 "yaml_path": yaml_path,
+                # Verbatim whole-file write; shares the write-path response
+                # shape so ``written`` stays a reliable discriminator.
+                "written": True,
                 "size": write_meta["size"],
                 "modified": datetime.fromtimestamp(write_meta["mtime"]).isoformat(),
                 # A whole-file restore can touch any number of keys; a restart
@@ -1239,6 +1274,7 @@ def _build_edit_yaml_config_handler(
                         "error": f"File does not exist: {rel_path}",
                     }
                 data = {}
+                raw_content = ""
 
             # Pre-write backups are captured MCP-side by ha-mcp's shared
             # auto-backup layer (#1579): ha_config_set_yaml snapshots the
@@ -1354,10 +1390,13 @@ def _build_edit_yaml_config_handler(
                         }
                     del data[yaml_key]
 
-            # Serialize back to YAML, keeping the file's own top-level
-            # sequence-dash style so untouched lines stay byte-identical
-            # (#1720: "changed indentation I didn't ask to change").
-            seq_style = detect_seq_indent(raw_content) if target_exists else None
+            # Serialize back to YAML, keeping the file's dominant top-level
+            # sequence-dash style (#1720: "changed indentation I didn't ask
+            # to change"). ruamel supports only ONE sequence style per dump,
+            # so in a MIXED-style file the minority-style sequences are
+            # normalized to the first-detected style — that collateral is
+            # counted below and surfaced as a warning + visible in ``diff``.
+            seq_style = detect_seq_indent(raw_content)
 
             def _dump() -> str:
                 ry = make_yaml()
@@ -1398,9 +1437,8 @@ def _build_edit_yaml_config_handler(
                     ),
                 }
 
-            diff_text = _unified_diff(
-                raw_content if target_exists else "", new_content, rel_path
-            )
+            diff_text = _unified_diff(raw_content, new_content, rel_path)
+            reindent_count = _count_reindented_lines(diff_text)
 
             require_confirm = bool(call.data.get("require_confirm", False))
             supplied_token = call.data.get("confirm_token")
@@ -1422,7 +1460,9 @@ def _build_edit_yaml_config_handler(
                         "to apply."
                     ),
                 }
-                if supplied_token:
+                if reindent_count:
+                    preview["warnings"] = [_reindent_warning(reindent_count)]
+                if supplied_token is not None:
                     preview["confirm_token_mismatch"] = True
                     preview["message"] = (
                         "confirm_token did not match — the file changed "
@@ -1466,6 +1506,8 @@ def _build_edit_yaml_config_handler(
                 "written": True,
                 "diff": diff_text,
             }
+            if reindent_count:
+                result["warnings"] = [_reindent_warning(reindent_count)]
 
             # Surface the post-edit action required to activate the change
             if kind == "lovelace_dashboard":
@@ -1531,6 +1573,10 @@ def _extract_yaml_subtree(content: str, yaml_path: str) -> str | None:
     """
     try:
         ry = make_yaml()
+        # The per-thread cached instance may carry a sequence style applied
+        # by a prior edit's dump on this executor thread — reset it so the
+        # snapshot never inherits another file's indentation.
+        apply_seq_indent(ry, None)
         node = ry.load(StringIO(content))
         for seg in yaml_path.split("."):
             if not isinstance(node, dict) or seg not in node:

@@ -369,3 +369,26 @@ utility_meter: {}
         apply_seq_indent(ry, (4, 2))
         apply_seq_indent(ry, None)
         assert yaml_dumps(ry, data) == self.COMPACT_STYLE
+
+
+class TestSeqIndentDetectionEdges:
+    """detect_seq_indent edge cases: interleaved comments/blanks and
+    non-matching (quoted) keys fall through safely."""
+
+    def test_detects_through_comment_and_blank_lines(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        text = "template:\n\n  # a comment before the first item\n  - sensor: []\n"
+        assert detect_seq_indent(text) == (4, 2)
+
+    def test_quoted_key_falls_back_to_next_key(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        text = '"quoted key":\n  - a\nsensor:\n- platform: rest\n'
+        assert detect_seq_indent(text) == (2, 0)
+
+    def test_key_with_inline_value_is_skipped(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        text = "name: My Home\ntemplate:\n  - sensor: []\n"
+        assert detect_seq_indent(text) == (4, 2)

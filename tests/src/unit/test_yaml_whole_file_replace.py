@@ -107,6 +107,8 @@ class TestReplaceFileAction:
 
         assert result["success"] is True, result
         assert result["action"] == "replace_file"
+        # ``written`` is the shared write-path discriminator (never a preview).
+        assert result["written"] is True
         assert result["post_action"] == "restart_required"
         assert result["config_check"] == "ok"
         # Verbatim — comment kept, old_key dropped.

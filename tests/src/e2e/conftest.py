@@ -1627,6 +1627,10 @@ def ha_container_with_fresh_config(request):
         # drops the extra index and forbids sdist builds (fail fast, no
         # surprise compiles); the fallback restores the image's stock pip
         # env for any future requirement only the wheels index carries.
+        # The ``env -u`` is load-bearing: it assumes the image pins the extra
+        # index via the PIP_EXTRA_INDEX_URL env var (true today). If that
+        # ever moves into pip.conf, attempt 1 silently reverts to hitting the
+        # wheels index — the ``||`` fallback still keeps installs working.
         container_kwargs["entrypoint"] = [
             "sh",
             "-c",
