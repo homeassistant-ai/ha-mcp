@@ -53,6 +53,10 @@ def log_info(message: str) -> None:
     _log("INFO", message)
 
 
+def log_warning(message: str) -> None:
+    _log("WARNING", message, sys.stderr)
+
+
 def log_error(message: str) -> None:
     _log("ERROR", message, sys.stderr)
 
@@ -67,6 +71,16 @@ def log_error(message: str) -> None:
 MCP_ADDON_SLUG_SUFFIXES = ["_ha_mcp", "_ha_mcp_dev"]
 # Also try exact slugs for official repo installs
 MCP_ADDON_EXACT_SLUGS = ["ha_mcp", "ha_mcp_dev"]
+
+# OAuth mode values written into the proxy config's `oauth.mode`. Mirrored by
+# the integration (mcp_proxy_dev.OAUTH_MODE_* / auth_native.HA_AUTH_MODE).
+#   ha_auth — HA core is the authorization server; no add-on credentials, no
+#             signing key, no HA restart. Sign in with your Home Assistant login.
+#   legacy  — the previous embedded authorization server (client id/secret).
+# ha_auth is the default only for a FIRST-TIME OAuth enable; existing legacy
+# setups are auto-detected and kept on legacy so an upgrade never switches them.
+HA_AUTH_MODE = "ha_auth"
+LEGACY_MODE = "legacy"
 
 # ---------------------------------------------------------------------------
 # Mutual exclusion (dev vs stable webhook proxy)
@@ -606,6 +620,73 @@ def _resolve_oauth_creds(
     return final_id, final_secret
 
 
+def _resolve_oauth_mode(
+    configured_mode: str, configured_id: str, configured_secret: str, data_dir: Path
+) -> str:
+    """Decide which OAuth mode to activate, logging which rule fired.
+
+    Upgrade-safe precedence — an existing legacy OAuth user is NEVER switched
+    silently by an add-on update:
+      1. An explicit ``oauth_mode`` add-on option wins outright.
+      2. Otherwise, if legacy OAuth is already in use — the user set
+         ``oauth_client_id``/``oauth_client_secret``, OR a persisted legacy
+         creds file (``/data/oauth_creds.json``) exists from a prior run —
+         stay on ``legacy``.
+      3. Otherwise (a first-time enable with no legacy trace) default to
+         ``ha_auth``, the recommended mode.
+    Switching an existing setup is therefore an explicit user action
+    (set ``oauth_mode``), which also requires re-adding the MCP connector.
+    """
+    mode = (configured_mode or "").strip().lower()
+    if mode in (HA_AUTH_MODE, LEGACY_MODE):
+        log_info(f"OAuth mode: '{mode}' (set explicitly via the oauth_mode option)")
+        return mode
+    if mode:
+        # Supervisor validates the option against the schema enum, so an unknown
+        # value should be unreachable — but fall through to detection rather
+        # than crash if one ever gets here.
+        log_error(
+            f"Ignoring unrecognized oauth_mode '{configured_mode}' "
+            f"(valid: '{HA_AUTH_MODE}', '{LEGACY_MODE}'); auto-detecting instead."
+        )
+    creds_file = data_dir / "oauth_creds.json"
+    try:
+        creds_file_exists = creds_file.exists()
+    except OSError as e:
+        # Path.exists() re-raises stat errors other than "not there" (e.g.
+        # EACCES). A stat failure is no proof of a legacy install, so treat
+        # the file as absent and keep auto-detecting instead of crashing
+        # startup; the ha_auth-default warning below still tells a legacy
+        # user how to get back.
+        log_error(
+            f"Could not check {creds_file} ({type(e).__name__}): {e}; "
+            "treating it as absent for OAuth mode detection."
+        )
+        creds_file_exists = False
+    if configured_id.strip() or configured_secret.strip() or creds_file_exists:
+        log_info(
+            "OAuth mode: 'legacy' — existing legacy OAuth credentials detected "
+            "(a configured client id/secret or a persisted /data/oauth_creds.json). "
+            f"Staying on legacy mode; set oauth_mode: {HA_AUTH_MODE} to switch "
+            "(you must then re-add your MCP connector)."
+        )
+        return LEGACY_MODE
+    log_info(
+        f"OAuth mode: '{HA_AUTH_MODE}' (default for a first-time OAuth enable — "
+        "sign in with your Home Assistant account; leave the connector's OAuth "
+        "fields blank)."
+    )
+    # OAuth was already enabled but no legacy trace was found. Normally that
+    # IS a first-time enable — but if a legacy user's /data trace was lost,
+    # this default silently changes their flow, so say how to get back.
+    log_warning(
+        f"Defaulting to '{HA_AUTH_MODE}'. If you previously used the legacy "
+        "OAuth flow, your existing connector must be re-added — or set "
+        f"oauth_mode: {LEGACY_MODE} to keep the previous flow."
+    )
+    return HA_AUTH_MODE
+
+
 def _get_or_create_webhook_id(data_dir: Path) -> str:
     """Get or create a persistent webhook ID."""
     wh_file = data_dir / "webhook_id.txt"
@@ -1009,6 +1090,7 @@ def main() -> int:
     enable_oauth = False
     oauth_client_id = ""
     oauth_client_secret = ""
+    oauth_mode_option = ""
     regenerate_oauth_creds = False
     debug_logging = False
     config: dict = {}
@@ -1022,17 +1104,38 @@ def main() -> int:
             enable_oauth = bool(config.get("enable_oauth", False))
             oauth_client_id = config.get("oauth_client_id", "")
             oauth_client_secret = config.get("oauth_client_secret", "")
+            # Unset by default in config.yaml options (no default value), so an
+            # upgrader inherits nothing — the mode is resolved below.
+            oauth_mode_option = config.get("oauth_mode", "")
             regenerate_oauth_creds = bool(config.get("regenerate_oauth_creds", False))
             debug_logging = bool(config.get("debug_logging", False))
         except (OSError, json.JSONDecodeError) as e:
             log_error(f"Failed to read config ({type(e).__name__}): {e}")
 
-    # OAuth credential resolution: user-supplied values in the addon config
-    # win. Otherwise fall back to a persisted creds file in /data, and if
-    # that doesn't exist either, auto-generate. This makes the happy path
-    # "toggle on, restart, copy creds from log" without the user ever having
-    # to invent secret strings.
+    # OAuth mode + credential resolution. ha_auth (HA-native) needs no add-on
+    # credentials at all; legacy resolves/persists a client id + secret (user
+    # value wins, else a persisted /data file, else auto-generated) so the happy
+    # path is "toggle on, restart, copy creds from log".
+    oauth_mode = ""
     if enable_oauth:
+        oauth_mode = _resolve_oauth_mode(
+            oauth_mode_option, oauth_client_id, oauth_client_secret, data_dir
+        )
+    if enable_oauth and oauth_mode == HA_AUTH_MODE:
+        # HA core is the authorization server: no credential resolution,
+        # generation, or persistence; no regenerate handling. The regenerate
+        # toggle only applies to legacy creds. (The fail-closed stale-code
+        # restart probe below still runs in this mode — it closes the
+        # code-upgrade fail-open window without breaking the no-restart-to-
+        # toggle promise.)
+        if regenerate_oauth_creds:
+            log_info(
+                "Ignoring 'Regenerate OAuth Credentials on Next Start': it only "
+                "applies to legacy OAuth mode. In ha_auth mode you sign in with "
+                "your Home Assistant account; there are no add-on credentials to "
+                "regenerate."
+            )
+    elif enable_oauth:
         if regenerate_oauth_creds:
             _regenerate_oauth_creds(data_dir)
             # Force fresh generation: ignore any user-supplied values in this
@@ -1131,14 +1234,28 @@ def main() -> int:
     # turn on OAuth see no change to their config file.
     proxy_config: dict = {"target_url": target_url, "webhook_id": webhook_id}
     resolved_remote: str | None = None
-    if enable_oauth:
-        # Resolve the remote URL so the OAuth provider can pin metadata
-        # URLs to the operator-configured public URL instead of trusting
-        # attacker-supplied Host headers on a per-request basis.
+    if enable_oauth and oauth_mode == HA_AUTH_MODE:
+        # ha_auth is deliberately host-agnostic: the ResourceServer resolves the
+        # public base URL per-request so the discovery documents work on ANY
+        # hostname regardless of HA's external_url. Exactly ONE oauth-section
+        # shape is ever written — {"mode": "ha_auth"} with NO credential keys —
+        # so ha_auth and legacy can never both be active.
+        proxy_config["oauth"] = {"mode": HA_AUTH_MODE}
+        if remote_url and remote_url.strip():
+            log_info(
+                "Note: the configured External URL is ignored in ha_auth mode — "
+                "OAuth discovery is host-derived and works on any hostname."
+            )
+    elif enable_oauth:
+        # legacy: pin the public base URL so metadata/redirect URLs can't be
+        # poisoned via a forged Host header, and carry the resolved creds. The
+        # explicit "mode": "legacy" marker makes the section unambiguous (the
+        # integration also treats a creds-only section as legacy for back-compat).
         resolved_remote = _resolve_remote_url(remote_url)
         if resolved_remote:
             proxy_config["public_base_url"] = resolved_remote
         proxy_config["oauth"] = {
+            "mode": LEGACY_MODE,
             "client_id": oauth_client_id,
             "client_secret": oauth_client_secret,
         }
@@ -1296,6 +1413,15 @@ def main() -> int:
     # Kept in sync with `mcp_proxy_dev/repairs.py:RESTART_MARKER_FILE`.
     oauth_restart_marker = Path("/config/.mcp_proxy_dev_oauth_restart_required")
 
+    # The fail-closed stale-code probe runs in BOTH modes. It only fails when
+    # the OAuth metadata endpoint isn't served yet — i.e. HA is still running
+    # the OLD cached integration module (which has no ha_auth branch) after a
+    # code UPGRADE, which genuinely requires an HA restart for HA to import the
+    # new module. ha_auth needs no restart to TOGGLE once its code is loaded, so
+    # running the probe here does NOT break that promise; it closes the
+    # fail-open window where the old module could serve the webhook while the
+    # banner says "OAuth ENABLED". The restart marker / notification / Repair is
+    # a generic click-to-restart signal, appropriate in either mode.
     if enable_oauth and not _probe_oauth_active():
         log_error("")
         log_error("=" * 70)
@@ -1425,9 +1551,21 @@ def main() -> int:
         log_info("    Set 'remote_url' in addon config, or enable Nabu Casa")
     log_info("")
     log_info("  Copy the remote URL above into your MCP client.")
-    if enable_oauth:
+    if enable_oauth and oauth_mode == HA_AUTH_MODE:
         log_info("")
-        log_info("  OAuth (Beta) is ENABLED for this URL.")
+        log_info("  OAuth (Beta) is ENABLED — sign in with your Home Assistant login.")
+        log_info("    LEAVE the connector's OAuth fields BLANK (no Client ID or")
+        log_info("    Client Secret needed). You sign in with your Home Assistant")
+        log_info("    account when your MCP client connects.")
+        log_info("    Works with any hostname/URL, and no Home Assistant restart")
+        log_info("    is needed to enable or disable it.")
+        log_info("    Revoke access anytime from your Home Assistant profile's")
+        log_info("    sessions/tokens.")
+        log_info("    Note: if your MCP client's UI insists on a Client Secret,")
+        log_info("    any value works — Home Assistant ignores it.")
+    elif enable_oauth:
+        log_info("")
+        log_info("  OAuth (Beta) is ENABLED for this URL (legacy mode).")
         log_info(f"    OAuth Client ID:     {oauth_client_id}")
         log_info(f"    OAuth Client Secret: {oauth_client_secret}")
         log_info("    Paste both into the OAuth fields of your MCP client's")

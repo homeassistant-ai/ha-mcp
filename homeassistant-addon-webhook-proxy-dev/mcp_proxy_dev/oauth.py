@@ -56,6 +56,36 @@ AUTHORIZE_PATH = "/authorize"
 TOKEN_PATH = "/token"
 SECRET_FILE = Path("/config/.mcp_proxy_dev_oauth_secret")
 
+# Shared hass.data key for the integration (matches __init__.py DOMAIN). The
+# mode-aware discovery-document views read the ACTIVE OAuth mode from
+# hass.data[DOMAIN] at request time (see _active_oauth_mode) so the SAME
+# registered view instances serve whichever mode is live now.
+DOMAIN = "mcp_proxy_dev"
+
+# TOP-LEVEL hass.data key (deliberately NOT under DOMAIN, so it survives
+# async_unload_entry's hass.data.pop(DOMAIN)) recording that the seven
+# discovery-document metadata views are bound to aiohttp for this HA session.
+# aiohttp raises ValueError on a duplicate view name and HA cannot unregister a
+# bound view until it restarts, so register_metadata_views must bind the seven
+# at most once: a same-mode ha_auth reload, a legacy->ha_auth switch, or a
+# ha_auth->legacy switch all reuse the already-bound views instead of
+# re-registering them (which would raise and fail the reload).
+#
+# Suffixed with DOMAIN so each add-on flavor gets its OWN top-level flag: the
+# metadata-view URLs and names are domain-specific (mcp_proxy_dev vs mcp_proxy)
+# and therefore never collide across flavors, so one flavor's flag must not
+# suppress the other flavor's (non-colliding) registration if both run ha_auth
+# once this dev code promotes to stable.
+_METADATA_VIEWS_REGISTERED_KEY = (
+    f"webhook_proxy_oauth_metadata_views_registered_{DOMAIN}"
+)
+
+# OAuth mode markers. Mirrored as auth_native.HA_AUTH_MODE and __init__.py's
+# OAUTH_MODE_* (a test pins them in agreement). ha_auth = HA core is the
+# authorization server; legacy = this module's embedded authorization server.
+MODE_HA_AUTH = "ha_auth"
+MODE_LEGACY = "legacy"
+
 ACCESS_TOKEN_TTL = 60 * 60  # 1 hour
 REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60  # 30 days
 AUTH_CODE_TTL = 5 * 60  # 5 minutes
@@ -126,6 +156,14 @@ def _json_error(
     if restart_hint:
         body["error_description"] = RESTART_HINT
     return web.json_response(body, status=status, headers=headers)
+
+
+def _json_not_found() -> web.Response:
+    """404 for an OAuth view whose integration data is gone (the config entry
+    was unloaded but HA can't drop the bound view until a restart) or whose
+    route is disabled in the active mode. MCP clients fall through their
+    discovery chain on a 404, so this matches the not-registered behavior."""
+    return web.json_response({"error": "not_found"}, status=404)
 
 
 class _PendingCode(TypedDict):
@@ -266,6 +304,51 @@ def _build_base_url(request: web.Request, public_base_url: str | None = None) ->
     return f"{scheme}://{host}"
 
 
+def _active_oauth_mode(provider: object) -> str | None:
+    """Return the OAuth mode currently active for this integration.
+
+    Read live from hass.data so the SAME registered view instances serve
+    whichever mode is active now — e.g. a legacy-bound view after the operator
+    switched the add-on to ha_auth, which Home Assistant cannot rebind without a
+    restart. Returns ``MODE_HA_AUTH`` or ``MODE_LEGACY``, or ``None`` when no
+    mode is live — the integration data is gone (the config entry was unloaded)
+    or present without an ``oauth_mode`` key (reloaded with OAuth turned off) —
+    so a stale view can 404 like an unregistered route; HA can't drop the bound
+    views until a restart either way. A non-dict ``hass.data[DOMAIN]`` (only
+    happens with test doubles) defaults to ``MODE_LEGACY``, the pre-ha_auth
+    behavior.
+    """
+    hass = getattr(provider, "_hass", None)
+    domain_data = hass.data.get(DOMAIN) if hass is not None else None
+    if domain_data is None:
+        return None
+    if not isinstance(domain_data, dict):
+        return MODE_LEGACY
+    return domain_data.get("oauth_mode")
+
+
+def _active_provider(bound_provider: object) -> object:
+    """Return the provider whose base-URL policy is active right now.
+
+    After a live mode switch the still-bound view instances were constructed
+    with the PREVIOUS mode's provider (HA can't rebind views mid-session), and
+    the two modes build URLs differently: legacy pins the base URL to the
+    operator-configured public_base_url (Host-poisoning resistance) while
+    ha_auth derives it from the request host (the same install must work via
+    any hostname). Resolving ``hass.data[DOMAIN]["oauth"]`` at request time
+    applies whichever policy is live; falls back to the bound provider when the
+    domain data is absent (test doubles — the unloaded case already 404s in the
+    views before any URL is built).
+    """
+    hass = getattr(bound_provider, "_hass", None)
+    domain_data = hass.data.get(DOMAIN) if hass is not None else None
+    if isinstance(domain_data, dict):
+        active = domain_data.get("oauth")
+        if active is not None:
+            return active
+    return bound_provider
+
+
 class OAuthProvider:
     """Holds OAuth state and registers HA HTTP views.
 
@@ -334,42 +417,21 @@ class OAuthProvider:
     # -----------------------------------------------------------------
 
     def register_views(self) -> None:
-        """Register the OAuth endpoints with HA's HTTP layer.
+        """Register the legacy OAuth endpoints with HA's HTTP layer.
 
-        Besides the four core views, the metadata documents are also served
-        at the RFC 8414 / RFC 9728 / OIDC-discovery well-known locations —
-        see the WellKnown* view docstrings for the live-captured client
-        behavior (issue #1714) that makes those locations load-bearing.
+        Delegates the seven discovery-document views to the shared,
+        flag-guarded `register_metadata_views` (which binds them at most once
+        per HA session — see `_METADATA_VIEWS_REGISTERED_KEY`), then registers
+        ONLY the two root views (`AuthorizeView` + `TokenView`). ha_auth mode
+        registers just the seven metadata views (HA core owns `/authorize` +
+        `/token`, so it binds no root views); routing both modes through the
+        same registrar means a legacy<->ha_auth switch or a same-mode reload
+        never re-registers the seven and trips aiohttp's duplicate-view
+        ValueError. The two root views stay gated by the caller's route-owner /
+        fingerprint logic in __init__.py.
         """
-        views: list[HomeAssistantView] = [
-            ProtectedResourceMetadataView(self),
-            AuthorizationServerMetadataView(self),
-            AuthorizeView(self),
-            TokenView(self),
-            WellKnownProtectedResourceView(self),
-        ]
-        for url, name in (
-            (
-                f"/.well-known/oauth-authorization-server{OAUTH_BASE}",
-                "mcp_proxy_dev:oauth:wellknown-as-rfc8414",
-            ),
-            (
-                f"/.well-known/openid-configuration{OAUTH_BASE}",
-                "mcp_proxy_dev:oauth:wellknown-oidc-prefixed",
-            ),
-            (
-                f"{OAUTH_BASE}/.well-known/openid-configuration",
-                "mcp_proxy_dev:oauth:wellknown-oidc-suffixed",
-            ),
-            (
-                f"{OAUTH_BASE}/.well-known/oauth-authorization-server",
-                "mcp_proxy_dev:oauth:wellknown-as-suffixed",
-            ),
-        ):
-            views.append(
-                WellKnownAuthorizationServerMetadataView(self, url=url, name=name)
-            )
-        for view in views:
+        register_metadata_views(self._hass, self)
+        for view in (AuthorizeView(self), TokenView(self)):
             self._hass.http.register_view(view)
 
     # -----------------------------------------------------------------
@@ -519,13 +581,20 @@ class ProtectedResourceMetadataView(HomeAssistantView):
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
-        base = self._provider.base_url_for(request)
+        # The protected-resource document has the same shape in both OAuth
+        # modes; only 404 when no mode is live (entry unloaded / OAuth off) so a
+        # stale-bound view acts like an unregistered route. URLs are built via
+        # the ACTIVE mode's provider, not the instance this view was bound with,
+        # so a live mode switch also switches the base-URL policy (legacy:
+        # pinned; ha_auth: host-derived).
+        if _active_oauth_mode(self._provider) is None:
+            return _json_not_found()
+        provider = _active_provider(self._provider)
+        base = provider.base_url_for(request)
         return web.json_response(
             {
-                "resource": self._provider.resource_url(base),
-                "authorization_servers": [
-                    self._provider.authorization_server_url(base)
-                ],
+                "resource": provider.resource_url(base),
+                "authorization_servers": [provider.authorization_server_url(base)],
                 "bearer_methods_supported": ["header"],
                 "resource_documentation": (
                     "https://github.com/homeassistant-ai/ha-mcp"
@@ -546,8 +615,25 @@ class AuthorizationServerMetadataView(HomeAssistantView):
         self._provider = provider
 
     async def get(self, request: web.Request) -> web.Response:
-        base = self._provider.base_url_for(request)
-        as_url = self._provider.authorization_server_url(base)
+        mode = _active_oauth_mode(self._provider)
+        if mode is None:
+            # No mode is live (entry unloaded / OAuth off) but HA can't drop
+            # this bound view until a restart — behave like an unregistered
+            # route.
+            return _json_not_found()
+        # Build URLs via the ACTIVE mode's provider (see _active_provider): a
+        # legacy-bound view serving the ha_auth document must use ha_auth's
+        # host-derived base URL, and vice versa the legacy pinned one.
+        provider = _active_provider(self._provider)
+        base = provider.base_url_for(request)
+        if mode == MODE_HA_AUTH:
+            # HA core is the authorization server: advertise its /auth/* endpoints
+            # + CIMD. Built in auth_native, imported lazily to avoid an import
+            # cycle (auth_native imports this module at load).
+            from .auth_native import authorization_server_document
+
+            return web.json_response(authorization_server_document(base))
+        as_url = provider.authorization_server_url(base)
         return web.json_response(
             {
                 "issuer": as_url,
@@ -644,6 +730,13 @@ class AuthorizeView(HomeAssistantView):
         )
 
     async def get(self, request: web.Request) -> web.Response:
+        if _active_oauth_mode(self._provider) != MODE_LEGACY:
+            # Serve ONLY when legacy is the live mode. Both ha_auth (HA core owns
+            # /authorize) and None (entry unloaded / OAuth off) mean this
+            # stale-bound root view must not serve: HA can't rebind or drop root
+            # views without a restart, so a legacy->ha_auth switch OR an unload
+            # leaves it bound. Refuse it.
+            return _text_error(404, "not found")
         params = request.query
         client_id = params.get("client_id", "")
         redirect_uri = params.get("redirect_uri", "")
@@ -695,6 +788,10 @@ class AuthorizeView(HomeAssistantView):
         return web.Response(text=html, content_type="text/html")
 
     async def post(self, request: web.Request) -> web.Response:
+        if _active_oauth_mode(self._provider) != MODE_LEGACY:
+            # Serve ONLY when legacy is live (see the GET defense above): ha_auth
+            # (HA core owns /authorize) and the unloaded/None case both 404.
+            return _text_error(404, "not found")
         data = await request.post()
         action = str(data.get("action", ""))
         client_id = str(data.get("client_id", ""))
@@ -789,6 +886,11 @@ class TokenView(HomeAssistantView):
         return form.get("client_id"), form.get("client_secret")
 
     async def post(self, request: web.Request) -> web.Response:
+        if _active_oauth_mode(self._provider) != MODE_LEGACY:
+            # Serve ONLY when legacy is live. Both ha_auth (HA core owns /token)
+            # and the unloaded/None case must not mint tokens from this
+            # stale-bound view (see AuthorizeView for the switch scenario).
+            return _json_not_found()
         form = dict(await request.post())
         client_id, client_secret = self._extract_client_creds(request, form)
         if not self._provider.authenticate_client(client_id, client_secret):
@@ -835,6 +937,75 @@ class TokenView(HomeAssistantView):
                 "refresh_token": self._provider.issue_refresh_token(),
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# Metadata-view registration (shared by legacy register_views + ha_auth)
+# ---------------------------------------------------------------------------
+
+
+def _metadata_views(provider: object) -> list[HomeAssistantView]:
+    """Build the seven discovery-document views bound to ``provider``.
+
+    The canonical protected-resource + authorization-server documents, the
+    path-scoped protected-resource document, and the four RFC 8414 / OIDC
+    well-known authorization-server locations (issue #1714). These serve the
+    same content in both OAuth modes (the AS view dispatches per-request); the
+    root `AuthorizeView` + `TokenView` are legacy-only and added by
+    `OAuthProvider.register_views`, never here.
+    """
+    views: list[HomeAssistantView] = [
+        ProtectedResourceMetadataView(provider),
+        AuthorizationServerMetadataView(provider),
+        WellKnownProtectedResourceView(provider),
+    ]
+    for url, name in (
+        (
+            f"/.well-known/oauth-authorization-server{OAUTH_BASE}",
+            "mcp_proxy_dev:oauth:wellknown-as-rfc8414",
+        ),
+        (
+            f"/.well-known/openid-configuration{OAUTH_BASE}",
+            "mcp_proxy_dev:oauth:wellknown-oidc-prefixed",
+        ),
+        (
+            f"{OAUTH_BASE}/.well-known/openid-configuration",
+            "mcp_proxy_dev:oauth:wellknown-oidc-suffixed",
+        ),
+        (
+            f"{OAUTH_BASE}/.well-known/oauth-authorization-server",
+            "mcp_proxy_dev:oauth:wellknown-as-suffixed",
+        ),
+    ):
+        views.append(
+            WellKnownAuthorizationServerMetadataView(provider, url=url, name=name)
+        )
+    return views
+
+
+def register_metadata_views(hass: HomeAssistant, provider: object) -> None:
+    """Register ONLY the seven discovery-document views (ha_auth mode).
+
+    ha_auth serves just these — Home Assistant core owns `/authorize` +
+    `/token`, so the add-on binds no root views and no HA restart is ever needed
+    to enable or disable the mode. ``provider`` is an
+    `auth_native.ResourceServer` (ha_auth) or an `OAuthProvider` (legacy, which
+    routes its seven views through here); the views read its `base_url_for`,
+    `resource_url`, `authorization_server_url`, `webhook_id`, and `_hass` (read
+    by `_active_oauth_mode` AND `_active_provider` for per-request mode/provider
+    dispatch).
+
+    Idempotent per HA session: the seven views bind at most once — a same-mode
+    reload or a legacy<->ha_auth switch reuses the already-bound views rather
+    than re-registering them (aiohttp raises ValueError on a duplicate view name
+    and HA can't drop a bound view until it restarts). The guard flag lives at a
+    top-level hass.data key so it survives async_unload_entry's pop(DOMAIN).
+    """
+    if hass.data.get(_METADATA_VIEWS_REGISTERED_KEY):
+        return
+    for view in _metadata_views(provider):
+        hass.http.register_view(view)
+    hass.data[_METADATA_VIEWS_REGISTERED_KEY] = True
 
 
 # ---------------------------------------------------------------------------
