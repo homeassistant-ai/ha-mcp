@@ -1332,15 +1332,30 @@ def _build_edit_yaml_config_handler(
                     "error": f"Failed to serialize YAML: {err}",
                 }
 
-            # Validate the result parses cleanly
+            # Validate the result parses cleanly AND round-trips to the
+            # same data we intend to write. The emitter must not alter any
+            # parsed value (e.g. by re-wrapping a long line inside a folded
+            # scalar, which embeds a literal newline in an untouched string
+            # — #1720); if it would, refuse to write rather than corrupt
+            # the file silently.
             try:
-                await hass.async_add_executor_job(
+                reparsed = await hass.async_add_executor_job(
                     lambda: make_yaml().load(StringIO(new_content))
                 )
             except YAMLError as err:
                 return {
                     "success": False,
                     "error": f"Generated YAML failed validation: {err}",
+                }
+            if reparsed != data:
+                return {
+                    "success": False,
+                    "error": (
+                        "Aborted: re-serializing the file would have altered "
+                        "content outside the requested edit (the YAML "
+                        "serializer changed at least one value elsewhere in "
+                        "the file). The file was NOT modified."
+                    ),
                 }
 
             # Create parent directories if needed (for new package files).

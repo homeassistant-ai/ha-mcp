@@ -76,10 +76,20 @@ def _register_ha_tags() -> None:
 _register_ha_tags()
 
 
+# Effectively-infinite emitter line width. ruamel's default (~80 columns)
+# re-wraps long lines on dump; inside a ``>`` folded scalar a new wrap
+# adjacent to a more-indented line becomes a LITERAL newline on re-parse,
+# silently corrupting string literals in blocks an edit never touched
+# (#1720). Never introducing new wraps also keeps untouched long lines
+# byte-stable across edits.
+_NEVER_WRAP_WIDTH = 2**31
+
+
 def _build_yaml() -> YAML:
     """Create a fresh round-trip YAML instance with HA tag support."""
     ry = YAML(typ="rt")
     ry.preserve_quotes = True
+    ry.width = _NEVER_WRAP_WIDTH
     return ry
 
 
