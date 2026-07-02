@@ -5340,8 +5340,13 @@ class TestStartHaAuthMode:
         out = capsys.readouterr().out
         assert "Home Assistant login" in out
         assert "BLANK" in out
+        # Pin the user-critical guidance lines, not just the headline: tokens
+        # are revoked from the HA profile, and a UI-required Client Secret can
+        # be any value (HA ignores it) — users act on these exact lines.
+        assert "Revoke access anytime from your Home Assistant profile's" in out
+        assert "any value works — Home Assistant ignores it." in out
 
-    def test_legacy_writes_mode_marker_and_creds(self, tmp_path):
+    def test_legacy_writes_mode_marker_and_creds(self, tmp_path, capsys):
         rc, written, mocks = self._run_main(
             tmp_path,
             {
@@ -5356,6 +5361,10 @@ class TestStartHaAuthMode:
         assert written["oauth"]["client_id"] == "client-1234567890ABCDEF"
         assert written["oauth"]["client_secret"] == "secret-much-secret"
         mocks["resolve_creds"].assert_called_once()
+        # Pin the copy-paste creds lines the legacy banner exists for.
+        out = capsys.readouterr().out
+        assert "OAuth Client ID:     client-1234567890ABCDEF" in out
+        assert "OAuth Client Secret: secret-much-secret" in out
 
     def test_ha_auth_stale_code_probe_fails_closed(self, tmp_path):
         """The fail-closed stale-code probe runs in ha_auth too (it closes the
