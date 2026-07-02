@@ -9,6 +9,7 @@ from __future__ import annotations
 import difflib
 import errno
 import fnmatch
+import hashlib
 import logging
 import os
 import posixpath
@@ -114,6 +115,11 @@ SERVICE_EDIT_YAML_CONFIG_SCHEMA = vol.Schema(
         vol.Optional("disabled_packages_keys", default=list): vol.All(
             cv.ensure_list, [cv.string]
         ),
+        # Two-step preview/confirm flow (#1720). Both optional with
+        # old-behavior defaults so a pre-confirm-flow server (which never
+        # sends them) still gets an immediate write.
+        vol.Optional("require_confirm", default=False): cv.boolean,
+        vol.Optional("confirm_token"): cv.string,
         vol.Optional(CALLER_TOKEN_FIELD): cv.string,
     }
 )
@@ -324,6 +330,16 @@ def _unified_diff(before: str, after: str, rel_path: str, max_lines: int = 200) 
         omitted = len(lines) - max_lines
         lines = lines[:max_lines] + [f"... diff truncated ({omitted} more lines)\n"]
     return "".join(lines)
+
+
+def _confirm_token(normalized: str, new_content: str) -> str:
+    """Stateless confirm token: hash of target path + exact bytes to write.
+
+    Re-derived on the confirm call from CURRENT disk state, so any change
+    to the file between preview and confirm invalidates the token
+    (optimistic locking, same philosophy as utils/config_hash.py).
+    """
+    return hashlib.sha256(f"{normalized}\n{new_content}".encode()).hexdigest()[:16]
 
 
 def _unauthorized_response(service_name: str, **extra: Any) -> dict[str, Any]:
@@ -1385,6 +1401,36 @@ def _build_edit_yaml_config_handler(
             diff_text = _unified_diff(
                 raw_content if target_exists else "", new_content, rel_path
             )
+
+            require_confirm = bool(call.data.get("require_confirm", False))
+            supplied_token = call.data.get("confirm_token")
+            expected_token = _confirm_token(normalized, new_content)
+            if require_confirm and supplied_token != expected_token:
+                preview: dict[str, Any] = {
+                    "success": True,
+                    "preview": True,
+                    "written": False,
+                    "file": rel_path,
+                    "action": action,
+                    "yaml_path": yaml_path,
+                    "diff": diff_text,
+                    "confirm_token": expected_token,
+                    "message": (
+                        "Preview only — NOTHING was written. Review the diff "
+                        "for unintended changes outside the requested edit, "
+                        "then repeat the exact same call with confirm_token "
+                        "to apply."
+                    ),
+                }
+                if supplied_token:
+                    preview["confirm_token_mismatch"] = True
+                    preview["message"] = (
+                        "confirm_token did not match — the file changed "
+                        "since the preview (or the token was wrong). NOTHING "
+                        "was written. Review the fresh diff and retry with "
+                        "the new confirm_token."
+                    )
+                return preview
 
             # Create parent directories if needed (for new package files).
             # mkdir(exist_ok=True) is idempotent so no pre-check is required.

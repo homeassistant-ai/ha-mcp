@@ -273,3 +273,81 @@ class TestDiffInResponse:
         assert result["success"] is True, result
         assert "diff truncated" in result["diff"]
         assert len(result["diff"].splitlines()) <= 210
+
+
+def _confirm_call(call_factory, token=None):
+    data = {
+        "file": "configuration.yaml",
+        "action": "add",
+        "yaml_path": "utility_meter",
+        "content": UTILITY_METER_CONTENT,
+        "require_confirm": True,
+    }
+    if token is not None:
+        data["confirm_token"] = token
+    return call_factory(data)
+
+
+class TestConfirmFlow:
+    """require_confirm=True turns the first call into a no-write preview."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_first_call_previews_without_writing(self, tmp_path, hass, call_factory):
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(handler(_confirm_call(call_factory)))
+
+        assert result["success"] is True, result
+        assert result["preview"] is True
+        assert result["written"] is False
+        assert "+utility_meter:" in result["diff"]
+        assert result["confirm_token"]
+        assert cfg.read_text() == ISSUE_1720_CONFIG  # nothing written
+
+    def test_confirm_with_token_writes(self, tmp_path, hass, call_factory):
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)
+        handler = _build_edit_yaml_config_handler(hass)
+
+        preview = self._run(handler(_confirm_call(call_factory)))
+        result = self._run(
+            handler(_confirm_call(call_factory, token=preview["confirm_token"]))
+        )
+
+        assert result["success"] is True, result
+        assert result["written"] is True
+        assert "monthly_bill_ac" in cfg.read_text()
+
+    def test_stale_token_re_previews(self, tmp_path, hass, call_factory):
+        """File changed between preview and confirm → token mismatch, no
+        write, fresh token issued."""
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)
+        handler = _build_edit_yaml_config_handler(hass)
+
+        preview = self._run(handler(_confirm_call(call_factory)))
+        cfg.write_text(ISSUE_1720_CONFIG + "input_boolean:\n  x: {}\n")
+        result = self._run(
+            handler(_confirm_call(call_factory, token=preview["confirm_token"]))
+        )
+
+        assert result["preview"] is True
+        assert result["written"] is False
+        assert result["confirm_token_mismatch"] is True
+        assert result["confirm_token"] != preview["confirm_token"]
+        assert "monthly_bill_ac" not in cfg.read_text()
+
+    def test_absent_flag_keeps_single_call_behavior(self, tmp_path, hass, call_factory):
+        """Old servers never send require_confirm — writes stay one-call."""
+        cfg = Path(tmp_path) / "configuration.yaml"
+        cfg.write_text(ISSUE_1720_CONFIG)
+
+        handler = _build_edit_yaml_config_handler(hass)
+        result = self._run(handler(_add_utility_meter_call(call_factory)))
+
+        assert result["written"] is True
+        assert "monthly_bill_ac" in cfg.read_text()
