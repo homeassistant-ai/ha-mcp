@@ -50,7 +50,7 @@ from .const import (
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
 )
-from .yaml_rt import make_yaml, yaml_dumps
+from .yaml_rt import apply_seq_indent, detect_seq_indent, make_yaml, yaml_dumps
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1321,11 +1321,18 @@ def _build_edit_yaml_config_handler(
                         }
                     del data[yaml_key]
 
-            # Serialize back to YAML
+            # Serialize back to YAML, keeping the file's own top-level
+            # sequence-dash style so untouched lines stay byte-identical
+            # (#1720: "changed indentation I didn't ask to change").
+            seq_style = detect_seq_indent(raw_content) if target_exists else None
+
+            def _dump() -> str:
+                ry = make_yaml()
+                apply_seq_indent(ry, seq_style)
+                return yaml_dumps(ry, data)
+
             try:
-                new_content = await hass.async_add_executor_job(
-                    lambda: yaml_dumps(make_yaml(), data)
-                )
+                new_content = await hass.async_add_executor_job(_dump)
             except YAMLError as err:
                 return {
                     "success": False,

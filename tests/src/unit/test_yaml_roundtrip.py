@@ -298,3 +298,74 @@ template:
         out = yaml_dumps(ry, data)
         after = self._attributes(make_yaml().load(StringIO(out)))
         assert after == before
+
+
+# ---------------------------------------------------------------------------
+# Sequence-indent style preservation (#1720)
+# ---------------------------------------------------------------------------
+
+
+class TestSeqIndentStylePreservation:
+    """Dumps keep the file's own top-level sequence-dash style (#1720
+    follow-through: 'the tool changed indentation I did not ask for')."""
+
+    HA_DOCS_STYLE = """\
+template:
+  - sensor:
+      - name: demo
+        state: "1"
+utility_meter: {}
+"""
+
+    COMPACT_STYLE = """\
+template:
+- sensor:
+  - name: demo
+    state: "1"
+utility_meter: {}
+"""
+
+    def test_detects_ha_docs_style(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        assert detect_seq_indent(self.HA_DOCS_STYLE) == (4, 2)
+
+    def test_detects_compact_style(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        assert detect_seq_indent(self.COMPACT_STYLE) == (2, 0)
+
+    def test_detects_none_without_top_level_sequence(self):
+        from custom_components.ha_mcp_tools.yaml_rt import detect_seq_indent
+
+        assert detect_seq_indent("homeassistant:\n  name: Home\n") is None
+
+    def test_ha_docs_style_roundtrips_byte_identical(self):
+        from custom_components.ha_mcp_tools.yaml_rt import (
+            apply_seq_indent,
+            detect_seq_indent,
+        )
+
+        ry, data = _load(self.HA_DOCS_STYLE)
+        apply_seq_indent(ry, detect_seq_indent(self.HA_DOCS_STYLE))
+        assert yaml_dumps(ry, data) == self.HA_DOCS_STYLE
+
+    def test_compact_style_roundtrips_byte_identical(self):
+        from custom_components.ha_mcp_tools.yaml_rt import (
+            apply_seq_indent,
+            detect_seq_indent,
+        )
+
+        ry, data = _load(self.COMPACT_STYLE)
+        apply_seq_indent(ry, detect_seq_indent(self.COMPACT_STYLE))
+        assert yaml_dumps(ry, data) == self.COMPACT_STYLE
+
+    def test_style_reset_between_dumps(self):
+        """make_yaml() is thread-cached — applying None must restore the
+        compact default rather than leak the previous file's style."""
+        from custom_components.ha_mcp_tools.yaml_rt import apply_seq_indent
+
+        ry, data = _load(self.COMPACT_STYLE)
+        apply_seq_indent(ry, (4, 2))
+        apply_seq_indent(ry, None)
+        assert yaml_dumps(ry, data) == self.COMPACT_STYLE
