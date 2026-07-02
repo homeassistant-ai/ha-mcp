@@ -89,15 +89,18 @@ SIMPLE_HELPER_TYPES: frozenset[str] = frozenset(
 # Stateful HA input helpers skip last-state restore when `initial` is stored in config
 # (including false/0). See input_boolean/input_number async_added_to_hass in HA core.
 _INITIAL_DISABLES_RESTORE_DESCRIPTION = (
-    "When set, disables last-state restore and forces this value on every "
-    "HA restart. Omit unless fixed reset-on-restart is intended."
+    "When set — even to false/0 — disables last-state restore and forces this "
+    "value on every HA restart. Omit unless you want the helper to reset to this "
+    "value on every restart instead of restoring its last state."
 )
 _INITIAL_PARAM_DESCRIPTION = (
     "Initial value for applicable helper types. For "
     "input_boolean, input_select, input_number, input_text, and input_datetime: "
-    "setting `initial` disables last-state restore and forces that value on every "
-    "HA restart; omit unless reset-on-restart is intended. For counter, use with "
-    "`restore` (default True)."
+    "setting `initial` — even to false/0 — disables last-state restore and forces "
+    "that value on every HA restart; omit unless you want the helper to reset to "
+    "that value on every restart instead of restoring its last state. For counter, "
+    "`initial` is just the starting value — restore-on-restart is controlled "
+    "separately by `restore` (default True)."
 )
 
 
@@ -405,7 +408,15 @@ SIMPLE_HELPER_SCHEMAS: dict[str, list[_HelperFieldSpec]] = {
             "selector": {"text": {}},
             "description": "Display name.",
         },
-        {"name": "initial", "required": False, "selector": {"number": {}}},
+        {
+            "name": "initial",
+            "required": False,
+            "selector": {"number": {}},
+            "description": (
+                "Initial value. Counter restores its last value on restart by "
+                "default; control via `restore`."
+            ),
+        },
         {
             "name": "min_value",
             "required": False,
