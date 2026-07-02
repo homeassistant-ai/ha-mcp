@@ -32,8 +32,9 @@ branch or carries the `allow-stable-edit` label (stable-only hotfixes). Every ch
 reaches stable through the promote workflow (see Promotion below).
 
 The only exception is this file (and its `CLAUDE.md` symlink): it is the contributor
-doc for both flavors, has no dev-side counterpart, and the promote transform never
-touches it, so the guard exempts it — edit it directly in a normal PR. `DOCS.md` and
+doc for both flavors (the dev tree carries only a pointer stub to it), the promote
+transform never touches it, and the guard exempts it — edit it directly in a normal
+PR. `DOCS.md` and
 `CHANGELOG.md` are also excluded from the promote transform, but they are user-shipped
 and stay guarded: they follow the dev-first flow and get a manual review/copy on each
 promote PR.

@@ -35,9 +35,9 @@ jobs:
           set -euo pipefail
           git fetch --quiet origin "$BASE_REF"
           # AGENTS.md (+ its CLAUDE.md symlink) is exempt: it is the contributor
-          # doc for BOTH flavors, exists only in the stable tree (no dev-side
-          # counterpart), and the promote transform never touches it — guarding
-          # it would force the allow-stable-edit label on pure doc corrections.
+          # doc for BOTH flavors (the dev tree carries only a pointer stub), and
+          # the promote transform never touches it — guarding it would force the
+          # allow-stable-edit label on pure doc corrections.
           CHANGED=$(git diff --name-only "origin/$BASE_REF...HEAD" \
             -- homeassistant-addon-webhook-proxy/ \
             ':(exclude)homeassistant-addon-webhook-proxy/AGENTS.md' \
