@@ -12,6 +12,10 @@
     "dockerfile",
     "git-submodules"
   ],
+  "git-submodules": {
+    "description": "The git-submodules manager ships enabled=false by default; enabledManagers only filters the manager list and does not flip that default, so both are required (#1729)",
+    "enabled": true
+  },
   "ignorePaths": [],
   "customManagers": [
     {
