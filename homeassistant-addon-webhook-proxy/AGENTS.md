@@ -63,8 +63,10 @@ Stable` workflow (`workflow_dispatch`): it runs `scripts/webhook_proxy_sync.py
 --direction promote`, verifies the result with the drift guards
 (`tests/src/unit/test_webhook_proxy_sync.py`), bumps stable's own version, and opens a
 draft promote PR. `DOCS.md`, `AGENTS.md`, and `CHANGELOG.md` are left untouched —
-review/copy them by hand on that PR. What the transform does (also the manual
-fallback):
+review/copy them by hand on that PR; its body embeds an identity-normalized
+`DOCS.md` diff showing exactly what diverged, and
+`test_stable_docs_free_of_dev_identity` fails the PR if dev identity/framing is
+copied onto stable. What the transform does (also the manual fallback):
 1. Copy the changed dev files onto the stable dir.
 2. Reverse-rename `mcp_proxy_dev` -> `mcp_proxy` everywhere (the inverse of the dev
    transform): component dir `mcp_proxy_dev/` -> `mcp_proxy/`, `DOMAIN`, `/opt` path,

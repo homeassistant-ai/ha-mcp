@@ -2,7 +2,9 @@ name: Webhook Proxy — Promote Dev to Stable
 
 # Manual promotion: copy the dev add-on onto the stable add-on (reverse-rename
 # mcp_proxy_dev -> mcp_proxy, restore stable identity) and bump stable's own
-# version line. Opens a draft PR; DOCS/AGENTS/CHANGELOG are left for a human.
+# version line. Opens a draft PR; DOCS/AGENTS/CHANGELOG are left for a human —
+# the PR body embeds an identity-normalized DOCS.md diff so the human sees
+# exactly what documentation content diverged and needs the manual carry-over.
 on:
   workflow_dispatch:
     inputs:
@@ -47,6 +49,60 @@ jobs:
           WEBHOOK_PROXY_TREES_SYNCED: "1"
         run: python3 -m pytest tests/src/unit/test_webhook_proxy_sync.py -q
 
+      # The transform never touches DOCS.md, so surface what the manual pass
+      # must carry over: rename-normalize the dev DOCS.md with the same token
+      # transform and diff it against stable's. An empty diff means nothing to
+      # copy; flavor-intrinsic wording (the dev-build banner section) is
+      # expected to differ. test_stable_docs_free_of_dev_identity guards the
+      # opposite mistake (copying dev DOCS.md onto stable wholesale).
+      - name: Build the DOCS.md divergence report
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > "$RUNNER_TEMP/docs-diff.md"
+          import difflib
+          import pathlib
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from webhook_proxy_sync import DEV, STABLE, rename_tokens
+
+          dev = pathlib.Path(DEV.addon_dir, "DOCS.md").read_text(encoding="utf-8")
+          stable = pathlib.Path(STABLE.addon_dir, "DOCS.md").read_text(encoding="utf-8")
+          normalized = rename_tokens(dev, DEV.component, STABLE.component)
+          diff = list(
+              difflib.unified_diff(
+                  stable.splitlines(),
+                  normalized.splitlines(),
+                  fromfile="stable DOCS.md",
+                  tofile="dev DOCS.md (identity-normalized)",
+                  lineterm="",
+              )
+          )
+          if not diff:
+              print(
+                  "**`DOCS.md`:** no content divergence beyond flavor identity "
+                  "— nothing to carry over."
+              )
+          else:
+              if len(diff) > 400:
+                  diff = diff[:400] + ["... (truncated — run the diff locally)"]
+              print(
+                  "**`DOCS.md` diverged** — carry the relevant additions onto "
+                  "stable's `DOCS.md` on this PR. Flavor-intrinsic wording "
+                  "(the dev-build banner section) is expected to differ; do "
+                  "NOT copy it, `test_stable_docs_free_of_dev_identity` "
+                  "fails the PR if the dev identity lands on stable."
+              )
+              print()
+              print("<details><summary>stable vs identity-normalized dev DOCS.md</summary>")
+              print()
+              print("```diff")
+              print("\n".join(diff))
+              print("```")
+              print()
+              print("</details>")
+          PY
+
       - name: Commit on a branch and open a draft PR
         env:
           GH_TOKEN: ${{ github.token }}
@@ -71,7 +127,9 @@ jobs:
           The transform only syncs code + identity + version. \`DOCS.md\`,
           \`AGENTS.md\`, and \`CHANGELOG.md\` are intentionally left untouched —
           give them a manual look before merging.
+
           EOF
+          cat "$RUNNER_TEMP/docs-diff.md" >> "$RUNNER_TEMP/pr-body.md"
           gh pr create --draft --base "$BASE_REF" --head "$BRANCH" \
             --title "chore(addon): promote webhook-proxy dev -> stable $NEW_VERSION" \
             --body-file "$RUNNER_TEMP/pr-body.md"
