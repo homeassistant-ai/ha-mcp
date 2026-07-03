@@ -20,48 +20,65 @@ configuration:
     description: |
       Adds OAuth 2.1 authentication to the webhook URL. The same URL keeps
       working but now requires a successful OAuth flow before serving MCP
-      requests.
+      requests. This is OFF by default and unchanged for anyone who leaves it
+      off — the webhook then works exactly as before with no auth check.
 
-      Easiest setup: turn this on, leave Client ID and Client Secret blank,
-      and restart the addon. The addon will generate strong values on first
-      start, persist them across restarts, and print them in the addon log
-      so you can copy them into your MCP client.
+      Two modes are available (see OAuth Mode below):
 
-      In Claude.ai: open the connector's Advanced settings and paste the
-      Client ID and Client Secret from the addon log into the OAuth fields
-      there. Claude.ai will then complete the OAuth handshake automatically
-      when adding the connector.
+      - ha_auth (recommended, the default for a first-time enable): you sign in
+        with your Home Assistant account. LEAVE the connector's OAuth fields
+        BLANK — no Client ID or Client Secret. Works with any hostname/URL and
+        needs NO Home Assistant restart to enable or disable.
+      - legacy: the previous flow, where the addon generates a Client ID +
+        Secret that you paste into the connector (see the OAuth Client ID /
+        Secret options). Enabling legacy requires a full Home Assistant restart
+        (a Repair with a restart button appears); disabling does not.
 
-      Enabling OAuth requires a full Home Assistant restart (Settings ->
-      System -> Restart) to take effect — restarting the add-on alone is NOT
-      enough, because Home Assistant only binds the OAuth authorize/token
-      endpoints cleanly at startup. After you enable this, a Repair
-      notification will appear with a button to restart Home Assistant.
-      Disabling OAuth does NOT require a restart. When this is off the webhook
-      URL works exactly as before with no auth check.
+      Upgrades are safe: if you already used the legacy flow (you set a Client
+      ID/Secret, or the addon stored one) the addon keeps you on legacy so your
+      existing connector keeps working. Switching modes is an explicit action
+      (set OAuth Mode) and requires deleting and re-adding your MCP connector.
+  oauth_mode:
+    name: OAuth Mode (Beta)
+    description: |
+      Which OAuth mode to use when Enable OAuth is on. Leave this UNSET unless
+      you want to switch — the addon picks the right default automatically.
+
+      - ha_auth: sign in with your Home Assistant account. Leave the connector's
+        OAuth fields blank; works with any hostname/URL; no Home Assistant
+        restart needed. This is the default for a first-time OAuth enable.
+      - legacy: the previous client-id/secret flow (deprecated), for setups that
+        still need it.
+
+      When unset, upgrades stay safe: if you already used legacy OAuth (a
+      configured or stored Client ID/Secret) the addon stays on legacy so
+      nothing breaks; otherwise it defaults to ha_auth. Changing this and
+      restarting switches modes — you must then delete and re-add your MCP
+      connector.
   oauth_client_id:
-    name: OAuth Client ID (auto-generated if blank)
+    name: OAuth Client ID (legacy mode; auto-generated if blank)
     description: |
-      Client ID that the MCP client (e.g. Claude.ai) must present at the
-      OAuth token endpoint. Leave blank to let the addon generate a value
-      on first start (recommended); the generated value is persisted in
-      /data/oauth_creds.json so it stays the same across restarts. If you
-      set a value here it must be at least 16 characters long.
+      Legacy OAuth mode only (ignored in ha_auth mode). Client ID that the MCP
+      client (e.g. Claude.ai) must present at the OAuth token endpoint. Leave
+      blank to let the addon generate a value on first start (recommended); the
+      generated value is persisted in /data/oauth_creds.json so it stays the
+      same across restarts. If you set a value here it must be at least 16
+      characters long.
   oauth_client_secret:
-    name: OAuth Client Secret (auto-generated if blank)
+    name: OAuth Client Secret (legacy mode; auto-generated if blank)
     description: |
-      Client Secret that the MCP client (e.g. Claude.ai) must present at
-      the OAuth token endpoint. Leave blank to let the addon generate a
-      strong random value on first start (recommended). Treat the value
-      like a password — anyone with it can complete the OAuth flow against
-      your MCP server.
+      Legacy OAuth mode only (ignored in ha_auth mode). Client Secret that the
+      MCP client (e.g. Claude.ai) must present at the OAuth token endpoint.
+      Leave blank to let the addon generate a strong random value on first
+      start (recommended). Treat the value like a password — anyone with it can
+      complete the OAuth flow against your MCP server.
   regenerate_oauth_creds:
-    name: Regenerate OAuth Credentials on Next Start
+    name: Regenerate OAuth Credentials on Next Start (legacy mode)
     description: |
-      One-shot action: when you turn this on and restart the addon, the
-      stored OAuth Client ID and Client Secret are wiped and fresh random
-      values are generated. The new values are printed in the addon log
-      and persisted across restarts.
+      Legacy OAuth mode only (ignored in ha_auth mode). One-shot action: when
+      you turn this on and restart the addon, the stored OAuth Client ID and
+      Client Secret are wiped and fresh random values are generated. The new
+      values are printed in the addon log and persisted across restarts.
 
       The addon attempts to flip this toggle back to off automatically
       after regenerating, so subsequent restarts don't keep regenerating.

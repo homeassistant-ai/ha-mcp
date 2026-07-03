@@ -9,6 +9,37 @@ history from before the fork.
 -->
 
 
+## v1.2.3.dev4 (2026-07-02)
+
+> **POTENTIAL BREAKING CHANGE (OAuth users).** This release changes the default
+> OAuth mode for *new* enables. Upgrades are engineered to be safe — existing
+> OAuth setups are auto-detected and kept on the old (legacy) mode — but if you
+> use OAuth, read the notes below. `enable_oauth` stays OFF by default; nothing
+> changes for anyone not using OAuth.
+
+### Added
+
+- New default OAuth mode `ha_auth` that delegates authorization to Home
+  Assistant's built-in OAuth: you sign in with your Home Assistant account and
+  the connector's OAuth fields stay blank (the add-on advertises Client ID
+  Metadata Documents, so no client id/secret is needed). It works with any
+  hostname regardless of Home Assistant's external URL, and needs no Home
+  Assistant restart to enable or disable. Validated live against claude.ai; also
+  enables ChatGPT (#1725). Follow-up to #1714.
+
+### Changed
+
+- OAuth's default for a first-time enable is now `ha_auth`. What this means for
+  OAuth users:
+  - OAuth setups from before this update keep working unchanged — legacy mode is
+    auto-detected (from a configured or stored Client ID/Secret) and kept.
+  - New / first-time OAuth enables default to the new `ha_auth` mode.
+  - Anyone switching modes must delete and re-add their MCP connector: set
+    `oauth_mode: ha_auth` (blank credentials) to move to the new mode, or
+    `oauth_mode: legacy` to pin the previous client-id/secret flow.
+  The legacy flow is unchanged and still available (deprecated).
+
+
 ## v1.2.3.dev3 (2026-07-02)
 
 ### Added

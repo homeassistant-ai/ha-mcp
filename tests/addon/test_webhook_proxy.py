@@ -286,6 +286,61 @@ def _bind_repairs(mod, tmp_marker_dir):
     return repairs
 
 
+def _ha_auth_supported() -> bool:
+    """Feature-detect whether the CURRENT flavor ships ha_auth mode (its
+    `auth_native.py` module). The stable flavor skips the ha_auth tests until
+    the module is promoted — same lockstep-with-code approach as
+    `_wellknown_oauth_urls`."""
+    return os.path.exists(
+        os.path.join(PROXY_ADDON_DIR, CURRENT["component"], "auth_native.py")
+    )
+
+
+def _load_pkg_submodule(pkg_name, component_dir, sub):
+    """Load `<pkg_name>.<sub>` from `<component_dir>/<sub>.py` and register it in
+    sys.modules under that dotted name so relative imports resolve to it."""
+    name = f"{pkg_name}.{sub}"
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(component_dir, f"{sub}.py")
+    )
+    m = importlib.util.module_from_spec(spec)
+    sys.modules[name] = m
+    spec.loader.exec_module(m)
+    return m
+
+
+def _import_ha_auth_stack(tmp_secret_dir=None):
+    """Import the integration wired for ha_auth mode.
+
+    Loads __init__, oauth, and auth_native all as submodules of ONE package so
+    the relative imports resolve in BOTH directions to the same instances:
+    auth_native does `from .oauth import ...` at load, and the ha_auth AS view
+    does `from .auth_native import ...` at request time. (The legacy helpers load
+    oauth top-level, which can't satisfy the view's reverse relative import.)
+    Returns (init_mod, oauth_mod, auth_native_mod).
+    """
+    _install_runtime_stubs()
+    component_dir = os.path.join(PROXY_ADDON_DIR, CURRENT["component"])
+    pkg_name = f"mcp_proxy_init_{CURRENT['key']}"
+    for suffix in ("", ".oauth", ".auth_native", ".repairs"):
+        sys.modules.pop(f"{pkg_name}{suffix}", None)
+    # Create the package object first so submodules have a parent with __path__.
+    init_path = os.path.join(component_dir, "__init__.py")
+    init_spec = importlib.util.spec_from_file_location(
+        pkg_name, init_path, submodule_search_locations=[component_dir]
+    )
+    pkg = importlib.util.module_from_spec(init_spec)
+    sys.modules[pkg_name] = pkg
+    # oauth first (auth_native's `from .oauth` needs it bound), secret redirected.
+    oauth = _load_pkg_submodule(pkg_name, component_dir, "oauth")
+    if tmp_secret_dir is not None:
+        oauth.SECRET_FILE = Path(tmp_secret_dir) / ".mcp_proxy_oauth_secret"
+    auth_native = _load_pkg_submodule(pkg_name, component_dir, "auth_native")
+    # Execute the package __init__ last; its lazy imports resolve to the above.
+    init_spec.loader.exec_module(pkg)
+    return pkg, oauth, auth_native
+
+
 # ---------------------------------------------------------------------------
 # Structure tests
 # ---------------------------------------------------------------------------
@@ -1917,6 +1972,19 @@ class TestOAuthProvider:
         assert provider.validate_access_token("") is False
         assert provider.validate_access_token("bare") is False
 
+    def test_non_ascii_bearer_rejected_not_raised(self, provider):
+        # C1 regression: a bearer whose pre-signature segment carries a
+        # non-ASCII char makes body.encode("ascii") raise UnicodeEncodeError.
+        # _validate_token must catch it and return False rather than let it
+        # escape the webhook gate (HA core's async_handle_webhook would swallow
+        # it into a 200 OK and never emit the 401 discovery challenge).
+        # The legacy hardening rides the dev flavor until promotion (stable still
+        # hmac's body.encode("ascii") outside the decode try), so skip on stable.
+        if not _ha_auth_supported():
+            pytest.skip("legacy non-ASCII hardening rides the dev flavor until promote")
+        assert provider.validate_access_token("é.AA") is False
+        assert provider.validate_access_token("\xff.AA") is False
+
     def test_token_with_tampered_payload_rejected(self, provider):
         token = provider.issue_access_token()
         body, sig = token.rsplit(".", 1)
@@ -2572,6 +2640,39 @@ class TestOAuthWebhookHandler:
         request.read.assert_not_awaited()
         response_ctor.assert_called_once()
         assert response_ctor.call_args.kwargs.get("status") == 401
+
+    async def test_non_ascii_bearer_gate_returns_401_not_swallowed(self, setup):
+        """C1 gate-level regression: a legacy-mode bearer whose pre-signature
+        segment has a non-ASCII char must yield the 401 discovery challenge, not
+        raise UnicodeEncodeError out of the gate — HA core's async_handle_webhook
+        would swallow that into a 200 OK and never challenge the client."""
+        mod, oauth = setup
+        # The C1 hardening rides the dev flavor until promotion (stable still
+        # hmac's body.encode("ascii") outside the decode try), so skip on stable.
+        if not _ha_auth_supported():
+            pytest.skip("legacy non-ASCII hardening rides the dev flavor until promote")
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
+        hass = self._make_hass(mod, provider)
+        request = self._make_request("Bearer é.AA")
+        request.headers["Host"] = "example.nabu.casa"
+
+        with patch.object(oauth.web, "Response") as response_ctor:
+            await mod._handle_webhook(hass, "mcp_test", request)
+
+        request.read.assert_not_awaited()
+        response_ctor.assert_called_once()
+        assert response_ctor.call_args.kwargs.get("status") == 401
+        ww = response_ctor.call_args.kwargs.get("headers", {}).get(
+            "WWW-Authenticate", ""
+        )
+        assert ww.startswith("Bearer realm=")
+        assert "resource_metadata=" in ww
 
     async def test_passes_through_with_valid_bearer(self, setup):
         mod, oauth = setup
@@ -4340,3 +4441,1279 @@ class TestUnauthorizedResponseShape:
         # Pinned base means evil.example is NOT in the metadata URL
         assert "evil.example" not in ww
         assert f"https://legit.example{CURRENT['oauth_base']}/protected-resource" in ww
+
+
+class TestHaAuthMode:
+    """The ha_auth OAuth mode: HA core is the authorization server and the
+    add-on is a pure resource server (serves the discovery documents + validates
+    bearers via hass.auth). Skips on flavors that don't ship auth_native yet."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_stable(self, _webhook_proxy_variant):
+        if not _ha_auth_supported():
+            pytest.skip("flavor does not ship ha_auth (auth_native) yet")
+
+    @pytest.fixture
+    def hass(self):
+        h = MagicMock()
+        h.data = {}
+        h.http = MagicMock()
+        h.http.register_view = MagicMock()
+
+        async def fake_executor(func, *args):
+            return func(*args)
+
+        h.async_add_executor_job = AsyncMock(side_effect=fake_executor)
+        return h
+
+    @staticmethod
+    def _ha_auth_config():
+        return {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+            "oauth": {"mode": "ha_auth"},
+        }
+
+    # ---- constants agree across the three modules ----
+
+    def test_mode_literals_agree(self, tmp_path):
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        assert auth_native.HA_AUTH_MODE == "ha_auth"
+        assert auth_native.AUTH_V2 is True
+        assert oauth.MODE_HA_AUTH == auth_native.HA_AUTH_MODE
+        assert oauth.MODE_LEGACY == "legacy"
+        assert mod.OAUTH_MODE_HA_AUTH == auth_native.HA_AUTH_MODE
+        assert mod.OAUTH_MODE_LEGACY == "legacy"
+        # start.py mirrors the same two literals for the config it writes.
+        start = _import_start()
+        assert start.HA_AUTH_MODE == auth_native.HA_AUTH_MODE
+        assert start.LEGACY_MODE == "legacy"
+        # The DOMAIN key the discovery views read via _active_oauth_mode
+        # (oauth.DOMAIN) must equal the one the handler writes (mod.DOMAIN);
+        # a drift would make every view 404 (no live mode ever resolved).
+        assert oauth.DOMAIN == mod.DOMAIN
+
+    # ---- config.yaml + translations coverage for oauth_mode (dev-only) ----
+
+    def test_oauth_mode_schema_and_translation(self):
+        with open(f"{PROXY_ADDON_DIR}/config.yaml") as f:
+            config = yaml.safe_load(f)
+        assert config["schema"]["oauth_mode"] == "list(ha_auth|legacy)?"
+        # No default in options: (kept hidden + no inherited value on upgrade).
+        assert "oauth_mode" not in config["options"]
+        with open(f"{PROXY_ADDON_DIR}/translations/en.yaml") as f:
+            tr = yaml.safe_load(f)
+        entry = tr["configuration"]["oauth_mode"]
+        assert entry.get("name"), "oauth_mode needs a translation name"
+        assert entry.get("description"), "oauth_mode needs a translation description"
+        assert "Beta" in entry["name"]
+
+    # ---- setup registers exactly the 7 metadata views, no root views ----
+
+    async def test_setup_registers_seven_metadata_views_and_marks_mode(
+        self, hass, tmp_path
+    ):
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        repairs = _bind_repairs(mod, tmp_path)
+        repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
+        with (
+            patch.object(mod, "_read_config", return_value=self._ha_auth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create_issue,
+            patch.object(repairs, "_write_marker") as mock_write,
+            patch.object(repairs, "_delete_issue_only") as mock_delete,
+        ):
+            result = await mod.async_setup_entry(hass, MagicMock())
+
+        assert result is True
+        registered = {
+            call.args[0].url for call in hass.http.register_view.call_args_list
+        }
+        expected = {
+            f"{CURRENT['oauth_base']}/protected-resource",
+            f"{CURRENT['oauth_base']}/authorization-server",
+        } | _wellknown_oauth_urls(oauth, "mcp_test")
+        assert registered == expected
+        assert len(registered) == 7
+        # No root /authorize or /token views in ha_auth mode.
+        assert "/authorize" not in registered
+        assert "/token" not in registered
+        # hass.data carries the ResourceServer + the mode marker.
+        assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_HA_AUTH
+        assert isinstance(hass.data[mod.DOMAIN]["oauth"], auth_native.ResourceServer)
+        # No owner-key / fingerprint bookkeeping (those guard root views).
+        assert mod.OAUTH_ROUTE_OWNER_KEY not in hass.data
+        assert mod.OAUTH_ROUTE_KEY_FINGERPRINT not in hass.data
+        # Restart-Repair marker CLEARED, never created.
+        assert not repairs.RESTART_MARKER_FILE.exists()
+        mock_delete.assert_called_once_with(hass, mod.DOMAIN)
+        mock_create_issue.assert_not_called()
+        mock_write.assert_not_called()
+
+    async def test_ha_auth_init_failure_unregisters_and_raises(self, hass, tmp_path):
+        """ha_auth mirror of the legacy provider-init-failure teardown: if
+        register_metadata_views raises while enabling OAuth, the user opted into
+        auth, so refuse to start — raise ConfigEntryError, tear down the webhook
+        registered above (no unauthenticated endpoint left live), close the
+        session (no leak), and leave DOMAIN out of hass.data."""
+        mod, oauth, _an = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        _bind_repairs(mod, tmp_path)
+        session = MagicMock()
+        session.close = AsyncMock()
+        with (
+            patch.object(mod, "_read_config", return_value=self._ha_auth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            # The integration lazy-imports register_metadata_views at call time
+            # (`from .oauth import register_metadata_views` inside
+            # async_setup_entry), so patching the oauth module attribute lands.
+            patch.object(
+                oauth, "register_metadata_views", side_effect=RuntimeError("boom")
+            ),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "Failed to enable OAuth" in str(exc_info.value)
+        mock_unreg.assert_called_once_with(hass, "mcp_test")
+        session.close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
+
+    async def test_setup_ignores_stray_public_base_url_host_derived(
+        self, hass, tmp_path
+    ):
+        """Fix 4 through async_setup_entry: a hand-edited ha_auth config that
+        ALSO carries a stray top-level `public_base_url` (the key legacy writes
+        and __init__ reads at line 507) must NOT pin the ResourceServer — ha_auth
+        is always host-derived. __init__ constructs the provider with
+        public_base_url=None regardless, so the served discovery base follows the
+        request Host, never the stray URL."""
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        _bind_repairs(mod, tmp_path)
+        config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+            # Stray hand-edit: a legacy-style pinned URL left behind after a
+            # manual switch to ha_auth. The ambiguity guard only rejects
+            # client_id/client_secret keys, so this reaches the provider wiring.
+            "public_base_url": "https://stray-pinned.example",
+            "oauth": {"mode": "ha_auth"},
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            result = await mod.async_setup_entry(hass, MagicMock())
+        assert result is True
+        rs = hass.data[mod.DOMAIN]["oauth"]
+        assert isinstance(rs, auth_native.ResourceServer)
+        # Wiring: the stray URL was dropped — the provider is host-derived.
+        assert rs._public_base_url is None
+        # Behavior: base_url_for follows the request Host, not the stray URL.
+        request = _make_view_request(headers={"Host": "host-abc.example"})
+        assert rs.base_url_for(request) == "https://host-abc.example"
+        # And the served authorization-server document reflects the request host.
+        with patch.object(oauth.web, "json_response") as jr:
+            await oauth.AuthorizationServerMetadataView(rs).get(request)
+        doc = jr.call_args.args[0]
+        assert doc["issuer"] == f"https://host-abc.example{oauth.OAUTH_BASE}"
+        assert "stray-pinned.example" not in doc["issuer"]
+        assert "stray-pinned.example" not in doc["authorization_endpoint"]
+        # It genuinely served the ha_auth document (public client + CIMD).
+        assert doc["token_endpoint_auth_methods_supported"] == ["none"]
+
+    async def test_reload_does_not_reregister_views(self, hass, tmp_path):
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        _bind_repairs(mod, tmp_path)
+        with (
+            patch.object(mod, "_read_config", return_value=self._ha_auth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+            first = hass.http.register_view.call_count
+            hass.http.register_view.reset_mock()
+            # A second setup (config-entry reload) must NOT re-register the views.
+            await mod.async_setup_entry(hass, MagicMock())
+        assert first == 7
+        assert hass.http.register_view.call_count == 0
+        # The register-once flag lives in oauth.py (a top-level hass.data key),
+        # not on the integration package.
+        assert hass.data[oauth._METADATA_VIEWS_REGISTERED_KEY] is True
+
+    async def test_register_once_flag_survives_unload(self, hass, tmp_path):
+        """The register-once flag lives at a TOP-LEVEL hass.data key so it
+        outlives async_unload_entry's pop(DOMAIN): HA can't drop the seven bound
+        views until it restarts, so a setup -> unload -> setup cycle must NOT
+        re-register them (which would trip aiohttp's duplicate-view ValueError)."""
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        _bind_repairs(mod, tmp_path)
+        session = MagicMock()
+        session.close = AsyncMock()
+        with (
+            patch.object(mod, "_read_config", return_value=self._ha_auth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+            assert hass.http.register_view.call_count == 7
+            flag_key = oauth._METADATA_VIEWS_REGISTERED_KEY
+            assert hass.data[flag_key] is True
+            await mod.async_unload_entry(hass, MagicMock())
+            # unload pops DOMAIN...
+            assert mod.DOMAIN not in hass.data
+            # ...but the top-level register-once flag survives it.
+            assert hass.data[flag_key] is True
+            hass.http.register_view.reset_mock()
+            # A fresh setup after the unload reuses the still-bound views.
+            await mod.async_setup_entry(hass, MagicMock())
+        assert hass.http.register_view.call_count == 0
+        assert hass.data[flag_key] is True
+
+    def _legacy_config(self):
+        return {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+            "oauth": {
+                "mode": "legacy",
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+
+    async def test_ha_auth_then_legacy_does_not_reregister_metadata(
+        self, hass, tmp_path
+    ):
+        """A live ha_auth -> legacy switch reuses the already-bound seven
+        metadata views: legacy's register_views() routes them through the same
+        flag-guarded registrar, so the second setup registers ONLY the two root
+        views, never a duplicate of the seven."""
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        _bind_repairs(mod, tmp_path)
+        # Boot-time so legacy binds its root views cleanly (no restart Repair).
+        hass.is_running = False
+        with (
+            patch.object(
+                mod,
+                "_read_config",
+                side_effect=[self._ha_auth_config(), self._legacy_config()],
+            ),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())  # ha_auth: 7 metadata
+            assert hass.http.register_view.call_count == 7
+            hass.http.register_view.reset_mock()
+            await mod.async_setup_entry(hass, MagicMock())  # legacy: only 2 root
+        registered = {
+            call.args[0].url for call in hass.http.register_view.call_args_list
+        }
+        assert registered == {"/authorize", "/token"}
+        # None of the seven metadata views were registered a second time.
+        assert not (registered & _wellknown_oauth_urls(oauth, "mcp_test"))
+        assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_LEGACY
+
+    async def test_legacy_then_ha_auth_does_not_reregister_metadata(
+        self, hass, tmp_path
+    ):
+        """A live legacy -> ha_auth switch: legacy already bound the seven via
+        the shared registrar, so the ha_auth setup's register_metadata_views
+        no-ops and registers nothing new."""
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        _bind_repairs(mod, tmp_path)
+        hass.is_running = False
+        with (
+            patch.object(
+                mod,
+                "_read_config",
+                side_effect=[self._legacy_config(), self._ha_auth_config()],
+            ),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())  # legacy: 7 + 2 root
+            assert hass.http.register_view.call_count == 9
+            hass.http.register_view.reset_mock()
+            await mod.async_setup_entry(hass, MagicMock())  # ha_auth: reuse all
+        assert hass.http.register_view.call_count == 0
+        assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_HA_AUTH
+
+    async def test_unknown_mode_raises(self, hass, tmp_path):
+        mod = _import_mcp_proxy()
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "oauth": {"mode": "bogus"},
+        }
+        session = MagicMock()
+        session.close = AsyncMock()
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+        assert "Unknown OAuth mode" in str(exc_info.value)
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
+        session.close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
+
+    async def test_ambiguous_ha_auth_with_creds_raises(self, hass, tmp_path):
+        """Hard mutual exclusion: mode ha_auth + legacy creds keys is ambiguous
+        and must be refused, not guessed."""
+        mod, _oauth, _an = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test_webhook_id_12345",
+            "oauth": {
+                "mode": "ha_auth",
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+        session = MagicMock()
+        session.close = AsyncMock()
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+        assert "Ambiguous" in str(exc_info.value)
+        mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
+        session.close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
+        # The ResourceServer was never constructed and no view registered.
+        hass.http.register_view.assert_not_called()
+
+    async def test_creds_without_mode_takes_legacy_path(self, hass, tmp_path):
+        """Back-compat pin: a creds-shaped section without a mode key is legacy,
+        and the ha_auth module (auth_native) is NEVER imported for it."""
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        mod = _import_mcp_proxy(preload_oauth=oauth)
+        hass.is_running = False
+        auth_native_name = f"{mod.__name__}.auth_native"
+        sys.modules.pop(auth_native_name, None)
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+            "oauth": {
+                "client_id": "client-1234567890ABCDEF",
+                "client_secret": "secret-much-secret",
+            },
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+        assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_LEGACY
+        # Legacy constructed its embedded provider + claimed the root routes.
+        assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
+        assert hasattr(hass.data[mod.DOMAIN]["oauth"], "validate_bearer")
+        # ha_auth's auth_native module must NOT be imported on the legacy path.
+        assert auth_native_name not in sys.modules
+
+    async def test_off_path_imports_neither_oauth_nor_auth_native(self, hass, tmp_path):
+        """The OAuth-off path must import neither oauth NOR auth_native (mirror
+        of the existing 'off path imports nothing' pin, extended to ha_auth)."""
+        mod = _import_mcp_proxy()
+        oauth_name = f"{mod.__name__}.oauth"
+        an_name = f"{mod.__name__}.auth_native"
+        sys.modules.pop(oauth_name, None)
+        sys.modules.pop(an_name, None)
+        proxy_config = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=proxy_config),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+        assert oauth_name not in sys.modules
+        assert an_name not in sys.modules
+
+    # ---- documents ----
+
+    def _resource_server(self, tmp_path, mode="ha_auth"):
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        hass.data = {mod.DOMAIN: {"oauth_mode": mode}}
+        rs = auth_native.ResourceServer(
+            hass, "mcp_webhook_id_aaaa", public_base_url="https://legit.example"
+        )
+        return oauth, rs
+
+    async def test_as_document_ha_auth_shape_canonical_and_wellknown(self, tmp_path):
+        oauth, rs = self._resource_server(tmp_path)
+        request = _make_view_request(headers={"Host": "ignored"})
+        with patch.object(oauth.web, "json_response") as jr:
+            await oauth.AuthorizationServerMetadataView(rs).get(request)
+        doc = jr.call_args.args[0]
+        assert doc["issuer"] == f"https://legit.example{oauth.OAUTH_BASE}"
+        assert doc["authorization_endpoint"] == "https://legit.example/auth/authorize"
+        assert doc["token_endpoint"] == "https://legit.example/auth/token"
+        assert doc["response_types_supported"] == ["code"]
+        assert doc["grant_types_supported"] == ["authorization_code", "refresh_token"]
+        assert doc["code_challenge_methods_supported"] == ["S256"]
+        assert doc["token_endpoint_auth_methods_supported"] == ["none"]
+        assert doc["client_id_metadata_document_supported"] is True
+        assert "registration_endpoint" not in doc
+        # A well-known variant serves the SAME document.
+        wk = oauth.WellKnownAuthorizationServerMetadataView(
+            rs,
+            url=f"{oauth.OAUTH_BASE}/.well-known/oauth-authorization-server",
+            name="test:wk",
+        )
+        with patch.object(oauth.web, "json_response") as jr2:
+            await wk.get(request)
+        assert jr2.call_args.args[0] == doc
+
+    async def test_prm_document_ha_auth_matches_legacy_shape(self, tmp_path):
+        oauth, rs = self._resource_server(tmp_path)
+        request = _make_view_request(headers={"Host": "ignored"})
+        with patch.object(oauth.web, "json_response") as jr:
+            await oauth.ProtectedResourceMetadataView(rs).get(request)
+        body = jr.call_args.args[0]
+        assert body["resource"] == (
+            "https://legit.example/api/webhook/mcp_webhook_id_aaaa"
+        )
+        assert body["authorization_servers"] == [
+            f"https://legit.example{oauth.OAUTH_BASE}"
+        ]
+        assert body["bearer_methods_supported"] == ["header"]
+        assert body["resource_documentation"] == (
+            "https://github.com/homeassistant-ai/ha-mcp"
+        )
+
+    # ---- runtime mutual-exclusion: root views 404 when ha_auth is active ----
+
+    async def test_authorize_and_token_views_404_when_ha_auth_active(self, tmp_path):
+        oauth = _import_oauth(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        hass.data = {oauth.DOMAIN: {"oauth_mode": oauth.MODE_HA_AUTH}}
+        # A legacy provider still bound from a prior legacy session.
+        provider = oauth.OAuthProvider(
+            hass=hass,
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
+        av = oauth.AuthorizeView(provider)
+        good_query = {
+            "response_type": "code",
+            "client_id": "cid-1234567890ABCDEF",
+            "redirect_uri": "https://claude.ai/cb",
+            "code_challenge": "X" * 43,
+            "code_challenge_method": "S256",
+            "state": "s",
+        }
+        with patch.object(oauth.web, "Response") as rc:
+            await av.get(_make_view_request(query=good_query, method="GET"))
+        assert rc.call_args.kwargs.get("status") == 404
+        with patch.object(oauth.web, "Response") as rc2:
+            await av.post(
+                _make_view_request(method="POST", post_data={"action": "approve"})
+            )
+        assert rc2.call_args.kwargs.get("status") == 404
+        tv = oauth.TokenView(provider)
+        with patch.object(oauth.web, "json_response") as jr:
+            await tv.post(
+                _make_view_request(
+                    method="POST", post_data={"grant_type": "authorization_code"}
+                )
+            )
+        assert jr.call_args.kwargs.get("status") == 404
+
+    # ---- webhook gate: bearer validated via hass.auth ----
+
+    def _gate_hass(self, mod, auth_native, validate_return):
+        hass = MagicMock()
+        hass.auth.async_validate_access_token = MagicMock(return_value=validate_return)
+        rs = auth_native.ResourceServer(hass, "wh")
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "mcp_test",
+                "session": MagicMock(),
+                "oauth": rs,
+                "oauth_mode": mod.OAUTH_MODE_HA_AUTH,
+            }
+        }
+        return hass
+
+    async def test_webhook_gate_valid_bearer_proxies(self, tmp_path):
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = self._gate_hass(mod, auth_native, object())  # non-None -> authorized
+        request = MagicMock()
+        request.headers = {"Authorization": "Bearer good-token", "Host": "h"}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.scheme = "https"
+        sentinel = mod.aiohttp.ClientError("stop here")
+        hass.data[mod.DOMAIN]["session"].request = MagicMock(side_effect=sentinel)
+        await mod._handle_webhook(hass, "mcp_test", request)
+        request.read.assert_awaited_once()  # gate passed -> upstream call reached
+        hass.auth.async_validate_access_token.assert_called_once_with("good-token")
+
+    async def test_webhook_gate_invalid_bearer_401(self, tmp_path):
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = self._gate_hass(mod, auth_native, None)  # None -> unauthorized
+        request = MagicMock()
+        request.headers = {"Authorization": "Bearer bad", "Host": "example.nabu.casa"}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.scheme = "https"
+        with patch.object(oauth.web, "Response") as response_ctor:
+            await mod._handle_webhook(hass, "mcp_test", request)
+        request.read.assert_not_awaited()
+        assert response_ctor.call_args.kwargs.get("status") == 401
+        ww = response_ctor.call_args.kwargs.get("headers", {}).get(
+            "WWW-Authenticate", ""
+        )
+        assert ww.startswith("Bearer realm=")
+        assert "resource_metadata=" in ww
+        hass.auth.async_validate_access_token.assert_called_once_with("bad")
+
+    async def test_webhook_gate_missing_bearer_401_validator_not_called(self, tmp_path):
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = self._gate_hass(mod, auth_native, object())
+        request = MagicMock()
+        request.headers = {"Host": "example.nabu.casa"}  # no Authorization
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.scheme = "https"
+        with patch.object(oauth.web, "Response") as response_ctor:
+            await mod._handle_webhook(hass, "mcp_test", request)
+        request.read.assert_not_awaited()
+        assert response_ctor.call_args.kwargs.get("status") == 401
+        # Malformed/missing header rejected WITHOUT invoking the HA validator.
+        hass.auth.async_validate_access_token.assert_not_called()
+
+    async def test_validator_raises_gate_returns_401_not_500(self, tmp_path):
+        """A crafted token can make hass.auth.async_validate_access_token raise
+        (outside jwt.InvalidTokenError). ResourceServer.validate_request must
+        swallow it and return False, and the webhook gate must then emit the
+        normal 401 discovery challenge — never a 500 that leaks the exception."""
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = self._gate_hass(mod, auth_native, object())
+        hass.auth.async_validate_access_token = MagicMock(
+            side_effect=RuntimeError("crafted unsigned token")
+        )
+        rs = hass.data[mod.DOMAIN]["oauth"]
+        # Direct: the raise is contained and reported as unauthorized.
+        direct = MagicMock()
+        direct.headers = {"Authorization": "Bearer crafted"}
+        assert await rs.validate_request(direct) is False
+        # Gate: 401 challenge, not a 500, and the upstream is never reached.
+        request = MagicMock()
+        request.headers = {"Authorization": "Bearer crafted", "Host": "h.nabu.casa"}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.scheme = "https"
+        with patch.object(oauth.web, "Response") as response_ctor:
+            await mod._handle_webhook(hass, "mcp_test", request)
+        request.read.assert_not_awaited()
+        assert response_ctor.call_args.kwargs.get("status") == 401
+        ww = response_ctor.call_args.kwargs.get("headers", {}).get(
+            "WWW-Authenticate", ""
+        )
+        assert ww.startswith("Bearer realm=")
+        assert "resource_metadata=" in ww
+
+    # ---- validate_request direct unit tests ----
+
+    def _resource_server_for_validate(self, tmp_path, validator):
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        hass.auth.async_validate_access_token = validator
+        return auth_native.ResourceServer(hass, "wh")
+
+    async def test_validate_request_empty_token_not_validated(self, tmp_path):
+        """A bare 'Bearer ' with an empty/whitespace token is rejected WITHOUT
+        calling the validator (no point hashing junk)."""
+        validator = MagicMock(return_value=object())
+        rs = self._resource_server_for_validate(tmp_path, validator)
+        req = MagicMock()
+        req.headers = {"Authorization": "Bearer    "}
+        assert await rs.validate_request(req) is False
+        validator.assert_not_called()
+
+    async def test_validate_request_wrong_scheme_rejected(self, tmp_path):
+        """A non-Bearer scheme (Basic) is rejected without touching the
+        validator."""
+        validator = MagicMock(return_value=object())
+        rs = self._resource_server_for_validate(tmp_path, validator)
+        req = MagicMock()
+        req.headers = {"Authorization": "Basic dXNlcjpwYXNzd29yZA=="}
+        assert await rs.validate_request(req) is False
+        validator.assert_not_called()
+
+    async def test_validate_request_mixed_case_bearer_accepted(self, tmp_path):
+        """The scheme match is case-insensitive: 'bEaReR' still routes the token
+        to the validator (a non-None RefreshToken -> authorized)."""
+        validator = MagicMock(return_value=object())
+        rs = self._resource_server_for_validate(tmp_path, validator)
+        req = MagicMock()
+        req.headers = {"Authorization": "bEaReR good-token"}
+        assert await rs.validate_request(req) is True
+        validator.assert_called_once_with("good-token")
+
+    async def test_validate_request_awaitable_result_branch(self, tmp_path):
+        """Defensive future-proofing: if a future HA turns async_validate_access_token
+        into a coroutine, validate_request awaits it before the None check."""
+        validator = AsyncMock(return_value=object())
+        rs = self._resource_server_for_validate(tmp_path, validator)
+        req = MagicMock()
+        req.headers = {"Authorization": "Bearer good-token"}
+        assert await rs.validate_request(req) is True
+        validator.assert_awaited_once_with("good-token")
+
+    # ---- unloaded (DOMAIN absent) -> every bound view 404s ----
+
+    async def test_unloaded_views_all_404(self, tmp_path):
+        """When the config entry was unloaded (hass.data lacks DOMAIN) but HA
+        can't drop the still-bound views until a restart, _active_oauth_mode
+        resolves None: both metadata views AND the three root view handlers must
+        404 like an unregistered route."""
+        _mod, oauth, _an = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        hass.data = {}  # DOMAIN absent -> unloaded
+        provider = oauth.OAuthProvider(
+            hass=hass,
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
+        req = _make_view_request(headers={"Host": "h"})
+        for view in (
+            oauth.ProtectedResourceMetadataView(provider),
+            oauth.AuthorizationServerMetadataView(provider),
+        ):
+            with patch.object(oauth.web, "json_response") as jr:
+                await view.get(req)
+            assert jr.call_args.kwargs.get("status") == 404
+        av = oauth.AuthorizeView(provider)
+        with patch.object(oauth.web, "Response") as rc:
+            await av.get(_make_view_request(query={}, method="GET"))
+        assert rc.call_args.kwargs.get("status") == 404
+        with patch.object(oauth.web, "Response") as rc:
+            await av.post(
+                _make_view_request(method="POST", post_data={"action": "approve"})
+            )
+        assert rc.call_args.kwargs.get("status") == 404
+        tv = oauth.TokenView(provider)
+        with patch.object(oauth.web, "json_response") as jr:
+            await tv.post(
+                _make_view_request(
+                    method="POST", post_data={"grant_type": "authorization_code"}
+                )
+            )
+        assert jr.call_args.kwargs.get("status") == 404
+
+    async def test_oauth_off_after_on_stale_views_all_404(self, tmp_path):
+        """OAuth toggled OFF after a prior ON: the entry reloaded and __init__
+        rewrote hass.data[DOMAIN] as {target_url, webhook_id, session} with NO
+        'oauth_mode' key, but HA can't drop the still-bound views until a
+        restart. _active_oauth_mode resolves domain_data.get('oauth_mode') ->
+        None, so every bound view must 404 — the distinct present-dict-without-
+        oauth_mode branch (test_unloaded_views_all_404 covers only the
+        DOMAIN-absent branch). Regression guard: someone re-adding a MODE_LEGACY
+        default on that .get()."""
+        _mod, oauth, _an = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        # Exact OAuth-off shape __init__ writes (target_url/webhook_id/session),
+        # a REAL dict with no "oauth_mode" -> _active_oauth_mode returns None.
+        hass.data = {
+            oauth.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "wh",
+                "session": MagicMock(),
+            }
+        }
+        provider = oauth.OAuthProvider(
+            hass=hass,
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
+        req = _make_view_request(headers={"Host": "h"})
+        for view in (
+            oauth.ProtectedResourceMetadataView(provider),
+            oauth.AuthorizationServerMetadataView(provider),
+        ):
+            with patch.object(oauth.web, "json_response") as jr:
+                await view.get(req)
+            assert jr.call_args.kwargs.get("status") == 404
+        av = oauth.AuthorizeView(provider)
+        with patch.object(oauth.web, "Response") as rc:
+            await av.get(_make_view_request(query={}, method="GET"))
+        assert rc.call_args.kwargs.get("status") == 404
+        with patch.object(oauth.web, "Response") as rc:
+            await av.post(
+                _make_view_request(method="POST", post_data={"action": "approve"})
+            )
+        assert rc.call_args.kwargs.get("status") == 404
+        tv = oauth.TokenView(provider)
+        with patch.object(oauth.web, "json_response") as jr:
+            await tv.post(
+                _make_view_request(
+                    method="POST", post_data={"grant_type": "authorization_code"}
+                )
+            )
+        assert jr.call_args.kwargs.get("status") == 404
+
+    # ---- the 401 challenge is the SAME builder + pointer in both modes ----
+
+    async def test_401_challenge_byte_identical_legacy_vs_ha_auth(self, tmp_path):
+        """Both modes emit the 401 through the one shared
+        build_unauthorized_response. Legacy pins its base to public_base_url and
+        ha_auth derives it from the host; for a request whose host equals the
+        pinned URL the two resolve to the same base, so the WWW-Authenticate
+        challenge (realm + resource_metadata pointer) is byte-identical."""
+        _mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        legacy = oauth.OAuthProvider(
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="mcp_webhook_id_aaaa",
+            signing_key=b"\x00" * 32,
+            public_base_url="https://myhost.example",
+        )
+        # ha_auth is host-derived (public_base_url None, per PR requirement).
+        ha = auth_native.ResourceServer(MagicMock(), "mcp_webhook_id_aaaa", None)
+        req = _make_view_request(headers={"Host": "myhost.example"}, scheme="https")
+        with patch.object(oauth.web, "Response") as rc:
+            oauth.build_unauthorized_response(req, legacy)
+        legacy_ww = rc.call_args.kwargs["headers"]["WWW-Authenticate"]
+        with patch.object(oauth.web, "Response") as rc:
+            oauth.build_unauthorized_response(req, ha)
+        ha_ww = rc.call_args.kwargs["headers"]["WWW-Authenticate"]
+        assert legacy_ww == ha_ww
+        assert legacy_ww == (
+            'Bearer realm="MCP Proxy", resource_metadata='
+            f'"https://myhost.example{oauth.OAUTH_BASE}/protected-resource"'
+        )
+
+    # ---- the ha_auth AS document is served identically at all 4 well-known URLs ----
+
+    async def test_ha_auth_as_doc_identity_across_all_wellknown_variants(
+        self, tmp_path
+    ):
+        """All four well-known authorization-server URLs must serve content
+        identical to the canonical ha_auth authorization_server_document (issue
+        #1714: claude.ai caches per-URL, so a stale/mismatched doc at any of
+        these poisons discovery)."""
+        oauth, rs = self._resource_server(tmp_path)  # oauth_mode ha_auth
+        request = _make_view_request(headers={"Host": "ignored"})
+        with patch.object(oauth.web, "json_response") as jr:
+            await oauth.AuthorizationServerMetadataView(rs).get(request)
+        canonical = jr.call_args.args[0]
+        # It is genuinely the ha_auth document (public client + CIMD), not legacy.
+        assert canonical["token_endpoint_auth_methods_supported"] == ["none"]
+        assert canonical["client_id_metadata_document_supported"] is True
+        assert canonical["authorization_endpoint"] == (
+            "https://legit.example/auth/authorize"
+        )
+        base = oauth.OAUTH_BASE
+        variants = (
+            f"/.well-known/oauth-authorization-server{base}",
+            f"/.well-known/openid-configuration{base}",
+            f"{base}/.well-known/openid-configuration",
+            f"{base}/.well-known/oauth-authorization-server",
+        )
+        for url in variants:
+            view = oauth.WellKnownAuthorizationServerMetadataView(
+                rs, url=url, name=f"test:{url}"
+            )
+            with patch.object(oauth.web, "json_response") as jr2:
+                await view.get(request)
+            assert jr2.call_args.args[0] == canonical
+
+    # ---- live mode switch: served doc uses the ACTIVE provider's policy ----
+
+    async def test_live_switch_bound_legacy_view_serves_ha_auth_host_derived(
+        self, tmp_path
+    ):
+        """Regression guard for a no-restart legacy->ha_auth switch. The AS view
+        was bound with the LEGACY provider (pinned public_base_url), but
+        hass.data now marks ha_auth active with the ResourceServer as the live
+        provider. `_active_provider` resolves the live ha_auth provider from
+        hass.data at request time, so the served document is the ha_auth shape
+        with a HOST-DERIVED base — never the bound legacy provider's pinned URL.
+        Every other ha_auth test leaves hass.data[DOMAIN] without an 'oauth' key,
+        so this is the only test that exercises the dynamic-provider branch."""
+        _mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        shared_hass = MagicMock()
+        ha_rs = auth_native.ResourceServer(shared_hass, "wh", None)  # host-derived
+        # ha_auth is live; the ResourceServer is the active provider.
+        shared_hass.data = {
+            oauth.DOMAIN: {"oauth_mode": oauth.MODE_HA_AUTH, "oauth": ha_rs}
+        }
+        # The view is still bound with the PREVIOUS mode's (legacy) provider,
+        # which pins its base URL — HA can't rebind the view mid-session.
+        bound_legacy = oauth.OAuthProvider(
+            hass=shared_hass,
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+            public_base_url="https://pinned-legacy.example",
+        )
+        request = _make_view_request(headers={"Host": "switch-host.example"})
+        with patch.object(oauth.web, "json_response") as jr:
+            await oauth.AuthorizationServerMetadataView(bound_legacy).get(request)
+        doc = jr.call_args.args[0]
+        # ha_auth document shape (public client + CIMD), not legacy.
+        assert doc["token_endpoint_auth_methods_supported"] == ["none"]
+        assert doc["client_id_metadata_document_supported"] is True
+        # Host-derived base from the request, NOT the bound provider's pin.
+        assert doc["issuer"] == f"https://switch-host.example{oauth.OAUTH_BASE}"
+        assert doc["authorization_endpoint"] == (
+            "https://switch-host.example/auth/authorize"
+        )
+        assert "pinned-legacy.example" not in doc["issuer"]
+
+    async def test_live_switch_bound_ha_auth_view_serves_legacy_pinned(self, tmp_path):
+        """The mirror direction of the no-restart switch: the AS view was bound
+        with the HA_AUTH provider (host-derived), but hass.data now marks legacy
+        active with the pinned OAuthProvider as the live provider.
+        `_active_provider` resolves the live legacy provider, so the served
+        document is the legacy shape pinned to public_base_url — the request Host
+        is ignored (Host-poisoning resistance)."""
+        _mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        shared_hass = MagicMock()
+        pinned_legacy = oauth.OAuthProvider(
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+            public_base_url="https://pinned-legacy.example",
+        )
+        # legacy is live; the pinned OAuthProvider is the active provider.
+        shared_hass.data = {
+            oauth.DOMAIN: {"oauth_mode": oauth.MODE_LEGACY, "oauth": pinned_legacy}
+        }
+        # The view is still bound with the PREVIOUS mode's (ha_auth) provider.
+        bound_ha = auth_native.ResourceServer(shared_hass, "wh", None)
+        request = _make_view_request(headers={"Host": "other-host.example"})
+        with patch.object(oauth.web, "json_response") as jr:
+            await oauth.AuthorizationServerMetadataView(bound_ha).get(request)
+        doc = jr.call_args.args[0]
+        # Legacy document shape (embedded AS, client_secret_* auth methods).
+        assert "client_secret_basic" in doc["token_endpoint_auth_methods_supported"]
+        assert "client_id_metadata_document_supported" not in doc
+        # Pinned base from public_base_url, NOT the request Host.
+        assert doc["issuer"] == f"https://pinned-legacy.example{oauth.OAUTH_BASE}"
+        assert doc["authorization_endpoint"] == (
+            "https://pinned-legacy.example/authorize"
+        )
+        assert "other-host.example" not in doc["issuer"]
+
+
+class TestResolveOAuthMode:
+    """start.py's upgrade-safe OAuth mode resolution. Skips on flavors that
+    don't ship ha_auth (their start.py has no _resolve_oauth_mode)."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_stable(self, _webhook_proxy_variant):
+        if not _ha_auth_supported():
+            pytest.skip("flavor does not ship ha_auth (_resolve_oauth_mode) yet")
+
+    @pytest.fixture
+    def start(self):
+        return _import_start()
+
+    def test_explicit_mode_wins(self, start, tmp_path):
+        assert start._resolve_oauth_mode("ha_auth", "", "", tmp_path) == "ha_auth"
+        assert start._resolve_oauth_mode("legacy", "", "", tmp_path) == "legacy"
+
+    def test_explicit_ha_auth_wins_even_with_legacy_creds_file(self, start, tmp_path):
+        (tmp_path / "oauth_creds.json").write_text(
+            json.dumps({"client_id": "x", "client_secret": "y"})
+        )
+        assert start._resolve_oauth_mode("ha_auth", "cid", "sec", tmp_path) == "ha_auth"
+
+    def test_unset_with_configured_creds_is_legacy(self, start, tmp_path):
+        assert (
+            start._resolve_oauth_mode("", "cid-1234567890ABCDEF", "sec", tmp_path)
+            == "legacy"
+        )
+
+    def test_unset_with_persisted_creds_file_is_legacy(self, start, tmp_path):
+        (tmp_path / "oauth_creds.json").write_text(
+            json.dumps({"client_id": "x", "client_secret": "y"})
+        )
+        assert start._resolve_oauth_mode("", "", "", tmp_path) == "legacy"
+
+    def test_unset_no_legacy_traces_defaults_ha_auth(self, start, tmp_path):
+        assert start._resolve_oauth_mode("", "", "", tmp_path) == "ha_auth"
+
+    def test_unknown_mode_falls_through_to_detection(self, start, tmp_path):
+        """Supervisor's enum validation normally blocks an unknown oauth_mode,
+        but if one reaches here it must fall through to auto-detection rather
+        than crash: no legacy trace -> ha_auth, a legacy trace -> legacy."""
+        assert start._resolve_oauth_mode("bogus", "", "", tmp_path) == "ha_auth"
+        assert (
+            start._resolve_oauth_mode("bogus", "cid-1234567890ABCDEF", "sec", tmp_path)
+            == "legacy"
+        )
+
+    def test_id_only_without_secret_or_file_is_legacy(self, start, tmp_path):
+        """A configured client id alone (no secret, no persisted creds file) is
+        still a legacy trace -> stay on legacy."""
+        assert (
+            start._resolve_oauth_mode("", "cid-1234567890ABCDEF", "", tmp_path)
+            == "legacy"
+        )
+
+    def test_secret_only_without_id_or_file_is_legacy(self, start, tmp_path):
+        """A configured client secret alone (no id, no persisted creds file) is
+        still a legacy trace -> stay on legacy."""
+        assert start._resolve_oauth_mode("", "", "sec", tmp_path) == "legacy"
+
+    def test_creds_file_stat_oserror_preserves_legacy(self, start, capsys):
+        """start.py ~654: Path.exists() re-raises a stat error other than 'not
+        there' (e.g. EACCES). A stat failure makes legacy detection
+        INDETERMINATE — it is no proof the file is absent — and flipping an
+        existing persisted-creds legacy user to ha_auth would break their
+        connector. So _resolve_oauth_mode must catch the OSError, log that the
+        legacy-install check could not be completed, and preserve the previous
+        flow by returning 'legacy' instead of defaulting to ha_auth."""
+        creds_file = MagicMock()
+        creds_file.exists.side_effect = OSError("EACCES: permission denied")
+        data_dir = MagicMock()
+        data_dir.__truediv__.return_value = creds_file
+        # No configured id/secret, but the creds-file stat fails -> preserve the
+        # previous (legacy) flow rather than silently switching to ha_auth.
+        assert start._resolve_oauth_mode("", "", "", data_dir) == "legacy"
+        # log_error goes to stderr; the indeterminate-preserve lines must appear.
+        err = capsys.readouterr().err
+        assert "indeterminate" in err
+        assert "Preserving the previous (legacy) OAuth flow" in err
+
+
+class TestStartHaAuthMode:
+    """start.py main(): ha_auth writes the mode-only oauth section and skips the
+    legacy credential machinery; legacy writes the mode + creds. Skips on
+    flavors without ha_auth."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_stable(self, _webhook_proxy_variant):
+        if not _ha_auth_supported():
+            pytest.skip("flavor does not ship ha_auth start.py support yet")
+
+    def _run_main(self, tmp_path, options, *, probe_active=True):
+        start = _import_start()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "options.json").write_text(json.dumps(options))
+        config_path = tmp_path / "proxy_config.json"
+
+        def path_factory(arg):
+            if arg == "/data/options.json":
+                return data_dir / "options.json"
+            if arg == "/data":
+                return data_dir
+            if arg == CURRENT["config_file"]:
+                return config_path
+            if arg == CURRENT["oauth_marker"]:
+                return tmp_path / "oauth_marker"
+            return Path(arg)
+
+        resolve_creds = MagicMock(
+            wraps=lambda d, cid, sec: (cid or "hamcp-generated1234567890", sec or "sec")
+        )
+        # A bool probe_active is a constant result; a list/tuple is a per-call
+        # sequence (side_effect) so a caller can model an initial probe failing
+        # and the re-probe succeeding after the HA restart.
+        probe_kwargs = (
+            {"side_effect": list(probe_active)}
+            if isinstance(probe_active, (list, tuple))
+            else {"return_value": probe_active}
+        )
+        with (
+            patch.object(start, "Path", side_effect=path_factory),
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+            patch.object(start, "_ha_core_api", return_value={}) as ha_core_api,
+            patch.object(start, "_install_integration", return_value=(False, False)),
+            patch.object(start, "_ensure_config_entry", return_value=True),
+            patch.object(start, "_reload_config_entry"),
+            patch.object(start, "_resolve_oauth_creds", resolve_creds),
+            patch.object(start, "_probe_oauth_active", **probe_kwargs),
+            # Destructive fail-closed helpers: patched so the stale-code path is
+            # observable without tearing down / blocking on a real HA restart.
+            patch.object(start, "_remove_config_entry") as remove_entry,
+            patch.object(start, "_wait_for_ha_restart") as wait_restart,
+            patch.object(start, "_request_restart_repair") as request_repair,
+            patch.object(
+                start, "_install_shutdown_handlers", return_value={"reason": None}
+            ),
+            patch.object(start, "_health_check", return_value=True),
+            patch.object(start, "_shutdown_cleanup"),
+            patch.object(start.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            rc = start.main()
+        written = json.loads(config_path.read_text())
+        mocks = {
+            "resolve_creds": resolve_creds,
+            "remove_entry": remove_entry,
+            "wait_restart": wait_restart,
+            "request_repair": request_repair,
+            "ha_core_api": ha_core_api,
+        }
+        return rc, written, mocks
+
+    def test_ha_auth_writes_mode_only_section_and_skips_creds(self, tmp_path, capsys):
+        rc, written, mocks = self._run_main(
+            tmp_path,
+            {
+                "mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "enable_oauth": True,
+                # no oauth_mode, no creds, no /data/oauth_creds.json -> ha_auth
+            },
+        )
+        assert rc == 0
+        # Exactly the mode marker; no credential keys.
+        assert written["oauth"] == {"mode": "ha_auth"}
+        # The legacy credential machinery is never invoked in ha_auth mode.
+        mocks["resolve_creds"].assert_not_called()
+        # Probe active -> no fail-closed teardown.
+        mocks["remove_entry"].assert_not_called()
+        out = capsys.readouterr().out
+        assert "Home Assistant login" in out
+        assert "BLANK" in out
+        # Pin the user-critical guidance lines, not just the headline: tokens
+        # are revoked from the HA profile, and a UI-required Client Secret can
+        # be any value (HA ignores it) — users act on these exact lines.
+        assert "Revoke access anytime from your Home Assistant profile's" in out
+        assert "any value works — Home Assistant ignores it." in out
+
+    def test_legacy_writes_mode_marker_and_creds(self, tmp_path, capsys):
+        rc, written, mocks = self._run_main(
+            tmp_path,
+            {
+                "mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "enable_oauth": True,
+                "oauth_client_id": "client-1234567890ABCDEF",
+                "oauth_client_secret": "secret-much-secret",
+            },
+        )
+        assert rc == 0
+        assert written["oauth"]["mode"] == "legacy"
+        assert written["oauth"]["client_id"] == "client-1234567890ABCDEF"
+        assert written["oauth"]["client_secret"] == "secret-much-secret"
+        mocks["resolve_creds"].assert_called_once()
+        # Pin the copy-paste creds lines the legacy banner exists for.
+        out = capsys.readouterr().out
+        assert "OAuth Client ID:     client-1234567890ABCDEF" in out
+        assert "OAuth Client Secret: secret-much-secret" in out
+
+    def test_ha_auth_stale_code_probe_fails_closed(self, tmp_path):
+        """The fail-closed stale-code probe runs in ha_auth too (it closes the
+        code-upgrade fail-open window, not the no-restart-to-toggle promise).
+        When the OAuth metadata endpoint isn't served yet — old cached module
+        after an upgrade — the webhook is torn down and a click-to-restart
+        Repair is requested, even in ha_auth mode."""
+        rc, written, mocks = self._run_main(
+            tmp_path,
+            {
+                "mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "enable_oauth": True,
+            },
+            probe_active=False,
+        )
+        assert rc == 0
+        # The ha_auth section is written BEFORE the probe, so it still lands.
+        assert written["oauth"] == {"mode": "ha_auth"}
+        # Fail-closed teardown fired: webhook removed, restart-Repair requested,
+        # and the HA-restart wait entered.
+        assert mocks["remove_entry"].called
+        assert mocks["request_repair"].called
+        mocks["wait_restart"].assert_called_once()
+        # The marker the integration's Repair flow watches was written.
+        assert (tmp_path / "oauth_marker").exists()
+
+    def test_ha_auth_probe_recovers_after_restart(self, tmp_path, capsys):
+        """Auto-recovery branch (start.py ~1482): the initial stale-code probe
+        fails, so main() tears the entry down, writes the restart marker, and
+        waits for the HA restart; the re-probe then succeeds, so the stale
+        notification is dismissed, the marker is unlinked, and the webhook is
+        reported re-enabled — no manual intervention needed."""
+        rc, written, mocks = self._run_main(
+            tmp_path,
+            {
+                "mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "enable_oauth": True,
+            },
+            probe_active=[False, True],  # initial probe fails, re-probe succeeds
+        )
+        assert rc == 0
+        # The ha_auth section is written BEFORE the probe, so it still lands.
+        assert written["oauth"] == {"mode": "ha_auth"}
+        # Initial probe failed -> fail-closed teardown ran and the restart was
+        # awaited.
+        assert mocks["remove_entry"].called
+        assert mocks["request_repair"].called
+        mocks["wait_restart"].assert_called_once()
+        # Re-probe succeeded -> the OAuth-stale notification was dismissed (the
+        # recovery branch's dismiss, not the several dismissed at startup).
+        dismiss_calls = [
+            c
+            for c in mocks["ha_core_api"].call_args_list
+            if c.args[:2] == ("POST", "/services/persistent_notification/dismiss")
+            and c.args[2].get("notification_id", "").endswith("oauth_stale")
+        ]
+        assert len(dismiss_calls) == 1
+        # ...the marker was unlinked, and the webhook reported re-enabled.
+        assert not (tmp_path / "oauth_marker").exists()
+        assert "webhook re-enabled" in capsys.readouterr().out
+
+    def test_ha_auth_with_remote_url_logs_ignored_notice_and_no_pin(
+        self, tmp_path, capsys
+    ):
+        """Fix 6: in ha_auth mode a configured External URL (remote_url) is
+        deliberately ignored — discovery is host-derived. main() logs the
+        info notice AND writes the mode-only oauth section with NO
+        public_base_url anywhere (reinforcing Fix 4: the External URL never
+        leaks into the ha_auth config)."""
+        rc, written, _mocks = self._run_main(
+            tmp_path,
+            {
+                "mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "enable_oauth": True,
+                "remote_url": "https://example.nabu.casa",
+                # no oauth_mode, no creds, no /data/oauth_creds.json -> ha_auth
+            },
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "External URL is ignored in ha_auth mode" in out
+        # Mode-only section; the External URL did not leak into the config.
+        assert written["oauth"] == {"mode": "ha_auth"}
+        assert "public_base_url" not in written
+        assert "public_base_url" not in written["oauth"]
+
+    def test_config_read_failure_refuses_to_start(self, tmp_path, capsys):
+        """FIX 1 (fail closed): if /data/options.json is present but
+        unreadable/corrupt, main() cannot tell whether the user enabled OAuth,
+        so it must refuse to start rather than fall back to the unauthenticated
+        defaults (enable_oauth=False). It logs a loud refusing-to-start block,
+        returns 1, and writes NO proxy config file.
+
+        Gated on _ha_auth_supported() like the rest of this class: the
+        fail-closed config read rides the dev flavor's start.py until it is
+        promoted to stable. Uses its own harness (not _run_main) because
+        _run_main reads the proxy config after main(), which is never written
+        on this early return."""
+        start = _import_start()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        # Corrupt options.json: present but not valid JSON.
+        (data_dir / "options.json").write_text("{ this is not valid json ")
+        config_path = tmp_path / "proxy_config.json"
+
+        def path_factory(arg):
+            if arg == "/data/options.json":
+                return data_dir / "options.json"
+            if arg == "/data":
+                return data_dir
+            if arg == CURRENT["config_file"]:
+                return config_path
+            if arg == CURRENT["oauth_marker"]:
+                return tmp_path / "oauth_marker"
+            return Path(arg)
+
+        # Only the sibling-mutex probe runs before the config read; the mocks
+        # for webhook/config work are unnecessary because main() returns first.
+        with (
+            patch.object(start, "Path", side_effect=path_factory),
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+        ):
+            rc = start.main()
+
+        assert rc == 1
+        # main() returned before any config work -> no proxy config written.
+        assert not config_path.exists()
+        # log_error goes to stderr; the loud refusing-to-start block must appear.
+        err = capsys.readouterr().err
+        assert "refusing to start" in err
+        assert "Could not read the add-on configuration" in err
+
+
+class TestStartOAuthOffConfigShape:
+    """enable_oauth stays OFF by default and this PR must not change that: an
+    absent/false enable_oauth writes the byte-identical no-oauth config file
+    shape (no `oauth` section, no `public_base_url`). Runs on BOTH flavors."""
+
+    def _run_main_off(self, tmp_path, options):
+        start = _import_start()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "options.json").write_text(json.dumps(options))
+        config_path = tmp_path / "proxy_config.json"
+
+        def path_factory(arg):
+            if arg == "/data/options.json":
+                return data_dir / "options.json"
+            if arg == "/data":
+                return data_dir
+            if arg == CURRENT["config_file"]:
+                return config_path
+            return Path(arg)
+
+        with (
+            patch.object(start, "Path", side_effect=path_factory),
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+            patch.object(start, "_ha_core_api", return_value={}),
+            patch.object(start, "_install_integration", return_value=(False, False)),
+            patch.object(start, "_ensure_config_entry", return_value=True),
+            patch.object(start, "_reload_config_entry"),
+            patch.object(
+                start, "_install_shutdown_handlers", return_value={"reason": None}
+            ),
+            patch.object(start, "_health_check", return_value=True),
+            patch.object(start, "_shutdown_cleanup"),
+            patch.object(start.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            rc = start.main()
+        return rc, json.loads(config_path.read_text())
+
+    def test_absent_enable_oauth_writes_no_oauth_section(self, tmp_path):
+        rc, written = self._run_main_off(
+            tmp_path,
+            {"mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa"},
+        )
+        assert rc == 0
+        # Byte-identical no-oauth shape: exactly the two legacy keys.
+        assert set(written.keys()) == {"target_url", "webhook_id"}
+        assert "oauth" not in written
+        assert "public_base_url" not in written
+
+    def test_false_enable_oauth_writes_no_oauth_section(self, tmp_path):
+        rc, written = self._run_main_off(
+            tmp_path,
+            {
+                "mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "enable_oauth": False,
+            },
+        )
+        assert rc == 0
+        assert set(written.keys()) == {"target_url", "webhook_id"}
+        assert "oauth" not in written
+        assert "public_base_url" not in written
