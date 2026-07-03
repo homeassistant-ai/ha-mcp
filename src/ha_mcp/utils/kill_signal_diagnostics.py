@@ -1,6 +1,6 @@
 """Kill-signal diagnostics for the HA MCP add-on.
 
-Opt-in (gated by the "Advanced debug logging" addon toggle) signal handler
+Opt-in (armed when the addon's effective log level is DEBUG) signal handler
 that, on SIGTERM/SIGINT/SIGHUP, captures and logs:
 
 - Signal name + ``si_code`` (USER/KERNEL/QUEUE/TKILL/...).
@@ -356,7 +356,7 @@ def _make_handler() -> Any:
             try:
                 os.write(
                     2,
-                    f"advanced_debug_logging handler failed for signal {signum}: {exc!r}\n".encode(
+                    f"kill-signal diagnostics handler failed for signal {signum}: {exc!r}\n".encode(
                         "utf-8", errors="replace"
                     ),
                 )
@@ -386,14 +386,14 @@ def install_kill_signal_diagnostics() -> bool:
 
     if sys.platform != "linux":
         logger.warning(
-            "advanced_debug_logging is Linux-only; skipping signal handler install on %s",
+            "kill-signal diagnostics are Linux-only; skipping signal handler install on %s",
             sys.platform,
         )
         return False
 
     if _handler_refs:
         logger.warning(
-            "advanced_debug_logging: install_kill_signal_diagnostics already called; skipping"
+            "kill-signal diagnostics: install_kill_signal_diagnostics already called; skipping"
         )
         return True
 
@@ -401,7 +401,7 @@ def install_kill_signal_diagnostics() -> bool:
         libc_path = ctypes.util.find_library("c")
         if libc_path is None:
             logger.warning(
-                "advanced_debug_logging: libc not found; skipping signal handler install"
+                "kill-signal diagnostics: libc not found; skipping signal handler install"
             )
             return False
 
@@ -441,7 +441,7 @@ def install_kill_signal_diagnostics() -> bool:
             if rc != 0:
                 err = ctypes.get_errno()
                 logger.warning(
-                    "advanced_debug_logging: sigaction(%s) failed: errno=%d",
+                    "kill-signal diagnostics: sigaction(%s) failed: errno=%d",
                     sig.name,
                     err,
                 )
@@ -449,7 +449,7 @@ def install_kill_signal_diagnostics() -> bool:
             installed_for.append(sig.name)
     except Exception as exc:
         logger.warning(
-            "advanced_debug_logging: install failed (%r); continuing without diagnostics",
+            "kill-signal diagnostics: install failed (%r); continuing without diagnostics",
             exc,
         )
         _handler_refs.clear()
@@ -460,7 +460,7 @@ def install_kill_signal_diagnostics() -> bool:
     if installed_for:
         chained_signals = sorted(signal.Signals(s).name for s in _chained_handlers)
         logger.info(
-            "advanced_debug_logging enabled — kill-signal diagnostics installed for: %s "
+            "kill-signal diagnostics installed for: %s "
             "(chains to existing handlers for: %s)",
             ", ".join(installed_for),
             ", ".join(chained_signals) or "<none>",
@@ -502,13 +502,13 @@ def schedule_install_after_uvicorn(
             current = signal.getsignal(signal.SIGTERM)
             if callable(current) and current not in (signal.SIG_DFL, signal.SIG_IGN):
                 logger.debug(
-                    "advanced_debug_logging: detected uvicorn signal handler; installing on top"
+                    "kill-signal diagnostics: detected uvicorn signal handler; installing on top"
                 )
                 install()
                 return
             time.sleep(poll_interval_secs)
         logger.info(
-            "advanced_debug_logging: uvicorn handler not detected within %.1fs; installing anyway",
+            "kill-signal diagnostics: uvicorn handler not detected within %.1fs; installing anyway",
             timeout_secs,
         )
         install()

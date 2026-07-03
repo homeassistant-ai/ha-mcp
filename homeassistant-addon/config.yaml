@@ -70,7 +70,6 @@ schema:
   auto_backup_throttle_minutes: int(0,1440)?
   auto_backup_retain_per_entity: int(1,10000)?
   verify_ssl: bool?
-  advanced_debug_logging: bool?
 # Add-on exposes HTTP port for MCP communication (fixed internal port)
 ports:
   9583/tcp: 9583
