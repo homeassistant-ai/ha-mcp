@@ -78,3 +78,34 @@ def test_corrupt_config_fails_open_returns_both(tmp_path, monkeypatch):
     )
     ids = sorted(r["entity_id"] for r in res["results"])
     assert ids == ["light.foo_lamp", "sensor.foo_batt"]
+
+
+class _GetStateClient:
+    """Minimal client for the targeted single-entity read path."""
+
+    async def get_entity_state(self, entity_id):
+        return {"entity_id": entity_id, "state": "on", "attributes": {}}
+
+    async def get_config(self):
+        return {"time_zone": "UTC"}
+
+
+def test_targeted_get_state_ignores_visibility_filter(tmp_path, monkeypatch):
+    """Tier-B contract: a targeted read returns the entity even when an enabled
+    denylist would hide it from collection reads. This is the runnable, in-process
+    counterpart to the container-only e2e Tier-B assertion."""
+    denied = "input_boolean.denied_probe"
+    # Filter enabled and denying the entity — a collection read would drop it.
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True, exclude_categories=[], deny_entity_ids=[denied]
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+    tools = tools_search.SearchTools(_GetStateClient(), smart_tools=None)
+    res = asyncio.run(tools._get_single_entity_state(denied, None, None, False))
+
+    # Targeted path never consults the filter — the entity is still returned.
+    assert res["data"]["entity_id"] == denied
