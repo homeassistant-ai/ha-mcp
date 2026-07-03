@@ -5387,20 +5387,25 @@ class TestResolveOAuthMode:
         still a legacy trace -> stay on legacy."""
         assert start._resolve_oauth_mode("", "", "sec", tmp_path) == "legacy"
 
-    def test_creds_file_stat_oserror_treated_absent(self, start, capsys):
+    def test_creds_file_stat_oserror_preserves_legacy(self, start, capsys):
         """start.py ~654: Path.exists() re-raises a stat error other than 'not
-        there' (e.g. EACCES). A stat failure is no proof of a legacy install, so
-        _resolve_oauth_mode must catch the OSError, log that it is treating the
-        file as absent, and keep auto-detecting (default ha_auth here) instead of
-        crashing startup."""
+        there' (e.g. EACCES). A stat failure makes legacy detection
+        INDETERMINATE — it is no proof the file is absent — and flipping an
+        existing persisted-creds legacy user to ha_auth would break their
+        connector. So _resolve_oauth_mode must catch the OSError, log that the
+        legacy-install check could not be completed, and preserve the previous
+        flow by returning 'legacy' instead of defaulting to ha_auth."""
         creds_file = MagicMock()
         creds_file.exists.side_effect = OSError("EACCES: permission denied")
         data_dir = MagicMock()
         data_dir.__truediv__.return_value = creds_file
-        # No configured id/secret and the creds-file stat fails -> ha_auth.
-        assert start._resolve_oauth_mode("", "", "", data_dir) == "ha_auth"
-        # log_error goes to stderr; the "treating it as absent" line must appear.
-        assert "treating it as absent" in capsys.readouterr().err
+        # No configured id/secret, but the creds-file stat fails -> preserve the
+        # previous (legacy) flow rather than silently switching to ha_auth.
+        assert start._resolve_oauth_mode("", "", "", data_dir) == "legacy"
+        # log_error goes to stderr; the indeterminate-preserve lines must appear.
+        err = capsys.readouterr().err
+        assert "indeterminate" in err
+        assert "Preserving the previous (legacy) OAuth flow" in err
 
 
 class TestStartHaAuthMode:
@@ -5603,6 +5608,52 @@ class TestStartHaAuthMode:
         assert written["oauth"] == {"mode": "ha_auth"}
         assert "public_base_url" not in written
         assert "public_base_url" not in written["oauth"]
+
+    def test_config_read_failure_refuses_to_start(self, tmp_path, capsys):
+        """FIX 1 (fail closed): if /data/options.json is present but
+        unreadable/corrupt, main() cannot tell whether the user enabled OAuth,
+        so it must refuse to start rather than fall back to the unauthenticated
+        defaults (enable_oauth=False). It logs a loud refusing-to-start block,
+        returns 1, and writes NO proxy config file.
+
+        Gated on _ha_auth_supported() like the rest of this class: the
+        fail-closed config read rides the dev flavor's start.py until it is
+        promoted to stable. Uses its own harness (not _run_main) because
+        _run_main reads the proxy config after main(), which is never written
+        on this early return."""
+        start = _import_start()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        # Corrupt options.json: present but not valid JSON.
+        (data_dir / "options.json").write_text("{ this is not valid json ")
+        config_path = tmp_path / "proxy_config.json"
+
+        def path_factory(arg):
+            if arg == "/data/options.json":
+                return data_dir / "options.json"
+            if arg == "/data":
+                return data_dir
+            if arg == CURRENT["config_file"]:
+                return config_path
+            if arg == CURRENT["oauth_marker"]:
+                return tmp_path / "oauth_marker"
+            return Path(arg)
+
+        # Only the sibling-mutex probe runs before the config read; the mocks
+        # for webhook/config work are unnecessary because main() returns first.
+        with (
+            patch.object(start, "Path", side_effect=path_factory),
+            patch.object(start, "_supervisor_get", return_value={"addons": []}),
+        ):
+            rc = start.main()
+
+        assert rc == 1
+        # main() returned before any config work -> no proxy config written.
+        assert not config_path.exists()
+        # log_error goes to stderr; the loud refusing-to-start block must appear.
+        err = capsys.readouterr().err
+        assert "refusing to start" in err
+        assert "Could not read the add-on configuration" in err
 
 
 class TestStartOAuthOffConfigShape:

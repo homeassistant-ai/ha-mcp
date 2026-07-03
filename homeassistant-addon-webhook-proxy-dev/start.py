@@ -630,8 +630,11 @@ def _resolve_oauth_mode(
       1. An explicit ``oauth_mode`` add-on option wins outright.
       2. Otherwise, if legacy OAuth is already in use — the user set
          ``oauth_client_id``/``oauth_client_secret``, OR a persisted legacy
-         creds file (``/data/oauth_creds.json``) exists from a prior run —
-         stay on ``legacy``.
+         creds file (``/data/oauth_creds.json``) exists from a prior run — OR
+         that creds-file check is INDETERMINATE (a stat error such as EACCES
+         stops us from knowing) — stay on ``legacy``. Flipping an existing
+         legacy user to ``ha_auth`` would break their connector, so an
+         unknown result preserves the previous flow.
       3. Otherwise (a first-time enable with no legacy trace) default to
          ``ha_auth``, the recommended mode.
     Switching an existing setup is therefore an explicit user action
@@ -654,15 +657,17 @@ def _resolve_oauth_mode(
         creds_file_exists = creds_file.exists()
     except OSError as e:
         # Path.exists() re-raises stat errors other than "not there" (e.g.
-        # EACCES). A stat failure is no proof of a legacy install, so treat
-        # the file as absent and keep auto-detecting instead of crashing
-        # startup; the ha_auth-default warning below still tells a legacy
-        # user how to get back.
+        # EACCES). A stat failure makes legacy detection INDETERMINATE — it is
+        # no proof the file is absent. Treating it as absent could flip an
+        # existing persisted-creds legacy user to ha_auth and break their
+        # connector, so preserve the previous flow: return legacy directly.
         log_error(
-            f"Could not check {creds_file} ({type(e).__name__}): {e}; "
-            "treating it as absent for OAuth mode detection."
+            f"Could not check {creds_file} ({type(e).__name__}): {e}; the "
+            "legacy-install check is indeterminate. Preserving the previous "
+            f"(legacy) OAuth flow; set oauth_mode: {HA_AUTH_MODE} explicitly "
+            "to switch (you must then re-add your MCP connector)."
         )
-        creds_file_exists = False
+        return LEGACY_MODE
     if configured_id.strip() or configured_secret.strip() or creds_file_exists:
         log_info(
             "OAuth mode: 'legacy' — existing legacy OAuth credentials detected "
@@ -1081,7 +1086,11 @@ def main() -> int:
     if _refuse_if_sibling_running():
         return 1
 
-    # Read config
+    # Read config. Supervisor always writes /data/options.json, so the outer
+    # existence check stays best-effort for the (unreachable) absent-file case.
+    # A present-but-unreadable/corrupt file, however, is FATAL (fail closed
+    # below): we can't tell whether the user enabled OAuth, and silently
+    # falling back to the unauthenticated defaults would betray that intent.
     config_file = Path("/data/options.json")
     data_dir = Path("/data")
     remote_url = ""
@@ -1110,7 +1119,31 @@ def main() -> int:
             regenerate_oauth_creds = bool(config.get("regenerate_oauth_creds", False))
             debug_logging = bool(config.get("debug_logging", False))
         except (OSError, json.JSONDecodeError) as e:
-            log_error(f"Failed to read config ({type(e).__name__}): {e}")
+            # Fail closed: the add-on config is present but unreadable/corrupt,
+            # so the user's intent is unknown — including whether OAuth should
+            # be enforced. Continuing would leave enable_oauth at its False
+            # default, silently serving an unauthenticated proxy (URL-secrecy
+            # only) to a user who turned OAuth ON. Refuse to start instead.
+            log_error("")
+            log_error("=" * 70)
+            log_error(
+                f"  Could not read the add-on configuration ({type(e).__name__}): {e}"
+            )
+            log_error("")
+            log_error("  The add-on options file could not be parsed, so your")
+            log_error("  configured intent is unknown — including whether OAuth")
+            log_error("  should be enforced. Starting now could serve the webhook")
+            log_error("  WITHOUT the authentication you asked for, so the add-on is")
+            log_error("  refusing to start.")
+            log_error("")
+            log_error("  Restart the add-on to recover: the Supervisor rewrites")
+            log_error("  this file from your saved configuration on every start,")
+            log_error("  so a restart normally heals a corrupted copy. If the")
+            log_error("  error persists across restarts, re-save the add-on's")
+            log_error("  Configuration tab and check the system's storage.")
+            log_error("=" * 70)
+            log_error("")
+            return 1
 
     # OAuth mode + credential resolution. ha_auth (HA-native) needs no add-on
     # credentials at all; legacy resolves/persists a client id + secret (user
