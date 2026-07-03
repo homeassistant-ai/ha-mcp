@@ -1,4 +1,5 @@
 import pytest
+
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import (
     load_visibility_config,

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
+from ..utils.data_paths import get_data_dir
 from .model import VisibilityConfig
+from .persistence import load_visibility_config
+
+logger = logging.getLogger(__name__)
 
 
 def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[str]:
@@ -45,3 +51,19 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
         if labels and labels.intersection(entry.get("labels") or []):
             hidden.add(eid)
     return hidden
+
+
+async def load_hidden_set(registry_result: object) -> set[str]:
+    """Load the visibility config off-loop and resolve the hidden set.
+
+    Fail-open: any error (missing/corrupt config, unexpected exception) returns
+    an empty set so a config problem never blanks the instance from the agent.
+    """
+    try:
+        config = await asyncio.to_thread(load_visibility_config, get_data_dir())
+        return hidden_entity_ids(registry_result, config)
+    except Exception:
+        logger.warning(
+            "entity visibility config load failed; filter disabled", exc_info=True
+        )
+        return set()
