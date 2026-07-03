@@ -39,10 +39,19 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from ..utilities.assertions import parse_mcp_result
+from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 LOG = logging.getLogger(__name__)
 
 DEV_ADDON_NAME = "Home Assistant MCP Server (Dev)"
+
+# Transient errors expected while the addon restarts underneath us:
+# the MCP-client polling set from wait_helpers, plus httpx transport
+# errors from the freshly-opened streamable-HTTP connection dying or
+# being refused mid-restart. Bugs (TypeError, KeyError, AssertionError)
+# must propagate per .gemini/styleguide.md "Exception Handling in Test
+# Polling Loops".
+_EXPECTED_RESTART_ERRORS = (*_POLLING_TRANSIENT_ERRORS, httpx.HTTPError)
 
 # start.py log lines asserted below. Keep in lockstep with
 # homeassistant-addon/start.py (the canary + arming strings).
@@ -108,7 +117,7 @@ async def _restart_self_and_wait(slug: str, addon_url: str) -> None:
             "ha_call_service",
             {"service": "hassio.addon_restart", "data": {"addon": slug}},
         )
-    except Exception as e:
+    except _EXPECTED_RESTART_ERRORS as e:
         LOG.info("Self-restart severed the in-flight call (expected): %r", e)
 
     deadline = time.monotonic() + _RESTART_TIMEOUT
@@ -130,7 +139,8 @@ async def _restart_self_and_wait(slug: str, addon_url: str) -> None:
         try:
             await _call_tool(addon_url, "ha_get_addon", {})
             return
-        except Exception:
+        except _EXPECTED_RESTART_ERRORS as e:
+            LOG.debug("MCP not ready yet after restart: %r", e)
             await asyncio.sleep(_POLL_INTERVAL)
     pytest.fail(f"MCP calls did not recover within {_RESTART_TIMEOUT}s of restart")
 
