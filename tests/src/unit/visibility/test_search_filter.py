@@ -80,6 +80,66 @@ def test_corrupt_config_fails_open_returns_both(tmp_path, monkeypatch):
     assert ids == ["light.foo_lamp", "sensor.foo_batt"]
 
 
+class _DomainClient:
+    """Client for the domain-listing path: states + registry + get_config
+    (the domain path wraps its result via add_timezone_metadata)."""
+
+    def __init__(self, states, registry):
+        self._states = states
+        self._registry = registry
+
+    async def get_states(self):
+        return self._states
+
+    async def send_websocket_message(self, msg):
+        assert msg == {"type": "config/entity_registry/list"}
+        return self._registry
+
+    async def get_config(self):
+        return {"time_zone": "UTC"}
+
+
+def test_domain_only_search_excludes_denied_and_counts_stay_coherent(
+    tmp_path, monkeypatch
+):
+    """_search_domain_only applies the filter before pagination, so a hidden
+    entity is gone AND total_matches reflects the post-filter set."""
+    states = [
+        {"entity_id": "sensor.keep", "state": "1", "attributes": {}},
+        {"entity_id": "sensor.drop", "state": "2", "attributes": {}},
+    ]
+    registry = {
+        "success": True,
+        "result": [
+            {"entity_id": "sensor.keep", "entity_category": None},
+            {"entity_id": "sensor.drop", "entity_category": "diagnostic"},
+        ],
+    }
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(enabled=True, exclude_categories=["diagnostic"]),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    tools = tools_search.SearchTools(_DomainClient(states, registry), smart_tools=None)
+    res = asyncio.run(
+        tools._search_domain_only(
+            query=None,
+            domain_filter="sensor",
+            state_filter=None,
+            limit=10,
+            offset=0,
+            include_hidden_bool=True,
+            group_by_domain_bool=False,
+            per_domain_limit_int=None,
+            parsed_result_fields=None,
+        )
+    )
+    data = res["data"]
+    ids = [r["entity_id"] for r in data["results"]]
+    assert ids == ["sensor.keep"]  # diagnostic sensor.drop excluded
+    assert data["total_matches"] == 1  # count reflects post-filter set, not raw 2
+
+
 class _GetStateClient:
     """Minimal client for the targeted single-entity read path."""
 
