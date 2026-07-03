@@ -22,8 +22,15 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
+
+# Batch-install category split, mirroring the HA 2026.7 Updates page: the
+# "Update all" button never covers core/OS/supervisor — those are applied
+# individually, on purpose.
+_INSTALL_ALL_CATEGORIES = ("addons", "hacs", "devices", "other")
+_PROTECTED_UPDATE_CATEGORIES = ("core", "os", "supervisor")
 
 _GITHUB_CORE_RELEASE_URL = (
     "https://api.github.com/repos/home-assistant/core/releases/tags/{version}"
@@ -760,6 +767,219 @@ class UpdateTools:
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify API access permissions",
+                ],
+            )
+            return (
+                None  # exception_to_structured_error always raises; explicit for CodeQL
+            )
+
+    async def _resolve_update_targets(
+        self,
+        action: str,
+        entity_ids: list[str] | str | None,
+        categories: list[str] | str | None,
+    ) -> list[str]:
+        """Validate parameters and resolve the update entity_ids to act on."""
+        if action not in ("install", "skip", "clear_skipped"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid action '{action}'. "
+                    "Must be 'install', 'skip', or 'clear_skipped'.",
+                    context={"action": action},
+                )
+            )
+
+        ids = [entity_ids] if isinstance(entity_ids, str) else list(entity_ids or [])
+        cats = [categories] if isinstance(categories, str) else list(categories or [])
+
+        if action != "install" and (not ids or cats):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"'{action}' requires entity_ids; categories is install-only.",
+                )
+            )
+        if action == "install" and bool(ids) == bool(cats):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "'install' requires exactly one of entity_ids or categories.",
+                )
+            )
+
+        invalid = [e for e in ids if not e.startswith("update.")]
+        if invalid:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "entity_ids must be 'update.' entities.",
+                    context={"invalid_entity_ids": invalid},
+                )
+            )
+
+        if not cats:
+            return list(dict.fromkeys(ids))
+
+        protected = sorted(set(cats) & set(_PROTECTED_UPDATE_CATEGORIES))
+        unknown = sorted(
+            set(cats) - set(_INSTALL_ALL_CATEGORIES) - set(_PROTECTED_UPDATE_CATEGORIES)
+        )
+        if protected or unknown:
+            problems = []
+            if protected:
+                problems.append(
+                    f"categories {protected} are excluded from batch install by "
+                    "design (mirrors the HA Updates page, which never bundles "
+                    "core/OS/supervisor into 'Update all') — target those "
+                    "individually via entity_ids"
+                )
+            if unknown:
+                problems.append(f"unknown categories {unknown}")
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "; ".join(problems),
+                    context={"allowed_categories": list(_INSTALL_ALL_CATEGORIES)},
+                )
+            )
+
+        listing = await self._list_updates(include_skipped=False)
+        listed_categories = listing.get("categories", {})
+        return [
+            update["entity_id"]
+            for cat in dict.fromkeys(cats)
+            for update in listed_categories.get(cat, [])
+            if update.get("can_install")
+        ]
+
+    @tool(
+        name="ha_manage_updates",
+        tags={"System"},
+        annotations={
+            "destructiveHint": False,
+            "openWorldHint": True,
+            "title": "Manage Updates",
+        },
+    )
+    @log_tool_usage
+    async def ha_manage_updates(
+        self,
+        action: Annotated[
+            str,
+            Field(
+                description="'install' (apply pending updates), 'skip' (hide the "
+                "offered version), or 'clear_skipped' (re-offer a skipped version)."
+            ),
+        ],
+        entity_ids: Annotated[
+            list[str] | str | None,
+            JSON_STRING_COERCION,
+            Field(
+                description="Update entity_id(s) to act on. Required for "
+                "skip/clear_skipped; for install, mutually exclusive with categories.",
+                default=None,
+            ),
+        ] = None,
+        categories: Annotated[
+            list[str] | str | None,
+            JSON_STRING_COERCION,
+            Field(
+                description="For install: apply every pending update in these "
+                "categories ('addons', 'hacs', 'devices', 'other'). Mirrors the "
+                "HA 2026.7 'Update all' button: core/os/supervisor are excluded "
+                "by design (target those individually via entity_ids) and "
+                "skipped updates are never included.",
+                default=None,
+            ),
+        ] = None,
+        backup: Annotated[
+            bool,
+            Field(
+                description="For install: create a backup before installing where "
+                "the update entity supports it (apps/add-ons). Default: False.",
+                default=False,
+            ),
+        ] = False,
+    ) -> dict[str, Any]:
+        """Manage pending updates -- batch install, skip, or un-skip update entities.
+
+        When NOT to use: reading update status or release notes -- use ha_get_updates.
+
+        Installs run asynchronously in Home Assistant and can take minutes: this
+        tool returns once the install calls are accepted, with per-entity results.
+        Poll ha_get_updates to watch in_progress until installed_version reaches
+        latest_version.
+        """
+        try:
+            targets = await self._resolve_update_targets(action, entity_ids, categories)
+
+            results: list[dict[str, Any]] = []
+            requested = len(targets)
+
+            # Explicit-id mode: verify the entities exist up front. HA service
+            # calls targeting nonexistent entities no-op silently, which would
+            # otherwise read as success.
+            if entity_ids:
+                states = await self._client.get_states()
+                known = {s.get("entity_id") for s in states if isinstance(s, dict)}
+                results.extend(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        f"Update entity not found: {eid}",
+                        context={"entity_id": eid},
+                        suggestions=["Use ha_get_updates() to list update entities"],
+                    )
+                    for eid in targets
+                    if eid not in known
+                )
+                targets = [e for e in targets if e in known]
+
+            succeeded = 0
+            for eid in targets:
+                data: dict[str, Any] = {"entity_id": eid}
+                if action == "install" and backup:
+                    data["backup"] = True
+                try:
+                    await self._client.call_service("update", action, data)
+                    results.append({"success": True, "entity_id": eid})
+                    succeeded += 1
+                except Exception as e:
+                    # Batch item failure — collect, don't raise.
+                    results.append(
+                        create_error_response(
+                            ErrorCode.SERVICE_CALL_FAILED,
+                            str(e),
+                            context={"entity_id": eid},
+                        )
+                    )
+
+            response: dict[str, Any] = {
+                "success": True,
+                "action": action,
+                "requested": requested,
+                "succeeded": succeeded,
+                "failed": requested - succeeded,
+                "results": results,
+            }
+            if not requested:
+                response["note"] = "No matching pending updates to act on."
+            elif action == "install" and succeeded:
+                response["note"] = (
+                    "Installs run asynchronously in Home Assistant and can take "
+                    "minutes; poll ha_get_updates to track progress."
+                )
+            return response
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to manage updates: {e}")
+            exception_to_structured_error(
+                e,
+                suggestions=[
+                    "Check Home Assistant connection",
+                    "Use ha_get_updates() to inspect available updates",
                 ],
             )
             return (

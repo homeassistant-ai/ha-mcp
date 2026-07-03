@@ -440,6 +440,8 @@ class AutomationConfigTools:
             Field(
                 description="Complete automation configuration with required fields: 'alias', 'triggers', 'actions'. "
                 "Optional: 'description', 'conditions', 'mode', 'max', 'initial_state', 'variables'. "
+                "Purpose-specific triggers/conditions (HA 2026.7+ default: 'trigger': '<domain>.<name>' "
+                "with 'target'/'options') are valid config. "
                 "Mutually exclusive with python_transform.",
                 default=None,
             ),

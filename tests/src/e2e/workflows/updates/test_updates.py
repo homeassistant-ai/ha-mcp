@@ -581,3 +581,89 @@ class TestUpdatesGetNegativeInputs:
             assert "suggestion" in data["error"], (
                 "Error response should include a suggestion"
             )
+
+
+@pytest.mark.updates
+class TestManageUpdates:
+    """E2E tests for ha_manage_updates (batch install / skip / clear_skipped)."""
+
+    async def test_invalid_action_rejected(self, mcp_client):
+        """An unknown action must fail validation."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_manage_updates",
+                {"action": "uninstall", "entity_ids": ["update.some_update"]},
+                expected_error="Invalid action",
+            )
+
+    async def test_install_requires_exactly_one_scope(self, mcp_client):
+        """install must reject entity_ids+categories together, and neither."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_manage_updates",
+                {"action": "install"},
+                expected_error="exactly one",
+            )
+            await mcp.call_tool_failure(
+                "ha_manage_updates",
+                {
+                    "action": "install",
+                    "entity_ids": ["update.some_update"],
+                    "categories": ["addons"],
+                },
+                expected_error="exactly one",
+            )
+
+    async def test_skip_requires_entity_ids(self, mcp_client):
+        """skip/clear_skipped act on explicit entities only."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_manage_updates",
+                {"action": "skip"},
+                expected_error="requires entity_ids",
+            )
+
+    async def test_non_update_entity_rejected(self, mcp_client):
+        """entity_ids outside the update domain must fail validation."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_manage_updates",
+                {"action": "install", "entity_ids": ["light.kitchen"]},
+                expected_error="update.",
+            )
+
+    async def test_protected_categories_rejected(self, mcp_client):
+        """core/os/supervisor are never batch-installed (mirrors HA Update all)."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_manage_updates",
+                {"action": "install", "categories": ["core"]},
+                expected_error="excluded from batch install",
+            )
+
+    async def test_install_all_with_no_pending_updates(self, mcp_client):
+        """Category install with nothing pending succeeds with zero targets."""
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_manage_updates",
+                {"action": "install", "categories": ["addons", "hacs"]},
+            )
+            assert result["action"] == "install"
+            assert result["requested"] == result["succeeded"] + result["failed"]
+            assert isinstance(result["results"], list)
+            if result["requested"] == 0:
+                assert "note" in result
+
+    async def test_skip_nonexistent_entity_reports_item_failure(self, mcp_client):
+        """A failing entity is reported per-item, not as a tool-level error."""
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_success(
+                "ha_manage_updates",
+                {
+                    "action": "skip",
+                    "entity_ids": ["update.nonexistent_entity_xyz"],
+                },
+            )
+            assert result["requested"] == 1
+            assert result["failed"] == 1
+            assert result["results"][0]["success"] is False
