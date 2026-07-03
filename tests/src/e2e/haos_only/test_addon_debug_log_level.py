@@ -63,9 +63,17 @@ INSTALLED_LINE = "kill-signal diagnostics installed for"
 # Transient errors expected while the addon restarts underneath us:
 # the MCP-client polling set from wait_helpers, plus httpx transport
 # errors from a freshly-opened connection dying or being refused
-# mid-restart. Bugs (TypeError, KeyError) must propagate per
-# .gemini/styleguide.md "Exception Handling in Test Polling Loops".
-_TRANSIENT = (*_POLLING_TRANSIENT_ERRORS, httpx.HTTPError, AssertionError)
+# mid-restart. Bugs (TypeError, KeyError, AssertionError) must propagate
+# per .gemini/styleguide.md "Exception Handling in Test Polling Loops".
+_TRANSIENT = (*_POLLING_TRANSIENT_ERRORS, httpx.HTTPError)
+
+# The finally-block restore/warm loops additionally retry on
+# AssertionError: _post_log_level / _restart_self assert on HTTP status,
+# and a 5xx from the addon mid-restart is a legitimate transient there
+# (same shape as test_readonly_mode's `_transient` restore set). The
+# main proof-polling loop deliberately does NOT get this — a real
+# assertion inside it must fail the test with its true cause.
+_RESTORE_TRANSIENT = (*_TRANSIENT, AssertionError)
 
 # Addon restart = container stop + start; CI runners take 5-25s, plus
 # the install thread's confirmation line lags boot slightly.
@@ -242,7 +250,7 @@ async def test_web_ui_debug_log_level_reaches_addon_log(
                 await _post_log_level(settings_advanced, "INFO")
                 await _restart_self(settings_restart)
                 break
-            except _TRANSIENT:
+            except _RESTORE_TRANSIENT:
                 if time.monotonic() >= restore_deadline:
                     raise
                 await asyncio.sleep(_POLL_INTERVAL)
@@ -255,7 +263,7 @@ async def test_web_ui_debug_log_level_reaches_addon_log(
             try:
                 await mcp_client.call_tool("ha_get_overview", {})
                 break
-            except _TRANSIENT:
+            except _RESTORE_TRANSIENT:
                 if time.monotonic() >= warm_deadline:
                     raise
                 await asyncio.sleep(_POLL_INTERVAL)
