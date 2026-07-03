@@ -201,6 +201,27 @@ class TestExemptionRules:
     @pytest.mark.parametrize(
         ("args", "allowed"),
         [
+            # action defaults to "list" at the schema layer, so an absent
+            # action key executes the list branch — a read.
+            ({}, True),
+            ({"action": "list"}, True),
+            ({"action": "list", "include_skipped": True}, True),
+            ({"action": "get", "entity_ids": ["update.core"]}, True),
+            ({"action": "install", "categories": ["addons"]}, False),
+            ({"action": "install", "entity_ids": ["update.x"]}, False),
+            ({"action": "skip", "entity_ids": ["update.x"]}, False),
+            ({"action": "clear_skipped", "entity_ids": ["update.x"]}, False),
+            # Unknown actions fail closed.
+            ({"action": "uninstall"}, False),
+        ],
+    )
+    def test_manage_updates(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_updates"].blocked_write
+        assert (rule(args) is None) is allowed
+
+    @pytest.mark.parametrize(
+        ("args", "allowed"),
+        [
             ({"radio": "matter", "action": "diagnostics", "device_id": "d1"}, True),
             ({"radio": "zwave", "action": "network_status"}, True),
             ({"radio": "matter", "action": "ping", "device_id": "d1"}, True),
@@ -465,6 +486,7 @@ class TestExemptTableContract:
             "ha_manage_pipeline",
             "ha_manage_custom_tool",
             "ha_manage_radio",
+            "ha_manage_updates",
         }
 
     def test_every_exemption_describes_whats_allowed(self):

@@ -2,7 +2,7 @@
 
 The standalone channels (pip / Docker / stdio) have no Supervisor-driven
 auto-update, so the server surfaces a newer-release notice via
-``ha_get_overview`` / ``ha_get_system_health`` / ``ha_get_updates``. These tests
+``ha_get_overview`` / ``ha_get_system_health`` / ``ha_manage_updates``. These tests
 exercise the real MCP client -> server -> tool -> ``update_check`` path against a
 live HA and assert the field actually reaches the response.
 
@@ -60,7 +60,7 @@ class TestSelfUpdateNoticeSurfacedInTools:
         [
             ("ha_get_overview", {}),
             ("ha_get_system_health", {}),
-            ("ha_get_updates", {}),
+            ("ha_manage_updates", {}),
         ],
     )
     async def test_update_available_surfaced(

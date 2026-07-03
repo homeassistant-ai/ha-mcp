@@ -19,7 +19,7 @@ from ha_mcp.tools.tools_updates import (
 
 
 class TestListUpdatesHaMcpUpdate:
-    """ha_get_updates (list mode) surfaces the MCP server's own update status."""
+    """ha_manage_updates (list mode) surfaces the MCP server's own update status."""
 
     @pytest.mark.asyncio
     async def test_ha_mcp_update_present_when_available(self, monkeypatch):
@@ -39,7 +39,7 @@ class TestListUpdatesHaMcpUpdate:
         )
         client = MagicMock()
         client.get_states = AsyncMock(return_value=[])
-        result = await UpdateTools(client).ha_get_updates()
+        result = await UpdateTools(client).ha_manage_updates()
         assert result["ha_mcp_update"] == {
             "current": "7.8.0",
             "latest": "7.9.0",
@@ -56,7 +56,7 @@ class TestListUpdatesHaMcpUpdate:
         )
         client = MagicMock()
         client.get_states = AsyncMock(return_value=[])
-        result = await UpdateTools(client).ha_get_updates()
+        result = await UpdateTools(client).ha_manage_updates()
         assert "ha_mcp_update" not in result
 
 

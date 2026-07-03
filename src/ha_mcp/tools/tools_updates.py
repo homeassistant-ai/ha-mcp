@@ -661,118 +661,6 @@ class UpdateTools:
 
         return None, None
 
-    @tool(
-        name="ha_get_updates",
-        tags={"System"},
-        annotations={
-            "idempotentHint": True,
-            "openWorldHint": True,
-            "readOnlyHint": True,
-            "title": "Get Updates",
-        },
-    )
-    @log_tool_usage
-    async def ha_get_updates(
-        self,
-        entity_id: Annotated[
-            str | None,
-            Field(
-                description="Update entity ID to get details for (e.g., 'update.home_assistant_core_update'). "
-                "If omitted, lists all available updates.",
-                default=None,
-            ),
-        ] = None,
-        include_skipped: Annotated[
-            bool,
-            Field(
-                description="When listing all updates, include updates that have been skipped (default: False)",
-                default=False,
-            ),
-        ] = False,
-        include_release_notes: Annotated[
-            bool,
-            Field(
-                description="When getting a Core update entity, fetch multi-version release notes "
-                "and breaking changes for all versions between installed and latest (default: False). "
-                "Adds breaking_changes, multi_version_release_notes, and installed_integrations to the response.",
-                default=False,
-            ),
-        ] = False,
-    ) -> dict[str, Any]:
-        """
-        Get update information -- list all updates or get details for a specific one.
-
-        Without an entity_id: Lists all available updates across the system including
-        Home Assistant Core, add-ons, device firmware, HACS, and OS updates.
-
-        With an entity_id: Returns detailed information about a specific update including
-        version info, category, and release notes (if available).
-
-        With include_release_notes=True (Core updates only): Also fetches HA release
-        blog posts for every monthly version between installed and latest. Returns
-        structured breaking changes and installed integration domains for cross-referencing.
-
-        EXAMPLES:
-        - List all updates: ha_get_updates()
-        - List including skipped: ha_get_updates(include_skipped=True)
-        - Get specific update: ha_get_updates(entity_id="update.home_assistant_core_update")
-        - Pre-update analysis: ha_get_updates(entity_id="update.home_assistant_core_update", include_release_notes=True)
-
-        RETURNS (when listing):
-        - updates_available: Count of available updates
-        - updates: List of update entities with version info
-        - categories: Updates grouped by category (core, addons, devices, hacs, os)
-        - ha_mcp_update: This MCP server's own update status
-          {current, latest, update_available} — so you can flag a newer ha-mcp
-          release (from PyPI for pip/Docker, the Supervisor add-on store for the
-          add-on). Present on all install types; omitted only for the unknown
-          version and when HA_MCP_DISABLE_UPDATE_CHECK is set.
-
-        RETURNS (when getting specific update):
-        - Update details including installed/latest versions
-        - Release notes (fetched from WebSocket API or GitHub)
-        - Category and installation status
-
-        RETURNS (with include_release_notes=True, Core only):
-        - breaking_changes.entries[]: Each has integration, description, version
-        - multi_version_release_notes[]: Full text per version {version, content, source_url}
-        - installed_integrations: Your integration domains for cross-referencing
-        """
-        try:
-            if entity_id is None:
-                return await self._list_updates(bool(include_skipped))
-            else:
-                return await self._get_update_details(
-                    entity_id, bool(include_release_notes)
-                )
-
-        except ToolError:
-            raise
-        except Exception as e:
-            error_msg = str(e)
-            if entity_id and ("404" in error_msg or "not found" in error_msg.lower()):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.ENTITY_NOT_FOUND,
-                        f"Update entity not found: {entity_id}",
-                        context={"entity_id": entity_id},
-                        suggestions=[
-                            "Use ha_get_updates() without entity_id to see all available updates"
-                        ],
-                    )
-                )
-            logger.error(f"Failed to get updates: {e}")
-            exception_to_structured_error(
-                e,
-                suggestions=[
-                    "Check Home Assistant connection",
-                    "Verify API access permissions",
-                ],
-            )
-            return (
-                None  # exception_to_structured_error always raises; explicit for CodeQL
-            )
-
     async def _resolve_update_targets(
         self,
         action: str,
@@ -780,16 +668,6 @@ class UpdateTools:
         categories: list[str] | str | None,
     ) -> list[str]:
         """Validate parameters and resolve the update entity_ids to act on."""
-        if action not in ("install", "skip", "clear_skipped"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    f"Invalid action '{action}'. "
-                    "Must be 'install', 'skip', or 'clear_skipped'.",
-                    context={"action": action},
-                )
-            )
-
         ids = [entity_ids] if isinstance(entity_ids, str) else list(entity_ids or [])
         cats = [categories] if isinstance(categories, str) else list(categories or [])
 
@@ -868,16 +746,20 @@ class UpdateTools:
         action: Annotated[
             str,
             Field(
-                description="'install' (apply pending updates), 'skip' (hide the "
-                "offered version), or 'clear_skipped' (re-offer a skipped version)."
+                description="'list' (all pending updates, default), 'get' "
+                "(details/release notes for one update), 'install' (apply "
+                "pending updates), 'skip' (hide the offered version), or "
+                "'clear_skipped' (re-offer a skipped version).",
+                default="list",
             ),
-        ],
+        ] = "list",
         entity_ids: Annotated[
             list[str] | str | None,
             JSON_STRING_COERCION,
             Field(
-                description="Update entity_id(s) to act on. Required for "
-                "skip/clear_skipped; for install, mutually exclusive with categories.",
+                description="Update entity_id(s) to act on. 'get' takes exactly "
+                "one; skip/clear_skipped require at least one; for install, "
+                "mutually exclusive with categories.",
                 default=None,
             ),
         ] = None,
@@ -893,6 +775,25 @@ class UpdateTools:
                 default=None,
             ),
         ] = None,
+        include_skipped: Annotated[
+            bool,
+            Field(
+                description="For list: include updates that have been skipped "
+                "(default: False).",
+                default=False,
+            ),
+        ] = False,
+        include_release_notes: Annotated[
+            bool,
+            Field(
+                description="For get on a Core update entity: fetch multi-version "
+                "release notes and breaking changes for all versions between "
+                "installed and latest (default: False). Adds breaking_changes, "
+                "multi_version_release_notes, and installed_integrations to the "
+                "response.",
+                default=False,
+            ),
+        ] = False,
         backup: Annotated[
             bool,
             Field(
@@ -902,16 +803,62 @@ class UpdateTools:
             ),
         ] = False,
     ) -> dict[str, Any]:
-        """Manage pending updates -- batch install, skip, or un-skip update entities.
+        """Manage Home Assistant updates -- list, read details, batch install, skip, or un-skip.
 
-        When NOT to use: reading update status or release notes -- use ha_get_updates.
+        Covers Core, OS, supervisor, apps (add-ons), device firmware, and HACS
+        update entities. In Read Only Mode the read actions ('list', 'get') stay
+        available; write actions are blocked.
 
-        Installs run asynchronously in Home Assistant and can take minutes: this
-        tool returns once the install calls are accepted, with per-entity results.
-        Poll ha_get_updates to watch in_progress until installed_version reaches
-        latest_version.
+        Installs run asynchronously in Home Assistant and can take minutes:
+        'install' returns once the service calls are accepted, with per-entity
+        results. Poll action='list' to watch in_progress until installed_version
+        reaches latest_version.
+
+        EXAMPLES:
+        - List all updates: ha_manage_updates()
+        - Pre-update analysis: ha_manage_updates(action="get", entity_ids=["update.home_assistant_core_update"], include_release_notes=True)
+        - Update everything pending in a category: ha_manage_updates(action="install", categories=["addons", "hacs"])
+
+        RETURNS (action='list'): updates_available, updates, categories, and
+        ha_mcp_update -- this MCP server's own update status {current, latest,
+        update_available}, so a newer ha-mcp release can be flagged.
+
+        RETURNS (action='get'): update details, release notes; with
+        include_release_notes=True on Core also breaking_changes.entries[],
+        multi_version_release_notes[], and installed_integrations.
         """
         try:
+            if action == "list":
+                return await self._list_updates(bool(include_skipped))
+
+            if action == "get":
+                ids = (
+                    [entity_ids]
+                    if isinstance(entity_ids, str)
+                    else list(entity_ids or [])
+                )
+                if len(ids) != 1:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "'get' requires exactly one entity in entity_ids.",
+                            context={"entity_ids": ids},
+                        )
+                    )
+                return await self._get_update_details(
+                    ids[0], bool(include_release_notes)
+                )
+
+            if action not in ("install", "skip", "clear_skipped"):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid action '{action}'. Must be 'list', 'get', "
+                        "'install', 'skip', or 'clear_skipped'.",
+                        context={"action": action},
+                    )
+                )
+
             targets = await self._resolve_update_targets(action, entity_ids, categories)
 
             results: list[dict[str, Any]] = []
@@ -928,7 +875,7 @@ class UpdateTools:
                         ErrorCode.ENTITY_NOT_FOUND,
                         f"Update entity not found: {eid}",
                         context={"entity_id": eid},
-                        suggestions=["Use ha_get_updates() to list update entities"],
+                        suggestions=["Use ha_manage_updates() to list update entities"],
                     )
                     for eid in targets
                     if eid not in known
@@ -967,19 +914,38 @@ class UpdateTools:
             elif action == "install" and succeeded:
                 response["note"] = (
                     "Installs run asynchronously in Home Assistant and can take "
-                    "minutes; poll ha_get_updates to track progress."
+                    "minutes; poll ha_manage_updates(action='list') to track "
+                    "progress."
                 )
             return response
 
         except ToolError:
             raise
         except Exception as e:
+            error_msg = str(e)
+            if (
+                action == "get"
+                and entity_ids
+                and ("404" in error_msg or "not found" in error_msg.lower())
+            ):
+                eid = entity_ids if isinstance(entity_ids, str) else entity_ids[0]
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        f"Update entity not found: {eid}",
+                        context={"entity_id": eid},
+                        suggestions=[
+                            "Use ha_manage_updates() without entity_ids to see "
+                            "all available updates"
+                        ],
+                    )
+                )
             logger.error(f"Failed to manage updates: {e}")
             exception_to_structured_error(
                 e,
                 suggestions=[
                     "Check Home Assistant connection",
-                    "Use ha_get_updates() to inspect available updates",
+                    "Use ha_manage_updates() to inspect available updates",
                 ],
             )
             return (
