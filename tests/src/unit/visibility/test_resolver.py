@@ -1,9 +1,52 @@
+import logging
+
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.resolver import hidden_entity_ids
 
 
 def _reg(*entries):
     return {"success": True, "result": list(entries)}
+
+
+def test_enabled_bad_payload_warns_and_fails_open(caplog):
+    with caplog.at_level(logging.WARNING):
+        assert (
+            hidden_entity_ids({"success": False}, VisibilityConfig(enabled=True))
+            == set()
+        )
+    assert any("unusable" in r.message for r in caplog.records)
+
+
+def test_enabled_exception_payload_fails_open(caplog):
+    # gather(return_exceptions=True) can hand an Exception object through as the
+    # registry payload; it is non-dict, so the filter degrades to empty (open).
+    with caplog.at_level(logging.WARNING):
+        assert (
+            hidden_entity_ids(RuntimeError("boom"), VisibilityConfig(enabled=True))
+            == set()
+        )
+    assert any("unusable" in r.message for r in caplog.records)
+
+
+def test_enabled_non_list_result_warns_and_fails_open(caplog):
+    with caplog.at_level(logging.WARNING):
+        assert (
+            hidden_entity_ids(
+                {"success": True, "result": "nope"}, VisibilityConfig(enabled=True)
+            )
+            == set()
+        )
+    assert any("not a list" in r.message for r in caplog.records)
+
+
+def test_disabled_bad_payload_stays_silent(caplog):
+    # Disabled is the default no-op; it must NOT warn on every call.
+    with caplog.at_level(logging.WARNING):
+        assert (
+            hidden_entity_ids({"success": False}, VisibilityConfig(enabled=False))
+            == set()
+        )
+    assert not caplog.records
 
 
 def test_disabled_config_hides_nothing():

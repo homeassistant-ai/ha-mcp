@@ -204,8 +204,10 @@ class EntitySearchMixin(_SearchBase):
             raise results[1]
         entities = results[0]
 
-        # Opt-in visibility filter (raw registry results[1] → all fields).
-        # Fails open; do NOT wrap in try/except or the failure mode inverts.
+        # Opt-in visibility filter. results[1] is the unprojected registry, so
+        # entity_category/hidden_by/area_id/labels are present (the slim map
+        # below drops them). Fails open; do NOT wrap in try/except or the
+        # failure mode inverts.
         visibility_hidden = await load_hidden_set(results[1])
         registry_slim = self._build_registry_slim(results[1])
         survivor_ids, survivor_states = self._filter_hidden_entities(
@@ -301,8 +303,9 @@ class EntitySearchMixin(_SearchBase):
             )
 
             entities = results[0] if not isinstance(results[0], Exception) else []
-            # Opt-in visibility filter (raw entity registry results[2] → all
-            # fields). Fails open (empty set on any error / non-dict payload).
+            # Opt-in visibility filter. results[2] is the unprojected entity
+            # registry, so entity_category/hidden_by/area_id/labels are present.
+            # Fails open (empty set on any error / non-dict payload).
             visibility_hidden = await load_hidden_set(results[2])
             area_registry = self._parse_area_registry(results[1])
             entity_reg_map = self._parse_entity_reg_map(results[2])

@@ -18,7 +18,13 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
     registry payload is unusable (fail-open — never hide on bad input)."""
     if not config.enabled:
         return set()
+    # Enabled past this point, so an unusable registry is a real degradation the
+    # operator should see (spec §7: degrade with a warning). Fail open regardless.
     if not isinstance(registry_result, dict) or not registry_result.get("success"):
+        logger.warning(
+            "entity visibility filter enabled but the registry payload was "
+            "unusable; degrading to unfiltered for this request"
+        )
         return set()
 
     categories = set(config.exclude_categories)
@@ -29,6 +35,10 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
     hidden: set[str] = set()
     entries: Any = registry_result.get("result", [])
     if not isinstance(entries, list):
+        logger.warning(
+            "entity visibility filter enabled but the registry 'result' was not "
+            "a list; degrading to unfiltered for this request"
+        )
         return set()
     for entry in entries:
         if not isinstance(entry, dict):
