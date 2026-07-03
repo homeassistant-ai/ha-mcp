@@ -85,6 +85,22 @@ def test_exclude_hidden_flag():
     assert hidden_entity_ids(reg, cfg) == {"sensor.h"}
 
 
+def test_label_string_value_is_not_char_iterated():
+    # A label served as a bare string (unexpected payload / mock) must count as
+    # one whole label, not be char-iterated by set.intersection.
+    reg = _reg({"entity_id": "sensor.s", "labels": "noise"})
+    # "n" is a character of "noise" but not the whole label -> must NOT hide.
+    char_cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_labels=["n"]
+    )
+    assert hidden_entity_ids(reg, char_cfg) == set()
+    # The exact whole-string label DOES hide.
+    exact_cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_labels=["noise"]
+    )
+    assert hidden_entity_ids(reg, exact_cfg) == {"sensor.s"}
+
+
 def test_malformed_registry_returns_empty():
     cfg = VisibilityConfig(enabled=True)
     assert hidden_entity_ids({"success": False}, cfg) == set()

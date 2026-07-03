@@ -58,7 +58,13 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
         if areas and entry.get("area_id") in areas:
             hidden.add(eid)
             continue
-        if labels and labels.intersection(entry.get("labels") or []):
+        entry_labels = entry.get("labels") or []
+        if isinstance(entry_labels, str):
+            # A label served as a bare string (unexpected payload / mock) must
+            # count as one label, not be char-iterated by set.intersection —
+            # else a single-char exclude entry could spuriously hide it.
+            entry_labels = [entry_labels]
+        if labels and labels.intersection(entry_labels):
             hidden.add(eid)
     return hidden
 

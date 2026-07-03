@@ -98,10 +98,14 @@ async def test_visibility_denylist_hides_entity_from_search_but_get_state_return
         assert filtered.get("entity_total_matches") == 0
 
         # Tier B: a targeted read is NOT filtered — it still returns the entity.
-        got = parse_mcp_result(
-            await mcp_client.call_tool("ha_get_state", {"entity_id": _PROBE_ENTITY_ID})
+        # ha_get_state returns a {data, metadata} envelope with no top-level
+        # `success` key, so assert success via the shared helper (which treats
+        # "has data, no error" as success) rather than a raw `success` check.
+        got_result = await mcp_client.call_tool(
+            "ha_get_state", {"entity_id": _PROBE_ENTITY_ID}
         )
-        assert got.get("success") is True
+        assert_mcp_success(got_result, "targeted read still returns hidden entity")
+        got = parse_mcp_result(got_result)
         assert got.get("data", {}).get("entity_id") == _PROBE_ENTITY_ID
 
     finally:

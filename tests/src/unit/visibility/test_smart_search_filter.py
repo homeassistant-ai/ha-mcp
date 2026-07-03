@@ -3,6 +3,9 @@
 import asyncio
 import json
 
+import pytest
+from fastmcp.exceptions import ToolError
+
 from ha_mcp.tools.smart_search._entities import EntitySearchMixin
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
@@ -149,3 +152,37 @@ def test_get_entities_by_area_excludes_denied_end_to_end(tmp_path, monkeypatch):
     assert "sensor.drop" not in blob
     assert "light.keep" in blob
     assert res["total_entities"] == 1  # only the surviving entity counted
+
+
+class _StatesFailAreaClient(_AreaClient):
+    """get_entities_by_area client whose mandatory states fetch fails."""
+
+    async def get_states(self):
+        raise ConnectionError("HA unreachable")
+
+
+def test_get_entities_by_area_reraises_states_failure():
+    """A failed states fetch surfaces as an error, not a bogus empty area result
+    with success=True — mirrors _fetch_search_entities. Regression guard."""
+    mixin = EntitySearchMixin()
+    mixin.client = _StatesFailAreaClient()
+    with pytest.raises(ToolError):
+        asyncio.run(mixin.get_entities_by_area(area_query="Kitchen"))
+
+
+class _RegistryCancelAreaClient(_AreaClient):
+    """get_entities_by_area client whose entity-registry sub-task is cancelled."""
+
+    async def send_websocket_message(self, msg):
+        if msg["type"] == "config/entity_registry/list":
+            raise asyncio.CancelledError
+        return await super().send_websocket_message(msg)
+
+
+def test_get_entities_by_area_propagates_registry_cancellation():
+    """A cancelled registry sub-task propagates instead of being silently
+    degraded to an empty registry (mirrors _fetch_search_entities)."""
+    mixin = EntitySearchMixin()
+    mixin.client = _RegistryCancelAreaClient()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(mixin.get_entities_by_area(area_query="Kitchen"))

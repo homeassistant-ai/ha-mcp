@@ -302,7 +302,19 @@ class EntitySearchMixin(_SearchBase):
                 return_exceptions=True,
             )
 
-            entities = results[0] if not isinstance(results[0], Exception) else []
+            # States are mandatory — surface connection/auth errors instead of a
+            # bogus empty area result with success=True (mirrors
+            # _fetch_search_entities). The registry results below still fail open.
+            if isinstance(results[0], BaseException):
+                raise results[0]
+            entities = results[0]
+            # A registry sub-task that was individually cancelled must propagate,
+            # not be silently degraded to an empty registry by the parsers below
+            # (mirrors _fetch_search_entities). Non-cancellation registry errors
+            # still fail open.
+            for reg_result in results[1:]:
+                if isinstance(reg_result, asyncio.CancelledError):
+                    raise reg_result
             # Opt-in visibility filter. results[2] is the unprojected entity
             # registry, so entity_category/hidden_by/area_id/labels are present.
             # Fails open (empty set on any error / non-dict payload).
