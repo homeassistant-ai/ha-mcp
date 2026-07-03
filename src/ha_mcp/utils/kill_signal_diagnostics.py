@@ -244,7 +244,7 @@ def format_diagnostic_block(
 
     lines = [
         "=" * 80,
-        "ADVANCED DEBUG LOGGING — kill-signal diagnostics",
+        "KILL-SIGNAL DIAGNOSTICS",
         "=" * 80,
         f"Signal:         {sig_name} ({signum})",
         f"si_code:        {code_name}",

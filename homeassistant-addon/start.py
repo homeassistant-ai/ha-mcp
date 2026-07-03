@@ -208,13 +208,14 @@ def resolve_effective_log_level() -> int:
     Reads the web Settings UI "Log level" advanced setting (persisted
     under ``/data`` and applied by ``get_global_settings()``) so the
     addon log actually honors it — ``main()`` configures logging before
-    ha-mcp is importable, so it can only hardcode INFO at that point and
+    ha-mcp is imported, so it can only hardcode INFO at that point and
     must re-apply the real level after the import (#1721).
 
-    Only callable after ``main()`` has exported ``HOMEASSISTANT_URL`` /
-    ``HOMEASSISTANT_TOKEN``; ``Settings`` construction requires them.
-    Any failure falls back to INFO — logging config must never block
-    addon startup.
+    Call only after ``main()`` has exported ``HOMEASSISTANT_URL`` /
+    ``HOMEASSISTANT_TOKEN``: ``get_global_settings()`` caches a
+    singleton, so an earlier call would pin placeholder connection
+    settings for the process. Any failure falls back to INFO — logging
+    config must never block addon startup.
     """
     import logging
 
@@ -739,7 +740,7 @@ def main() -> int:
     # FastMCP surfaces its update notice in these same startup logs.
     _log_startup_version()
 
-    # Re-apply the effective log level now that ha_mcp is importable —
+    # Re-apply the effective log level now that ha_mcp is imported —
     # the basicConfig above could only hardcode INFO. Without this, the
     # web Settings UI "Log level" setting never reaches the addon log
     # (#1721).
