@@ -158,9 +158,7 @@ def test_targeted_get_state_ignores_visibility_filter(tmp_path, monkeypatch):
     # Filter enabled and denying the entity — a collection read would drop it.
     save_visibility_config(
         tmp_path,
-        VisibilityConfig(
-            enabled=True, exclude_categories=[], deny_entity_ids=[denied]
-        ),
+        VisibilityConfig(enabled=True, exclude_categories=[], deny_entity_ids=[denied]),
     )
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
 
