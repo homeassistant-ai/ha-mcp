@@ -695,7 +695,9 @@ def _check_triggers(
         platform = trigger.get("platform", trigger.get("trigger", ""))
 
         # 2026.7 renamed purpose-specific trigger keys — old keys no longer load.
-        renamed_trigger = _RENAMED_TRIGGER_KEYS.get(platform)
+        renamed_trigger = (
+            _RENAMED_TRIGGER_KEYS.get(platform) if isinstance(platform, str) else None
+        )
         if renamed_trigger:
             _emit(
                 warnings,
