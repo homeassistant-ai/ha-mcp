@@ -361,12 +361,10 @@ class TestResolveEffectiveLogLevel:
         self.addon = _load_addon_start()
 
     def _patch_level(self, monkeypatch, level_name):
-        import ha_mcp.config as config_mod
-
         class _FakeSettings:
             log_level = level_name
 
-        monkeypatch.setattr(config_mod, "get_global_settings", _FakeSettings)
+        monkeypatch.setattr("ha_mcp.config.get_global_settings", _FakeSettings)
 
     def test_debug_setting_yields_debug_level(self, monkeypatch):
         import logging
@@ -389,12 +387,10 @@ class TestResolveEffectiveLogLevel:
     def test_settings_failure_falls_back_to_info(self, monkeypatch):
         import logging
 
-        import ha_mcp.config as config_mod
-
         def _boom():
             raise RuntimeError("settings unavailable")
 
-        monkeypatch.setattr(config_mod, "get_global_settings", _boom)
+        monkeypatch.setattr("ha_mcp.config.get_global_settings", _boom)
         assert self.addon.resolve_effective_log_level() == logging.INFO
 
     def test_advanced_debug_logging_toggle_removed(self):
