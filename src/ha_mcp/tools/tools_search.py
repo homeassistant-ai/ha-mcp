@@ -1737,9 +1737,9 @@ class SearchTools:
         filtered_entities = [
             e
             for e in states_result
-            if e.get("entity_id", "").startswith(f"{domain_filter}.")
-            and e.get("entity_id") not in visibility_hidden
-            and (include_hidden_bool or e.get("entity_id") not in hidden_ids)
+            if (eid := e.get("entity_id", "")).startswith(f"{domain_filter}.")
+            and eid not in visibility_hidden
+            and (include_hidden_bool or eid not in hidden_ids)
         ]
 
         # Score: 100 baseline for domain membership (exact, not fuzzy);
