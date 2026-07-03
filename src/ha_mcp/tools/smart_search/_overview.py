@@ -136,7 +136,8 @@ class SystemOverviewMixin(_SearchBase):
                 formatted_domain_stats, limit, offset, detail_level
             )
 
-            # totals always reflect the full system, regardless of filtering
+            # totals reflect the full (visibility-filtered) system and are not
+            # narrowed by the domains_filter display filter below
             system_summary: dict[str, Any] = {
                 "total_entities": len(entities),
                 "total_domains": len(all_domains),
