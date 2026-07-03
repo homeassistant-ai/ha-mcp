@@ -1,0 +1,22 @@
+# Service descriptions for the HA UI (names/descriptions come from
+# strings.json / translations/en.json). refresh_repairs is called by the
+# Webhook Proxy add-on to raise/clear the click-to-restart Repair issues;
+# it is not intended for manual use.
+refresh_repairs:
+  fields:
+    issue_id:
+      required: true
+      example: update_restart_required
+      selector:
+        select:
+          options:
+            - oauth_restart_required
+            - update_restart_required
+    action:
+      required: true
+      example: create
+      selector:
+        select:
+          options:
+            - create
+            - clear

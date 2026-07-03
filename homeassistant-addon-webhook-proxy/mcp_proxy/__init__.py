@@ -22,7 +22,9 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
@@ -33,7 +35,7 @@ from homeassistant.components.webhook import (
     async_unregister,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers.typing import ConfigType
 
@@ -47,6 +49,34 @@ _LOGGER_LEVEL_RAISED = False
 
 DOMAIN = "mcp_proxy"
 CONFIG_FILE = Path("/config/.mcp_proxy_config.json")
+
+# OAuth mode markers written into hass.data["oauth_mode"] and read by the
+# webhook gate + the mode-aware discovery views. Mirrored as
+# auth_native.HA_AUTH_MODE / oauth.MODE_* (a test pins them in agreement).
+#   ha_auth — HA core is the authorization server (auth_native.ResourceServer);
+#             the add-on only serves the discovery documents + validates bearers.
+#   legacy  — this integration's embedded authorization server (oauth.py).
+# The two are mutually exclusive: exactly one marker is ever set for an entry.
+OAUTH_MODE_HA_AUTH = "ha_auth"
+OAUTH_MODE_LEGACY = "legacy"
+
+# Service the add-on calls (via the HA Core API) to raise/clear the
+# click-to-restart Repair issues from outside HA — see async_setup.
+SERVICE_REFRESH_REPAIRS = "refresh_repairs"
+_REFRESH_REPAIRS_SCHEMA = vol.Schema(
+    {
+        # Kept in sync with repairs.py ISSUE_ID / UPDATE_ISSUE_ID (asserted
+        # by the addon test suite); literals here so the schema builds
+        # without importing repairs.py on the happy path.
+        vol.Required("issue_id"): vol.In(
+            ["oauth_restart_required", "update_restart_required"]
+        ),
+        vol.Required("action"): vol.In(["create", "clear"]),
+    }
+)
+# The add-on's "integration updated, restart HA" notification id — dismissed
+# at boot once the new code is actually loaded. Kept in sync with start.py.
+UPDATE_NOTIFICATION_ID = "mcp_proxy_update"
 
 # Inbound-request mirror file. When "Log inbound requests" is on we append each
 # inbound debug line here in addition to logging it to Home Assistant, so the
@@ -141,6 +171,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     gate or the integration's mid-session OAuth enable), surface it as a
     Repair card with a click-to-restart fix flow. See repairs.py for
     the full lifecycle.
+
+    Registers the `refresh_repairs` service the add-on calls to raise a
+    click-to-restart Repair from OUTSIDE Home Assistant the moment a restart
+    becomes necessary (integration files updated on disk, or OAuth enabled
+    against stale loaded code). Only in-process code can file repair issues,
+    so without this service the add-on could only post a persistent
+    notification and the Repair card would not appear until the very restart
+    it is supposed to prompt.
     """
     if DOMAIN in config:
         _LOGGER.info(
@@ -154,7 +192,57 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         from .repairs import maybe_create_issue
 
         maybe_create_issue(hass, DOMAIN)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_REFRESH_REPAIRS,
+        _make_refresh_repairs_handler(hass),
+        schema=_REFRESH_REPAIRS_SCHEMA,
+    )
+
+    # This code executing at boot means the most recently installed
+    # integration files are what's loaded — the restart any earlier
+    # "integration updated" notification asked for has happened. Dismissing
+    # a notification that doesn't exist is a no-op.
+    hass.async_create_task(
+        hass.services.async_call(
+            "persistent_notification",
+            "dismiss",
+            {"notification_id": UPDATE_NOTIFICATION_ID},
+        )
+    )
     return True
+
+
+def _make_refresh_repairs_handler(
+    hass: HomeAssistant,
+) -> Callable[[ServiceCall], Coroutine[Any, Any, None]]:
+    """Build the refresh_repairs service handler (see async_setup docstring)."""
+
+    async def _handle_refresh_repairs(call: ServiceCall) -> None:
+        from .repairs import (
+            ISSUE_ID,
+            _delete_issue_only,
+            create_issue,
+            marker_present,
+        )
+
+        issue_id: str = call.data["issue_id"]
+        if call.data["action"] == "clear":
+            _delete_issue_only(hass, DOMAIN, issue_id)
+            return
+        if issue_id == ISSUE_ID:
+            # The marker file is the source of truth for the OAuth repair
+            # (it must survive an aborted restart), so file the issue only
+            # when the add-on has actually written it.
+            if await hass.async_add_executor_job(marker_present):
+                create_issue(hass, DOMAIN, issue_id)
+            return
+        # update_restart_required: non-persistent by design — a successful
+        # HA restart loads the new code and drops the issue automatically.
+        create_issue(hass, DOMAIN, issue_id)
+
+    return _handle_refresh_repairs
 
 
 def _marker_present() -> bool:
@@ -290,7 +378,100 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # leave them with an open endpoint they think is locked.
     oauth_restart_needed = False
     oauth_section = proxy_config.get("oauth")
-    if isinstance(oauth_section, dict):
+    oauth_mode = oauth_section.get("mode") if isinstance(oauth_section, dict) else None
+    if isinstance(oauth_section, dict) and oauth_mode == OAUTH_MODE_HA_AUTH:
+        # ── ha_auth: HA core is the authorization server (see auth_native) ──
+        # Hard mutual exclusion: a ha_auth section carries NO legacy credentials.
+        # If client_id/client_secret keys are present the config is ambiguous
+        # (a bad hand-edit or a bug) — refuse to guess which mode was intended
+        # rather than risk serving with the wrong auth model.
+        if "client_id" in oauth_section or "client_secret" in oauth_section:
+            async_unregister(hass, webhook_id)
+            await session.close()
+            raise ConfigEntryError(
+                "Ambiguous OAuth config: the oauth section is mode 'ha_auth' "
+                "but also carries legacy client_id/client_secret keys. ha_auth "
+                "signs in with your Home Assistant account and takes no add-on "
+                "credentials. Restart the Webhook Proxy addon to regenerate "
+                "/config/.mcp_proxy_config.json."
+            )
+        # Log the HA version. No minimum-version gate: everything ha_auth calls
+        # at runtime is long-stable HA API — /auth/*, same-origin URL-shaped
+        # IndieAuth client_ids, and hass.auth bearer validation. The advertised
+        # client_id_metadata_document_supported flag is advertisement-only (HA
+        # never fetches a CIMD document; the field just signals capability),
+        # and home-assistant/core#153820 is field evidence that claude.ai /
+        # ChatGPT custom connectors work against HA's native OAuth, not a
+        # runtime code dependency of this add-on — hence nothing to gate on.
+        try:
+            from homeassistant.const import __version__ as _hass_version
+        except ImportError:  # pragma: no cover - defensive
+            _hass_version = "unknown"
+        _LOGGER.info(
+            "MCP Proxy: OAuth mode 'ha_auth' — Home Assistant (version %s) is "
+            "the authorization server; this add-on serves only the OAuth "
+            "discovery documents and validates bearer tokens via hass.auth. No "
+            "HA restart is needed to enable or disable this mode.",
+            _hass_version,
+        )
+        # ha_auth is ALWAYS host-derived: the SAME install must work via the
+        # Nabu Casa cloud URL AND any other external URL, so the base URL is
+        # built per-request from the host and never pinned. Pass None explicitly
+        # and ignore any public_base_url a hand-edited config might carry (the
+        # ambiguity guard above only rejects stray client_id/client_secret keys,
+        # so a stray public_base_url would otherwise wrongly pin the base URL).
+        try:
+            from .auth_native import ResourceServer
+            from .oauth import register_metadata_views
+
+            resource_server = ResourceServer(hass, webhook_id, None)
+            # Registers the seven discovery-document views at most once per HA
+            # session (register_metadata_views no-ops when either mode already
+            # bound them — see oauth._METADATA_VIEWS_REGISTERED_KEY), so a
+            # config-entry reload or a live legacy->ha_auth switch doesn't
+            # stack shadowed duplicates. ha_auth binds NO root views (HA core is
+            # the authorization server, serving its own /auth/authorize +
+            # /auth/token; the bare /authorize + /token are the legacy flavor's
+            # own root views), so there is no owner-key / fingerprint bookkeeping
+            # and no restart concept — hence oauth_restart_needed stays False and
+            # the marker-CLEAR path runs below.
+            register_metadata_views(hass, resource_server)
+        except Exception as err:
+            _LOGGER.exception(
+                "MCP Proxy: failed to initialise ha_auth OAuth (%s)",
+                type(err).__name__,
+            )
+            # OAuth setup failed — unregister the webhook we registered above so
+            # we don't leave an unauthenticated endpoint live.
+            async_unregister(hass, webhook_id)
+            await session.close()
+            raise ConfigEntryError(
+                f"Failed to enable OAuth on the MCP webhook: {err}. "
+                "Auth is not being enforced — refusing to start the "
+                "integration so the webhook URL is not silently exposed "
+                "without the protection the user requested."
+            ) from err
+        hass_data["oauth"] = resource_server
+        hass_data["oauth_mode"] = OAUTH_MODE_HA_AUTH
+    elif isinstance(oauth_section, dict) and oauth_mode not in (
+        None,
+        OAUTH_MODE_LEGACY,
+    ):
+        # Unknown mode value — refuse loudly rather than silently guessing.
+        async_unregister(hass, webhook_id)
+        await session.close()
+        raise ConfigEntryError(
+            f"Unknown OAuth mode {oauth_mode!r} in "
+            "/config/.mcp_proxy_config.json. Valid values are 'ha_auth' and "
+            "'legacy'. Restart the Webhook Proxy addon to regenerate the "
+            "config file."
+        )
+    elif isinstance(oauth_section, dict):
+        # ── legacy: this integration's embedded authorization server ──────
+        # Reached for mode 'legacy' OR an absent mode key (creds-only
+        # back-compat with pre-ha_auth config files, which guarantees every
+        # existing legacy test keeps passing unchanged). Byte-for-byte the
+        # pre-ha_auth behavior below.
         client_id = str(oauth_section.get("client_id", ""))
         client_secret = str(oauth_section.get("client_secret", ""))
         if not client_id or not client_secret:
@@ -420,6 +601,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             oauth_provider.client_id_masked(),
         )
         hass_data["oauth"] = oauth_provider
+        hass_data["oauth_mode"] = OAUTH_MODE_LEGACY
 
     hass.data[DOMAIN] = hass_data
 
@@ -527,18 +709,26 @@ async def _handle_webhook(
 
     # OAuth gate. When OAuth isn't configured, `oauth_provider` is None and
     # this branch is a single attribute lookup with zero behavior change vs
-    # the original handler.
+    # the original handler. When it is configured, the bearer check dispatches
+    # by mode: ha_auth validates against HA core via the ResourceServer (async),
+    # legacy validates this integration's own signed bearer (sync). Either way
+    # an invalid/missing bearer yields the SAME 401 discovery challenge.
     oauth_provider = data.get("oauth")
-    if oauth_provider is not None and not oauth_provider.validate_bearer(request):
-        if debug:
-            await _debug_log(
-                hass,
-                "MCP Proxy [inbound]: -> 401 Unauthorized (no/invalid OAuth "
-                "bearer; expected for the initial discovery probe)",
-            )
-        from .oauth import build_unauthorized_response
+    if oauth_provider is not None:
+        if data.get("oauth_mode") == OAUTH_MODE_HA_AUTH:
+            authorized = await oauth_provider.validate_request(request)
+        else:
+            authorized = oauth_provider.validate_bearer(request)
+        if not authorized:
+            if debug:
+                await _debug_log(
+                    hass,
+                    "MCP Proxy [inbound]: -> 401 Unauthorized (no/invalid OAuth "
+                    "bearer; expected for the initial discovery probe)",
+                )
+            from .oauth import build_unauthorized_response
 
-        return build_unauthorized_response(request, oauth_provider)
+            return build_unauthorized_response(request, oauth_provider)
 
     body = await request.read()
 
