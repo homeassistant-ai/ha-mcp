@@ -134,7 +134,7 @@ async def _await_lines_in_addon_log(slug: str, required: tuple[str, ...]) -> str
         except _TRANSIENT as err:
             last = err
         await asyncio.sleep(_POLL_INTERVAL)
-    pytest.fail(
+    raise AssertionError(
         f"Addon log never showed all of {required} within "
         f"{_RECOVERY_TIMEOUT}s of the DEBUG restart (last={last!r}). "
         "Either the self-restart did not fire, or the web-UI log level "
