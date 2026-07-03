@@ -384,7 +384,7 @@ class TestResolveEffectiveLogLevel:
         self._patch_level(monkeypatch, "VERBOSE")
         assert self.addon.resolve_effective_log_level() == logging.INFO
 
-    def test_settings_failure_falls_back_to_info(self, monkeypatch):
+    def test_settings_failure_falls_back_to_info(self, monkeypatch, capsys):
         import logging
 
         def _boom():
@@ -392,6 +392,11 @@ class TestResolveEffectiveLogLevel:
 
         monkeypatch.setattr("ha_mcp.config.get_global_settings", _boom)
         assert self.addon.resolve_effective_log_level() == logging.INFO
+        # The fallback must be LOUD — a silent INFO fallback recreates
+        # the "user set DEBUG, nothing happened, no clue why" bug class.
+        captured = capsys.readouterr()
+        assert "web-UI Log level not applied" in captured.err
+        assert "settings unavailable" in captured.err
 
     def test_advanced_debug_logging_toggle_removed(self):
         """The confusing addon-config toggle is gone everywhere.
@@ -541,6 +546,14 @@ class TestAddonStartup:
 
             # Should not have errors
             assert "[ERROR] Failed to start MCP server:" not in logs
+
+            # Default config = INFO level: the DEBUG canary must be
+            # absent and kill-signal diagnostics must NOT arm. Guards
+            # the arming gate against regressing to always-on (the
+            # SA_SIGINFO handler must stay opt-in via DEBUG).
+            assert "Debug logging active (log_level applied from settings)" not in logs
+            assert "arming kill-signal diagnostics" not in logs
+            assert "kill-signal diagnostics installed for" not in logs
 
         finally:
             container.stop()

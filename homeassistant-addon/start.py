@@ -222,7 +222,16 @@ def resolve_effective_log_level() -> int:
         from ha_mcp.config import get_global_settings
 
         return getattr(logging, get_global_settings().log_level, logging.INFO)
-    except Exception:
+    except Exception as e:
+        # Loud fallback: without this line, a user who set DEBUG in the
+        # web UI can't tell "I'm on INFO" from "my DEBUG request crashed
+        # on load" — the same silent-no-op class this fix exists to kill.
+        # print-based so it reaches the addon log regardless of logging
+        # state.
+        log_warning(
+            f"Could not resolve effective log level from settings; "
+            f"defaulting to INFO (web-UI Log level not applied): {e!r}"
+        )
         return logging.INFO
 
 
