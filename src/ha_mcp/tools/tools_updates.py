@@ -15,6 +15,10 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import (
+    HomeAssistantAuthError,
+    HomeAssistantConnectionError,
+)
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -735,7 +739,7 @@ class UpdateTools:
         name="ha_manage_updates",
         tags={"System"},
         annotations={
-            "destructiveHint": False,
+            "destructiveHint": True,
             "openWorldHint": True,
             "title": "Manage Updates",
         },
@@ -891,6 +895,11 @@ class UpdateTools:
                     await self._client.call_service("update", action, data)
                     results.append({"success": True, "entity_id": eid})
                     succeeded += 1
+                except (HomeAssistantConnectionError, HomeAssistantAuthError):
+                    # Fatal transport/auth failure — the connection is gone,
+                    # so remaining items would fail identically. Propagate to
+                    # surface the root cause instead of N per-item errors.
+                    raise
                 except Exception as e:
                     # Batch item failure — collect, don't raise.
                     results.append(

@@ -508,6 +508,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_pipeline": "tools_voice_assistant.py",
     "ha_manage_custom_tool": "tools_code.py",
     "ha_manage_radio": "tools_radio.py",
+    "ha_manage_updates": "tools_updates.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -535,6 +536,7 @@ _EXEMPT_INSPECTED_ARGS = {
     "ha_manage_pipeline": {"action"},
     "ha_manage_custom_tool": {"list_saved", "code", "run_saved"},
     "ha_manage_radio": {"action"},
+    "ha_manage_updates": {"action"},
 }
 
 # The subset of the addon manifest that ``_addon_write`` iterates as
@@ -645,6 +647,16 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "entity_id",
         "params",
         "confirm",
+    },
+    "ha_manage_updates": {
+        # Targets/scope for the write actions (install/skip/clear_skipped),
+        # all blocked by the inspected ``action`` dispatch before use.
+        "entity_ids",
+        "categories",
+        "backup",
+        # Read-path modifiers of the allowed list/get actions.
+        "include_skipped",
+        "include_release_notes",
     },
 }
 
