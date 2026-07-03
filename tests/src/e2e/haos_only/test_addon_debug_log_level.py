@@ -11,14 +11,22 @@ Runs the FULL user journey against the real dev addon inside HAOS
    the 200 flushes first — same mechanism as test_readonly_mode.py).
 3. Poll (fresh streamable-HTTP client per round, via
    ``wait_for_addon_mcp_ready``) until the addon's own container log —
-   ``ha_get_logs(source="supervisor")`` — contains the DEBUG canary.
-   The canary is emitted through the logging system at DEBUG level, so
-   its presence is a positive proof BOTH that the restart took effect
+   ``ha_get_logs(source="supervisor")`` — contains DEBUG-level records.
+   Their presence is positive proof BOTH that the restart took effect
    AND that the override reached the root logger. start.py used to
    hardcode ``basicConfig(level=INFO)``, which made the web-UI setting
    a silent no-op and left #1721's reporter unable to produce debug
-   logs. Kill-signal diagnostics arm on the same condition (they
-   replaced the removed ``advanced_debug_logging`` addon toggle).
+   logs.
+
+Why DEBUG records rather than start.py's one-shot boot lines (the
+canary / kill-signal arming): Supervisor's ``/addons/<slug>/logs``
+serves only a bounded recent window, and at DEBUG verbosity boot lines
+scroll out of it within seconds — a first CI run failed exactly that
+way. DEBUG records regenerate with every request (including this
+poll's own), so the signal is scroll-proof. The boot lines themselves
+are asserted against complete docker logs by the testcontainer tests
+in tests/addon/test_addon_startup.py, including the negative
+(INFO-must-not-arm) case.
 
 The ``finally`` restores ``log_level=INFO`` (retried set+restart, as
 the readonly-mode test does) and re-warms the SHARED session
@@ -44,12 +52,6 @@ from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 LOG = logging.getLogger(__name__)
 
 DEV_ADDON_NAME = "Home Assistant MCP Server (Dev)"
-
-# start.py log lines asserted below. Keep in lockstep with
-# homeassistant-addon/start.py (the canary + arming strings).
-DEBUG_CANARY = "Debug logging active (log_level applied from settings)"
-ARMING_LINE = "arming kill-signal diagnostics"
-INSTALLED_LINE = "kill-signal diagnostics installed for"
 
 # Transient errors expected while the addon restarts underneath us:
 # the MCP-client polling set from wait_helpers, plus httpx transport
@@ -105,37 +107,58 @@ async def _restart_self(settings_restart_url: str) -> None:
     )
 
 
-async def _await_lines_in_addon_log(slug: str, required: tuple[str, ...]) -> str:
-    """Poll the addon's own container log until all ``required`` lines appear.
+def _has_debug_record(logs: str) -> bool:
+    """True when any line is a DEBUG-level logging record.
 
-    Reconnects each round (``wait_for_addon_mcp_ready`` + fresh client),
-    so it rides out the restart window. Returning only when every line
-    is present is the positive both-proofs signal: the canary can only
-    exist after a boot that applied DEBUG, and the install-confirmation
-    lags boot by the install thread's poll cadence.
+    Addon logging uses Python's BASIC_FORMAT (``LEVEL:name:message``),
+    so a root logger at DEBUG produces ``DEBUG:``-prefixed lines
+    continuously (every MCP request generates several), and a root
+    logger at INFO produces none. startswith avoids false-positives on
+    INFO messages that merely mention the word.
     """
+    return any(ln.startswith("DEBUG:") for ln in logs.splitlines())
+
+
+async def _fetch_addon_log(slug: str) -> str:
+    """Fetch the addon's own recent container log via a fresh client."""
     from haos_runtime import wait_for_addon_mcp_ready
 
+    url = wait_for_addon_mcp_ready(timeout=30.0)
+    data = await _call_tool_fresh(
+        url,
+        "ha_get_logs",
+        {"source": "supervisor", "slug": slug, "limit": 2000},
+    )
+    return data.get("log", "")
+
+
+async def _await_debug_records_in_addon_log(slug: str) -> str:
+    """Poll the addon's own container log until DEBUG records appear.
+
+    Reconnects each round (``wait_for_addon_mcp_ready`` + fresh client),
+    so it rides out the restart window. DEBUG-record presence is the
+    scroll-proof positive signal that the restart happened AND the
+    web-UI level reached the root logger: Supervisor's ``/logs``
+    endpoint only serves a bounded recent window, so one-shot boot
+    lines (the start.py canary/arming lines) can scroll out under
+    DEBUG verbosity — but DEBUG records are re-emitted by every
+    request, including this poll's own, so the signal regenerates.
+    (Those boot lines are asserted against complete docker logs by
+    tests/addon/test_addon_startup.py's testcontainer tests.)
+    """
     deadline = time.monotonic() + _RECOVERY_TIMEOUT
     last: object = None
     while time.monotonic() < deadline:
         try:
-            url = wait_for_addon_mcp_ready(timeout=30.0)
-            data = await _call_tool_fresh(
-                url,
-                "ha_get_logs",
-                {"source": "supervisor", "slug": slug, "limit": 2000},
-            )
-            logs = data.get("log", "")
-            missing = [line for line in required if line not in logs]
-            if not missing:
+            logs = await _fetch_addon_log(slug)
+            if _has_debug_record(logs):
                 return logs
-            last = f"missing: {missing}"
+            last = f"no DEBUG records in {len(logs.splitlines())}-line window"
         except _TRANSIENT as err:
             last = err
         await asyncio.sleep(_POLL_INTERVAL)
     raise AssertionError(
-        f"Addon log never showed all of {required} within "
+        f"Addon log never showed DEBUG-level records within "
         f"{_RECOVERY_TIMEOUT}s of the DEBUG restart (last={last!r}). "
         "Either the self-restart did not fire, or the web-UI log level "
         "was not applied to the root logger (the #1721-era "
@@ -170,15 +193,24 @@ async def test_web_ui_debug_log_level_reaches_addon_log(
     )
     slug = dev_addon["slug"]
 
+    # Baseline sanity: at the session's default INFO level the log
+    # window must contain zero DEBUG records — otherwise the positive
+    # signal below would be meaningless.
+    baseline = await _fetch_addon_log(slug)
+    assert not _has_debug_record(baseline), (
+        "Addon log already contains DEBUG records at the default INFO "
+        "level — the DEBUG-record signal cannot discriminate. First "
+        "DEBUG line: "
+        + next(ln for ln in baseline.splitlines() if ln.startswith("DEBUG:"))
+    )
+
     await _post_log_level(settings_advanced, "DEBUG")
     try:
         await _restart_self(settings_restart)
-        logs = await _await_lines_in_addon_log(
-            slug, (DEBUG_CANARY, ARMING_LINE, INSTALLED_LINE)
-        )
+        logs = await _await_debug_records_in_addon_log(slug)
         LOG.info(
-            "DEBUG canary + kill-signal diagnostics verified in addon log "
-            "(%d chars fetched)",
+            "DEBUG records verified in addon log after web-UI DEBUG + "
+            "restart (%d chars fetched)",
             len(logs),
         )
     finally:
