@@ -458,6 +458,7 @@ class TestManageUpdatesDispatch:
             1,
             1,
         )
+        assert result["success"] is False
         failures = [r for r in result["results"] if not r.get("success")]
         assert len(failures) == 1
         assert failures[0]["error"]["context"]["entity_id"] == "update.missing"

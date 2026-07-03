@@ -910,12 +910,15 @@ class UpdateTools:
                         )
                     )
 
+            failed = requested - succeeded
             response: dict[str, Any] = {
-                "success": True,
+                # Aggregate convention (matches ha_bulk-style tools): True only
+                # when nothing failed — zero requested counts as success.
+                "success": failed == 0,
                 "action": action,
                 "requested": requested,
                 "succeeded": succeeded,
-                "failed": requested - succeeded,
+                "failed": failed,
                 "results": results,
             }
             if not requested:

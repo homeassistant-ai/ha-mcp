@@ -659,15 +659,17 @@ class TestManageUpdates:
                 assert "note" in result
 
     async def test_skip_nonexistent_entity_reports_item_failure(self, mcp_client):
-        """A failing entity is reported per-item, not as a tool-level error."""
-        async with MCPAssertions(mcp_client) as mcp:
-            result = await mcp.call_tool_success(
-                "ha_manage_updates",
-                {
-                    "action": "skip",
-                    "entity_ids": ["update.nonexistent_entity_xyz"],
-                },
-            )
-            assert result["requested"] == 1
-            assert result["failed"] == 1
-            assert result["results"][0]["success"] is False
+        """A failing entity is reported per-item, not as a tool-level error,
+        and the aggregate success flag reflects the failure."""
+        result = await safe_call_tool(
+            mcp_client,
+            "ha_manage_updates",
+            {
+                "action": "skip",
+                "entity_ids": ["update.nonexistent_entity_xyz"],
+            },
+        )
+        assert result["success"] is False
+        assert result["requested"] == 1
+        assert result["failed"] == 1
+        assert result["results"][0]["success"] is False
