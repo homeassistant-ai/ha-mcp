@@ -606,7 +606,7 @@ class HomeAssistantClient:
         self._supervised_detected = is_supervised
         return is_supervised
 
-    async def get_addon_logs(self, slug: str) -> str:
+    async def get_addon_logs(self, slug: str, lines: int | None = None) -> str:
         """Fetch an add-on's container logs.
 
         Branch on ``is_running_in_addon()`` (which keys off ``SUPERVISOR_TOKEN``
@@ -621,6 +621,15 @@ class HomeAssistantClient:
         HA URL), falls back to the HA Core proxy path. That path requires an
         admin LLA but works fine when not invoked from the add-on container.
 
+        ``lines`` sets the journald window Supervisor serves via its
+        ``?lines=`` query param (supervisor/api/host.py). Without it,
+        Supervisor returns only its default window (``DEFAULT_LINES = 100``
+        in supervisor/api/const.py) — which silently capped every larger
+        caller-side limit before this param existed. Both branches carry
+        it: the direct endpoint parses the query natively, and HA Core's
+        hassio proxy forwards ``request.query`` upstream
+        (homeassistant/components/hassio/http.py).
+
         Both branches return ``text/plain`` log content.
 
         Raises:
@@ -633,17 +642,18 @@ class HomeAssistantClient:
             HomeAssistantConnectionError: Network, timeout, or transport error.
         """
         if is_running_in_addon():
-            return await self._get_addon_logs_via_supervisor(slug)
+            return await self._get_addon_logs_via_supervisor(slug, lines=lines)
 
         logger.debug(f"Fetching addon logs for slug={slug} via HA Core proxy")
         response = await self._raw_request(
             "GET",
             f"/hassio/addons/{slug}/logs",
             headers={"Accept": "text/plain"},
+            params={"lines": lines} if lines is not None else None,
         )
         return response.text
 
-    async def _supervisor_logs_get(self, path: str) -> str:
+    async def _supervisor_logs_get(self, path: str, lines: int | None = None) -> str:
         """Fetch ``text/plain`` logs from a Supervisor REST endpoint.
 
         ``path`` is everything between ``http://supervisor/`` and ``/logs``:
@@ -651,6 +661,9 @@ class HomeAssistantClient:
         - ``"addons/<slug>"`` for add-on container logs
         - ``"<service>"`` (where service ∈ {supervisor, host, core, dns, audio,
           cli, multicast, observer}) for system-service logs
+
+        ``lines`` maps to the endpoint's ``?lines=`` journald-window query
+        param; omitted → Supervisor's 100-line default window.
 
         Bypasses ``HomeAssistantClient.httpx_client`` because the Supervisor
         endpoint uses a different base URL (``http://supervisor``) and a
@@ -681,9 +694,10 @@ class HomeAssistantClient:
 
         relative_path = f"/{path}/logs"
         logger.debug(
-            "Fetching %s%s via Supervisor direct",
+            "Fetching %s%s via Supervisor direct (lines=%s)",
             get_supervisor_base_url(),
             relative_path,
+            lines,
         )
 
         try:
@@ -694,6 +708,7 @@ class HomeAssistantClient:
                 response = await client.get(
                     relative_path,
                     headers={"Accept": "text/plain"},
+                    params={"lines": lines} if lines is not None else None,
                 )
         except httpx.TimeoutException as e:
             raise HomeAssistantConnectionError(
@@ -753,7 +768,9 @@ class HomeAssistantClient:
             )
         return response.text
 
-    async def _get_addon_logs_via_supervisor(self, slug: str) -> str:
+    async def _get_addon_logs_via_supervisor(
+        self, slug: str, lines: int | None = None
+    ) -> str:
         """Fetch add-on container logs directly from Supervisor's REST API.
 
         Distinct from ``tools_bug_report._fetch_addon_logs``: that helper is
@@ -766,9 +783,11 @@ class HomeAssistantClient:
         Delegates to ``_supervisor_logs_get`` so error handling stays in
         lockstep with ``_get_system_service_logs``.
         """
-        return await self._supervisor_logs_get(f"addons/{slug}")
+        return await self._supervisor_logs_get(f"addons/{slug}", lines=lines)
 
-    async def _get_system_service_logs(self, service: str) -> str:
+    async def _get_system_service_logs(
+        self, service: str, lines: int | None = None
+    ) -> str:
         """Fetch HA system-service logs.
 
         ``service`` must be one of the eight Supervisor-managed services:
@@ -796,13 +815,14 @@ class HomeAssistantClient:
         logs) call kept working through its own Core-proxy fallback.
         """
         if is_running_in_addon():
-            return await self._supervisor_logs_get(service)
+            return await self._supervisor_logs_get(service, lines=lines)
 
         logger.debug(f"Fetching {service} logs via HA Core proxy")
         response = await self._raw_request(
             "GET",
             f"/hassio/{service}/logs",
             headers={"Accept": "text/plain"},
+            params={"lines": lines} if lines is not None else None,
         )
         return response.text
 

@@ -34,7 +34,12 @@ from ha_mcp.client.rest_client import (
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.tools_utility import register_utility_tools
+from ha_mcp.tools.tools_utility import (
+    DEFAULT_LOG_LIMIT,
+    MAX_LIMIT,
+    SUPERVISOR_SEARCH_WINDOW_LINES,
+    register_utility_tools,
+)
 
 
 @pytest.fixture
@@ -889,7 +894,9 @@ class TestGetSupervisorLogWrapper:
         assert "limit" in result
         # No filters applied → key is omitted
         assert "filters_applied" not in result
-        client_with_logs.get_addon_logs.assert_awaited_once_with("core_mosquitto")
+        client_with_logs.get_addon_logs.assert_awaited_once_with(
+            "core_mosquitto", lines=DEFAULT_LOG_LIMIT
+        )
 
     @pytest.mark.asyncio
     async def test_tail_slicing_returns_last_n_lines(self, client_with_logs):
@@ -1164,7 +1171,7 @@ class TestGetSystemServiceLogWrapper:
         assert "host log line 1" in result["log"]
         assert result["total_lines"] == 2
         client_with_system_logs._get_system_service_logs.assert_awaited_once_with(
-            "host"
+            "host", lines=DEFAULT_LOG_LIMIT
         )
 
     @pytest.mark.asyncio
@@ -1222,7 +1229,7 @@ class TestGetSystemServiceLogWrapper:
         assert result["success"] is True
         assert result["slug"] == service
         client_with_system_logs._get_system_service_logs.assert_awaited_once_with(
-            service
+            service, lines=DEFAULT_LOG_LIMIT
         )
 
     @pytest.mark.asyncio
@@ -1382,3 +1389,138 @@ class TestStaleToolNameReferences:
             f"Stale `ha_list_addons` reference in: {offenders}. "
             "Replace suggestions/docs with `ha_get_addon()` — see #950."
         )
+
+
+class TestJournaldWindowLinesParam:
+    """The ``?lines=`` journald-window param must reach Supervisor.
+
+    Supervisor's ``/logs`` endpoints serve a 100-line default window
+    (``DEFAULT_LINES`` in supervisor/api/const.py), which silently capped
+    every larger tool-side ``limit`` — found via #1721's inaddon e2e,
+    where DEBUG-verbosity boot lines scrolled out of the default window
+    within seconds. The wrappers size the window to the caller's limit
+    (or ``SUPERVISOR_SEARCH_WINDOW_LINES`` when a search filter needs
+    history behind it); the REST client forwards it as ``?lines=`` on
+    both the Supervisor-direct and HA-Core-proxy branches.
+    """
+
+    @pytest.fixture
+    def client_with_logs(self):
+        client = MagicMock()
+        client.get_addon_logs = AsyncMock(return_value="line\n")
+        client._get_system_service_logs = AsyncMock(return_value="line\n")
+        return client
+
+    @pytest.fixture
+    def mock_async_client_class(self):
+        inner_client = MagicMock()
+        inner_client.get = AsyncMock()
+
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=inner_client)
+        cm.__aexit__ = AsyncMock(return_value=None)
+
+        client_class = MagicMock(return_value=cm)
+        with patch("httpx.AsyncClient", client_class):
+            yield inner_client, client_class
+
+    @pytest.mark.asyncio
+    async def test_wrapper_window_matches_custom_limit(self, client_with_logs):
+        tools = _register_and_collect(client_with_logs)
+
+        await tools["ha_get_logs"](source="supervisor", slug="core_ssh", limit=500)
+
+        client_with_logs.get_addon_logs.assert_awaited_once_with("core_ssh", lines=500)
+
+    @pytest.mark.asyncio
+    async def test_wrapper_search_requests_search_window(self, client_with_logs):
+        """A search over a small limit needs history behind it — the fetch
+        window expands to SUPERVISOR_SEARCH_WINDOW_LINES, not the limit."""
+        tools = _register_and_collect(client_with_logs)
+
+        await tools["ha_get_logs"](
+            source="supervisor", slug="core_ssh", limit=10, search="error"
+        )
+
+        client_with_logs.get_addon_logs.assert_awaited_once_with(
+            "core_ssh", lines=SUPERVISOR_SEARCH_WINDOW_LINES
+        )
+
+    @pytest.mark.asyncio
+    async def test_wrapper_limit_clamped_to_max_limit(self, client_with_logs):
+        """``_coerce_limit`` clamps the limit to ``MAX_LIMIT`` (500); the
+        window request follows the clamped value, not the raw ask —
+        response size stays bounded even for huge limits."""
+        tools = _register_and_collect(client_with_logs)
+
+        await tools["ha_get_logs"](
+            source="supervisor", slug="core_ssh", limit=MAX_LIMIT + 2000
+        )
+
+        client_with_logs.get_addon_logs.assert_awaited_once_with(
+            "core_ssh", lines=MAX_LIMIT
+        )
+
+    @pytest.mark.asyncio
+    async def test_system_service_wrapper_window_matches_limit(self, client_with_logs):
+        tools = _register_and_collect(client_with_logs)
+
+        await tools["ha_get_logs"](source="system_service", slug="host", limit=300)
+
+        client_with_logs._get_system_service_logs.assert_awaited_once_with(
+            "host", lines=300
+        )
+
+    @pytest.mark.asyncio
+    async def test_addon_direct_branch_sends_lines_query(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        inner_client, _class = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "x\n"
+        inner_client.get.return_value = mock_response
+
+        await mock_client.get_addon_logs("81f33d0f_ha_mcp", lines=2000)
+
+        _args, kwargs = inner_client.get.call_args
+        assert kwargs["params"] == {"lines": 2000}
+
+    @pytest.mark.asyncio
+    async def test_addon_direct_branch_omits_query_without_lines(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        inner_client, _class = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "x\n"
+        inner_client.get.return_value = mock_response
+
+        await mock_client.get_addon_logs("81f33d0f_ha_mcp")
+
+        _args, kwargs = inner_client.get.call_args
+        assert kwargs["params"] is None
+
+    @pytest.mark.asyncio
+    async def test_addon_proxy_branch_sends_lines_query(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "x\n"
+        mock_client.httpx_client.request = AsyncMock(return_value=mock_response)
+
+        await mock_client.get_addon_logs("core_ssh", lines=2000)
+
+        _args, kwargs = mock_client.httpx_client.request.call_args
+        assert kwargs["params"] == {"lines": 2000}
+
+    @pytest.mark.asyncio
+    async def test_system_service_proxy_branch_sends_lines_query(self, mock_client):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "x\n"
+        mock_client.httpx_client.request = AsyncMock(return_value=mock_response)
+
+        await mock_client._get_system_service_logs("host", lines=1234)
+
+        _args, kwargs = mock_client.httpx_client.request.call_args
+        assert kwargs["params"] == {"lines": 1234}
