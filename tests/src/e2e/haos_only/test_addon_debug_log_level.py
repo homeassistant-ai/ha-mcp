@@ -107,18 +107,45 @@ async def _restart_self_and_wait(slug: str, addon_url: str) -> None:
     """Restart the addon under test and wait until it serves MCP again.
 
     The restart call's HTTP response dies with the addon container, so
-    any transport error is expected and swallowed. Liveness is then
-    polled with plain HTTP (any status code = uvicorn listening again)
-    followed by a real MCP call on a fresh connection.
+    transport errors from it are expected and swallowed. To guard
+    against a silently-failed restart (e.g. a tool-level validation
+    error also lands in the except — that exact false-negative shipped
+    in this test's first version, when wrong ha_call_service args drew
+    a VALIDATION_FAILED ToolError that was logged as "expected"), the
+    helper then REQUIRES observing the addon go down before polling for
+    recovery.
     """
     try:
         await _call_tool(
             addon_url,
             "ha_call_service",
-            {"service": "hassio.addon_restart", "data": {"addon": slug}},
+            {
+                "domain": "hassio",
+                "service": "addon_restart",
+                "data": {"addon": slug},
+            },
         )
     except _EXPECTED_RESTART_ERRORS as e:
         LOG.info("Self-restart severed the in-flight call (expected): %r", e)
+
+    # Proof the restart actually fired: the HTTP endpoint must go DOWN
+    # within the window. If it never does, the restart silently failed
+    # and polling for recovery would false-pass against the old process.
+    went_down = False
+    deadline = time.monotonic() + _RESTART_TIMEOUT
+    async with httpx.AsyncClient() as http:
+        while time.monotonic() < deadline:
+            try:
+                await http.get(addon_url, timeout=2)
+                await asyncio.sleep(0.2)
+            except httpx.HTTPError:
+                went_down = True
+                break
+    if not went_down:
+        pytest.fail(
+            f"Addon never went down within {_RESTART_TIMEOUT}s of the "
+            "hassio.addon_restart call — the self-restart did not fire."
+        )
 
     deadline = time.monotonic() + _RESTART_TIMEOUT
     async with httpx.AsyncClient() as http:
