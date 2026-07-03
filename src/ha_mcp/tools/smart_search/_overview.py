@@ -5,6 +5,7 @@ import logging
 import random
 from typing import Any
 
+from ...visibility.resolver import load_hidden_set
 from ..helpers import exception_to_structured_error
 from ._base import _SearchBase
 from ._config import _simplify_states_summary
@@ -67,6 +68,16 @@ class SystemOverviewMixin(_SearchBase):
             if isinstance(results[0], Exception):
                 raise results[0]
             entities = results[0]
+
+            # Opt-in visibility filter: drop out-of-scope entities from the whole
+            # overview universe before any domain stats/samples are computed, so
+            # every count stays coherent. results[3] is the raw entity registry.
+            # Fails open (empty set on any error); do NOT wrap in try/except.
+            visibility_hidden = await load_hidden_set(results[3])
+            if visibility_hidden:
+                entities = [
+                    e for e in entities if e.get("entity_id") not in visibility_hidden
+                ]
 
             # Services failure affects total count + catalog; log at warning.
             partial_warnings: list[str] = []

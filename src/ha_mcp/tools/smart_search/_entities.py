@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from ...utils.fuzzy_search import calculate_partial_ratio
+from ...visibility.resolver import load_hidden_set
 from ..helpers import exception_to_structured_error
 from ._base import _SearchBase
 
@@ -115,6 +116,7 @@ class EntitySearchMixin(_SearchBase):
         entities: list[dict[str, Any]],
         registry_slim: dict[str, dict[str, Any]],
         include_hidden: bool,
+        visibility_hidden: set[str],
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """Drop UI-hidden entities (unless include_hidden); collect survivor ids.
 
@@ -126,6 +128,8 @@ class EntitySearchMixin(_SearchBase):
         for entity in entities:
             eid = entity.get("entity_id", "")
             if not eid:
+                continue
+            if eid in visibility_hidden:
                 continue
             slim = registry_slim.get(eid, {})
             hidden_by = slim.get("hidden_by")
@@ -200,9 +204,12 @@ class EntitySearchMixin(_SearchBase):
             raise results[1]
         entities = results[0]
 
+        # Opt-in visibility filter (raw registry results[1] → all fields).
+        # Fails open; do NOT wrap in try/except or the failure mode inverts.
+        visibility_hidden = await load_hidden_set(results[1])
         registry_slim = self._build_registry_slim(results[1])
         survivor_ids, survivor_states = self._filter_hidden_entities(
-            entities, registry_slim, include_hidden
+            entities, registry_slim, include_hidden, visibility_hidden
         )
         aliases_map = await self._fetch_entity_aliases(survivor_ids)
 
@@ -294,6 +301,9 @@ class EntitySearchMixin(_SearchBase):
             )
 
             entities = results[0] if not isinstance(results[0], Exception) else []
+            # Opt-in visibility filter (raw entity registry results[2] → all
+            # fields). Fails open (empty set on any error / non-dict payload).
+            visibility_hidden = await load_hidden_set(results[2])
             area_registry = self._parse_area_registry(results[1])
             entity_reg_map = self._parse_entity_reg_map(results[2])
             device_area_map = self._parse_device_area_map(results[3])
@@ -314,7 +324,7 @@ class EntitySearchMixin(_SearchBase):
                 }
 
             entity_area_resolved, hidden_entity_ids = self._resolve_entity_areas(
-                entity_reg_map, device_area_map, include_hidden
+                entity_reg_map, device_area_map, include_hidden, visibility_hidden
             )
             state_map = self._build_state_map(entities)
             formatted_areas, total_entities = self._format_area_entities(
@@ -438,6 +448,7 @@ class EntitySearchMixin(_SearchBase):
         entity_reg_map: dict[str, dict[str, str | None]],
         device_area_map: dict[str, str | None],
         include_hidden: bool,
+        visibility_hidden: set[str],
     ) -> tuple[dict[str, str], set[str]]:
         """Map entity_id -> resolved area_id (entity area > device area).
 
@@ -449,6 +460,8 @@ class EntitySearchMixin(_SearchBase):
         entity_area_resolved: dict[str, str] = {}
         hidden_entity_ids: set[str] = set()
         for entity_id, reg_info in entity_reg_map.items():
+            if entity_id in visibility_hidden:
+                continue
             is_hidden = reg_info.get("hidden_by") is not None
             if is_hidden and not include_hidden:
                 continue
