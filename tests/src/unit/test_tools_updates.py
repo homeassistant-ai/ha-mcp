@@ -461,7 +461,7 @@ class TestManageUpdatesDispatch:
         assert result["success"] is False
         failures = [r for r in result["results"] if not r.get("success")]
         assert len(failures) == 1
-        assert failures[0]["error"]["context"]["entity_id"] == "update.missing"
+        assert failures[0]["entity_id"] == "update.missing"
 
     @pytest.mark.asyncio
     async def test_connection_error_propagates_out_of_batch(self, monkeypatch):
