@@ -383,3 +383,106 @@ class TestTryRawCdn:
         assert result is not None
         assert result["notes"] == "y" * 100
         assert client.get.await_count == 2
+
+
+class TestManageUpdatesDispatch:
+    """Write-action dispatch: category resolution, filtering, aggregation."""
+
+    @pytest.mark.asyncio
+    async def test_install_category_resolves_filters_and_dispatches(self, monkeypatch):
+        from ha_mcp import update_check
+        from ha_mcp.tools.tools_updates import UpdateTools
+
+        monkeypatch.setattr(
+            update_check, "get_update_field", AsyncMock(return_value=None)
+        )
+        # Titles carry "Add-on" so _categorize_update buckets both as
+        # "addons"; addon_b is in_progress and must be filtered out.
+        states = [
+            {
+                "entity_id": "update.addon_a",
+                "state": "on",
+                "attributes": {"title": "Add-on A", "in_progress": False},
+            },
+            {
+                "entity_id": "update.addon_b",
+                "state": "on",
+                "attributes": {"title": "Add-on B", "in_progress": True},
+            },
+        ]
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=states)
+        client.call_service = AsyncMock(return_value={"success": True})
+
+        result = await UpdateTools(client).ha_manage_updates(
+            action="install", categories=["addons"], backup=True
+        )
+
+        client.call_service.assert_awaited_once_with(
+            "update", "install", {"entity_id": "update.addon_a", "backup": True}
+        )
+        assert (result["requested"], result["succeeded"], result["failed"]) == (
+            1,
+            1,
+            0,
+        )
+        assert result["results"][0]["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_skip_mixed_existing_and_missing_aggregates(self, monkeypatch):
+        from ha_mcp import update_check
+        from ha_mcp.tools.tools_updates import UpdateTools
+
+        monkeypatch.setattr(
+            update_check, "get_update_field", AsyncMock(return_value=None)
+        )
+        client = MagicMock()
+        client.get_states = AsyncMock(
+            return_value=[
+                {"entity_id": "update.exists", "state": "on", "attributes": {}}
+            ]
+        )
+        client.call_service = AsyncMock(return_value={"success": True})
+
+        result = await UpdateTools(client).ha_manage_updates(
+            action="skip", entity_ids=["update.exists", "update.missing"]
+        )
+
+        # The existence precheck routes the missing entity to a per-item
+        # ENTITY_NOT_FOUND result; only the real one reaches call_service.
+        client.call_service.assert_awaited_once_with(
+            "update", "skip", {"entity_id": "update.exists"}
+        )
+        assert (result["requested"], result["succeeded"], result["failed"]) == (
+            2,
+            1,
+            1,
+        )
+        failures = [r for r in result["results"] if not r.get("success")]
+        assert len(failures) == 1
+        assert failures[0]["error"]["context"]["entity_id"] == "update.missing"
+
+    @pytest.mark.asyncio
+    async def test_connection_error_propagates_out_of_batch(self, monkeypatch):
+        from ha_mcp import update_check
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+        from ha_mcp.tools.tools_updates import UpdateTools
+
+        monkeypatch.setattr(
+            update_check, "get_update_field", AsyncMock(return_value=None)
+        )
+        client = MagicMock()
+        client.get_states = AsyncMock(
+            return_value=[
+                {"entity_id": "update.exists", "state": "on", "attributes": {}}
+            ]
+        )
+        client.call_service = AsyncMock(
+            side_effect=HomeAssistantConnectionError("connection lost")
+        )
+
+        with pytest.raises(Exception) as excinfo:
+            await UpdateTools(client).ha_manage_updates(
+                action="skip", entity_ids=["update.exists"]
+            )
+        assert "connection" in str(excinfo.value).lower()

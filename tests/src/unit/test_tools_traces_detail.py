@@ -445,3 +445,49 @@ class TestFormatDetailedTrace:
         assert "1" in paths
         assert "0/repeat/sequence/0" in paths
         assert "sequence/0" in paths
+
+    def test_condition_step_error_surfaced(self):
+        """HA 2026.7 always records template errors on the failing step —
+        the condition formatter must not drop them."""
+        trace = {
+            "state": "stopped",
+            "trace": {
+                "condition/0": [
+                    {
+                        "path": "condition/0",
+                        "result": {"result": None},
+                        "error": "TemplateError: 'x' is undefined",
+                    }
+                ]
+            },
+        }
+        result = _format_detailed_trace("automation.x", "1", trace)
+        assert (
+            result["condition_results"][0]["error"] == "TemplateError: 'x' is undefined"
+        )
+
+    def test_trigger_step_error_surfaced(self):
+        trace = {
+            "state": "stopped",
+            "trace": {
+                "trigger/0": [
+                    {
+                        "path": "trigger/0",
+                        "changed_variables": {"trigger": {"platform": "template"}},
+                        "error": "TemplateError: bad template",
+                    }
+                ]
+            },
+        }
+        result = _format_detailed_trace("automation.x", "1", trace)
+        assert result["trigger"]["error"] == "TemplateError: bad template"
+
+    def test_condition_step_without_error_has_no_error_key(self):
+        trace = {
+            "state": "stopped",
+            "trace": {
+                "condition/0": [{"path": "condition/0", "result": {"result": True}}]
+            },
+        }
+        result = _format_detailed_trace("automation.x", "1", trace)
+        assert "error" not in result["condition_results"][0]
