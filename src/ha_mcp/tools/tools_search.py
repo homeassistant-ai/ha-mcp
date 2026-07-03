@@ -17,6 +17,7 @@ from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.fuzzy_search import apply_hidden_penalty
+from ..visibility.resolver import load_hidden_set
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -719,12 +720,19 @@ async def _exact_match_search(
         raise registry_result
     all_entities = state_result
     hidden_ids = _build_hidden_ids(registry_result)
+    # Opt-in visibility filter: a hard exclude (unlike the hidden_by score
+    # penalty). Fails open — load_hidden_set returns an empty set on any
+    # config/load error, so a bad config never blanks results. Do NOT wrap in
+    # try/except here, or the failure mode inverts to fail-closed (hide all).
+    visibility_hidden = await load_hidden_set(registry_result)
 
     query_lower = query.lower().strip()
 
     results = []
     for entity in all_entities:
         entity_id = entity.get("entity_id", "")
+        if entity_id in visibility_hidden:
+            continue
         is_hidden = entity_id in hidden_ids
         if is_hidden and not include_hidden:
             continue
@@ -1718,13 +1726,19 @@ class SearchTools:
             raise registry_result
 
         hidden_ids = _build_hidden_ids(registry_result)
+        # Opt-in visibility filter: hard exclude, fails open (empty set on any
+        # error). Do NOT wrap in try/except or the failure mode inverts.
+        visibility_hidden = await load_hidden_set(registry_result)
 
         # Filter by domain. Hidden entities are kept by default (with score
         # penalty applied below); ``include_hidden=False`` filters them out.
+        # The visibility exclude is applied before pagination so the counts
+        # computed below stay coherent with the returned set.
         filtered_entities = [
             e
             for e in states_result
             if e.get("entity_id", "").startswith(f"{domain_filter}.")
+            and e.get("entity_id") not in visibility_hidden
             and (include_hidden_bool or e.get("entity_id") not in hidden_ids)
         ]
 
