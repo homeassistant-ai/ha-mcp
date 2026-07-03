@@ -1972,6 +1972,19 @@ class TestOAuthProvider:
         assert provider.validate_access_token("") is False
         assert provider.validate_access_token("bare") is False
 
+    def test_non_ascii_bearer_rejected_not_raised(self, provider):
+        # C1 regression: a bearer whose pre-signature segment carries a
+        # non-ASCII char makes body.encode("ascii") raise UnicodeEncodeError.
+        # _validate_token must catch it and return False rather than let it
+        # escape the webhook gate (HA core's async_handle_webhook would swallow
+        # it into a 200 OK and never emit the 401 discovery challenge).
+        # The legacy hardening rides the dev flavor until promotion (stable still
+        # hmac's body.encode("ascii") outside the decode try), so skip on stable.
+        if not _ha_auth_supported():
+            pytest.skip("legacy non-ASCII hardening rides the dev flavor until promote")
+        assert provider.validate_access_token("é.AA") is False
+        assert provider.validate_access_token("\xff.AA") is False
+
     def test_token_with_tampered_payload_rejected(self, provider):
         token = provider.issue_access_token()
         body, sig = token.rsplit(".", 1)
@@ -2627,6 +2640,39 @@ class TestOAuthWebhookHandler:
         request.read.assert_not_awaited()
         response_ctor.assert_called_once()
         assert response_ctor.call_args.kwargs.get("status") == 401
+
+    async def test_non_ascii_bearer_gate_returns_401_not_swallowed(self, setup):
+        """C1 gate-level regression: a legacy-mode bearer whose pre-signature
+        segment has a non-ASCII char must yield the 401 discovery challenge, not
+        raise UnicodeEncodeError out of the gate — HA core's async_handle_webhook
+        would swallow that into a 200 OK and never challenge the client."""
+        mod, oauth = setup
+        # The C1 hardening rides the dev flavor until promotion (stable still
+        # hmac's body.encode("ascii") outside the decode try), so skip on stable.
+        if not _ha_auth_supported():
+            pytest.skip("legacy non-ASCII hardening rides the dev flavor until promote")
+        provider = oauth.OAuthProvider(
+            hass=MagicMock(),
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
+        hass = self._make_hass(mod, provider)
+        request = self._make_request("Bearer é.AA")
+        request.headers["Host"] = "example.nabu.casa"
+
+        with patch.object(oauth.web, "Response") as response_ctor:
+            await mod._handle_webhook(hass, "mcp_test", request)
+
+        request.read.assert_not_awaited()
+        response_ctor.assert_called_once()
+        assert response_ctor.call_args.kwargs.get("status") == 401
+        ww = response_ctor.call_args.kwargs.get("headers", {}).get(
+            "WWW-Authenticate", ""
+        )
+        assert ww.startswith("Bearer realm=")
+        assert "resource_metadata=" in ww
 
     async def test_passes_through_with_valid_bearer(self, setup):
         mod, oauth = setup
@@ -4505,6 +4551,36 @@ class TestHaAuthMode:
         mock_create_issue.assert_not_called()
         mock_write.assert_not_called()
 
+    async def test_ha_auth_init_failure_unregisters_and_raises(self, hass, tmp_path):
+        """ha_auth mirror of the legacy provider-init-failure teardown: if
+        register_metadata_views raises while enabling OAuth, the user opted into
+        auth, so refuse to start — raise ConfigEntryError, tear down the webhook
+        registered above (no unauthenticated endpoint left live), close the
+        session (no leak), and leave DOMAIN out of hass.data."""
+        mod, oauth, _an = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        _bind_repairs(mod, tmp_path)
+        session = MagicMock()
+        session.close = AsyncMock()
+        with (
+            patch.object(mod, "_read_config", return_value=self._ha_auth_config()),
+            patch.object(mod, "async_register"),
+            patch.object(mod, "async_unregister") as mock_unreg,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            # The integration lazy-imports register_metadata_views at call time
+            # (`from .oauth import register_metadata_views` inside
+            # async_setup_entry), so patching the oauth module attribute lands.
+            patch.object(
+                oauth, "register_metadata_views", side_effect=RuntimeError("boom")
+            ),
+            pytest.raises(_FakeConfigEntryError) as exc_info,
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+
+        assert "Failed to enable OAuth" in str(exc_info.value)
+        mock_unreg.assert_called_once_with(hass, "mcp_test")
+        session.close.assert_awaited_once()
+        assert mod.DOMAIN not in hass.data
+
     async def test_setup_ignores_stray_public_base_url_host_derived(
         self, hass, tmp_path
     ):
@@ -5048,6 +5124,59 @@ class TestHaAuthMode:
             )
         assert jr.call_args.kwargs.get("status") == 404
 
+    async def test_oauth_off_after_on_stale_views_all_404(self, tmp_path):
+        """OAuth toggled OFF after a prior ON: the entry reloaded and __init__
+        rewrote hass.data[DOMAIN] as {target_url, webhook_id, session} with NO
+        'oauth_mode' key, but HA can't drop the still-bound views until a
+        restart. _active_oauth_mode resolves domain_data.get('oauth_mode') ->
+        None, so every bound view must 404 — the distinct present-dict-without-
+        oauth_mode branch (test_unloaded_views_all_404 covers only the
+        DOMAIN-absent branch). Regression guard: someone re-adding a MODE_LEGACY
+        default on that .get()."""
+        _mod, oauth, _an = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        # Exact OAuth-off shape __init__ writes (target_url/webhook_id/session),
+        # a REAL dict with no "oauth_mode" -> _active_oauth_mode returns None.
+        hass.data = {
+            oauth.DOMAIN: {
+                "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "webhook_id": "wh",
+                "session": MagicMock(),
+            }
+        }
+        provider = oauth.OAuthProvider(
+            hass=hass,
+            client_id="cid-1234567890ABCDEF",
+            client_secret="sec",
+            webhook_id="wh",
+            signing_key=b"\x00" * 32,
+        )
+        req = _make_view_request(headers={"Host": "h"})
+        for view in (
+            oauth.ProtectedResourceMetadataView(provider),
+            oauth.AuthorizationServerMetadataView(provider),
+        ):
+            with patch.object(oauth.web, "json_response") as jr:
+                await view.get(req)
+            assert jr.call_args.kwargs.get("status") == 404
+        av = oauth.AuthorizeView(provider)
+        with patch.object(oauth.web, "Response") as rc:
+            await av.get(_make_view_request(query={}, method="GET"))
+        assert rc.call_args.kwargs.get("status") == 404
+        with patch.object(oauth.web, "Response") as rc:
+            await av.post(
+                _make_view_request(method="POST", post_data={"action": "approve"})
+            )
+        assert rc.call_args.kwargs.get("status") == 404
+        tv = oauth.TokenView(provider)
+        with patch.object(oauth.web, "json_response") as jr:
+            await tv.post(
+                _make_view_request(
+                    method="POST", post_data={"grant_type": "authorization_code"}
+                )
+            )
+        assert jr.call_args.kwargs.get("status") == 404
+
     # ---- the 401 challenge is the SAME builder + pointer in both modes ----
 
     async def test_401_challenge_byte_identical_legacy_vs_ha_auth(self, tmp_path):
@@ -5258,6 +5387,21 @@ class TestResolveOAuthMode:
         still a legacy trace -> stay on legacy."""
         assert start._resolve_oauth_mode("", "", "sec", tmp_path) == "legacy"
 
+    def test_creds_file_stat_oserror_treated_absent(self, start, capsys):
+        """start.py ~654: Path.exists() re-raises a stat error other than 'not
+        there' (e.g. EACCES). A stat failure is no proof of a legacy install, so
+        _resolve_oauth_mode must catch the OSError, log that it is treating the
+        file as absent, and keep auto-detecting (default ha_auth here) instead of
+        crashing startup."""
+        creds_file = MagicMock()
+        creds_file.exists.side_effect = OSError("EACCES: permission denied")
+        data_dir = MagicMock()
+        data_dir.__truediv__.return_value = creds_file
+        # No configured id/secret and the creds-file stat fails -> ha_auth.
+        assert start._resolve_oauth_mode("", "", "", data_dir) == "ha_auth"
+        # log_error goes to stderr; the "treating it as absent" line must appear.
+        assert "treating it as absent" in capsys.readouterr().err
+
 
 class TestStartHaAuthMode:
     """start.py main(): ha_auth writes the mode-only oauth section and skips the
@@ -5290,15 +5434,23 @@ class TestStartHaAuthMode:
         resolve_creds = MagicMock(
             wraps=lambda d, cid, sec: (cid or "hamcp-generated1234567890", sec or "sec")
         )
+        # A bool probe_active is a constant result; a list/tuple is a per-call
+        # sequence (side_effect) so a caller can model an initial probe failing
+        # and the re-probe succeeding after the HA restart.
+        probe_kwargs = (
+            {"side_effect": list(probe_active)}
+            if isinstance(probe_active, (list, tuple))
+            else {"return_value": probe_active}
+        )
         with (
             patch.object(start, "Path", side_effect=path_factory),
             patch.object(start, "_supervisor_get", return_value={"addons": []}),
-            patch.object(start, "_ha_core_api", return_value={}),
+            patch.object(start, "_ha_core_api", return_value={}) as ha_core_api,
             patch.object(start, "_install_integration", return_value=(False, False)),
             patch.object(start, "_ensure_config_entry", return_value=True),
             patch.object(start, "_reload_config_entry"),
             patch.object(start, "_resolve_oauth_creds", resolve_creds),
-            patch.object(start, "_probe_oauth_active", return_value=probe_active),
+            patch.object(start, "_probe_oauth_active", **probe_kwargs),
             # Destructive fail-closed helpers: patched so the stale-code path is
             # observable without tearing down / blocking on a real HA restart.
             patch.object(start, "_remove_config_entry") as remove_entry,
@@ -5318,6 +5470,7 @@ class TestStartHaAuthMode:
             "remove_entry": remove_entry,
             "wait_restart": wait_restart,
             "request_repair": request_repair,
+            "ha_core_api": ha_core_api,
         }
         return rc, written, mocks
 
@@ -5390,6 +5543,41 @@ class TestStartHaAuthMode:
         mocks["wait_restart"].assert_called_once()
         # The marker the integration's Repair flow watches was written.
         assert (tmp_path / "oauth_marker").exists()
+
+    def test_ha_auth_probe_recovers_after_restart(self, tmp_path, capsys):
+        """Auto-recovery branch (start.py ~1482): the initial stale-code probe
+        fails, so main() tears the entry down, writes the restart marker, and
+        waits for the HA restart; the re-probe then succeeds, so the stale
+        notification is dismissed, the marker is unlinked, and the webhook is
+        reported re-enabled — no manual intervention needed."""
+        rc, written, mocks = self._run_main(
+            tmp_path,
+            {
+                "mcp_server_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+                "enable_oauth": True,
+            },
+            probe_active=[False, True],  # initial probe fails, re-probe succeeds
+        )
+        assert rc == 0
+        # The ha_auth section is written BEFORE the probe, so it still lands.
+        assert written["oauth"] == {"mode": "ha_auth"}
+        # Initial probe failed -> fail-closed teardown ran and the restart was
+        # awaited.
+        assert mocks["remove_entry"].called
+        assert mocks["request_repair"].called
+        mocks["wait_restart"].assert_called_once()
+        # Re-probe succeeded -> the OAuth-stale notification was dismissed (the
+        # recovery branch's dismiss, not the several dismissed at startup).
+        dismiss_calls = [
+            c
+            for c in mocks["ha_core_api"].call_args_list
+            if c.args[:2] == ("POST", "/services/persistent_notification/dismiss")
+            and c.args[2].get("notification_id", "").endswith("oauth_stale")
+        ]
+        assert len(dismiss_calls) == 1
+        # ...the marker was unlinked, and the webhook reported re-enabled.
+        assert not (tmp_path / "oauth_marker").exists()
+        assert "webhook re-enabled" in capsys.readouterr().out
 
     def test_ha_auth_with_remote_url_logs_ignored_notice_and_no_pin(
         self, tmp_path, capsys

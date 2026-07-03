@@ -429,10 +429,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # session (register_metadata_views no-ops when either mode already
             # bound them — see oauth._METADATA_VIEWS_REGISTERED_KEY), so a
             # config-entry reload or a live legacy->ha_auth switch doesn't
-            # stack shadowed duplicates. ha_auth binds NO root views (HA core
-            # owns /authorize + /token), so there is no owner-key / fingerprint
-            # bookkeeping and no restart concept — hence oauth_restart_needed
-            # stays False and the marker-CLEAR path runs below.
+            # stack shadowed duplicates. ha_auth binds NO root views (HA core is
+            # the authorization server, serving its own /auth/authorize +
+            # /auth/token; the bare /authorize + /token are the legacy flavor's
+            # own root views), so there is no owner-key / fingerprint bookkeeping
+            # and no restart concept — hence oauth_restart_needed stays False and
+            # the marker-CLEAR path runs below.
             register_metadata_views(hass, resource_server)
         except Exception as err:
             _LOGGER.exception(

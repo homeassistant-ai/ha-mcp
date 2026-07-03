@@ -65,11 +65,13 @@ DOMAIN = "mcp_proxy_dev"
 # TOP-LEVEL hass.data key (deliberately NOT under DOMAIN, so it survives
 # async_unload_entry's hass.data.pop(DOMAIN)) recording that the seven
 # discovery-document metadata views are bound to aiohttp for this HA session.
-# aiohttp raises ValueError on a duplicate view name and HA cannot unregister a
-# bound view until it restarts, so register_metadata_views must bind the seven
-# at most once: a same-mode ha_auth reload, a legacy->ha_auth switch, or a
-# ha_auth->legacy switch all reuse the already-bound views instead of
-# re-registering them (which would raise and fail the reload).
+# HA registers views with no route name and leaves the router unfrozen, so a
+# duplicate registration does NOT raise — aiohttp lets the first-registered
+# path win and silently shadows the later one; HA also can't unregister a bound
+# view until it restarts. So register_metadata_views must bind the seven at
+# most once: a same-mode ha_auth reload, a legacy->ha_auth switch, or a
+# ha_auth->legacy switch all reuse the already-bound views instead of stacking
+# silently-shadowed duplicate routes on every reload/switch.
 #
 # Suffixed with DOMAIN so each add-on flavor gets its OWN top-level flag: the
 # metadata-view URLs and names embed the flavor's DOMAIN and therefore never
@@ -448,12 +450,16 @@ class OAuthProvider:
         flag-guarded `register_metadata_views` (which binds them at most once
         per HA session — see `_METADATA_VIEWS_REGISTERED_KEY`), then registers
         ONLY the two root views (`AuthorizeView` + `TokenView`). ha_auth mode
-        registers just the seven metadata views (HA core owns `/authorize` +
-        `/token`, so it binds no root views); routing both modes through the
-        same registrar means a legacy<->ha_auth switch or a same-mode reload
-        never re-registers the seven and trips aiohttp's duplicate-view
-        ValueError. The two root views stay gated by the caller's route-owner /
-        fingerprint logic in __init__.py.
+        registers just the seven metadata views (HA core is the authorization
+        server, serving its own `/auth/authorize` + `/auth/token`, so the
+        add-on binds no root views); the bare `/authorize` + `/token` here are
+        this add-on's OWN legacy root views. Routing both modes through the same
+        registrar means a legacy<->ha_auth switch or a same-mode reload reuses
+        the already-bound seven instead of stacking silently-shadowed duplicate
+        routes (a duplicate registration does not raise — aiohttp lets the
+        first-registered path win — and HA can't unregister a bound view until
+        it restarts). The two root views stay gated by the caller's route-owner
+        / fingerprint logic in __init__.py.
         """
         register_metadata_views(self._hass, self)
         for view in (AuthorizeView(self), TokenView(self)):
@@ -483,11 +489,17 @@ class OAuthProvider:
             return False
         try:
             actual_sig = _b64url_decode(sig_part)
-        except (ValueError, binascii.Error):
+            # body.encode("ascii") is inside the try: a bearer whose
+            # pre-signature segment carries a non-ASCII char raises
+            # UnicodeEncodeError, which must be caught here (return False)
+            # rather than escaping the webhook gate — HA core's
+            # async_handle_webhook would swallow the exception into a 200 OK
+            # and never emit the 401 discovery challenge.
+            expected_sig = hmac.new(
+                self._signing_key, body.encode("ascii"), hashlib.sha256
+            ).digest()
+        except (ValueError, binascii.Error, UnicodeEncodeError):
             return False
-        expected_sig = hmac.new(
-            self._signing_key, body.encode("ascii"), hashlib.sha256
-        ).digest()
         if not hmac.compare_digest(actual_sig, expected_sig):
             return False
         try:
@@ -756,11 +768,12 @@ class AuthorizeView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.Response:
         if _active_oauth_mode(self._provider) != MODE_LEGACY:
-            # Serve ONLY when legacy is the live mode. Both ha_auth (HA core owns
-            # /authorize) and None (entry unloaded / OAuth off) mean this
-            # stale-bound root view must not serve: HA can't rebind or drop root
-            # views without a restart, so a legacy->ha_auth switch OR an unload
-            # leaves it bound. Refuse it.
+            # Serve ONLY when legacy is the live mode. Both ha_auth (HA core is
+            # the authorization server on its own /auth/authorize; this bare
+            # /authorize is the add-on's own legacy view) and None (entry
+            # unloaded / OAuth off) mean this stale-bound root view must not
+            # serve: HA can't rebind or drop root views without a restart, so a
+            # legacy->ha_auth switch OR an unload leaves it bound. Refuse it.
             return _text_error(404, "not found")
         params = request.query
         client_id = params.get("client_id", "")
@@ -815,7 +828,9 @@ class AuthorizeView(HomeAssistantView):
     async def post(self, request: web.Request) -> web.Response:
         if _active_oauth_mode(self._provider) != MODE_LEGACY:
             # Serve ONLY when legacy is live (see the GET defense above): ha_auth
-            # (HA core owns /authorize) and the unloaded/None case both 404.
+            # (HA core is the authorization server on its own /auth/authorize;
+            # this bare /authorize is the add-on's own legacy view) and the
+            # unloaded/None case both 404.
             return _text_error(404, "not found")
         data = await request.post()
         action = str(data.get("action", ""))
@@ -912,9 +927,11 @@ class TokenView(HomeAssistantView):
 
     async def post(self, request: web.Request) -> web.Response:
         if _active_oauth_mode(self._provider) != MODE_LEGACY:
-            # Serve ONLY when legacy is live. Both ha_auth (HA core owns /token)
-            # and the unloaded/None case must not mint tokens from this
-            # stale-bound view (see AuthorizeView for the switch scenario).
+            # Serve ONLY when legacy is live. Both ha_auth (HA core is the
+            # authorization server on its own /auth/token; this bare /token is
+            # the add-on's own legacy view) and the unloaded/None case must not
+            # mint tokens from this stale-bound view (see AuthorizeView for the
+            # switch scenario).
             return _json_not_found()
         form = dict(await request.post())
         client_id, client_secret = self._extract_client_creds(request, form)
@@ -1011,20 +1028,22 @@ def _metadata_views(provider: MetadataProvider) -> list[HomeAssistantView]:
 def register_metadata_views(hass: HomeAssistant, provider: MetadataProvider) -> None:
     """Register ONLY the seven discovery-document views (ha_auth mode).
 
-    ha_auth serves just these — Home Assistant core owns `/authorize` +
-    `/token`, so the add-on binds no root views and no HA restart is ever needed
-    to enable or disable the mode. ``provider`` is an
-    `auth_native.ResourceServer` (ha_auth) or an `OAuthProvider` (legacy, which
-    routes its seven views through here); the views read its `base_url_for`,
-    `resource_url`, `authorization_server_url`, `webhook_id`, and `_hass` (read
-    by `_active_oauth_mode` AND `_active_provider` for per-request mode/provider
-    dispatch).
+    ha_auth serves just these — Home Assistant core is the authorization server,
+    serving its own `/auth/authorize` + `/auth/token`, so the add-on binds no
+    root views (the bare `/authorize` + `/token` are the legacy flavor's own
+    root views) and no HA restart is ever needed to enable or disable the mode.
+    ``provider`` is an `auth_native.ResourceServer` (ha_auth) or an
+    `OAuthProvider` (legacy, which routes its seven views through here); the
+    views read its `base_url_for`, `resource_url`, `authorization_server_url`,
+    `webhook_id`, and `_hass` (read by `_active_oauth_mode` AND
+    `_active_provider` for per-request mode/provider dispatch).
 
     Idempotent per HA session: the seven views bind at most once — a same-mode
     reload or a legacy<->ha_auth switch reuses the already-bound views rather
-    than re-registering them (aiohttp raises ValueError on a duplicate view name
-    and HA can't drop a bound view until it restarts). The guard flag lives at a
-    top-level hass.data key so it survives async_unload_entry's pop(DOMAIN).
+    than stacking silently-shadowed duplicate routes (a duplicate registration
+    does not raise — aiohttp lets the first-registered path win — and HA can't
+    drop a bound view until it restarts). The guard flag lives at a top-level
+    hass.data key so it survives async_unload_entry's pop(DOMAIN).
     """
     if hass.data.get(_METADATA_VIEWS_REGISTERED_KEY):
         return
