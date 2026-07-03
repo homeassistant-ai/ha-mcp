@@ -3,6 +3,70 @@
 <!-- version list -->
 
 
+## v2.0.0 (2026-07-03)
+
+> **POTENTIAL BREAKING CHANGE (OAuth users).** This release changes the default
+> OAuth mode for *new* enables. Upgrades are engineered to be safe — existing
+> OAuth setups are auto-detected and kept on the old (legacy) mode — but if you
+> use OAuth, read the notes below. `enable_oauth` stays OFF by default; nothing
+> changes for anyone not using OAuth.
+
+### Added
+
+- New default OAuth mode `ha_auth` that delegates authorization to Home
+  Assistant's built-in OAuth: you sign in with your Home Assistant account and
+  the connector's OAuth fields stay blank (the add-on advertises Client ID
+  Metadata Documents, so no client id/secret is needed). It works with any
+  hostname regardless of Home Assistant's external URL, and needs no Home
+  Assistant restart to enable or disable. Validated live against claude.ai; also
+  enables ChatGPT (#1725). Follow-up to #1714.
+- Serve the OAuth metadata at the RFC 8414 / RFC 9728 / OIDC well-known
+  locations (issue #1714): the authorization-server document at
+  `/.well-known/oauth-authorization-server/api/mcp_proxy/oauth` (plus the
+  `openid-configuration` variants), and the protected-resource document at the
+  path-scoped `/.well-known/oauth-protected-resource/api/webhook/<id>`. The
+  path-scoped document is claude.ai's first fallback probe when the 401's
+  `WWW-Authenticate` pointer is missing, and a valid authorization-server
+  document at the well-known path overrides a previously mis-cached per-URL
+  client config — healing a broken connector with no client-side action.
+- Click-to-restart Repair (HACS-style) now appears the moment a restart is
+  needed, not only at the next HA boot: the integration registers a
+  `refresh_repairs` service the add-on calls when the integration files were
+  updated on disk or OAuth was enabled against stale loaded code. The stale
+  "integration updated" notification is auto-dismissed once the new code
+  actually loads.
+
+### Changed
+
+- OAuth's default for a first-time enable is now `ha_auth`. What this means for
+  OAuth users:
+  - OAuth setups from before this update keep working unchanged — legacy mode is
+    auto-detected (from a configured or stored Client ID/Secret) and kept.
+  - New / first-time OAuth enables default to the new `ha_auth` mode.
+  - Anyone switching modes must delete and re-add their MCP connector: set
+    `oauth_mode: ha_auth` (blank credentials) to move to the new mode, or
+    `oauth_mode: legacy` to pin the previous client-id/secret flow.
+  The legacy flow is unchanged and still available (deprecated).
+- The add-on now refuses to start when its options file is present but
+  unreadable or corrupt, instead of silently starting with OAuth defaulted off.
+  A restart normally recovers on its own (the Supervisor rewrites the file from
+  the saved configuration on every start).
+
+### Fixed
+
+- Repair cards now render with proper text: custom integrations load runtime
+  translations from `translations/en.json`, which was missing.
+- A bearer token containing non-ASCII characters now receives the standard 401
+  discovery challenge in legacy OAuth mode, instead of an unhandled error that
+  surfaced as an empty 200 response.
+
+### Documentation
+
+- Add a "Cloudflare users" troubleshooting section to DOCS.md: disable
+  "Block AI training bots" and don't geo-block your AI provider's US IP
+  ranges (Claude.ai connects from Anthropic's network, `160.79.104.0/21`).
+
+
 ## v1.2.3 (2026-07-01)
 
 ### Added
