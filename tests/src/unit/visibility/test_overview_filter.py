@@ -7,6 +7,8 @@ this is the fast inner one. Asserts both the filter effect and count coherence
 
 import asyncio
 
+import pytest
+
 from ha_mcp.tools.smart_search._overview import SystemOverviewMixin
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
@@ -74,3 +76,20 @@ def test_overview_disabled_keeps_all(tmp_path, monkeypatch):
     res = _run_overview(tmp_path, monkeypatch, VisibilityConfig(enabled=False))
     assert res["system_summary"]["total_entities"] == 2
     assert {"light", "sensor"} <= set(res["domain_stats"])
+
+
+class _StatesCancelOverviewClient(_OverviewClient):
+    """get_system_overview client whose mandatory states fetch is cancelled."""
+
+    async def get_states(self):
+        raise asyncio.CancelledError
+
+
+def test_overview_propagates_states_cancellation():
+    """A cancelled states fetch propagates instead of being assigned to
+    ``entities`` and crashing downstream iteration (mirrors the area-search
+    siblings)."""
+    mixin = SystemOverviewMixin()
+    mixin.client = _StatesCancelOverviewClient(_STATES, _ENTITY_REGISTRY)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(mixin.get_system_overview(detail_level="full"))
