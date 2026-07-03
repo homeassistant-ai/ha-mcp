@@ -627,8 +627,17 @@ class TestAddonStartup:
         container.start()
 
         try:
-            stdout, stderr = container.get_logs()
-            logs = stdout.decode("utf-8") + "\n" + stderr.decode("utf-8")
+            # The install-confirmation line is emitted by the deferred
+            # install thread slightly AFTER uvicorn logs "running", so
+            # poll briefly instead of single-shot reading the logs.
+            deadline = time.monotonic() + 15.0
+            logs = ""
+            while time.monotonic() < deadline:
+                stdout, stderr = container.get_logs()
+                logs = stdout.decode("utf-8") + "\n" + stderr.decode("utf-8")
+                if "kill-signal diagnostics installed for" in logs:
+                    break
+                time.sleep(0.5)
 
             # The canary is emitted at DEBUG through the logging system,
             # so its presence proves the level override was applied.
