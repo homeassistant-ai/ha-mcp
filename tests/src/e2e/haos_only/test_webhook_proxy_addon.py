@@ -579,11 +579,17 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
     the OAuth integration is verified loaded. Accept either auth-
     rejection (401/403) or unregistered-404 as evidence the gate
     engaged. Restored to ``enable_oauth=false`` in ``finally``.
+
+    The webhook probes are deliberately sent WITHOUT credentials: since
+    webhook-proxy 2.0.0 a first-time enable defaults to ``ha_auth`` mode,
+    where a valid Home Assistant access token is legitimately ACCEPTED by
+    the gate (the request authenticates and is forwarded upstream), so a
+    probe carrying the harness's HA token would see the ungated status in
+    ha_auth mode and a 401 in legacy mode. A credential-less probe must be
+    401-challenged in BOTH modes, which is what this test pins.
     """
     slug = WEBHOOK_PROXY_SLUG
     base_url = ha_container_with_fresh_config["base_url"]
-    token = ha_container_with_fresh_config["token"]
-    headers = {"Authorization": f"Bearer {token}"}
 
     detail = await _get_addon_detail(mcp_client, slug)
     current_options = detail.get("options") or {}
@@ -594,9 +600,7 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
     assert webhook_id, "Could not extract webhook ID from addon log."
     webhook_url = f"{base_url}/api/webhook/{webhook_id}"
 
-    baseline_resp = await asyncio.to_thread(
-        requests.post, webhook_url, headers=headers, timeout=10
-    )
+    baseline_resp = await asyncio.to_thread(requests.post, webhook_url, timeout=10)
     assert baseline_resp.status_code not in (401, 403), (
         f"Baseline (OAuth off) POST should not be auth-rejected; "
         f"got {baseline_resp.status_code}: {baseline_resp.text[:300]!r}"
@@ -629,9 +633,7 @@ async def test_addon_oauth_toggle_blocks_unauthenticated_webhook(
         gated = False
         while time.monotonic() < deadline:
             try:
-                resp = await asyncio.to_thread(
-                    requests.post, webhook_url, headers=headers, timeout=10
-                )
+                resp = await asyncio.to_thread(requests.post, webhook_url, timeout=10)
             except requests.exceptions.RequestException as exc:
                 # Transient connection/timeout during addon restart and
                 # OAuth gate activation. Retry until the deadline.
