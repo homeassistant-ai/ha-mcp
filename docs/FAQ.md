@@ -311,6 +311,37 @@ The version should match the [latest release](https://github.com/homeassistant-a
 | `weak` | Rarely suggests backups |
 | `auto` | Same as normal (future: auto-detection) |
 
+### Entity visibility filter (opt-in)
+
+By default the agent sees every entity. If auto-generated diagnostic or helper
+entities clutter search and overview results, you can hide a chosen set of them
+from the *collection* read tools (`ha_search`, `ha_get_overview`). This is
+**noise reduction, not access control** – a hidden entity is still returned by a
+direct `ha_get_state` / `ha_get_entity` on its `entity_id`, and still appears in
+automation, dashboard, and template content, so do not rely on it as a security
+boundary.
+
+The filter is off until you create `entity_visibility.json` in the ha-mcp data
+directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
+`"enabled": true`:
+
+```json
+{
+  "enabled": true,
+  "exclude_categories": ["diagnostic", "config"],
+  "exclude_hidden": false,
+  "deny_entity_ids": [],
+  "exclude_areas": [],
+  "exclude_labels": []
+}
+```
+
+An entity is hidden when its `entity_category` is in `exclude_categories`, its
+`entity_id` is in `deny_entity_ids`, or its area/label is in `exclude_areas` /
+`exclude_labels`. Set `exclude_hidden: true` to also fold in entities already
+marked hidden in Home Assistant. The config is read live per request, so edits
+apply on the next call; a missing or invalid file leaves the filter off.
+
 ---
 
 ## Feedback & Help
