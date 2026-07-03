@@ -415,8 +415,7 @@ class TestResolveEffectiveLogLevel:
         ):
             content = (repo_root / rel).read_text(encoding="utf-8")
             assert "advanced_debug_logging" not in content, (
-                f"{rel} still references the removed advanced_debug_logging "
-                "toggle"
+                f"{rel} still references the removed advanced_debug_logging toggle"
             )
 
     def test_start_py_arms_kill_diagnostics_on_debug(self):

@@ -83,9 +83,7 @@ async def _resolve_dev_addon_slug(addon_url: str) -> str:
 async def _post_log_level(settings_url: str, level: str) -> None:
     """Write ``log_level`` through the settings advanced API."""
     async with httpx.AsyncClient() as http:
-        resp = await http.post(
-            settings_url, json={"log_level": level}, timeout=15
-        )
+        resp = await http.post(settings_url, json={"log_level": level}, timeout=15)
     assert resp.status_code == 200, (
         f"POST {{'log_level': {level!r}}} to {settings_url} returned "
         f"{resp.status_code}: {resp.text[:500]}"
