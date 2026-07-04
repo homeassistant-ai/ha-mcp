@@ -411,6 +411,27 @@ class EmbeddedServerManager:
         from ha_mcp.settings_ui import register_settings_routes
 
         server = HomeAssistantSmartMCPServer()
+
+        # Startup observability (no secrets): confirm the in-memory connection
+        # channel actually reached the settings singleton — a sentinel here means
+        # the server cannot talk to HA core and every tool call will fail.
+        from ha_mcp.config import OAUTH_MODE_TOKEN, OAUTH_MODE_URL, get_global_settings
+
+        resolved = get_global_settings()
+        _LOGGER.info(
+            "Embedded connection resolved: url=%s, token=%s (requested url=%s)",
+            resolved.homeassistant_url,
+            "provisioned"
+            if resolved.homeassistant_token not in ("", OAUTH_MODE_TOKEN)
+            else "SENTINEL-MISSING",
+            self._server_url,
+        )
+        if resolved.homeassistant_url in ("", OAUTH_MODE_URL):
+            _LOGGER.error(
+                "Embedded connection did not apply (sentinel URL) — tool calls "
+                "will fail. This indicates the in-process settings channel broke."
+            )
+
         # Parity with the CLI HTTP runner: serve the web settings UI under the
         # same secret path as the MCP endpoint.
         register_settings_routes(server.mcp, server, secret_path=self._secret_path)

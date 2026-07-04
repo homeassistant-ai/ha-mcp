@@ -193,3 +193,28 @@ class TestEmbeddedConnection:
         rebuilt = config.get_global_settings()
         assert rebuilt.homeassistant_url == "http://127.0.0.1:8123"
         assert rebuilt.homeassistant_token == "tok-mem"
+
+    def test_registration_after_singleton_already_built(self, tmp_path, monkeypatch):
+        # Regression (live-found): importing ha_mcp runs the package's eager
+        # import chain, and tools/smart_search/_config.py builds the settings
+        # singleton AT IMPORT TIME — before the integration can possibly call
+        # set_embedded_connection (it imports that function from the very
+        # package whose import builds the singleton). Registration must
+        # therefore retro-apply to an existing singleton, not only on build.
+        monkeypatch.delenv("HOMEASSISTANT_URL", raising=False)
+        monkeypatch.delenv("HOMEASSISTANT_TOKEN", raising=False)
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+
+        config._reset_global_settings()
+        stale = config.get_global_settings()  # built first, sentinel connection
+        assert stale.homeassistant_url == config.OAUTH_MODE_URL
+
+        config.set_embedded_connection("http://127.0.0.1:8123", "tok-late")
+
+        # The ALREADY-BUILT singleton is patched in place...
+        assert stale.homeassistant_url == "http://127.0.0.1:8123"
+        assert stale.homeassistant_token == "tok-late"
+        # ...and the cached accessor returns the same patched object.
+        assert config.get_global_settings().homeassistant_url == (
+            "http://127.0.0.1:8123"
+        )

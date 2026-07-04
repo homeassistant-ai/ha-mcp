@@ -1293,9 +1293,18 @@ def set_embedded_connection(url: str, token: str) -> None:
     and admin token reach ``Settings`` in memory instead of through ``os.environ``.
     The values survive ``_reset_global_settings()``: the settings-UI reset+rebuild
     path re-applies them on the next ``get_global_settings()`` call.
+
+    Also applies to an ALREADY-BUILT singleton: importing ``ha_mcp`` runs the
+    package's eager import chain, and ``tools/smart_search/_config.py`` builds
+    the settings singleton at import time (its documented read-once budgets).
+    Registration therefore cannot assume it runs before the first build — the
+    integration imports this function from the very package whose import
+    creates the singleton.
     """
     _EMBEDDED_CONNECTION["url"] = url
     _EMBEDDED_CONNECTION["token"] = token
+    if _settings is not None:
+        _apply_embedded_connection(_settings)
 
 
 def _reset_embedded_connection() -> None:
