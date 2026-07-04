@@ -915,3 +915,41 @@
     border-bottom-color: var(--accent);
     box-shadow: inset 0 -1px 0 0 var(--accent);
   }
+
+  /* ── NARROW SCREENS (phones / small tablets) ─────────────────────────────
+     The layout was desktop-only (label left, control right on one line). On a
+     phone the label + help + control were crammed into a sliver. Below 640px,
+     stack each setting row so the control sits on its own line under the help,
+     make text fields fill the width, tighten the page gutters, and drop the
+     decorative header icon. Nothing here changes hooks or semantics. */
+  @media (max-width: 640px) {
+    main { padding: 0 12px 40px; }
+    .header { padding: 0 12px; }
+    .header-icon { display: none; }
+    .header h1 { font-size: 1.0625rem; }
+    .panel { padding-top: 20px; }
+
+    /* One control per line, aligned under its label + help. */
+    .feature-row,
+    .adv-row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+    }
+    .feature-control,
+    .adv-control { width: 100%; justify-content: flex-start; }
+    .adv-control input[type="text"],
+    .adv-control select { width: 100%; }
+
+    /* Backups: stack the row body above its actions; drop the desktop indents. */
+    .backup-row { flex-direction: column; align-items: stretch; }
+    .backup-row-actions { flex-wrap: wrap; }
+    .backup-field-label { min-width: 0; }
+    .backup-field-help { margin-left: 0; }
+
+    /* Policy predicate form: the desktop hint indent has no room here. */
+    .policy-predicate-form .policy-form-hint { padding-left: 0; }
+
+    /* Modal fills the small viewport instead of floating in a sliver. */
+    .modal { max-height: 94vh; }
+  }
