@@ -123,6 +123,15 @@ class ResourceServer:
     async def validate_request(self, request: web.Request) -> bool:
         """Return True iff the request carries a Bearer token Home Assistant accepts.
 
+        Thin wrapper over `validate_request_detailed` — same contract, without
+        the rejection-reason string.
+        """
+        authorized, _ = await self.validate_request_detailed(request)
+        return authorized
+
+    async def validate_request_detailed(self, request: web.Request) -> tuple[bool, str]:
+        """Return ``(authorized, reason)`` for the request's Bearer token.
+
         A missing or malformed `Authorization` header is rejected WITHOUT
         touching the validator. Otherwise the token is handed to
         `hass.auth.async_validate_access_token`, which returns the backing
@@ -132,21 +141,30 @@ class ResourceServer:
         normal 401 challenge instead of a 500. That method is a synchronous
         `@callback` in HA core (`homeassistant/auth/__init__.py`); we still await
         defensively iff a future Home Assistant turns it into a coroutine.
+
+        The reason string is diagnostic telemetry for the add-on's inbound
+        debug log (never the token itself): it distinguishes a request that
+        carried no usable bearer from one whose bearer HA's validator rejected
+        outright vs. one where the validator raised — the discrimination needed
+        to debug provider-specific rejections (issue #1714's OIDC leg) from a
+        user's add-on log alone.
         """
         header = request.headers.get("Authorization", "")
         if not header.lower().startswith("bearer "):
-            return False
+            return False, "no bearer header"
         token = header[7:].strip()
         if not token:
-            return False
+            return False, "empty bearer token"
         try:
             result = self._hass.auth.async_validate_access_token(token)
             if inspect.isawaitable(result):
                 result = await result
-        except Exception:
+        except Exception as err:
             _LOGGER.debug(
                 "ha_auth: bearer validation raised; treating as unauthorized",
                 exc_info=True,
             )
-            return False
-        return result is not None
+            return False, f"validator raised {type(err).__name__}"
+        if result is None:
+            return False, "token rejected by hass.auth (returned None)"
+        return True, "valid"
