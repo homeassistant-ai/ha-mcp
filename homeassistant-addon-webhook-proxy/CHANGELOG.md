@@ -3,6 +3,17 @@
 <!-- version list -->
 
 
+## v2.0.1 (2026-07-04)
+
+### Added
+
+- ha_auth debug observability: with debug logging enabled, a 401 on the webhook
+  now logs WHY the bearer was rejected — no usable bearer, token rejected by
+  Home Assistant's validator, or the validator raised — so provider-specific
+  login issues (issue #1714's OIDC leg) are diagnosable from the add-on log
+  alone. The token itself is never logged.
+
+
 ## v2.0.0 (2026-07-03)
 
 > **POTENTIAL BREAKING CHANGE (OAuth users).** This release changes the default
