@@ -86,6 +86,5 @@ schema:
   disabled_tools: str?
   pinned_tools: str?
   verify_ssl: bool?
-  advanced_debug_logging: bool?
 ports:
   9583/tcp: 9583

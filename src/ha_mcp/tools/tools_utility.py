@@ -53,6 +53,11 @@ SYSTEM_SERVICE_SLUGS = frozenset(
 
 DEFAULT_LIMIT = 50
 DEFAULT_LOG_LIMIT = 100
+# Journald window to request from Supervisor when a search filter is
+# active: matches are found within the fetched window only, so a
+# search over the caller's (often small) limit needs more history
+# behind it than the limit itself.
+SUPERVISOR_SEARCH_WINDOW_LINES = 2000
 MAX_LIMIT = 500
 
 # Regex to match log level at the start of a log line
@@ -752,8 +757,18 @@ class UtilityTools:
             limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
         )
 
+        # Request a journald window sized to the caller's limit —
+        # Supervisor's /logs endpoints default to their last-100-lines
+        # window, which silently capped any larger limit before ?lines=
+        # was plumbed through (found via #1721's e2e).
+        fetch_lines = (
+            max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
+            if search
+            else effective_limit
+        )
+
         try:
-            log_text = await self._client.get_addon_logs(slug)
+            log_text = await self._client.get_addon_logs(slug, lines=fetch_lines)
 
             lines = log_text.splitlines() if log_text else []
 
@@ -892,8 +907,16 @@ class UtilityTools:
             limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
         )
 
+        fetch_lines = (
+            max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
+            if search
+            else effective_limit
+        )
+
         try:
-            log_text = await self._client._get_system_service_logs(service)
+            log_text = await self._client._get_system_service_logs(
+                service, lines=fetch_lines
+            )
 
             lines = log_text.splitlines() if log_text else []
 

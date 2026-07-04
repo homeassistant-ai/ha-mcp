@@ -1,4 +1,4 @@
-"""Unit tests for the advanced-debug-logging kill-signal diagnostics module.
+"""Unit tests for the kill-signal diagnostics module (armed at DEBUG log level).
 
 The module installs a Linux-only sigaction(SA_SIGINFO) handler. We don't
 exercise the kernel signal path; instead we verify the helpers that
