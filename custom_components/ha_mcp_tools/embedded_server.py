@@ -495,6 +495,7 @@ class EmbeddedServerManager:
         finally:
             with suppress(Exception):
                 loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.run_until_complete(loop.shutdown_default_executor())
             loop.close()
 
     async def _serve(self, access_token: str) -> None:
@@ -571,9 +572,9 @@ class EmbeddedServerManager:
         uv_server = uvicorn.Server(config)
 
         assert self._stop_event is not None
-        stop_task = asyncio.ensure_future(self._stop_event.wait())
+        stop_task = asyncio.create_task(self._stop_event.wait())
         async with server.mcp._lifespan_manager():
-            serve_task = asyncio.ensure_future(uv_server.serve())
+            serve_task = asyncio.create_task(uv_server.serve())
             done, _pending = await asyncio.wait(
                 {serve_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
             )
@@ -702,7 +703,6 @@ def _uninstall_distribution(dist_name: str) -> None:
             text=True,
             timeout=_PIP_UNINSTALL_TIMEOUT_SECONDS,
             check=False,
-            env=os.environ.copy(),
         )
     except (OSError, subprocess.SubprocessError) as err:
         _LOGGER.warning("Could not uninstall %r: %s", dist_name, err)

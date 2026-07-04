@@ -415,7 +415,7 @@ def _webhook_cfg(hass: HomeAssistant) -> dict[str, Any] | None:
 def _request_is_https(request: web.Request) -> bool:
     """Return True when the request reached HA over HTTPS (honoring the proxy)."""
     forwarded = request.headers.get("X-Forwarded-Proto")
-    return (forwarded or request.scheme) == "https"
+    return bool((forwarded or request.scheme) == "https")
 
 
 class _suppress_connection_reset:
