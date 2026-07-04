@@ -43,7 +43,17 @@ import pytest
 import requests
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 
-pytestmark = [pytest.mark.slow, pytest.mark.container_only]
+# ``not_on_embedded``: this test boots its OWN dedicated ha_mcp_server container to
+# prove the install method end to end. The embedded backend (E2E_BACKEND=embedded)
+# already exercises that exact path as its session backend for every test in the
+# suite, so running this here would redundantly repeat a full container boot + pip
+# install. It keeps running on the plain container lane (where the session server
+# is in-process, not the embedded integration), which is its real home.
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.container_only,
+    pytest.mark.not_on_embedded,
+]
 
 _DOMAIN = "ha_mcp_server"
 _ENTRY_ID = "e2e_test_ha_mcp_server_entry"

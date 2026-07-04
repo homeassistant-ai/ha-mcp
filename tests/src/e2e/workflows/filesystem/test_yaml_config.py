@@ -61,22 +61,26 @@ async def mcp_client_with_yaml_config(
 ):
     """Yield an MCP client with YAML-config editing enabled.
 
-    In inaddon mode ``mcp_server`` is None (the addon is the server) and
-    the session ``mcp_client`` already speaks HTTP to the addon —
-    started with ENABLE_YAML_CONFIG_EDITING=true via Supervisor options
-    at install time. Yield that client directly.
+    When ``mcp_server`` is None the server runs out-of-process — the inaddon HAOS
+    addon (started with ENABLE_YAML_CONFIG_EDITING=true via Supervisor options) or
+    the embedded backend's in-process ha_mcp_server (with the flag in its
+    feature_flags.json override). In both, the session ``mcp_client`` already
+    speaks HTTP to that server, so yield it directly instead of wrapping
+    ``mcp_server.mcp`` (which would be None).
     """
-    if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
-        # Fail fast at fixture setup if the addon's install-time options
-        # drifted and the YAML config tool isn't registered.
+    if mcp_server is None:
+        # Fail fast at fixture setup if the out-of-process server's YAML config
+        # tool isn't registered.
         tools = await mcp_client.list_tools()
         tool_names = {t.name for t in tools}
+        backend = ha_container_with_fresh_config.get("backend")
         assert TOOL_NAME in tool_names, (
-            f"Inaddon addon is missing {TOOL_NAME}; the addon's install-time "
-            f"options (build_image.install_ha_mcp_dev_addon) must include "
-            f"enable_yaml_config_editing=true."
+            f"Out-of-process server ({backend}) is missing {TOOL_NAME}. The inaddon "
+            f"addon needs enable_yaml_config_editing=true in its install-time "
+            f"options (build_image.install_ha_mcp_dev_addon); the embedded backend "
+            f"needs it in feature_flags.json (conftest._EMBEDDED_FEATURE_FLAGS)."
         )
-        logger.debug("FastMCP client (inaddon, HTTP) reused for YAML tests")
+        logger.debug("FastMCP client (%s, HTTP) reused for YAML tests", backend)
         # Session-scope mcp_client owns __aexit__; the per-test fixture
         # deliberately doesn't wrap in `async with`.
         yield mcp_client

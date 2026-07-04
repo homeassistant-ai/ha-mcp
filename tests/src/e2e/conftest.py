@@ -95,6 +95,66 @@ _READINESS_TIMINGS: list[dict[str, Any]] = []
 _ALL_READINESS_TIMINGS: list[dict[str, Any]] = []
 
 
+# --- Embedded backend (in-process ha_mcp_server integration, #1527) -----------
+# Same testcontainer HA as the ``container`` backend, but the server-under-test is
+# the ``ha_mcp_server`` custom integration running IN-PROCESS inside the container
+# (not an in-process FastMCP server in the pytest process). Selected with
+# ``E2E_BACKEND=embedded``; ``mcp_client`` then speaks Streamable HTTP to the
+# integration's ingress webhook instead of using an in-memory transport. The
+# install/bring-up wiring lives in ``ha_container_with_fresh_config``'s
+# testcontainer path (see ``_install_embedded_server``).
+_EMBEDDED_DOMAIN = "ha_mcp_server"
+_EMBEDDED_ENTRY_ID = "e2e_embedded_ha_mcp_server_entry"
+# Stable webhook id + secret so the fixture knows the connect URL up front (a
+# generated one would live only in the container's .storage after bring-up).
+_EMBEDDED_WEBHOOK_ID = "mcp_e2e_embedded_0123456789abcdef"
+_EMBEDDED_SECRET_PATH = "/private_e2e_embedded_server"
+_EMBEDDED_SERVER_PORT = 9584
+# Persistent data dir the integration hands ha_mcp via HA_MCP_CONFIG_DIR (mirrors
+# the integration's const.SERVER_CONFIG_SUBDIR); the feature-flag override file
+# lives directly under it.
+_EMBEDDED_SERVER_CONFIG_SUBDIR = ".ha_mcp_server"
+# Feature flags the container backend injects as pytest-process env vars for its
+# in-process server (see the testcontainer path below). The embedded server runs
+# inside the container and cannot read the pytest process env, so the SAME values
+# are written to the component's data-dir override file (feature_flags.json) —
+# ha_mcp.config reads that override layer in a standalone deployment, and the
+# embedded server IS standalone (is_running_in_addon() is False in embedded mode,
+# so the file is honored rather than short-circuited by Supervisor). Keys are
+# ha_mcp.config Settings field names (config.FEATURE_FLAG_FIELDS), not env-var
+# names. READ_ONLY_MODE / ENABLE_TOOL_SECURITY_POLICIES are deliberately absent:
+# the tests that need them build their own in-process server
+# (test_readonly_mode / test_approval_flow), so enabling them on the shared
+# embedded server would break the default-catalog tests.
+_EMBEDDED_FEATURE_FLAGS: dict[str, bool] = {
+    "enable_beta_features": True,
+    "enable_yaml_config_editing": True,
+    "enable_yaml_packages_automation": True,
+    "enable_yaml_packages_script": True,
+    "enable_yaml_packages_scene": True,
+    "enable_filesystem_tools": True,
+    "enable_custom_component_integration": True,
+}
+# Boot budgets for the embedded path. The wheel + its dependency tree is
+# preinstalled in the container entrypoint BEFORE HA's /init (so bring-up is
+# fast + deterministic), which delays /api/ liveness by the pip window — hence a
+# much larger API-ready timeout than the default 60s. ``_EMBEDDED_BRINGUP_TIMEOUT``
+# then covers the background bring-up (force-install of the local wheel with deps
+# already satisfied, token provisioning, server thread start, webhook register).
+_EMBEDDED_API_READY_TIMEOUT = 480
+_EMBEDDED_BRINGUP_TIMEOUT = 300
+_EMBEDDED_READY_POLL_S = 5
+
+
+def _is_embedded_backend_selected() -> bool:
+    """Return True when ``E2E_BACKEND=embedded`` selects the in-process server.
+
+    The embedded backend is a variant of the testcontainer path (not HAOS), so it
+    is orthogonal to ``is_haos_backend_selected()`` — both are never true at once.
+    """
+    return os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded"
+
+
 def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     """Record a fixture-side readiness-gate timing data point.
 
@@ -137,6 +197,13 @@ def pytest_collection_modifyitems(config, items):
     del config
     haos = is_haos_backend_selected()
     inaddon = haos and is_haos_inaddon_mode()
+    # The embedded backend (#1527) is a testcontainer variant, so ``haos`` is
+    # False here — ``haos_only`` still skips and ``container_only`` still runs on
+    # it. What differs is that the in-process server lives INSIDE the container:
+    # test-process env / monkeypatch reconfiguration and in-process mocks can't
+    # reach it (exactly the inaddon limitation ``external_only`` already guards),
+    # and a couple of tests are provably redundant with the lane's own backend.
+    embedded = _is_embedded_backend_selected()
     skip_haos = pytest.mark.skip(
         reason="HAOS backend not selected (set HAOS_TEST_IMAGE_PATH)"
     )
@@ -147,7 +214,13 @@ def pytest_collection_modifyitems(config, items):
         reason="inaddon mode required (set HAOS_TEST_MODE=inaddon)"
     )
     skip_external_only = pytest.mark.skip(
-        reason="HAOS external mode required (inaddon mode active)"
+        reason="out-of-process server (inaddon/embedded); test needs an "
+        "in-process server it can reconfigure via env/monkeypatch or reach an "
+        "in-process mock"
+    )
+    skip_not_on_embedded = pytest.mark.skip(
+        reason="redundant on the embedded backend (the lane's own session "
+        "backend already exercises this path)"
     )
     for item in items:
         if "haos_only" in str(item.fspath):
@@ -159,17 +232,26 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_container)
         if "inaddon_only" in keywords and not inaddon:
             item.add_marker(skip_inaddon_only)
-        # ``external_only`` skips ONLY on the inaddon tier. The name is
-        # historical (from #1361 where the only motivating consumer was
-        # ``test_supervisor_mock.py``, whose monkeypatch-based fixture
-        # works fine on testcontainer + external HAOS but can't reach
-        # the addon's separate process inaddon). Skipping on
-        # testcontainer too was a dispatcher bug — the mock fixture is
-        # in-process and runs cleanly there. Surfaced during PR #1375
-        # final-skip audit; 14 supervisor_mock tests were silently
-        # skipping on every testcontainer e2e-tests.yml run.
-        elif "external_only" in keywords and inaddon:
+        # ``external_only`` skips on any tier where the server is NOT in the
+        # pytest process: the inaddon HAOS addon AND the embedded backend's
+        # in-process ha_mcp_server (both #1527). The name is historical (from
+        # #1361 where the only motivating consumer was ``test_supervisor_mock.py``,
+        # whose monkeypatch-based fixture works fine on testcontainer + external
+        # HAOS but can't reach a server in another process). Skipping on plain
+        # testcontainer was a dispatcher bug — the mock fixture is in-process and
+        # runs cleanly there (PR #1375 final-skip audit; 14 supervisor_mock tests
+        # were silently skipping on every testcontainer e2e-tests.yml run). The
+        # embedded backend has the same out-of-process constraint as inaddon, so
+        # it joins the skip; those tests keep full coverage on the container lane.
+        elif "external_only" in keywords and (inaddon or embedded):
             item.add_marker(skip_external_only)
+        # ``not_on_embedded`` is applied only where a test is provably redundant
+        # with the embedded lane's own session backend (e.g. the workflows/embedded
+        # smoke test boots its OWN ha_mcp_server container to prove the install
+        # method — which the embedded lane already does for every test). It keeps
+        # running unchanged on the container lane.
+        if "not_on_embedded" in keywords and embedded:
+            item.add_marker(skip_not_on_embedded)
 
 
 # Fail fast on a doomed run, on EVERY e2e lane (this conftest is shared by the
@@ -635,6 +717,181 @@ def _install_custom_component(
 
     logger.info("Installed %s component", domain)
     return True
+
+
+def _build_embedded_server_wheel(dest_dir: Path) -> Path:
+    """Build a ha-mcp wheel from the checkout into ``dest_dir`` via ``uv build``.
+
+    The wheel carries the PR's own ``src/ha_mcp`` (checkout fidelity for the
+    embedded-mode routing under test); its dependencies still resolve in the
+    container (preinstalled in the entrypoint, see the testcontainer path).
+
+    Uses ``uv build`` rather than ``python -m pip wheel`` (as the
+    workflows/embedded smoke test and ``haos_runtime`` helpers do): the project's
+    uv-managed venv does not seed ``pip``/``setuptools``, so ``python -m pip
+    wheel`` fails with "No module named pip". Those helpers catch the failure and
+    skip/warn, but this backend must ERROR loudly if the wheel can't be built —
+    the whole lane depends on it — so it must use a mechanism that actually works
+    in the venv. ``uv`` is always on PATH (the suite runs under ``uv run``) and
+    builds in an isolated env without needing pip in the venv.
+    """
+    repo_root = Path(__file__).parent.parent.parent.parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(dest_dir), str(repo_root)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    wheels = list(dest_dir.glob("ha_mcp-*.whl"))
+    if not wheels:
+        raise RuntimeError(f"no ha_mcp wheel built in {dest_dir}")
+    return wheels[0]
+
+
+def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
+    """Install the ``ha_mcp_server`` integration + seed its entry + feature flags.
+
+    Three pieces, all laid down before the container boots (so a post-boot host
+    write to the bind mount doesn't have to propagate, matching the other
+    pre-boot seeders):
+
+    1. Copy the integration into ``custom_components/ha_mcp_server``.
+    2. Seed its config entry with the stable webhook id/secret (so the mcp_client
+       fixture knows the connect URL) and a ``file://`` ``pip_spec`` pointing at
+       the checkout-built wheel copied into ``/config``. No ``last_pip_spec`` is
+       stored, so bring-up takes the force-install path (proven by the
+       workflows/embedded smoke test) — fast here because the entrypoint already
+       installed the wheel + deps.
+    3. Write the feature-flag override file. The container backend injects these
+       as pytest-process env vars for its in-process server; the embedded server
+       runs in the container and can't read that env, so the equivalent values go
+       to ``<config>/.ha_mcp_server/feature_flags.json`` — the same override
+       layer ``ha_mcp.config`` reads in a standalone deployment (the embedded
+       server is standalone: ``is_running_in_addon()`` is False in embedded mode,
+       so the file is honored rather than short-circuited by Supervisor).
+    """
+    repo_root = Path(__file__).parent.parent.parent.parent
+    src = repo_root / "homeassistant-integration" / _EMBEDDED_DOMAIN
+    dest = config_path / "custom_components" / _EMBEDDED_DOMAIN
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest, dirs_exist_ok=True)
+
+    storage_file = config_path / ".storage" / "core.config_entries"
+    data = json.loads(storage_file.read_text())
+    entries = data.setdefault("data", {}).setdefault("entries", [])
+    if not any(
+        isinstance(e, dict) and e.get("domain") == _EMBEDDED_DOMAIN for e in entries
+    ):
+        entries.append(
+            {
+                "created_at": "2025-09-07T23:56:28.040744+00:00",
+                "data": {
+                    "webhook_id": _EMBEDDED_WEBHOOK_ID,
+                    "secret_path": _EMBEDDED_SECRET_PATH,
+                },
+                "disabled_by": None,
+                "discovery_keys": {},
+                "domain": _EMBEDDED_DOMAIN,
+                "entry_id": _EMBEDDED_ENTRY_ID,
+                "minor_version": 1,
+                "modified_at": "2025-09-07T23:56:28.040747+00:00",
+                "options": {
+                    # file:// wheel (the pre-release/override channel) + deps
+                    # resolved under HA's constraints on force-install.
+                    "pip_spec": f"ha-mcp @ file:///config/{wheel_name}",
+                    "server_port": _EMBEDDED_SERVER_PORT,
+                    "bind_host": "127.0.0.1",
+                    "webhook_auth": "none",
+                },
+                "pref_disable_new_entities": False,
+                "pref_disable_polling": False,
+                "source": "import",
+                "subentries": [],
+                "title": "Home Assistant MCP Server",
+                "unique_id": _EMBEDDED_DOMAIN,
+                "version": 1,
+            }
+        )
+        storage_file.write_text(json.dumps(data, indent=2))
+
+    server_data_dir = config_path / _EMBEDDED_SERVER_CONFIG_SUBDIR
+    server_data_dir.mkdir(parents=True, exist_ok=True)
+    (server_data_dir / "feature_flags.json").write_text(
+        json.dumps(_EMBEDDED_FEATURE_FLAGS, indent=2)
+    )
+    logger.info(
+        "Installed %s integration + seeded config entry + feature-flag overrides",
+        _EMBEDDED_DOMAIN,
+    )
+
+
+def _embedded_mcp_result(resp: requests.Response) -> dict[str, Any] | None:
+    """Parse a Streamable-HTTP MCP response (JSON body or SSE) to a JSON-RPC dict.
+
+    Mirrors the workflows/embedded smoke test's ``_parse_mcp`` — the embedded
+    server may answer ``initialize`` with either a JSON body or an SSE stream
+    depending on negotiation, and the readiness probe must accept both.
+    """
+    ctype = resp.headers.get("Content-Type", "")
+    if "text/event-stream" in ctype:
+        for line in resp.text.splitlines():
+            if line.startswith("data:"):
+                try:
+                    obj = json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and ("result" in obj or "error" in obj):
+                    return obj
+        return None
+    try:
+        obj = json.loads(resp.text)
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _wait_for_embedded_webhook_ready(webhook_url: str, timeout: int) -> bool:
+    """Poll the embedded server's ingress webhook until MCP ``initialize`` works.
+
+    A valid JSON-RPC ``result`` means the in-process ha_mcp_server has installed
+    itself, started its worker thread, and registered the webhook. Returns False
+    on timeout so the caller can dump diagnostics and fail with context.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "e2e-embedded-readiness", "version": "1.0"},
+        },
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            resp = requests.post(
+                webhook_url, headers=headers, data=json.dumps(payload), timeout=30
+            )
+            if resp.status_code == 200:
+                parsed = _embedded_mcp_result(resp)
+                if parsed is not None and "result" in parsed:
+                    elapsed = int(time.monotonic() - (deadline - timeout))
+                    logger.info(
+                        "✅ Embedded ha_mcp_server webhook ready after ~%ds", elapsed
+                    )
+                    return True
+        except requests.exceptions.RequestException:
+            # Bring-up still in flight (pip force-install, thread start): retry.
+            pass
+        time.sleep(_EMBEDDED_READY_POLL_S)
+    return False
 
 
 def _seed_legacy_yaml_backups(config_path: Path) -> None:
@@ -1518,6 +1775,12 @@ def ha_container_with_fresh_config(request):
 
     logger.info("🐳 Creating Home Assistant container with testcontainers...")
 
+    # Embedded backend (#1527): install the in-process ha_mcp_server integration
+    # into this same testcontainer and drive it over its ingress webhook. The
+    # wheel name is captured here and consumed by the entrypoint preinstall below.
+    embedded = _is_embedded_backend_selected()
+    embedded_wheel_name: str | None = None
+
     # Create temporary directory for this test session
     temp_dir = tempfile.mkdtemp(prefix="ha_e2e_test_")
 
@@ -1566,6 +1829,16 @@ def ha_container_with_fresh_config(request):
         "ha_mcp_tools",
         "HA MCP Tools",
     )
+
+    # Embedded backend: build the checkout's wheel into /config, install the
+    # ha_mcp_server integration, seed its config entry + feature-flag overrides.
+    # Runs before _setup_config_permissions so the wheel, integration, and the
+    # .ha_mcp_server data dir all get the same readable perms as the rest of the
+    # config. The wheel's dep tree is preinstalled in the container entrypoint.
+    if embedded:
+        wheel = _build_embedded_server_wheel(config_path)
+        embedded_wheel_name = wheel.name
+        _install_embedded_server(config_path, embedded_wheel_name)
 
     # Pre-#1579 legacy backups for the legacy-restore e2e: seed before boot so
     # the bind-mounted .ha_mcp_tools_backups/ is populated when the component
@@ -1622,6 +1895,11 @@ def ha_container_with_fresh_config(request):
     # install`` first; ``&&`` short-circuits to ``/init`` only on success,
     # so install failures surface as container-exit-non-zero rather than
     # as an HA boot with missing dependencies.
+    # Commands to run in the wrapped entrypoint before ``exec /init``. Each is
+    # ``&&``-chained so a failure surfaces as container-exit-non-zero rather than
+    # an HA boot with missing dependencies.
+    preinit_cmds: list[str] = []
+
     manifest_reqs = _collect_manifest_requirements(config_path)
     if manifest_reqs:
         quoted = " ".join(shlex.quote(r) for r in manifest_reqs)
@@ -1638,19 +1916,40 @@ def ha_container_with_fresh_config(request):
         # index via the PIP_EXTRA_INDEX_URL env var (true today). If that
         # ever moves into pip.conf, attempt 1 silently reverts to hitting the
         # wheels index — the ``||`` fallback still keeps installs working.
-        container_kwargs["entrypoint"] = [
-            "sh",
-            "-c",
-            (
-                f"(env -u PIP_EXTRA_INDEX_URL pip install --no-cache-dir "
-                f"--only-binary=:all: {quoted} "
-                f"|| pip install --no-cache-dir {quoted}) && exec /init"
-            ),
-        ]
+        preinit_cmds.append(
+            f"(env -u PIP_EXTRA_INDEX_URL pip install --no-cache-dir "
+            f"--only-binary=:all: {quoted} "
+            f"|| pip install --no-cache-dir {quoted})"
+        )
         logger.info(
             f"📦 Pre-installing {len(manifest_reqs)} custom-component "
             f"requirement(s) before HA boots: {manifest_reqs}"
         )
+
+    if embedded and embedded_wheel_name is not None:
+        # Preinstall the ha-mcp wheel + its whole dependency tree (fastmcp etc.)
+        # BEFORE HA's /init, so the in-process ha_mcp_server bring-up is fast and
+        # deterministic — its force-install of the local wheel then finds every
+        # dependency already satisfied, and the mcp_client fixture's webhook-
+        # readiness poll doesn't have to sit through a multi-minute PyPI download.
+        # The heavy download happens during container boot instead, which is why
+        # the embedded path uses a much larger HA-API-ready budget below.
+        preinit_cmds.append(
+            f"pip install --no-cache-dir "
+            f"{shlex.quote(f'/config/{embedded_wheel_name}')}"
+        )
+        logger.info(
+            "📦 Embedded backend: preinstalling ha-mcp wheel %s (+deps) before "
+            "HA boots",
+            embedded_wheel_name,
+        )
+
+    if preinit_cmds:
+        container_kwargs["entrypoint"] = [
+            "sh",
+            "-c",
+            " && ".join(preinit_cmds) + " && exec /init",
+        ]
 
     container = container.with_kwargs(**container_kwargs)
 
@@ -1741,13 +2040,18 @@ def ha_container_with_fresh_config(request):
         # Use test token for API readiness checks
         headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
 
+        # The embedded backend's entrypoint preinstalls the ha-mcp wheel + its
+        # dependency tree before HA's /init, so /api/ liveness is delayed by that
+        # pip window and needs a much larger budget than the default 60s.
+        api_ready_timeout = _EMBEDDED_API_READY_TIMEOUT if embedded else 60
         logger.info("🔄 Waiting for Home Assistant API to become ready...")
-        if not _wait_for_ha_api_ready(base_url, headers, timeout=60):
+        if not _wait_for_ha_api_ready(base_url, headers, timeout=api_ready_timeout):
             _dump_ha_readiness_diagnostics(
                 container, base_url, headers, label="api-not-ready"
             )
             pytest.fail(
-                f"Home Assistant API at {base_url} did not become ready within 60 seconds.\n"
+                f"Home Assistant API at {base_url} did not become ready within "
+                f"{api_ready_timeout} seconds.\n"
                 "The container may have failed to start. Check Docker logs for details."
             )
 
@@ -1819,6 +2123,37 @@ def ha_container_with_fresh_config(request):
                 f"⚠️ sun.sun still 'unknown' after {SUN_WAIT}s — template tests may fail"
             )
 
+        # Embedded backend: HA core is up, but the in-process ha_mcp_server
+        # integration's background bring-up (force-install of the local wheel,
+        # token provisioning, worker-thread start, webhook registration) runs
+        # after CoreState RUNNING. Wait for its ingress webhook to answer MCP
+        # ``initialize`` before yielding so the session mcp_client fixture connects
+        # to a live server. This is a REAL bring-up gate — a timeout here means the
+        # embedded server genuinely failed to come up, not a flaky environment.
+        embedded_webhook_url: str | None = None
+        if embedded:
+            embedded_webhook_url = f"{base_url}/api/webhook/{_EMBEDDED_WEBHOOK_ID}"
+            logger.info(
+                "⏳ Waiting for the in-process ha_mcp_server webhook to come up..."
+            )
+            if not _wait_for_embedded_webhook_ready(
+                embedded_webhook_url, timeout=_EMBEDDED_BRINGUP_TIMEOUT
+            ):
+                _dump_ha_readiness_diagnostics(
+                    container,
+                    base_url,
+                    headers,
+                    label="embedded-webhook-not-ready",
+                    config_entry_domain=_EMBEDDED_DOMAIN,
+                )
+                pytest.fail(
+                    "The in-process ha_mcp_server did not answer its ingress "
+                    f"webhook within {_EMBEDDED_BRINGUP_TIMEOUT}s. Bring-up "
+                    "(wheel install / token provisioning / server thread / webhook "
+                    "registration) failed — check the HA log dump above for the "
+                    f"{_EMBEDDED_DOMAIN} config-entry state and any repair issue."
+                )
+
         # Store connection info for other fixtures
         container_info = {
             "container": container,
@@ -1827,7 +2162,13 @@ def ha_container_with_fresh_config(request):
             "config_path": str(config_path),
             "blueprint_server": local_blueprint,
             "token": TEST_TOKEN,
-            "backend": "container",
+            # ``embedded`` reuses the whole testcontainer path but swaps the
+            # server-under-test to the in-process integration; mcp_server yields
+            # None and mcp_client speaks HTTP to embedded_webhook_url (below).
+            "backend": "embedded" if embedded else "container",
+            # Set only on the embedded backend; None keeps the container-lane
+            # dispatch assertions (addon_mcp_url is None) unchanged.
+            "embedded_webhook_url": embedded_webhook_url,
         }
 
         try:
@@ -1887,18 +2228,20 @@ async def mcp_server(
 ) -> AsyncGenerator[HomeAssistantSmartMCPServer | None]:
     """Create MCP server instance connected to the container or HAOS QEMU.
 
-    Yields None on the inaddon HAOS backend — the ha-mcp dev addon
-    running inside the booted HAOS IS the server in that mode, so
-    spinning up an in-process FastMCP server here would be wasteful and
-    misleading (it'd connect to HA but tests would never use it).
-    The ``mcp_client`` fixture branches on backend to either use this
-    in-process server or build an HTTP transport pointing at the addon.
+    Yields None on the inaddon HAOS backend and the embedded backend — in both,
+    the server-under-test runs in a separate process (the ha-mcp dev addon inside
+    booted HAOS; the in-process ha_mcp_server integration inside the testcontainer),
+    so spinning up an in-process FastMCP server here would be wasteful and
+    misleading (it'd connect to HA but tests would never use it). The
+    ``mcp_client`` fixture branches on backend to either use this in-process
+    server or build an HTTP transport pointing at the out-of-process server.
     """
     container_info = ha_container_with_fresh_config
-    if container_info.get("backend") == "haos_inaddon":
+    if container_info.get("backend") in ("haos_inaddon", "embedded"):
         logger.info(
-            "Inaddon mode: skipping in-process MCP server "
-            "(tests use addon's HTTP MCP endpoint instead)"
+            "%s mode: skipping in-process MCP server "
+            "(tests use the out-of-process server's HTTP endpoint instead)",
+            container_info.get("backend"),
         )
         yield None
         return
@@ -1925,31 +2268,45 @@ async def mcp_server(
 async def mcp_client(
     ha_container_with_fresh_config, mcp_server
 ) -> AsyncGenerator[Client]:
-    """Create FastMCP client — in-memory for in-process server, HTTP for inaddon.
+    """Create FastMCP client — in-memory for in-process server, HTTP otherwise.
 
     On testcontainer + HAOS-external: in-memory transport bound to the
     ``mcp_server`` fixture (current behavior).
     On HAOS-inaddon: ``StreamableHttpTransport`` pointing at the dev
-    addon's MCP endpoint (running inside the booted HAOS). The addon
-    is the server in that mode; the local process is just a client.
+    addon's MCP endpoint (running inside the booted HAOS).
+    On embedded (#1527): ``StreamableHttpTransport`` pointing at the in-process
+    ha_mcp_server integration's ingress webhook (running inside the testcontainer).
+    In both HTTP cases the server-under-test is a separate process; the local
+    process is just a client.
     """
     container_info = ha_container_with_fresh_config
-    if container_info.get("backend") == "haos_inaddon":
+    backend = container_info.get("backend")
+    if backend in ("haos_inaddon", "embedded"):
         from fastmcp.client.transports import StreamableHttpTransport
 
-        addon_url = container_info.get("addon_mcp_url")
-        if not addon_url:
-            raise RuntimeError(
+        if backend == "embedded":
+            server_url = container_info.get("embedded_webhook_url")
+            missing_msg = (
+                "Embedded backend signaled but container_info has no "
+                "embedded_webhook_url — the embedded-webhook readiness gate must "
+                "run + populate this key before mcp_client is requested. Check "
+                "ha_container_with_fresh_config's embedded branch."
+            )
+        else:
+            server_url = container_info.get("addon_mcp_url")
+            missing_msg = (
                 "Inaddon backend signaled but container_info has no "
                 "addon_mcp_url — wait_for_addon_mcp_ready must run + "
                 "populate this key before mcp_client is requested. "
                 "Check ha_container_with_fresh_config's inaddon branch."
             )
-        logger.info(f"🔗 FastMCP client connecting (HTTP) to {addon_url}")
-        transport = StreamableHttpTransport(url=addon_url)
+        if not server_url:
+            raise RuntimeError(missing_msg)
+        logger.info(f"🔗 FastMCP client connecting (HTTP) to {server_url}")
+        transport = StreamableHttpTransport(url=server_url)
         client = Client(transport)
         async with client:
-            logger.debug("🔗 FastMCP client connected (HTTP transport, inaddon)")
+            logger.debug("🔗 FastMCP client connected (HTTP transport, %s)", backend)
             yield client
         return
 

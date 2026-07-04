@@ -83,6 +83,20 @@ _SKIP_CEILING_PER_LANE = {
     "container": 71,  # was 68; +3 in-process ha_mcp_server HAOS tests (haos_only/test_embedded_server_haos.py, skip on the container lane)
     "haos": 37,  # was 35; +2 in-process ha_mcp_server tests (workflows/embedded, @container_only, run on the container lane only). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
     "haos_inaddon": 59,  # was 58; +1 net from the in-process ha_mcp_server tests (workflows/embedded, @container_only; observed lane count). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
+    # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
+    # lane's marker-skips PLUS two embedded-specific additions:
+    #   - haos_only + inaddon_only tests skip on embedded just like on container
+    #     (embedded is neither HAOS nor inaddon), and
+    #   - external_only tests skip here (their server is out-of-process, unreachable
+    #     by test-process env/monkeypatch — same reason as inaddon), plus the
+    #     workflows/embedded smoke test (not_on_embedded).
+    # Static def-level derivation (Docker-less, so parametrize item-inflation isn't
+    # visible locally): haos_only 51 + inaddon_only-outside-haos 11 + external_only
+    # 35 (auto_backup 18, supervisor_mock 15, self_update_notice 1, file_operations
+    # 1) + not_on_embedded 2 = 99. Set to 115 to absorb parametrize inflation the
+    # same way the container ceiling (71) sits above its ~62 def-skips; the first
+    # green embedded CI run reveals the exact item count for a follow-up tighten.
+    "embedded": 115,
 }
 
 
@@ -130,6 +144,27 @@ def test_backend_dispatch_matches_workflow_env(
         assert ha_container_with_fresh_config["port"] is None
         assert ha_container_with_fresh_config["config_path"] is None
         assert ha_container_with_fresh_config["addon_mcp_url"] is None
+    elif os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded":
+        # Embedded backend (#1527): a testcontainer variant (no HAOS env) whose
+        # server-under-test is the in-process ha_mcp_server integration inside the
+        # same container. It reuses the whole testcontainer path, so container /
+        # port / config_path are populated exactly like the container backend, but
+        # it exposes the ingress webhook URL that mcp_client connects to.
+        assert backend == "embedded", (
+            f"E2E_BACKEND=embedded set but dispatch picked backend={backend!r}. "
+            f"The in-process ha_mcp_server integration is NOT the server-under-test "
+            f"for this run."
+        )
+        assert ha_container_with_fresh_config["container"] is not None
+        assert ha_container_with_fresh_config["port"] is not None
+        assert ha_container_with_fresh_config["config_path"] is not None
+        webhook_url = ha_container_with_fresh_config.get("embedded_webhook_url")
+        assert webhook_url and webhook_url.startswith("http"), (
+            f"embedded backend reported but embedded_webhook_url is "
+            f"{webhook_url!r}; the mcp_client fixture would route nowhere."
+        )
+        # The embedded backend is not the addon path — no addon_mcp_url.
+        assert ha_container_with_fresh_config.get("addon_mcp_url") is None
     else:
         assert backend == "container", (
             f"No HAOS env vars set, expected testcontainer backend, "
@@ -138,9 +173,9 @@ def test_backend_dispatch_matches_workflow_env(
         assert ha_container_with_fresh_config["container"] is not None
         assert ha_container_with_fresh_config["port"] is not None
         assert ha_container_with_fresh_config["config_path"] is not None
-        # The container branch (conftest.py:1698-1706) does NOT include
-        # an addon_mcp_url key at all, unlike the HAOS branches. Use
-        # .get() so the assertion holds against either absence or None.
+        # The container branch does NOT include an addon_mcp_url key at all,
+        # unlike the HAOS branches. Use .get() so the assertion holds against
+        # either absence or None.
         assert ha_container_with_fresh_config.get("addon_mcp_url") is None
 
 
