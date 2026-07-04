@@ -86,12 +86,21 @@ class FakeResponse:
         text: str | None = None,
         body: Any = None,
         headers: dict[str, str] | None = None,
+        content_type: str | None = None,
+        charset: str | None = None,
     ) -> None:
         self.status = status
         self.text = text
         self.body = body
         self.headers = dict(headers or {})
+        self.content_type = content_type
+        self.charset = charset
         self.json_body: Any = None
+        self.cookies: dict[str, dict[str, Any]] = {}
+
+    def set_cookie(self, name: str, value: str, **attrs: Any) -> None:
+        """Record a Set-Cookie the way ``web.Response.set_cookie`` would send it."""
+        self.cookies[name] = {"value": value, **attrs}
 
 
 class FakeStreamResponse:
@@ -206,6 +215,37 @@ def install() -> None:
         "homeassistant.components.webhook",
         async_register=MagicMock(name="async_register"),
         async_unregister=MagicMock(name="async_unregister"),
+    )
+    # frontend / panel_custom fakes for the settings-UI panel. Registration state
+    # is kept in ``hass.data`` so it is isolated per test (each test builds a
+    # fresh hass), unlike a module-level registry that would leak across tests.
+    _FAKE_PANELS_KEY = "_fake_frontend_panels"
+
+    def _panels(hass: Any) -> dict[str, Any]:
+        return hass.data.setdefault(_FAKE_PANELS_KEY, {})
+
+    def _async_panel_exists(hass: Any, frontend_url_path: str) -> bool:
+        return frontend_url_path in _panels(hass)
+
+    def _async_remove_panel(
+        hass: Any, frontend_url_path: str, *, warn_if_unknown: bool = True
+    ) -> None:
+        _panels(hass).pop(frontend_url_path, None)
+
+    async def _async_register_panel(
+        hass: Any, *, frontend_url_path: str, **kwargs: Any
+    ) -> None:
+        _panels(hass)[frontend_url_path] = dict(kwargs)
+
+    setmod(
+        "homeassistant.components.frontend",
+        async_panel_exists=_async_panel_exists,
+        async_remove_panel=_async_remove_panel,
+        async_register_built_in_panel=MagicMock(name="async_register_built_in_panel"),
+    )
+    setmod(
+        "homeassistant.components.panel_custom",
+        async_register_panel=_async_register_panel,
     )
     setmod(
         "homeassistant.helpers.issue_registry",

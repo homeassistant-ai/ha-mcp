@@ -55,8 +55,14 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # Imported lazily (see the import note) so the aiohttp / auth / requirements
     # chain is pulled in only when an entry is actually set up.
     from .embedded_setup import async_bring_up_server
+    from .ui_panel import async_register_ui_panel
 
     _ensure_secrets(hass, entry)
+
+    # Admin-only "Open Web UI" sidebar panel + proxy. Registered while the entry
+    # exists (its proxy returns 503 until the server is actually running), so the
+    # user sees the panel immediately and it reflects the running state.
+    await async_register_ui_panel(hass)
 
     domain_data = hass.data.setdefault(DOMAIN, {})
     # Snapshot the options so the update listener reloads only on a genuine
@@ -80,6 +86,7 @@ async def async_unload_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     down before the explicit teardown runs.
     """
     from .embedded_setup import async_teardown_server  # lazy (see import note)
+    from .ui_panel import async_unregister_ui_panel
 
     domain_data = hass.data.get(DOMAIN, {})
     task = domain_data.pop(DATA_BRINGUP_TASK, None)
@@ -89,6 +96,7 @@ async def async_unload_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
             await task
 
     await async_teardown_server(hass)
+    async_unregister_ui_panel(hass)
     domain_data.pop(DATA_LAST_OPTIONS, None)
     return True
 

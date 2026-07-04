@@ -1,7 +1,7 @@
 {
     "domain": "ha_mcp_tools",
     "name": "HA-MCP Custom Component",
-    "after_dependencies": ["hassio", "http", "cloud"],
+    "after_dependencies": ["hassio", "http", "cloud", "frontend"],
     "codeowners": ["@homeassistant-ai"],
     "config_flow": true,
     "dependencies": ["webhook"],
