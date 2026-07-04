@@ -79,6 +79,26 @@ def test_denylist_and_area_and_label_union():
     assert hidden_entity_ids(reg, cfg) == {"sensor.x", "sensor.y", "sensor.z"}
 
 
+def test_deny_hides_entity_absent_from_registry():
+    # A denied entity that has no entity-registry entry (legacy YAML / template
+    # entity present only in states) must still be hidden — deny is a literal
+    # entity_id match, not registry-gated. Only the registry-derived dimensions
+    # (category/area/label/hidden_by) require a registry entry.
+    reg = _reg({"entity_id": "sensor.registered"})
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
+    )
+    assert hidden_entity_ids(reg, cfg) == {"sensor.ghost"}
+
+
+def test_deny_applies_over_empty_registry():
+    # Empty registry list (healthy read, no entries) still honours the denylist.
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
+    )
+    assert hidden_entity_ids(_reg(), cfg) == {"sensor.ghost"}
+
+
 def test_exclude_hidden_flag():
     reg = _reg({"entity_id": "sensor.h", "hidden_by": "user"})
     cfg = VisibilityConfig(enabled=True, exclude_categories=[], exclude_hidden=True)

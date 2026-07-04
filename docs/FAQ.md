@@ -340,9 +340,9 @@ directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
 An entity is hidden when its `entity_category` is in `exclude_categories`, its
 `entity_id` is in `deny_entity_ids`, or its area/label is in `exclude_areas` /
 `exclude_labels`. Set `exclude_hidden: true` to also fold in entities already
-marked hidden in Home Assistant. `version` is managed automatically; you don't
-need to set it. The config is read live per request, so edits apply on the next
-call; a missing or invalid file leaves the filter off.
+marked hidden in Home Assistant. `version` is reserved for future use; leave it
+at `1`. The config is read live per request, so edits apply on the next call; a
+missing or invalid file leaves the filter off.
 
 ---
 

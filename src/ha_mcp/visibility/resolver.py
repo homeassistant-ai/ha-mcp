@@ -32,7 +32,13 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
     areas = set(config.exclude_areas)
     labels = set(config.exclude_labels)
 
-    hidden: set[str] = set()
+    # Seed with the explicit denylist: deny is a literal entity_id match and must
+    # hide an entity even when it has no entity-registry entry (legacy YAML /
+    # template entities live only in states, not the registry). The
+    # registry-derived dimensions below still require a registry entry. On a
+    # failed registry read the two early returns above still fail open — a
+    # transient outage is not when a denylist should suddenly start mattering.
+    hidden: set[str] = set(denied)
     entries: Any = registry_result.get("result", [])
     if not isinstance(entries, list):
         logger.warning(
@@ -47,8 +53,7 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
         if not eid:
             continue
         if eid in denied:
-            hidden.add(eid)
-            continue
+            continue  # already hidden via the seed above
         if categories and entry.get("entity_category") in categories:
             hidden.add(eid)
             continue
