@@ -42,7 +42,22 @@ _ce.OptionsFlow = _OptionsFlowBase
 _ce.ConfigFlowResult = _ConfigFlowResult
 _ce.ConfigEntry = MagicMock
 sys.modules["homeassistant.config_entries"] = _ce
-sys.modules["homeassistant.core"].callback = lambda func: func
+_core = sys.modules.get("homeassistant.core") or MagicMock()
+_core.callback = lambda func: func
+sys.modules["homeassistant.core"] = _core
+
+# Determinism under pytest-xdist: peer unit files register a MagicMock voluptuous
+# via sys.modules.setdefault, and whether that or the real package is bound is
+# import-order dependent across workers. The channel tests below inspect the REAL
+# vol.Schema markers (marker.schema / marker.default()), so evict any stub — plus
+# any cached ha_mcp_server.config_flow that may have bound it — so config_flow's
+# own ``import voluptuous`` re-binds the real package (a hard dependency, always
+# installed) regardless of worker file composition/order.
+for _name in [
+    n for n in sys.modules if n == "voluptuous" or n.startswith("voluptuous.")
+]:
+    del sys.modules[_name]
+sys.modules.pop("ha_mcp_server.config_flow", None)
 
 import ha_mcp_server.config_flow as cf  # noqa: E402
 import ha_mcp_server.const as const  # noqa: E402
