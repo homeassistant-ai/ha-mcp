@@ -190,14 +190,14 @@ HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 
-# In-process ha_mcp_server integration baked into the qcow2 for the HAOS-lane
-# embedded-server E2E (#1527). Its source lives at
-# ``homeassistant-integration/ha_mcp_server/`` and is copied into
-# ``/config/custom_components/ha_mcp_server`` by ``bake_test_state`` (mirroring
-# the ha_mcp_tools staging), together with a config entry seeded DISABLED. The
-# entry is baked disabled on purpose: enabling it triggers a multi-minute
-# runtime pip install of the fastmcp tree plus a server thread, and we only want
-# that cost on the one session that runs the embedded-server test (the
+# In-process MCP server config entry baked into the qcow2 for the HAOS-lane
+# embedded-server E2E (#1527). The in-process server is a SECOND config entry of
+# the ha_mcp_tools component (``entry_type="server"``), so no separate component
+# is copied — the ha_mcp_tools staging loop already lays down the component; this
+# only injects the server config entry, seeded DISABLED. The entry is baked
+# disabled on purpose: enabling it triggers a multi-minute runtime pip install of
+# the fastmcp tree plus a server thread, and we only want that cost on the one
+# session that runs the embedded-server test (the
 # ``tests/src/e2e/haos_only/test_embedded_server_haos.py`` fixture enables it via
 # the ``config_entries/disable`` WS command). The ``pip_spec`` is a placeholder
 # here; the conftest HAOS branch overwrites it with a ``file://`` URL to a wheel
@@ -207,7 +207,10 @@ HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 # (same manual-sync arrangement as HA_MCP_TEST_SECRET_PATH above); a cross-
 # package import here would pull the qemu/websockets test runtime into the
 # standalone build script.
-HA_MCP_SERVER_DOMAIN = "ha_mcp_server"
+HA_MCP_SERVER_DOMAIN = "ha_mcp_tools"
+# unique_id of the single-instance server entry (config_flow's _SERVER_UNIQUE_ID),
+# distinct from the tools entry's unique_id so both coexist under one domain.
+HA_MCP_SERVER_UNIQUE_ID = "ha_mcp_tools-server"
 HA_MCP_SERVER_ENTRY_ID = "e2e_test_ha_mcp_server_entry"
 HA_MCP_SERVER_WEBHOOK_ID = "mcp_e2e_ha_mcp_server_haos"
 HA_MCP_SERVER_SECRET_PATH = "/private_e2e_ha_mcp_server_haos"
@@ -1611,36 +1614,19 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
     )
 
 
-def _stage_embedded_server_integration(
-    repo_root: Path, staging: Path, cc_dir: Path
-) -> None:
-    """Stage the ha_mcp_server integration + a DISABLED config entry into ``staging``.
+def _stage_embedded_server_integration(staging: Path) -> None:
+    """Inject a DISABLED in-process server config entry into ``staging``.
 
-    Copies ``homeassistant-integration/ha_mcp_server`` into
-    ``custom_components/ha_mcp_server`` (so a real HA finds it on boot) and
-    injects a config entry seeded with the webhook id / secret / options the
-    HAOS embedded-server E2E addresses. The entry is ``disabled_by="user"`` so
-    the multi-minute server bring-up only fires when the test enables it — every
+    The ha_mcp_tools component is already staged by ``bake_test_state``'s loop;
+    the in-process server is a SECOND config entry of that component
+    (``entry_type="server"``), so nothing is copied here — this only seeds the
+    server config entry with the webhook id / secret / options the HAOS
+    embedded-server E2E addresses. The entry is ``disabled_by="user"`` so the
+    multi-minute server bring-up only fires when the test enables it — every
     other HAOS session boots with the entry present but inert. The ``pip_spec``
     is a placeholder; the conftest HAOS branch rewrites it to a ``file://`` wheel
     built from the checkout before boot.
     """
-    src = repo_root / "homeassistant-integration" / HA_MCP_SERVER_DOMAIN
-    if not src.exists():
-        raise RuntimeError(
-            f"ha_mcp_server integration source missing: {src} — checkout is "
-            f"incomplete; the image cannot be built."
-        )
-    dest = cc_dir / HA_MCP_SERVER_DOMAIN
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__"))
-    LOG.info(
-        "Staged custom component %s ← homeassistant-integration/%s (disabled entry)",
-        HA_MCP_SERVER_DOMAIN,
-        HA_MCP_SERVER_DOMAIN,
-    )
-
     ce_path = staging / ".storage" / "core.config_entries"
     ce_data = json.loads(ce_path.read_text())
     # Same shape guard the loop above uses — a malformed file here would wipe
@@ -1655,14 +1641,17 @@ def _stage_embedded_server_integration(
             f"dict with data.entries list; HA storage schema may have bumped."
         )
     entries = ce_data["data"]["entries"]
-    if not any(e.get("domain") == HA_MCP_SERVER_DOMAIN for e in entries):
+    # Dedupe by entry_id, not domain: the domain (ha_mcp_tools) is shared with
+    # the tools services entry the staging loop injects.
+    if not any(e.get("entry_id") == HA_MCP_SERVER_ENTRY_ID for e in entries):
         entries.append(
             {
                 "created_at": "2025-09-07T23:56:28.040744+00:00",
-                # entry.data carries the stable ids/secrets the test addresses;
-                # the integration's _ensure_secrets keeps them because they are
-                # already present.
+                # entry.data carries the entry-type discriminator plus the stable
+                # ids/secrets the test addresses; the component's _ensure_secrets
+                # keeps the secrets because they are already present.
                 "data": {
+                    "entry_type": "server",
                     "webhook_id": HA_MCP_SERVER_WEBHOOK_ID,
                     "secret_path": HA_MCP_SERVER_SECRET_PATH,
                 },
@@ -1688,13 +1677,16 @@ def _stage_embedded_server_integration(
                 "pref_disable_polling": False,
                 "source": "import",
                 "subentries": [],
-                "title": "Home Assistant MCP Server",
-                "unique_id": HA_MCP_SERVER_DOMAIN,
+                "title": "In-process MCP server",
+                "unique_id": HA_MCP_SERVER_UNIQUE_ID,
                 "version": 1,
             }
         )
         ce_path.write_text(json.dumps(ce_data, indent=2))
-        LOG.info("Injected DISABLED config entry for %s", HA_MCP_SERVER_DOMAIN)
+        LOG.info(
+            "Injected DISABLED in-process server config entry (%s)",
+            HA_MCP_SERVER_ENTRY_ID,
+        )
 
 
 def bake_test_state(qcow2: Path) -> None:
@@ -1708,8 +1700,9 @@ def bake_test_state(qcow2: Path) -> None:
     their config entries — the testcontainer dispatch installs them
     dynamically via _install_custom_component, but on HAOS we bake them
     directly into the image at this step so HA Core finds them on first
-    boot. The in-process ha_mcp_server integration (#1527) is staged the same
-    way via ``_stage_embedded_server_integration``, but with a DISABLED entry.
+    boot. The in-process MCP server (#1527) is a second config entry of the
+    ha_mcp_tools component, injected DISABLED via
+    ``_stage_embedded_server_integration`` (no separate component to copy).
     """
     repo_root = Path(__file__).resolve().parent.parent.parent
     tests_dir = repo_root / "tests"
@@ -1804,14 +1797,11 @@ def bake_test_state(qcow2: Path) -> None:
                 ce_path.write_text(json.dumps(ce_data, indent=2))
                 LOG.info("Injected config entry for %s", domain)
 
-        # In-process ha_mcp_server integration (#1527): staged like the two
-        # components above but with a tailored, DISABLED config entry. The
-        # source lives outside custom_components/ (at
-        # homeassistant-integration/ha_mcp_server) so HACS resolves this repo's
-        # listing via ha_mcp_tools rather than hijacking it; the bake copies it
-        # into /config/custom_components/ha_mcp_server so a real HA finds it on
-        # boot. See the HA_MCP_SERVER_* constants for why the entry is disabled.
-        _stage_embedded_server_integration(repo_root, staging, cc_dir)
+        # In-process MCP server (#1527): a SECOND config entry of the ha_mcp_tools
+        # component staged in the loop above (entry_type="server"), seeded with a
+        # tailored, DISABLED entry — no separate component to copy. See the
+        # HA_MCP_SERVER_* constants for why the entry is disabled.
+        _stage_embedded_server_integration(staging)
 
         # mcp_proxy reads target_url + webhook_id from this file on setup —
         # the testcontainer dispatch writes the same JSON before container

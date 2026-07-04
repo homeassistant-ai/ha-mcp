@@ -1,4 +1,4 @@
-"""HAOS-lane E2E for the in-process ha_mcp_server integration (issue #1527).
+"""HAOS-lane E2E for the in-process MCP server entry (issue #1527).
 
 The testcontainer embedded-server test
 (``tests/src/e2e/workflows/embedded/test_embedded_server.py``, ``@container_only``)
@@ -21,7 +21,7 @@ broken and that the container lane cannot reach —
   the in-process server defaults to 9584, so the two coexist — this module
   asserts both respond.
 
-How the entry gets here: the bake seeds a DISABLED ``ha_mcp_server`` config entry
+How the entry gets here: the bake seeds a DISABLED in-process server config entry
 into the qcow2 (``build_image._stage_embedded_server_integration``) and the
 conftest HAOS branch delivers a wheel built from the checkout into ``/config`` +
 rewrites the entry's ``pip_spec`` to it
@@ -140,7 +140,7 @@ def _initialize(base_url: str) -> tuple[bool, str | None]:
 def embedded_server(
     ha_container_with_fresh_config: dict[str, Any],
 ) -> Iterator[tuple[str, str | None, dict[str, Any]]]:
-    """Enable the baked ha_mcp_server entry and wait for its webhook to answer.
+    """Enable the baked in-process server entry and wait for its webhook to answer.
 
     Yields ``(base_url, session_id, container_info)`` once the in-process server
     has installed itself, started, and registered its ingress webhook.
@@ -177,7 +177,7 @@ def embedded_server(
         # install/start failed" without digging through the diagnostics artifact.
         staging = read_embedded_staging_status()
         raise AssertionError(
-            "The in-process ha_mcp_server did not become reachable via its "
+            "The in-process in-process MCP server did not become reachable via its "
             f"webhook within {_READY_TIMEOUT_S}s of enabling {HA_MCP_SERVER_ENTRY_ID}. "
             f"Wheel-staging status for this worker: {staging}. "
             "If staging ok=True, the runtime pip install of the fastmcp tree or "

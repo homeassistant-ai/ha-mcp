@@ -63,7 +63,7 @@ async def mcp_client_with_yaml_config(
 
     When ``mcp_server`` is None the server runs out-of-process — the inaddon HAOS
     addon (started with ENABLE_YAML_CONFIG_EDITING=true via Supervisor options) or
-    the embedded backend's in-process ha_mcp_server (with the flag in its
+    the embedded backend's in-process MCP server (with the flag in its
     feature_flags.json override). In both, the session ``mcp_client`` already
     speaks HTTP to that server, so yield it directly instead of wrapping
     ``mcp_server.mcp`` (which would be None).

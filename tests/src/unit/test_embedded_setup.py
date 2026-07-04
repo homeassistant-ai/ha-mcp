@@ -1,4 +1,4 @@
-"""Unit tests for the ha_mcp_server bring-up orchestration (issue #1527).
+"""Unit tests for the in-process server bring-up orchestration (issue #1527).
 
 ``embedded_setup`` is the glue between the server manager and the webhook ingress:
 the background bring-up sequence, repair issues on failure (Home Assistant must
@@ -7,7 +7,7 @@ removal. The integration is always-on — the config entry existing means the
 server runs — so there is no enable/disable gate here.
 
 Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (which also puts
-homeassistant-integration/ on sys.path). The server manager and webhook
+the component package on sys.path). The server manager and webhook
 register/unregister functions are patched so these tests exercise only the
 orchestration decisions.
 """
@@ -25,13 +25,13 @@ from ._embedded_stubs import install
 
 install()
 
-import ha_mcp_server.embedded_setup as esetup  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
 
 # Captured before any test patches it so the connect-URL tests can restore the
 # real implementation regardless of the module-level spy.
 _REAL_SURFACE_CONNECT_URLS = esetup._surface_connect_urls
 
-from ha_mcp_server.const import (  # noqa: E402
+from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_MANAGER,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,

@@ -87,17 +87,21 @@ HAOS_IMAGE_ENV = "HAOS_TEST_IMAGE_PATH"
 # into the test runtime path.
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 
-# In-process ha_mcp_server integration constants (#1527). The bake seeds a
-# DISABLED config entry with these ids into the qcow2's
-# .storage/core.config_entries (build_image._stage_embedded_server_integration);
-# stage_embedded_server_wheel_in_qcow2 below delivers a checkout-built wheel and
-# rewrites the entry's pip_spec to point at it, and the HAOS embedded-server E2E
+# In-process MCP server config-entry constants (#1527). The in-process server is
+# a SECOND config entry of the ha_mcp_tools component (``entry_type="server"``);
+# the bake seeds it DISABLED into the qcow2's .storage/core.config_entries
+# (build_image._stage_embedded_server_integration); stage_embedded_server_wheel_in_qcow2
+# below delivers a checkout-built wheel and rewrites the entry's pip_spec to point
+# at it, and the HAOS embedded-server E2E
 # (tests/src/e2e/haos_only/test_embedded_server_haos.py) enables the entry then
 # drives the webhook. These MUST stay in sync with the copies in
 # tests/haos_image_build/build_image.py (kept manually, like
 # HA_MCP_TEST_SECRET_PATH — a cross-package import would pull the qemu build
 # deps into the test runtime path).
-HA_MCP_SERVER_DOMAIN = "ha_mcp_server"
+HA_MCP_SERVER_DOMAIN = "ha_mcp_tools"
+# unique_id of the single-instance server entry (config_flow's _SERVER_UNIQUE_ID),
+# distinct from the tools entry's unique_id so both coexist under one domain.
+HA_MCP_SERVER_UNIQUE_ID = "ha_mcp_tools-server"
 HA_MCP_SERVER_ENTRY_ID = "e2e_test_ha_mcp_server_entry"
 HA_MCP_SERVER_WEBHOOK_ID = "mcp_e2e_ha_mcp_server_haos"
 HA_MCP_SERVER_SECRET_PATH = "/private_e2e_ha_mcp_server_haos"
@@ -260,7 +264,7 @@ def is_haos_embedded_mode() -> bool:
     """True iff this run targets the embedded-server HAOS tier (#1527).
 
     The embedded mode points ``mcp_client`` at the baked in-process
-    ``ha_mcp_server`` integration's ingress webhook inside the booted HAOS
+    in-process MCP server's ingress webhook inside the booted HAOS
     (``/api/webhook/<HA_MCP_SERVER_WEBHOOK_ID>``) instead of an external
     in-process FastMCP server (external mode) or the dev add-on's HTTP MCP
     endpoint (inaddon mode). The session fixture enables the baked-disabled
@@ -670,14 +674,16 @@ def _build_embedded_server_wheel(dest_dir: Path) -> Path:
 def _set_embedded_server_pip_spec(
     config_entries_doc: dict[str, Any], pip_spec: str
 ) -> bool:
-    """Point the baked ha_mcp_server entry's ``options.pip_spec`` at ``pip_spec``.
+    """Point the baked server entry's ``options.pip_spec`` at ``pip_spec``.
 
     Mutates ``config_entries_doc`` (a parsed ``.storage/core.config_entries``)
-    in place. Returns True if the ha_mcp_server entry was found and patched,
-    False if the document has none (doc left untouched).
+    in place. Matches by entry_id, not domain: the domain (ha_mcp_tools) is
+    shared with the tools services entry, so only the entry_id uniquely
+    identifies the in-process server entry. Returns True if it was found and
+    patched, False if the document has none (doc left untouched).
     """
     for entry in config_entries_doc.get("data", {}).get("entries", []):
-        if entry.get("domain") == HA_MCP_SERVER_DOMAIN:
+        if entry.get("entry_id") == HA_MCP_SERVER_ENTRY_ID:
             entry.setdefault("options", {})["pip_spec"] = pip_spec
             return True
     return False
@@ -716,7 +722,7 @@ def _write_embedded_staging_status(ok: bool, detail: str) -> None:
 
 
 def read_embedded_staging_status() -> dict[str, Any] | None:
-    """Return this worker's ha_mcp_server wheel-staging outcome, or None if unset."""
+    """Return this worker's in-process server wheel-staging outcome, or None if unset."""
     try:
         return json.loads(_embedded_staging_status_path().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -728,7 +734,7 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
 
     Builds a ``--no-deps`` ha-mcp wheel from the working tree, copies it into the
     qcow2's ``/config`` (``/supervisor/homeassistant``), and rewrites the baked
-    ha_mcp_server config entry's ``options.pip_spec`` to a ``file://`` URL
+    in-process server config entry's ``options.pip_spec`` to a ``file://`` URL
     pointing at it — so when the HAOS embedded-server test enables the entry, the
     in-process server installs from the PR's own source (checkout fidelity for
     the ``src/ha_mcp`` embedded-mode routing under test) rather than PyPI. Runs
@@ -761,7 +767,7 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
             )
             LOG.warning(
                 "Could not build the ha-mcp wheel for the embedded HAOS test "
-                "(%s) — the ha_mcp_server entry keeps its placeholder pip_spec; "
+                "(%s) — the in-process server entry keeps its placeholder pip_spec; "
                 "the embedded-server test will fail on bring-up, rest of the "
                 "suite is unaffected",
                 detail,
@@ -797,7 +803,7 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
             pip_spec = f"ha-mcp @ file:///config/{wheel.name}"
             if not _set_embedded_server_pip_spec(doc, pip_spec):
                 detail = (
-                    "no ha_mcp_server config entry in the image — the bake may "
+                    "no in-process server config entry in the image — the bake may "
                     "not have seeded it (check build_image.bake_test_state)"
                 )
                 LOG.warning("%s; the embedded-server test will fail", detail)
@@ -853,13 +859,13 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
 
 # HA config dir inside the qcow2 (``/config`` on HAOS) and the in-process
 # server's data subdir under it. Mirrors the integration's
-# ``const.SERVER_CONFIG_SUBDIR`` (".ha_mcp_server"): the integration hands
-# ha_mcp ``HA_MCP_CONFIG_DIR=<config>/.ha_mcp_server`` and ha_mcp.config reads
+# ``const.SERVER_CONFIG_SUBDIR`` (".ha_mcp"): the integration hands
+# ha_mcp ``HA_MCP_CONFIG_DIR=<config>/.ha_mcp`` and ha_mcp.config reads
 # its ``feature_flags.json`` override from there. Hardcoded here for the same
 # reason the storage paths above are (no cross-package import into the build/test
 # runtime); kept in step with the container backend's ``_EMBEDDED_SERVER_CONFIG_SUBDIR``.
 _HAOS_CONFIG_DIR = "/supervisor/homeassistant"
-_HAOS_EMBEDDED_SERVER_DATA_DIR = f"{_HAOS_CONFIG_DIR}/.ha_mcp_server"
+_HAOS_EMBEDDED_SERVER_DATA_DIR = f"{_HAOS_CONFIG_DIR}/.ha_mcp"
 
 
 def stage_embedded_server_feature_flags_in_qcow2(
@@ -868,12 +874,12 @@ def stage_embedded_server_feature_flags_in_qcow2(
     """Write the in-process server's feature-flag override into the qcow2 (#1527).
 
     Only the ``haos_embedded`` lane calls this. On that lane the WHOLE E2E suite
-    runs through the in-process ha_mcp_server, so it needs the same feature flags
+    runs through the in-process MCP server, so it needs the same feature flags
     the container ``embedded`` backend injects (yaml-config editing, filesystem
     tools, custom-component integration, …). The container backend delivers those
     as pytest-process env vars for its in-process server; the HAOS embedded server
     runs inside the core container and can't read that env, so the equivalent
-    values go to ``<config>/.ha_mcp_server/feature_flags.json`` — the override
+    values go to ``<config>/.ha_mcp/feature_flags.json`` — the override
     layer ``ha_mcp.config`` reads in a standalone deployment. The server is
     standalone here (``is_running_in_addon()`` is False in embedded mode despite
     ``SUPERVISOR_TOKEN`` in the core env), so the file is honored rather than
@@ -953,7 +959,7 @@ def enable_config_entry(
     Sending ``config_entries/disable`` with ``disabled_by=null`` is exactly how
     the HA frontend re-enables an entry: it clears the disabled flag and sets the
     entry up (calling ``async_setup_entry``). Used by the HAOS embedded-server
-    E2E to turn on the baked-disabled ha_mcp_server entry so only that test's
+    E2E to turn on the baked-disabled in-process server entry so only that test's
     session pays the server bring-up cost. Raises on a WS-level failure (e.g. an
     unknown entry id) so the test surfaces a clear cause instead of a downstream
     webhook timeout.

@@ -76,7 +76,7 @@ async def mcp_client_with_filesystem(
 
     When ``mcp_server`` is None the server runs out-of-process — the inaddon HAOS
     addon (started with HAMCP_ENABLE_FILESYSTEM_TOOLS=true via the Supervisor
-    options dict) or the embedded backend's in-process ha_mcp_server (with the flag
+    options dict) or the embedded backend's in-process MCP server (with the flag
     set in its feature_flags.json override). In both, the session-scope
     ``mcp_client`` already speaks HTTP to that server, so yield it directly instead
     of building a new in-memory one around ``mcp_server.mcp`` (which would be None).

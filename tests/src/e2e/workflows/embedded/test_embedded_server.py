@@ -1,7 +1,7 @@
-"""End-to-end test for the in-process ha_mcp_server integration (issue #1527).
+"""End-to-end test for the in-process MCP server entry (issue #1527).
 
 Proves the whole install method for real, in a throwaway Home Assistant Core
-container: the ha_mcp_server integration is installed, its config entry is seeded
+container: the in-process MCP server entry is installed, its config entry is seeded
 (with a locally-built ha-mcp wheel as the pip spec), HA schedules the background
 bring-up which runtime-installs the server package, starts the FastMCP server on
 its worker thread, and registers the ingress webhook. The test then drives the
@@ -23,7 +23,7 @@ Strategy notes:
   with a generous timeout (minutes).
 - The entry-driven pip path and every unit of the webhook / manager / flow logic
   are covered hermetically in tests/src/unit/test_{embedded_server,mcp_webhook,
-  embedded_setup,config_flow_ha_mcp_server,ha_mcp_server_entry}.py; this test is
+  embedded_setup,config_flow,ha_mcp_server_entry}.py; this test is
   the real-container proof of the mechanism end to end.
 """
 
@@ -44,7 +44,7 @@ from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 
 from ...utilities.streamable_http import parse_mcp_response
 
-# ``not_on_embedded``: this test boots its OWN dedicated ha_mcp_server container to
+# ``not_on_embedded``: this test boots its OWN dedicated in-process MCP server container to
 # prove the install method end to end. The embedded backend (E2E_BACKEND=embedded)
 # already exercises that exact path as its session backend for every test in the
 # suite, so running this here would redundantly repeat a full container boot + pip
@@ -56,7 +56,9 @@ pytestmark = [
     pytest.mark.not_on_embedded,
 ]
 
-_DOMAIN = "ha_mcp_server"
+_DOMAIN = "ha_mcp_tools"
+# unique_id of the single-instance server entry (config_flow's _SERVER_UNIQUE_ID).
+_UNIQUE_ID = "ha_mcp_tools-server"
 _ENTRY_ID = "e2e_test_ha_mcp_server_entry"
 # Stable, known secrets seeded into entry.data so the test knows the webhook URL
 # up front (otherwise async_setup_entry would generate them and the test could
@@ -71,7 +73,7 @@ _READY_POLL_S = 5
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _INITIAL_STATE = _REPO_ROOT / "tests" / "initial_test_state"
-_INTEGRATION_SRC = _REPO_ROOT / "homeassistant-integration" / "ha_mcp_server"
+_INTEGRATION_SRC = _REPO_ROOT / "custom_components" / "ha_mcp_tools"
 
 
 def _docker_available() -> bool:
@@ -123,6 +125,7 @@ def _seed_config(config_path: Path, wheel_name: str) -> None:
         {
             "created_at": "2025-09-07T23:56:28.040744+00:00",
             "data": {
+                "entry_type": "server",
                 "webhook_id": _WEBHOOK_ID,
                 "secret_path": _SECRET_PATH,
             },
@@ -143,8 +146,8 @@ def _seed_config(config_path: Path, wheel_name: str) -> None:
             "pref_disable_polling": False,
             "source": "import",
             "subentries": [],
-            "title": "Home Assistant MCP Server",
-            "unique_id": _DOMAIN,
+            "title": "In-process MCP server",
+            "unique_id": _UNIQUE_ID,
             "version": 1,
         }
     )
@@ -232,7 +235,7 @@ def _initialize(base_url: str) -> tuple[bool, str | None]:
 
 @pytest.fixture(scope="module")
 def embedded_ha():
-    """Boot a dedicated HA container running the ha_mcp_server integration.
+    """Boot a dedicated HA container running the in-process MCP server entry.
 
     Yields ``(base_url, session_id)`` once the in-process MCP server has installed
     itself, started, and registered its ingress webhook.
@@ -291,7 +294,7 @@ def embedded_ha():
         if not ready:
             logs = container.get_logs()
             raise AssertionError(
-                "ha_mcp_server did not become reachable via its webhook within "
+                "in-process MCP server did not become reachable via its webhook within "
                 f"{_READY_TIMEOUT_S}s. Container logs:\n{logs}"
             )
         yield base_url, session_id

@@ -12,7 +12,7 @@ reads to choose a backend:
 
 The testcontainer ``embedded`` backend (#1527) is a fourth variant selected by a
 separate axis, ``E2E_BACKEND=embedded`` (not ``HAOS_TEST_MODE``): same container
-HA, but the server-under-test is the in-process ha_mcp_server integration inside
+HA, but the server-under-test is the in-process MCP server entry inside
 the container.
 
 Three layers of guard, each catching a different silent-failure mode:
@@ -86,9 +86,9 @@ _SKIP_CEILING_PER_LANE = {
     # Baselines are the observed skip counts as of 2026-05-22 (container=46,
     # haos=14, haos_inaddon=39 from the prose above), plus this PR's new
     # marker-gated skips, plus a 5-9 growth buffer.
-    "container": 71,  # was 68; +3 in-process ha_mcp_server HAOS tests (haos_only/test_embedded_server_haos.py, skip on the container lane)
-    "haos": 37,  # was 35; +2 in-process ha_mcp_server tests (workflows/embedded, @container_only, run on the container lane only). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
-    "haos_inaddon": 59,  # was 58; +1 net from the in-process ha_mcp_server tests (workflows/embedded, @container_only; observed lane count). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
+    "container": 71,  # was 68; +3 in-process MCP server HAOS tests (haos_only/test_embedded_server_haos.py, skip on the container lane)
+    "haos": 37,  # was 35; +2 in-process MCP server tests (workflows/embedded, @container_only, run on the container lane only). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
+    "haos_inaddon": 59,  # was 58; +1 net from the in-process MCP server tests (workflows/embedded, @container_only; observed lane count). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -159,13 +159,13 @@ def test_backend_dispatch_matches_workflow_env(
         assert ha_container_with_fresh_config["config_path"] is None
     elif image_path and mode == "embedded":
         # haos_embedded (#1527): a HAOS backend whose server-under-test is the
-        # baked in-process ha_mcp_server, driven over its ingress webhook on the
+        # baked in-process MCP server, driven over its ingress webhook on the
         # booted VM. Container keys are None (HAOS path); addon_mcp_url is None
         # (not the addon path); embedded_webhook_url is the connect URL.
         assert backend == "haos_embedded", (
             f"Workflow set HAOS_TEST_IMAGE_PATH + HAOS_TEST_MODE=embedded "
             f"but dispatch picked backend={backend!r}. The in-process "
-            f"ha_mcp_server is NOT the server-under-test for this run."
+            f"the in-process MCP server is NOT the server-under-test for this run."
         )
         assert ha_container_with_fresh_config["container"] is None
         assert ha_container_with_fresh_config["port"] is None
@@ -189,13 +189,13 @@ def test_backend_dispatch_matches_workflow_env(
         assert ha_container_with_fresh_config["addon_mcp_url"] is None
     elif os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded":
         # Embedded backend (#1527): a testcontainer variant (no HAOS env) whose
-        # server-under-test is the in-process ha_mcp_server integration inside the
+        # server-under-test is the in-process MCP server entry inside the
         # same container. It reuses the whole testcontainer path, so container /
         # port / config_path are populated exactly like the container backend, but
         # it exposes the ingress webhook URL that mcp_client connects to.
         assert backend == "embedded", (
             f"E2E_BACKEND=embedded set but dispatch picked backend={backend!r}. "
-            f"The in-process ha_mcp_server integration is NOT the server-under-test "
+            f"The in-process MCP server entry is NOT the server-under-test "
             f"for this run."
         )
         assert ha_container_with_fresh_config["container"] is not None

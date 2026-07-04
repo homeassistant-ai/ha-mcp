@@ -19,14 +19,14 @@ import pytest
 
 from ._embedded_stubs import FakeSession, FakeUpstream, install, make_request
 
-# Install the HA / aiohttp sys.modules stubs and put homeassistant-integration/
-# on sys.path BEFORE importing the integration modules below. This statement is
-# also an isort barrier so the component imports are never reordered above it
-# (which would import mcp_webhook before the stubs exist).
+# Install the HA / aiohttp sys.modules stubs BEFORE importing the component
+# modules below. This statement is also an isort barrier so the component imports
+# are never reordered above it (which would import mcp_webhook before the stubs
+# exist).
 install()
 
-import ha_mcp_server.mcp_webhook as mw  # noqa: E402
-from ha_mcp_server.const import (  # noqa: E402
+import custom_components.ha_mcp_tools.mcp_webhook as mw  # noqa: E402
+from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_WEBHOOK,
     DATA_WEBHOOK_ID,
     DOMAIN,
@@ -283,7 +283,7 @@ class TestHaAuthGate:
         request.read.assert_not_awaited()  # short-circuited before read
         www = resp.headers["WWW-Authenticate"]
         assert www.startswith("Bearer realm=")
-        assert 'realm="Home Assistant MCP Server"' in www
+        assert 'realm="HA-MCP"' in www
         assert (
             f'resource_metadata="https://example.nabu.casa{OAUTH_BASE}/protected-resource"'
             in www

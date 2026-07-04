@@ -1,13 +1,17 @@
-"""Unit tests for the ha_mcp_server entry-point wiring (issue #1527).
+"""Unit tests for the in-process server entry-point wiring (issue #1527).
 
-``__init__`` is intentionally thin: generate the stable secrets, schedule the
-bring-up as a config-entry background task (so a minutes-long first pip install
-never stalls HA startup), reload only on a genuine options change, tear down on
-unload, and revoke credentials on removal. The bring-up / teardown themselves
-live in ``embedded_setup`` and are patched here.
+``embedded_entry`` is intentionally thin: generate the stable secrets, schedule
+the bring-up as a config-entry background task (so a minutes-long first pip
+install never stalls HA startup), reload only on a genuine options change, tear
+down on unload, and revoke credentials on removal. The bring-up / teardown
+themselves live in ``embedded_setup`` and are patched here.
 
-Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (which also puts
-homeassistant-integration/ on sys.path).
+The domain dispatcher in the package ``__init__`` routes the two entry types
+(``tools`` / ``server``, discriminated by ``entry.data[entry_type]``, missing =
+``tools``) to their respective setup/unload/remove functions — exercised by
+``TestDomainDispatch`` below.
+
+Home Assistant / aiohttp are stubbed via ``_embedded_stubs``.
 """
 
 from __future__ import annotations
@@ -21,14 +25,18 @@ from ._embedded_stubs import install
 
 install()
 
-import ha_mcp_server as pkg  # noqa: E402
-import ha_mcp_server.embedded_setup as esetup  # noqa: E402
-from ha_mcp_server.const import (  # noqa: E402
+import custom_components.ha_mcp_tools as component  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_entry as pkg  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
+from custom_components.ha_mcp_tools.const import (  # noqa: E402
+    CONF_ENTRY_TYPE,
     DATA_BRINGUP_TASK,
     DATA_LAST_OPTIONS,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
     DOMAIN,
+    ENTRY_TYPE_SERVER,
+    ENTRY_TYPE_TOOLS,
 )
 
 
@@ -92,7 +100,7 @@ class TestSetupEntry:
         hass = _make_hass()
         entry = _make_entry(options={"server_port": 9584})
 
-        result = await pkg.async_setup_entry(hass, entry)
+        result = await pkg.async_setup_server_entry(hass, entry)
 
         assert result is True
         # Secrets generated (entry.data was empty).
@@ -116,7 +124,7 @@ class TestUnloadEntry:
         pending = loop.create_future()  # a still-running bring-up task
         hass.data[DOMAIN] = {DATA_BRINGUP_TASK: pending, DATA_LAST_OPTIONS: {}}
 
-        result = await pkg.async_unload_entry(hass, entry)
+        result = await pkg.async_unload_server_entry(hass, entry)
 
         assert result is True
         assert pending.cancelled()
@@ -132,7 +140,7 @@ class TestUnloadEntry:
         done.set_result(None)
         hass.data[DOMAIN] = {DATA_BRINGUP_TASK: done, DATA_LAST_OPTIONS: {}}
 
-        result = await pkg.async_unload_entry(hass, entry)
+        result = await pkg.async_unload_server_entry(hass, entry)
         assert result is True
         assert not done.cancelled()
         esetup.async_teardown_server.assert_awaited_once()
@@ -142,7 +150,7 @@ class TestRemoveEntry:
     async def test_revokes_credentials(self):
         hass = _make_hass()
         entry = _make_entry()
-        await pkg.async_remove_entry(hass, entry)
+        await pkg.async_remove_server_entry(hass, entry)
         esetup.async_revoke_credentials_on_remove.assert_awaited_once_with(hass, entry)
 
 
@@ -164,3 +172,70 @@ class TestOptionsUpdatedListener:
 
         await pkg._async_options_updated(hass, entry)
         hass.config_entries.async_reload.assert_not_awaited()
+
+
+class TestDomainDispatch:
+    """The package ``__init__`` dispatcher routes on ``entry.data[entry_type]``.
+
+    Both entry types live under one domain; the server functions are lazy-imported
+    from ``embedded_entry`` inside each dispatcher, so they are patched on that
+    module (``pkg``). The tools functions are patched on the package.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _patch_dispatch_targets(self, monkeypatch):
+        monkeypatch.setattr(
+            component, "_async_setup_tools_entry", AsyncMock(return_value=True)
+        )
+        monkeypatch.setattr(
+            component, "_async_unload_tools_entry", AsyncMock(return_value=True)
+        )
+        monkeypatch.setattr(
+            pkg, "async_setup_server_entry", AsyncMock(return_value=True)
+        )
+        monkeypatch.setattr(
+            pkg, "async_unload_server_entry", AsyncMock(return_value=True)
+        )
+        monkeypatch.setattr(pkg, "async_remove_server_entry", AsyncMock())
+
+    async def test_server_entry_setup_routes_to_server(self):
+        entry = _make_entry(data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER})
+        assert await component.async_setup_entry(_make_hass(), entry) is True
+        pkg.async_setup_server_entry.assert_awaited_once()
+        component._async_setup_tools_entry.assert_not_awaited()
+
+    async def test_missing_entry_type_setup_defaults_to_tools(self):
+        # Pre-existing services entries carry no entry_type key — they must route
+        # to the tools setup, never the server setup, with no migration.
+        entry = _make_entry(data={})
+        assert await component.async_setup_entry(_make_hass(), entry) is True
+        component._async_setup_tools_entry.assert_awaited_once()
+        pkg.async_setup_server_entry.assert_not_awaited()
+
+    async def test_explicit_tools_entry_setup_routes_to_tools(self):
+        entry = _make_entry(data={CONF_ENTRY_TYPE: ENTRY_TYPE_TOOLS})
+        assert await component.async_setup_entry(_make_hass(), entry) is True
+        component._async_setup_tools_entry.assert_awaited_once()
+        pkg.async_setup_server_entry.assert_not_awaited()
+
+    async def test_server_entry_unload_routes_to_server(self):
+        entry = _make_entry(data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER})
+        assert await component.async_unload_entry(_make_hass(), entry) is True
+        pkg.async_unload_server_entry.assert_awaited_once()
+        component._async_unload_tools_entry.assert_not_awaited()
+
+    async def test_missing_entry_type_unload_defaults_to_tools(self):
+        entry = _make_entry(data={})
+        assert await component.async_unload_entry(_make_hass(), entry) is True
+        component._async_unload_tools_entry.assert_awaited_once()
+        pkg.async_unload_server_entry.assert_not_awaited()
+
+    async def test_server_entry_remove_revokes(self):
+        entry = _make_entry(data={CONF_ENTRY_TYPE: ENTRY_TYPE_SERVER})
+        await component.async_remove_entry(_make_hass(), entry)
+        pkg.async_remove_server_entry.assert_awaited_once()
+
+    async def test_tools_entry_remove_is_noop(self):
+        entry = _make_entry(data={})
+        await component.async_remove_entry(_make_hass(), entry)
+        pkg.async_remove_server_entry.assert_not_awaited()

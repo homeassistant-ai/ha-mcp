@@ -9,9 +9,10 @@ extending the ``sys.modules``-stub approach already used by
 issue-registry / aiohttp modules the embedded server and webhook ingress need.
 
 Import this module **before** importing any ``custom_components.ha_mcp_tools.*``
-module. Installation is idempotent, so several test files can import it and share
-one stable set of fakes (the fakes are bound into the component modules'
-namespaces at their first import and must not be swapped afterwards).
+embedded module (``embedded_server`` / ``mcp_webhook`` / ``embedded_setup`` /
+``embedded_entry``). Installation is idempotent, so several test files can import
+it and share one stable set of fakes (the fakes are bound into the component
+modules' namespaces at their first import and must not be swapped afterwards).
 
 The fakes are deliberately small — real exception/base classes where the code
 depends on ``except``/``class`` semantics, and attribute-recording stand-ins for
@@ -21,20 +22,15 @@ chunks without a real event loop.
 
 from __future__ import annotations
 
-import pathlib
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-# The ha_mcp_server integration lives at homeassistant-integration/ha_mcp_server/
-# (outside custom_components/, to avoid hijacking the HACS listing), so it is not
-# importable as custom_components.*. Put that directory on sys.path once so tests
-# can ``import ha_mcp_server.<module>`` — the file-path route the webhook-proxy
-# tests use for the same out-of-tree situation.
-_INTEGRATION_DIR = (
-    pathlib.Path(__file__).resolve().parents[3] / "homeassistant-integration"
-)
+# The embedded server modules now live inside the ha_mcp_tools component
+# (``custom_components/ha_mcp_tools/``), importable as
+# ``custom_components.ha_mcp_tools.*`` exactly like the rest of the component's
+# unit suites — no extra sys.path entry needed.
 
 # ---------------------------------------------------------------------------
 # Real classes the component code depends on structurally
@@ -161,9 +157,6 @@ def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
-
-    if str(_INTEGRATION_DIR) not in sys.path:
-        sys.path.insert(0, str(_INTEGRATION_DIR))
 
     def setmod(name: str, **attrs: Any) -> ModuleType:
         mod = ModuleType(name)

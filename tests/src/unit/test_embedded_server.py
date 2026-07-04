@@ -21,13 +21,13 @@ import pytest
 
 from ._embedded_stubs import RequirementsNotFound, install
 
-# Install stubs + put homeassistant-integration/ on sys.path before importing the
+# Install stubs + put the component package on sys.path before importing the
 # integration modules below. Also an isort barrier so the imports below are never
 # reordered above it (which would import embedded_server before the stubs exist).
 install()
 
-import ha_mcp_server.embedded_server as es  # noqa: E402
-from ha_mcp_server.const import (  # noqa: E402
+import custom_components.ha_mcp_tools.embedded_server as es  # noqa: E402
+from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CHANNEL_DEV,
     CHANNEL_STABLE,
     DATA_ACCESS_TOKEN,
@@ -261,7 +261,7 @@ class TestEnsurePackage:
         monkeypatch.setattr(
             es,
             "async_process_requirements",
-            AsyncMock(side_effect=RequirementsNotFound("ha_mcp_server", ["ha-mcp"])),
+            AsyncMock(side_effect=RequirementsNotFound("ha_mcp_tools", ["ha-mcp"])),
         )
         with pytest.raises(es.EmbeddedServerError) as exc:
             await mgr._async_ensure_package()
