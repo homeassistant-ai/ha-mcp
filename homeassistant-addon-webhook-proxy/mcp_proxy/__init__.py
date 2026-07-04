@@ -715,16 +715,23 @@ async def _handle_webhook(
     # an invalid/missing bearer yields the SAME 401 discovery challenge.
     oauth_provider = data.get("oauth")
     if oauth_provider is not None:
+        # ha_auth carries a rejection reason so the debug log can distinguish
+        # "no usable bearer" from "hass.auth rejected/raised on the token" —
+        # the discrimination needed to debug provider-specific rejections
+        # (issue #1714's OIDC leg) from a user's add-on log. Never the token.
+        reject_reason = "no/invalid OAuth bearer"
         if data.get("oauth_mode") == OAUTH_MODE_HA_AUTH:
-            authorized = await oauth_provider.validate_request(request)
+            authorized, reject_reason = await oauth_provider.validate_request_detailed(
+                request
+            )
         else:
             authorized = oauth_provider.validate_bearer(request)
         if not authorized:
             if debug:
                 await _debug_log(
                     hass,
-                    "MCP Proxy [inbound]: -> 401 Unauthorized (no/invalid OAuth "
-                    "bearer; expected for the initial discovery probe)",
+                    f"MCP Proxy [inbound]: -> 401 Unauthorized ({reject_reason}; "
+                    "expected for the initial discovery probe)",
                 )
             from .oauth import build_unauthorized_response
 
