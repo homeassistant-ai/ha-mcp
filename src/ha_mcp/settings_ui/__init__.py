@@ -796,6 +796,61 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
     }
 
 
+def _build_visibility_handlers(*, data_dir: Path) -> dict[str, Any]:
+    """Settings-UI handlers for the entity visibility filter config.
+
+    Serves the on-disk ``entity_visibility.json`` GET/PUT with the same
+    optimistic-concurrency (version) guard as the tool policy handlers. Pure
+    file I/O, so it is always available (no approval-queue dependency).
+    """
+    from pydantic import ValidationError
+
+    from ..visibility.model import VisibilityConfig
+    from ..visibility.persistence import (
+        load_visibility_config,
+        save_visibility_config,
+    )
+
+    async def get_config(_: Request) -> JSONResponse:
+        try:
+            return JSONResponse(
+                load_visibility_config(data_dir).model_dump(mode="json")
+            )
+        except ValueError as e:
+            # Surface corruption rather than crash the tab on a 500.
+            return JSONResponse(
+                {"error": str(e), "visibility_file_corrupt": True},
+                status_code=500,
+            )
+
+    async def put_config(request: Request) -> JSONResponse:
+        try:
+            new_config = VisibilityConfig.model_validate(await request.json())
+        except (ValidationError, ValueError) as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        # Optimistic concurrency: reject if the on-disk version moved between
+        # this caller's GET and PUT.
+        current = load_visibility_config(data_dir)
+        if new_config.version != current.version:
+            return JSONResponse(
+                {
+                    "error": (
+                        "Visibility config version mismatch. Reload before saving."
+                    ),
+                    "current_version": current.version,
+                    "current_config": current.model_dump(mode="json"),
+                },
+                status_code=409,
+            )
+        save_visibility_config(data_dir, new_config)
+        return JSONResponse({"saved": True, "version": new_config.version + 1})
+
+    return {
+        "visibility_get_config": get_config,
+        "visibility_put_config": put_config,
+    }
+
+
 class _SupervisorOptionsError(NamedTuple):
     """Discriminated failure shape for the supervisor options helpers.
 
@@ -3237,6 +3292,8 @@ def build_settings_handlers(
     else:
         handlers.update(_build_stub_policy_handlers(data_dir=get_data_dir()))
 
+    handlers.update(_build_visibility_handlers(data_dir=get_data_dir()))
+
     return handlers
 
 
@@ -3397,6 +3454,9 @@ def register_settings_routes(
         ("/api/policy/deny", ["POST"], "policy_post_deny"),
         ("/api/policy/tool-schema", ["GET"], "policy_get_tool_schema"),
         ("/api/policy/value-source", ["GET"], "policy_get_value_source"),
+        # Entity visibility filter endpoints (issue #1728)
+        ("/api/visibility/config", ["GET"], "visibility_get_config"),
+        ("/api/visibility/config", ["PUT"], "visibility_put_config"),
     ]
 
     def _mount(prefix: str, *, guard: bool = False) -> None:

@@ -107,6 +107,9 @@ class TestBuildSettingsHandlers:
             # Custom filesystem directories (issue #1567).
             "get_fs_custom_paths",
             "save_fs_custom_paths",
+            # Entity visibility filter (#1728).
+            "visibility_get_config",
+            "visibility_put_config",
         }
 
     def test_get_tools_reads_cache_when_server_is_none(
@@ -1213,3 +1216,61 @@ class TestFeatureFlagOverrideReadErrors:
         assert any("not a JSON object" in r.message for r in caplog.records), [
             r.message for r in caplog.records
         ]
+
+
+class TestVisibilityHandlers:
+    """Entity visibility config GET/PUT handlers (#1728)."""
+
+    @staticmethod
+    def _client() -> TestClient:
+        handlers = build_settings_handlers(server=None)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/visibility/config",
+                    handlers["visibility_get_config"],
+                    methods=["GET"],
+                ),
+                Route(
+                    "/api/visibility/config",
+                    handlers["visibility_put_config"],
+                    methods=["PUT"],
+                ),
+            ]
+        )
+        return TestClient(app)
+
+    def test_get_returns_default_when_no_file(self, tmp_data_dir: Path) -> None:
+        resp = self._client().get("/api/visibility/config")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["enabled"] is False
+        assert body["version"] == 1
+
+    def test_put_persists_and_bumps_version(self, tmp_data_dir: Path) -> None:
+        client = self._client()
+        resp = client.put(
+            "/api/visibility/config",
+            json={"version": 1, "enabled": True, "deny_entity_ids": ["light.x"]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["version"] == 2
+        got = client.get("/api/visibility/config").json()
+        assert got["enabled"] is True
+        assert got["deny_entity_ids"] == ["light.x"]
+        assert got["version"] == 2
+
+    def test_put_stale_version_conflicts(self, tmp_data_dir: Path) -> None:
+        client = self._client()
+        client.put("/api/visibility/config", json={"version": 1, "enabled": True})
+        resp = client.put(
+            "/api/visibility/config", json={"version": 1, "enabled": False}
+        )
+        assert resp.status_code == 409
+        assert resp.json()["current_version"] == 2
+
+    def test_put_rejects_invalid_payload(self, tmp_data_dir: Path) -> None:
+        resp = self._client().put(
+            "/api/visibility/config", json={"version": "abc"}
+        )
+        assert resp.status_code == 400
