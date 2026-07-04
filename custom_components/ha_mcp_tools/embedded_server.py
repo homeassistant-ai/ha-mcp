@@ -534,7 +534,9 @@ class EmbeddedServerManager:
         # Startup observability (no secrets): confirm the in-memory connection
         # channel actually reached the settings singleton — a sentinel here means
         # the server cannot talk to HA core and every tool call will fail.
-        from ha_mcp.config import OAUTH_MODE_TOKEN, OAUTH_MODE_URL, get_global_settings
+        OAUTH_MODE_TOKEN = _hamcp_config.OAUTH_MODE_TOKEN
+        OAUTH_MODE_URL = _hamcp_config.OAUTH_MODE_URL
+        get_global_settings = _hamcp_config.get_global_settings
 
         resolved = get_global_settings()
         _LOGGER.info(
