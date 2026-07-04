@@ -123,6 +123,15 @@ entry revokes it, and disabling the config entry stops the server. As with
 standard mode, that token's Home Assistant permissions define what the server can
 do.
 
+The component also adds an admin-only **settings panel** to the Home Assistant
+sidebar that reverse-proxies the server's web settings UI over Home Assistant's
+own HTTP. Because a browser cannot attach a Bearer token to a panel view, access
+is gated by a short-lived, HttpOnly session cookie that an authenticated
+**administrator** obtains through Home Assistant, and every proxied request
+re-validates that the session still maps to an active admin. The loopback secret
+path is never exposed to the browser and no token or secret is placed in a URL;
+the proxy returns 503 whenever the server is not running.
+
 ## Scope
 
 **In scope** — please report these:
