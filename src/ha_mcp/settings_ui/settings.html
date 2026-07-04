@@ -158,6 +158,7 @@
   <button class="tab" data-panel="server" role="tab" id="tab-server" aria-controls="panel-server" aria-selected="false" tabindex="-1">Server Settings</button>
   <button class="tab" data-panel="backups" role="tab" id="tab-backups" aria-controls="panel-backups" aria-selected="false" tabindex="-1">Backups</button>
   <button class="tab" data-panel="tool-security-policies" role="tab" id="tab-tool-security-policies" aria-controls="panel-tool-security-policies" aria-selected="false" tabindex="-1">Tool Security Policies</button>
+  <button class="tab" data-panel="entity-visibility" role="tab" id="tab-entity-visibility" aria-controls="panel-entity-visibility" aria-selected="false" tabindex="-1">Entity Visibility</button>
   <button class="tab" data-panel="accessibility" role="tab" id="tab-accessibility" aria-controls="panel-accessibility" aria-selected="false" tabindex="-1">Accessibility</button>
 </div>
 <div class="restart-notice" id="restartNotice">
@@ -401,6 +402,54 @@
   </section>
   <section class="a11y-section">
     <button id="a11y-reset" class="restart-btn" type="button">Reset to defaults</button>
+  </section>
+</div>
+<div class="panel" id="panel-entity-visibility" role="tabpanel" aria-labelledby="tab-entity-visibility" tabindex="0">
+  <p class="tool-desc" style="margin-bottom:12px">
+    Hide low-value entities (auto-generated diagnostic or helper entities, or an
+    explicit list) from the collection read tools <code>ha_search</code> and
+    <code>ha_get_overview</code>, so search and overview results are less
+    cluttered. Off by default; changes apply on the next tool call.
+  </p>
+  <p class="a11y-contrast-warning" id="visibility-boundary-note">
+    Noise reduction, not access control: a hidden entity is still returned by a
+    direct read of its entity_id and still appears in automation, dashboard, and
+    template content. Do not rely on this as a security boundary.
+  </p>
+  <div id="visibility-load-error" class="visibility-error" style="display:none"></div>
+
+  <section class="a11y-section">
+    <label class="a11y-option"><input type="checkbox" id="visibility-enabled"> Enable entity visibility filter</label>
+  </section>
+
+  <section class="a11y-section">
+    <h2 class="a11y-section-title">Hide by category</h2>
+    <p class="a11y-section-help">Home Assistant tags auto-generated entities as diagnostic or config.</p>
+    <fieldset class="a11y-options">
+      <legend class="visually-hidden">Entity categories to hide</legend>
+      <label class="a11y-option"><input type="checkbox" id="visibility-cat-diagnostic"> Diagnostic</label>
+      <label class="a11y-option"><input type="checkbox" id="visibility-cat-config"> Config</label>
+      <label class="a11y-option"><input type="checkbox" id="visibility-exclude-hidden"> Also entities already hidden in Home Assistant</label>
+    </fieldset>
+  </section>
+
+  <section class="a11y-section">
+    <h2 class="a11y-section-title">Hide by area or label</h2>
+    <p class="a11y-section-help">Comma-separated area IDs or label IDs; entities in any listed area or label are hidden.</p>
+    <label class="visibility-field">Areas <input type="text" id="visibility-areas" placeholder="garage, basement"></label>
+    <label class="visibility-field">Labels <input type="text" id="visibility-labels" placeholder="noise, archived"></label>
+  </section>
+
+  <section class="a11y-section">
+    <h2 class="a11y-section-title">Hide specific entities</h2>
+    <p class="a11y-section-help">One entity_id per line. These stay hidden even without an entity-registry entry.</p>
+    <label class="visibility-field visually-hidden" for="visibility-deny">Denied entity IDs</label>
+    <textarea id="visibility-deny" class="visibility-textarea" rows="4" placeholder="sensor.example_diagnostic&#10;light.unused"></textarea>
+  </section>
+
+  <section class="a11y-section">
+    <button id="visibility-save-btn" class="restart-btn" type="button">Save</button>
+    <span id="visibility-save-status" class="status" role="status" aria-live="polite"></span>
   </section>
 </div>
 </main>

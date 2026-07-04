@@ -889,3 +889,18 @@
     border-bottom-color: var(--accent);
     box-shadow: inset 0 -1px 0 0 var(--accent);
   }
+
+  /* Entity visibility filter tab (#1728) */
+  .visibility-field {
+    display: block; margin: 10px 0; color: var(--text-secondary); font-size: 0.85rem;
+  }
+  .visibility-field input[type="text"], .visibility-textarea {
+    display: block; width: 100%; margin-top: 4px; padding: 6px 8px;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; font: inherit;
+  }
+  .visibility-textarea { resize: vertical; }
+  .visibility-error {
+    background: var(--danger); color: #fff; padding: 8px 12px;
+    border-radius: 6px; margin-bottom: 8px; font-size: 0.85rem;
+  }
