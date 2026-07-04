@@ -1,9 +1,9 @@
 """Webhook ingress for the in-process ha-mcp server (issue #1527).
 
 Ported from the proven webhook-proxy add-on (``mcp_proxy``): an HA webhook
-(``/api/webhook/<id>``) forwards MCP traffic to the loopback embedded server and
-streams the response back, so the server is reachable through Nabu Casa remote UI
-(or any reverse proxy) with the webhook id as the shared secret.
+(``/api/webhook/<id>``) forwards MCP traffic to the loopback server and streams
+the response back, so the server is reachable through Nabu Casa remote UI (or any
+reverse proxy) with the webhook id as the shared secret.
 
 Two auth postures, chosen in the options flow:
 
@@ -35,7 +35,7 @@ from homeassistant.components.webhook import async_register, async_unregister
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    DATA_EMBEDDED_WEBHOOK,
+    DATA_WEBHOOK,
     DATA_WEBHOOK_ID,
     DOMAIN,
     OAUTH_BASE,
@@ -47,9 +47,12 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Human-readable webhook name shown in the HA webhook registry.
+_WEBHOOK_NAME = "Home Assistant MCP Server"
+
 # Hop-by-hop / sensitive request headers never forwarded upstream (identical set
-# to mcp_proxy). ``authorization`` is stripped because the embedded server
-# authenticates to HA with its own provisioned token, not the caller's bearer.
+# to mcp_proxy). ``authorization`` is stripped because the server authenticates
+# to HA with its own provisioned token, not the caller's bearer.
 _STRIPPED_REQUEST_HEADERS = frozenset(
     {
         "host",
@@ -72,7 +75,7 @@ _CLIENT_TIMEOUT = aiohttp.ClientTimeout(total=300, sock_connect=10, sock_read=30
 # for this HA session. Deliberately NOT under DOMAIN so it survives
 # async_unload_entry's teardown — aiohttp cannot unregister an HTTP view until HA
 # restarts, so the views (and this ownership flag) must outlive the config entry.
-_OAUTH_VIEWS_REGISTERED_KEY = "ha_mcp_tools_oauth_metadata_views_registered"
+_OAUTH_VIEWS_REGISTERED_KEY = "ha_mcp_server_oauth_metadata_views_registered"
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +102,8 @@ def _authorization_server_document(base: str) -> dict[str, Any]:
     client (``token_endpoint_auth_methods_supported: ["none"]``) and
     ``client_id_metadata_document_supported`` so clients present a URL-shaped
     ``client_id`` (CIMD) that HA core's long-standing IndieAuth handling accepts —
-    the user never pastes an add-on credential. No ``registration_endpoint``: HA
-    offers no dynamic client registration; CIMD replaces it.
+    the user never pastes a credential. No ``registration_endpoint``: HA offers no
+    dynamic client registration; CIMD replaces it.
     """
     return {
         "issuer": f"{base}{OAUTH_BASE}",
@@ -183,7 +186,7 @@ def _ha_auth_live(hass: HomeAssistant) -> bool:
     domain_data = hass.data.get(DOMAIN)
     if not isinstance(domain_data, dict):
         return False
-    cfg = domain_data.get(DATA_EMBEDDED_WEBHOOK)
+    cfg = domain_data.get(DATA_WEBHOOK)
     return isinstance(cfg, dict) and cfg.get("auth_mode") == WEBHOOK_AUTH_HA
 
 
@@ -198,7 +201,7 @@ class _ProtectedResourceMetadataView(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/protected-resource"
-    name = "ha_mcp_tools:oauth:protected-resource"
+    name = "ha_mcp_server:oauth:protected-resource"
 
     def __init__(self, provider: ResourceServer) -> None:
         """Bind the view to its ha_auth resource server."""
@@ -227,7 +230,7 @@ class _AuthorizationServerMetadataView(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/authorization-server"
-    name = "ha_mcp_tools:oauth:authorization-server"
+    name = "ha_mcp_server:oauth:authorization-server"
 
     def __init__(self, provider: ResourceServer) -> None:
         """Bind the view to its ha_auth resource server."""
@@ -249,7 +252,7 @@ class _WellKnownProtectedResourceView(_ProtectedResourceMetadataView):
     ``resource_metadata`` pointer is missing.
     """
 
-    name = "ha_mcp_tools:oauth:wellknown-protected-resource"
+    name = "ha_mcp_server:oauth:wellknown-protected-resource"
 
     def __init__(self, provider: ResourceServer) -> None:
         """Bind and set the per-install well-known URL embedding the webhook id."""
@@ -283,19 +286,19 @@ def _metadata_views(provider: ResourceServer) -> list[HomeAssistantView]:
     for url, name in (
         (
             f"/.well-known/oauth-authorization-server{OAUTH_BASE}",
-            "ha_mcp_tools:oauth:wellknown-as-rfc8414",
+            "ha_mcp_server:oauth:wellknown-as-rfc8414",
         ),
         (
             f"/.well-known/openid-configuration{OAUTH_BASE}",
-            "ha_mcp_tools:oauth:wellknown-oidc-prefixed",
+            "ha_mcp_server:oauth:wellknown-oidc-prefixed",
         ),
         (
             f"{OAUTH_BASE}/.well-known/openid-configuration",
-            "ha_mcp_tools:oauth:wellknown-oidc-suffixed",
+            "ha_mcp_server:oauth:wellknown-oidc-suffixed",
         ),
         (
             f"{OAUTH_BASE}/.well-known/oauth-authorization-server",
-            "ha_mcp_tools:oauth:wellknown-as-suffixed",
+            "ha_mcp_server:oauth:wellknown-as-suffixed",
         ),
     ):
         views.append(
@@ -335,7 +338,7 @@ def _build_unauthorized_response(
         text="Unauthorized",
         headers={
             "WWW-Authenticate": (
-                f'Bearer realm="HA MCP Embedded Server", '
+                f'Bearer realm="Home Assistant MCP Server", '
                 f'resource_metadata="{metadata_url}"'
             )
         },
@@ -350,15 +353,11 @@ def _build_unauthorized_response(
 async def _async_handle_webhook(
     hass: HomeAssistant, webhook_id: str, request: web.Request
 ) -> web.StreamResponse:
-    """Forward an MCP request to the loopback embedded server and stream back."""
+    """Forward an MCP request to the loopback server and stream the reply back."""
     domain_data = hass.data.get(DOMAIN)
-    cfg = (
-        domain_data.get(DATA_EMBEDDED_WEBHOOK)
-        if isinstance(domain_data, dict)
-        else None
-    )
+    cfg = domain_data.get(DATA_WEBHOOK) if isinstance(domain_data, dict) else None
     if not isinstance(cfg, dict):
-        return web.Response(status=503, text="Embedded MCP server is not available")
+        return web.Response(status=503, text="MCP server is not available")
 
     # Auth gate. ``none`` = the secret webhook URL is the credential; ``ha_auth``
     # = validate the bearer via HA core, and on failure emit the 401 discovery
@@ -418,11 +417,11 @@ async def _async_handle_webhook(
                 status=upstream_resp.status, body=resp_body, headers=resp_headers
             )
     except aiohttp.ClientError as err:
-        _LOGGER.error("Embedded MCP webhook: upstream request failed: %s", err)
-        return web.Response(status=502, text="Embedded MCP server unavailable")
+        _LOGGER.error("MCP webhook: upstream request failed: %s", err)
+        return web.Response(status=502, text="MCP server unavailable")
     except Exception as err:
-        _LOGGER.exception("Embedded MCP webhook: unexpected error: %s", err)
-        return web.Response(status=500, text="Embedded MCP server internal error")
+        _LOGGER.exception("MCP webhook: unexpected error: %s", err)
+        return web.Response(status=500, text="MCP server internal error")
 
 
 # ---------------------------------------------------------------------------
@@ -440,22 +439,12 @@ async def async_register_webhook(
 ) -> None:
     """Register the ingress webhook (and, for ha_auth, the discovery views).
 
-    Stores the forwarding config in ``hass.data[DOMAIN][DATA_EMBEDDED_WEBHOOK]``
-    and opens a long-lived aiohttp session for streaming. Raises on failure with
-    the webhook already unregistered, so the caller never leaves a half-configured
-    endpoint live.
+    Stores the forwarding config in ``hass.data[DOMAIN][DATA_WEBHOOK]`` and opens
+    a long-lived aiohttp session for streaming. Raises on failure with the webhook
+    already unregistered, so the caller never leaves a half-configured endpoint
+    live. ``webhook`` is a manifest dependency, so HA guarantees it is set up
+    before this runs.
     """
-    # The webhook integration ships in HA's default_config, but ensure it is
-    # loaded so a stripped-down config can still use the embedded server.
-    if "webhook" not in hass.config.components:
-        from homeassistant.setup import async_setup_component
-
-        if not await async_setup_component(hass, "webhook", {}):
-            raise RuntimeError(
-                "The 'webhook' integration could not be set up; the embedded "
-                "MCP server needs it for remote ingress."
-            )
-
     webhook_id: str = entry.data[DATA_WEBHOOK_ID]
     target_url = f"http://127.0.0.1:{port}{secret_path}"
     session = aiohttp.ClientSession(timeout=_CLIENT_TIMEOUT)
@@ -475,7 +464,7 @@ async def async_register_webhook(
         async_register(
             hass,
             DOMAIN,
-            "HA MCP Embedded Server",
+            _WEBHOOK_NAME,
             webhook_id,
             _async_handle_webhook,
             allowed_methods=["POST", "GET"],
@@ -491,7 +480,7 @@ async def async_register_webhook(
         await session.close()
         raise
 
-    hass.data.setdefault(DOMAIN, {})[DATA_EMBEDDED_WEBHOOK] = cfg
+    hass.data.setdefault(DOMAIN, {})[DATA_WEBHOOK] = cfg
 
 
 async def async_unregister_webhook(hass: HomeAssistant) -> None:
@@ -503,7 +492,7 @@ async def async_unregister_webhook(hass: HomeAssistant) -> None:
     domain_data = hass.data.get(DOMAIN)
     if not isinstance(domain_data, dict):
         return
-    cfg = domain_data.pop(DATA_EMBEDDED_WEBHOOK, None)
+    cfg = domain_data.pop(DATA_WEBHOOK, None)
     if not isinstance(cfg, dict):
         return
     webhook_id = cfg.get("webhook_id")

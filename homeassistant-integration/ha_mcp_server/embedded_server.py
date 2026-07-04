@@ -1,24 +1,27 @@
 """Run the ha-mcp FastMCP server in-process inside Home Assistant (issue #1527).
 
-The :class:`EmbeddedServerManager` owns the full lifecycle of an embedded ha-mcp
-server:
+The :class:`EmbeddedServerManager` owns the full lifecycle of the in-process
+ha-mcp server:
 
 * ensures the ``ha-mcp`` package is importable (runtime pip install via
   Home Assistant's requirements manager, honoring an options-flow pip-spec
-  override for pre-release testing),
+  override for pre-release testing, and forcing a real reinstall when that spec
+  changes),
 * provisions a long-lived Home Assistant admin token the server uses to reach HA
   core over loopback (REST + WebSocket),
 * runs the server on a dedicated thread with its own asyncio loop — uvicorn
   skips signal capture off the main thread and a heavy tool can never stall HA's
   event loop — and
 * tears the thread down cleanly, and revokes the provisioned credentials when
-  the feature is disabled or the entry is removed.
+  the entry is removed.
 
-Everything the embedded server needs from ha-mcp is imported **inside the worker
-thread**, after the required environment variables are staged, so importing this
+Everything the server needs from ha-mcp is imported **inside the worker thread**,
+after the required non-secret environment variables are staged, so importing this
 module never pulls in ``ha_mcp`` (which may not be installed yet) and never runs
-before the connection env is in place. ``ha_mcp`` module-level imports are
-therefore forbidden here.
+before the connection is in place. The loopback URL and the admin token are handed
+to ha-mcp **in memory** via ``ha_mcp.config.set_embedded_connection`` — never
+through ``os.environ`` — so the admin token can never be read from the shared HA
+process environment. ``ha_mcp`` module-level imports are therefore forbidden here.
 """
 
 from __future__ import annotations
@@ -31,15 +34,22 @@ import os
 import threading
 from contextlib import suppress
 from datetime import timedelta
+from functools import partial
 from typing import TYPE_CHECKING
 
 from homeassistant.auth.const import GROUP_ID_ADMIN
 from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.core import HomeAssistant
-from homeassistant.requirements import RequirementsNotFound, async_process_requirements
+from homeassistant.requirements import (
+    RequirementsNotFound,
+    async_process_requirements,
+    pip_kwargs,
+)
+from homeassistant.util.package import install_package
 
 from .const import (
     DATA_ACCESS_TOKEN,
+    DATA_LAST_PIP_SPEC,
     DATA_REFRESH_TOKEN_ID,
     DATA_SECRET_PATH,
     DATA_SERVER_USER_ID,
@@ -47,13 +57,14 @@ from .const import (
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
-    EMBEDDED_CONFIG_SUBDIR,
-    EMBEDDED_SERVER_USER_NAME,
-    EMBEDDED_TOKEN_CLIENT_NAME,
+    DOMAIN,
     OPT_BIND_HOST,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
+    SERVER_CONFIG_SUBDIR,
+    SERVER_TOKEN_CLIENT_NAME,
+    SERVER_USER_NAME,
 )
 
 if TYPE_CHECKING:
@@ -75,9 +86,23 @@ _READY_POLL_INTERVAL_SECONDS = 0.5
 # leaking it rather than blocking HA shutdown.
 _STOP_JOIN_TIMEOUT_SECONDS = 10.0
 
+# Per-download HTTP timeout for a forced reinstall. The first install pulls the
+# whole fastmcp tree, well beyond HA's 60s requirements default.
+_PIP_INSTALL_TIMEOUT_SECONDS = 300
+
 
 class EmbeddedServerError(Exception):
-    """Raised when the embedded ha-mcp server could not be installed or started."""
+    """Raised when the in-process ha-mcp server could not be installed or started.
+
+    ``kind`` classifies the failure so the caller can file the matching repair
+    issue: ``"package"`` for a pip install / import failure, ``"start"`` for
+    everything else (token provisioning, thread crash, readiness timeout).
+    """
+
+    def __init__(self, message: str, *, kind: str = "start") -> None:
+        """Store the message and the failure ``kind`` (``package`` / ``start``)."""
+        super().__init__(message)
+        self.kind = kind
 
 
 class EmbeddedServerManager:
@@ -96,7 +121,7 @@ class EmbeddedServerManager:
         ).rstrip("/")
         self._pip_spec: str = str(options.get(OPT_PIP_SPEC) or DEFAULT_PIP_SPEC)
         self._secret_path: str = str(entry.data.get(DATA_SECRET_PATH, ""))
-        self._config_dir: str = hass.config.path(EMBEDDED_CONFIG_SUBDIR)
+        self._config_dir: str = hass.config.path(SERVER_CONFIG_SUBDIR)
 
         # Worker-thread state. ``_loop`` and ``_stop_event`` are created in the
         # thread before its loop runs, so a stop request can always reach them.
@@ -107,7 +132,7 @@ class EmbeddedServerManager:
 
     @property
     def port(self) -> int:
-        """TCP port the embedded server listens on."""
+        """TCP port the server listens on."""
         return self._port
 
     @property
@@ -121,12 +146,12 @@ class EmbeddedServerManager:
         """Install the package, provision a token, and start the server thread.
 
         Raises :class:`EmbeddedServerError` on any failure. The caller is
-        responsible for surfacing a repair issue and leaving the integration's
-        other services running — a failed embedded start must never break them.
+        responsible for surfacing a repair issue — a failed start must never take
+        the rest of Home Assistant down with it.
         """
         if not self._secret_path:
             raise EmbeddedServerError(
-                "Embedded server secret path missing from the config entry; "
+                "Server secret path missing from the config entry; "
                 "reload the integration to regenerate it."
             )
 
@@ -138,7 +163,7 @@ class EmbeddedServerManager:
         self._thread = threading.Thread(
             target=self._thread_main,
             args=(access_token,),
-            name="ha-mcp-embedded",
+            name="ha-mcp-server",
             daemon=True,
         )
         self._thread.start()
@@ -151,8 +176,8 @@ class EmbeddedServerManager:
         Never blocks Home Assistant shutdown indefinitely: if the thread does not
         exit within the timeout it is logged and left to die with the process.
         Does NOT revoke the provisioned token — that is reserved for
-        :meth:`async_revoke_credentials` (disable / entry removal) so a reload
-        keeps working.
+        :meth:`async_revoke_credentials` (entry removal) so a reload keeps
+        working.
         """
         thread = self._thread
         if thread is None:
@@ -166,8 +191,8 @@ class EmbeddedServerManager:
         await self._hass.async_add_executor_job(thread.join, _STOP_JOIN_TIMEOUT_SECONDS)
         if thread.is_alive():
             _LOGGER.warning(
-                "Embedded ha-mcp server thread did not stop within %.0fs; leaving "
-                "it to terminate with the process.",
+                "Home Assistant MCP Server thread did not stop within %.0fs; "
+                "leaving it to terminate with the process.",
                 _STOP_JOIN_TIMEOUT_SECONDS,
             )
         self._thread = None
@@ -177,9 +202,8 @@ class EmbeddedServerManager:
     async def async_revoke_credentials(self) -> None:
         """Revoke the provisioned refresh token and remove the server's user.
 
-        Called when the embedded server is disabled or the config entry is
-        removed. Best-effort and idempotent: missing ids / already-deleted
-        objects are treated as success.
+        Called when the config entry is removed. Best-effort and idempotent:
+        missing ids / already-deleted objects are treated as success.
         """
         rt_id = self._entry.data.get(DATA_REFRESH_TOKEN_ID)
         user_id = self._entry.data.get(DATA_SERVER_USER_ID)
@@ -205,34 +229,80 @@ class EmbeddedServerManager:
     # -- package install ---------------------------------------------------
 
     async def _async_ensure_package(self) -> None:
-        """Ensure ``ha-mcp`` is importable, installing the pip spec if not.
+        """Ensure ``ha-mcp`` is importable, installing the pip spec if needed.
 
-        Delegates the "already satisfied?" decision to Home Assistant's
-        requirements manager (which applies HA's own constraints file), then
-        invalidates the import caches and verifies the package resolves. Never
-        imports ``ha_mcp`` in this (main) process — that happens only inside the
-        worker thread after the connection env is staged.
+        Fast path: when the configured pip spec matches the one last installed
+        and the package imports, delegate the "already satisfied?" decision to
+        Home Assistant's requirements manager. Otherwise (spec changed — the
+        pre-release test channel — or the package is missing) force a real
+        reinstall that bypasses the requirements manager's is-installed shortcut,
+        so a changed spec actually takes effect. Never imports ``ha_mcp`` in this
+        (main) process — that happens only inside the worker thread.
         """
+        stored_spec = self._entry.data.get(DATA_LAST_PIP_SPEC)
+        installed_version = await self._hass.async_add_executor_job(
+            _installed_ha_mcp_version
+        )
+
+        if stored_spec == self._pip_spec and installed_version is not None:
+            await self._async_process_requirements_fast()
+        else:
+            await self._async_force_install()
+
+        version = await self._hass.async_add_executor_job(_installed_ha_mcp_version)
+        if version is None:
+            raise EmbeddedServerError(
+                f"Installed the server requirement ({self._pip_spec!r}) but the "
+                "'ha-mcp' package is still not importable.",
+                kind="package",
+            )
+        _LOGGER.info("Home Assistant MCP Server package ready (version %s)", version)
+        if stored_spec != self._pip_spec:
+            self._store_installed_spec()
+
+    async def _async_process_requirements_fast(self) -> None:
+        """Fast path: let HA's requirements manager satisfy the pinned spec."""
         try:
             await async_process_requirements(
                 self._hass,
-                "ha_mcp_tools embedded server",
+                f"{DOMAIN} server",
                 [self._pip_spec],
                 is_built_in=False,
             )
         except RequirementsNotFound as err:
             raise EmbeddedServerError(
-                f"Could not install the embedded ha-mcp server "
-                f"({self._pip_spec!r}): {err}"
+                f"Could not install the server ({self._pip_spec!r}): {err}",
+                kind="package",
             ) from err
 
-        version = await self._hass.async_add_executor_job(_installed_ha_mcp_version)
-        if version is None:
+    async def _async_force_install(self) -> None:
+        """Force a real (re)install of the pip spec, bypassing the is-installed
+        cache.
+
+        Mirrors how ``homeassistant.requirements`` builds its pip invocation
+        (HA's own constraints file + ``config/deps`` target where applicable) so
+        the resolver honors Home Assistant's constraints, then installs with
+        ``upgrade=True`` and a generous per-download timeout.
+        """
+        kwargs = pip_kwargs(self._hass.config.config_dir)
+        kwargs["timeout"] = max(
+            int(kwargs.get("timeout") or 0), _PIP_INSTALL_TIMEOUT_SECONDS
+        )
+        installed = await self._hass.async_add_executor_job(
+            partial(install_package, self._pip_spec, upgrade=True, **kwargs)
+        )
+        if not installed:
             raise EmbeddedServerError(
-                f"Installed the embedded server requirement ({self._pip_spec!r}) "
-                "but the 'ha-mcp' package is still not importable."
+                f"Could not install the server ({self._pip_spec!r}); see the "
+                "Home Assistant log for the pip output.",
+                kind="package",
             )
-        _LOGGER.info("Embedded ha-mcp server package ready (version %s)", version)
+
+    def _store_installed_spec(self) -> None:
+        """Persist the pip spec just installed so a restart skips the reinstall."""
+        new_data = {**self._entry.data, DATA_LAST_PIP_SPEC: self._pip_spec}
+        if new_data != dict(self._entry.data):
+            self._hass.config_entries.async_update_entry(self._entry, data=new_data)
 
     # -- token provisioning ------------------------------------------------
 
@@ -250,7 +320,7 @@ class EmbeddedServerManager:
         user = await self._hass.auth.async_get_user(user_id) if user_id else None
         if user is None:
             user = await self._hass.auth.async_create_user(
-                EMBEDDED_SERVER_USER_NAME,
+                SERVER_USER_NAME,
                 group_ids=[GROUP_ID_ADMIN],
                 local_only=True,
             )
@@ -267,13 +337,13 @@ class EmbeddedServerManager:
             # any stale one left behind by a partial previous provision.
             for token in list(user.refresh_tokens.values()):
                 if (
-                    token.client_name == EMBEDDED_TOKEN_CLIENT_NAME
+                    token.client_name == SERVER_TOKEN_CLIENT_NAME
                     and token.token_type == TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
                 ):
                     self._hass.auth.async_remove_refresh_token(token)
             refresh_token = await self._hass.auth.async_create_refresh_token(
                 user,
-                client_name=EMBEDDED_TOKEN_CLIENT_NAME,
+                client_name=SERVER_TOKEN_CLIENT_NAME,
                 token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
                 access_token_expiration=_ACCESS_TOKEN_TTL,
             )
@@ -291,20 +361,20 @@ class EmbeddedServerManager:
         return access_token
 
     def _prepare_config_dir(self) -> None:
-        """Create the embedded server's persistent data directory (blocking)."""
+        """Create the server's persistent data directory (blocking)."""
         os.makedirs(self._config_dir, exist_ok=True)
 
     # -- worker thread -----------------------------------------------------
 
     def _thread_main(self, access_token: str) -> None:
-        """Thread entry point: stage env, then run the server on its own loop.
+        """Thread entry point: stage non-secret env, then run the server.
 
-        Environment variables MUST be set before the first ``ha_mcp`` import so
-        the settings singleton, data-dir resolution, and embedded-mode detection
-        all see them. The import happens inside :meth:`_serve`.
+        Only the non-secret ``HA_MCP_CONFIG_DIR`` / ``HA_MCP_EMBEDDED`` variables
+        are staged here (both read lazily throughout ha_mcp), and they MUST be set
+        before the first ``ha_mcp`` import so data-dir resolution and embedded-mode
+        detection see them. The loopback URL and the admin token are handed to
+        ha_mcp in memory inside :meth:`_serve` — never via ``os.environ``.
         """
-        os.environ["HOMEASSISTANT_URL"] = self._server_url
-        os.environ["HOMEASSISTANT_TOKEN"] = access_token
         os.environ["HA_MCP_CONFIG_DIR"] = self._config_dir
         os.environ["HA_MCP_EMBEDDED"] = "1"
 
@@ -313,23 +383,30 @@ class EmbeddedServerManager:
         self._loop = loop
         self._stop_event = asyncio.Event()
         try:
-            loop.run_until_complete(self._serve())
+            loop.run_until_complete(self._serve(access_token))
         except Exception as err:
             self._thread_exc = err
-            _LOGGER.exception("Embedded ha-mcp server thread crashed")
+            _LOGGER.exception("Home Assistant MCP Server thread crashed")
         finally:
             with suppress(Exception):
                 loop.run_until_complete(loop.shutdown_asyncgens())
             loop.close()
 
-    async def _serve(self) -> None:
+    async def _serve(self, access_token: str) -> None:
         """Build the ha-mcp server and run it until a stop is signaled.
 
         Mirrors the CLI HTTP runner in ``ha_mcp.__main__`` without importing it
         (that module runs process-global side effects — truststore SSL patching,
         signal handlers, ``asyncio.run`` — that must never happen in-process).
         """
-        # Imported here, in the worker thread, after the connection env is set.
+        # Hand ha-mcp the loopback URL + provisioned admin token in memory, before
+        # the server (and its settings singleton) is built. Keeping the token out
+        # of os.environ is the whole point of the in-process channel.
+        from ha_mcp.config import set_embedded_connection
+
+        set_embedded_connection(self._server_url, access_token)
+
+        # Imported here, in the worker thread, after the connection is registered.
         from ha_mcp.server import HomeAssistantSmartMCPServer
         from ha_mcp.settings_ui import register_settings_routes
 
@@ -380,15 +457,15 @@ class EmbeddedServerManager:
         while self._hass.loop.time() < deadline:
             if self._thread_exc is not None:
                 raise EmbeddedServerError(
-                    f"Embedded ha-mcp server failed to start: {self._thread_exc}"
+                    f"Home Assistant MCP Server failed to start: {self._thread_exc}"
                 ) from self._thread_exc
             if self._thread is not None and not self._thread.is_alive():
                 raise EmbeddedServerError(
-                    "Embedded ha-mcp server thread exited during startup."
+                    "Home Assistant MCP Server thread exited during startup."
                 )
             if await self._async_probe_port():
                 _LOGGER.info(
-                    "Embedded ha-mcp server is listening on %s:%d",
+                    "Home Assistant MCP Server is listening on %s:%d",
                     self._bind_host,
                     self._port,
                 )
@@ -399,7 +476,7 @@ class EmbeddedServerManager:
         # server behind an unregistered webhook.
         await self.async_stop()
         raise EmbeddedServerError(
-            f"Embedded ha-mcp server did not become reachable on port "
+            f"Home Assistant MCP Server did not become reachable on port "
             f"{self._port} within {_READY_TIMEOUT_SECONDS:.0f}s."
         )
 

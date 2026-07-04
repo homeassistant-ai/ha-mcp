@@ -92,10 +92,10 @@ token (LLAT). This is **by design**:
 The consent form explains this revocation path. Reports about token opacity
 (the LLAT being visible inside the token) will be closed as by-design.
 
-### In-process server (custom component)
+### In-process server (`ha_mcp_server` integration)
 
-The `ha_mcp_tools` custom component can run the ha-mcp server in-process inside
-Home Assistant and expose it through a Home Assistant webhook (see
+The separate `ha_mcp_server` integration can run the ha-mcp server in-process
+inside Home Assistant and expose it through a Home Assistant webhook (see
 [docs/in-process-server.md](docs/in-process-server.md)). It offers two
 authentication postures, selected in the integration options:
 
@@ -106,16 +106,18 @@ authentication postures, selected in the integration options:
   Any party that has the full webhook URL is a trusted principal; keep the URL
   secret.
 - **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
-  authorization server: the component serves the discovery documents and
+  authorization server: the integration serves the discovery documents and
   validates inbound Bearer tokens against Home Assistant's own auth, so access
   is gated by a Home Assistant login. This is distinct from the beta OAuth mode
   below — no bespoke authorization server or self-issued token is involved, and
   revoking the user's Home Assistant token/session revokes access.
 
-The embedded server reaches Home Assistant with a dedicated admin token the
-component provisions and stores in the config entry; disabling the server or
-removing the integration revokes it. As with standard mode, that token's Home
-Assistant permissions define what the server can do.
+The server reaches Home Assistant with a dedicated admin token the integration
+provisions and stores in its config entry. The token is handed to the server
+in-memory (never through the Home Assistant process environment); removing the
+integration revokes it, and disabling the config entry stops the server. As with
+standard mode, that token's Home Assistant permissions define what the server can
+do.
 
 ## Scope
 

@@ -52,11 +52,6 @@ from .const import (
     YAML_KEY_DEFAULT_POST_ACTION,
     YAML_KEY_POST_ACTIONS,
 )
-from .embedded_setup import (
-    async_remove_embedded_server,
-    async_setup_embedded_server,
-    async_unload_embedded_server,
-)
 from .yaml_rt import apply_seq_indent, detect_seq_indent, make_yaml, yaml_dumps
 
 _LOGGER = logging.getLogger(__name__)
@@ -2438,37 +2433,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     _LOGGER.info("HA MCP Tools initialized with file management services")
-
-    # In-process MCP server (issue #1527) — strictly opt-in via the options
-    # flow. Contained: a failure files a repair issue and leaves the file/YAML
-    # services above running.
-    await async_setup_embedded_server(hass, entry)
-
-    # Reload the entry when its options change (options-flow save) so
-    # embedded-server toggles / port / auth take effect. Registered AFTER
-    # embedded setup so the entry.data writes it performs (webhook id, secret
-    # path, provisioned token ids) never trigger a mid-setup reload.
-    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
-
     return True
-
-
-async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the config entry after an options change."""
-    await hass.config_entries.async_reload(entry.entry_id)
-
-
-async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Revoke the embedded server's provisioned credentials on entry removal."""
-    await async_remove_embedded_server(hass, entry)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    # Stop the embedded server + ingress webhook first (reload-safe; keeps the
-    # provisioned token for the next start).
-    await async_unload_embedded_server(hass, entry)
-
     # Remove all services
     hass.services.async_remove(DOMAIN, SERVICE_EDIT_YAML_CONFIG)
     hass.services.async_remove(DOMAIN, SERVICE_LIST_FILES)

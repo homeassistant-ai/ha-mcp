@@ -1,0 +1,15 @@
+{
+    "domain": "ha_mcp_server",
+    "name": "Home Assistant MCP Server",
+    "after_dependencies": ["http", "cloud"],
+    "codeowners": ["@homeassistant-ai"],
+    "config_flow": true,
+    "dependencies": ["webhook"],
+    "documentation": "https://github.com/homeassistant-ai/ha-mcp",
+    "integration_type": "service",
+    "iot_class": "local_push",
+    "issue_tracker": "https://github.com/homeassistant-ai/ha-mcp/issues",
+    "requirements": [],
+    "single_config_entry": true,
+    "version": "0.1.0"
+}
