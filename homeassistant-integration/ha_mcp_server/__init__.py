@@ -27,11 +27,14 @@ from .const import (
     DATA_WEBHOOK_ID,
     DOMAIN,
 )
-from .embedded_setup import (
-    async_bring_up_server,
-    async_revoke_credentials_on_remove,
-    async_teardown_server,
-)
+
+# NOTE: embedded_setup (and its embedded_server / mcp_webhook chain) is imported
+# lazily inside the entry lifecycle functions below, not at module top level. It
+# pulls in aiohttp and several homeassistant.* submodules (auth, requirements,
+# util.package, components.http/webhook) that the entry-point wiring here never
+# touches directly, so a top-level import would make importing this package
+# require that whole stack — breaking hermetic unit tests that stub only the
+# modules they use.
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -49,6 +52,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     the update listener is registered, so those ``entry.data`` writes never
     trigger a mid-setup reload.
     """
+    # Imported lazily (see the import note) so the aiohttp / auth / requirements
+    # chain is pulled in only when an entry is actually set up.
+    from .embedded_setup import async_bring_up_server
+
     _ensure_secrets(hass, entry)
 
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -72,6 +79,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     Cancels the bring-up task first so a still-in-flight install/start is torn
     down before the explicit teardown runs.
     """
+    from .embedded_setup import async_teardown_server  # lazy (see import note)
+
     domain_data = hass.data.get(DOMAIN, {})
     task = domain_data.pop(DATA_BRINGUP_TASK, None)
     if task is not None and not task.done():
@@ -86,6 +95,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Revoke the provisioned credentials when the config entry is removed."""
+    from .embedded_setup import (  # lazy (see import note)
+        async_revoke_credentials_on_remove,
+    )
+
     await async_revoke_credentials_on_remove(hass, entry)
 
 
