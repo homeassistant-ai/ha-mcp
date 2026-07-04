@@ -587,7 +587,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cryptography", specifier = ">=48.0.1,<50" },
+    { name = "cryptography", specifier = ">=48.0.0,<50" },
     { name = "fastmcp", specifier = "==3.4.2" },
     { name = "httpx", extras = ["socks"], specifier = "==0.28.1" },
     { name = "packaging", specifier = ">=24.0" },

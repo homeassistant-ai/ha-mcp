@@ -1915,9 +1915,21 @@ def ha_container_with_fresh_config(request):
         # readiness poll doesn't have to sit through a multi-minute PyPI download.
         # The heavy download happens during container boot instead, which is why
         # the embedded path uses a much larger HA-API-ready budget below.
+        # Resolve under HA's OWN constraints file so the preinstall cannot
+        # mutate the image's pinned dependency set (a real HA install applies
+        # the same constraints) — this is exactly what surfaced the
+        # cryptography-floor incompatibility with HA 2026.6 (live-found).
+        quoted_wheel = shlex.quote(f"/config/{embedded_wheel_name}")
+        constraints_probe = (
+            "HACONS=\"$(python3 -c 'import homeassistant, os; "
+            "print(os.path.join(os.path.dirname(homeassistant.__file__), "
+            '"package_constraints.txt"))\')"'
+        )
         preinit_cmds.append(
-            f"pip install --no-cache-dir "
-            f"{shlex.quote(f'/config/{embedded_wheel_name}')}"
+            f"{constraints_probe} && "
+            f'if [ -f "$HACONS" ]; then '
+            f'pip install --no-cache-dir --constraint "$HACONS" {quoted_wheel}; '
+            f"else pip install --no-cache-dir {quoted_wheel}; fi"
         )
         logger.info(
             "📦 Embedded backend: preinstalling ha-mcp wheel %s (+deps) before "
