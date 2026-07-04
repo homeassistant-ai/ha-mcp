@@ -192,7 +192,7 @@ def _mcp_post(
 
 def _parse_mcp(resp: requests.Response) -> dict[str, Any] | None:
     """Parse a Streamable-HTTP MCP response (JSON body or SSE) to a JSON-RPC dict."""
-    return parse_mcp_response(resp.headers.get("Content-Type", ""), resp.text)
+    return parse_mcp_response(resp.headers.get("Content-Type", ""), resp.content)
 
 
 def _initialize(base_url: str) -> tuple[bool, str | None]:

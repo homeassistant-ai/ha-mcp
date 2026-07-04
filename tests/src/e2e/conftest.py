@@ -830,7 +830,7 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
 
 def _embedded_mcp_result(resp: requests.Response) -> dict[str, Any] | None:
     """Parse a Streamable-HTTP MCP response (JSON body or SSE) to a JSON-RPC dict."""
-    return parse_mcp_response(resp.headers.get("Content-Type", ""), resp.text)
+    return parse_mcp_response(resp.headers.get("Content-Type", ""), resp.content)
 
 
 def _wait_for_embedded_webhook_ready(webhook_url: str, timeout: int) -> bool:

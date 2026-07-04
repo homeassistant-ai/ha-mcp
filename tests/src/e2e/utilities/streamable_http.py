@@ -9,7 +9,14 @@ exactly one spot.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+# SSE-legal line boundaries ONLY (\r\n, \r, \n). str.splitlines() must never be
+# used on SSE bodies: it also splits on NEL (\x85), \v, \f, \x1c-\x1e and
+# U+2028/U+2029 — characters that legitimately appear INSIDE a UTF-8 JSON
+# payload (or arise from a mis-decode) and would shear the data line mid-JSON.
+_SSE_LINE_SPLIT = re.compile(r"\r\n|\r|\n")
 
 
 def sse_event_payloads(text: str) -> list[str]:
@@ -30,7 +37,7 @@ def sse_event_payloads(text: str) -> list[str]:
             payloads.append("\n".join(data_lines))
             data_lines.clear()
 
-    for line in text.splitlines():
+    for line in _SSE_LINE_SPLIT.split(text):
         if line.startswith("data:"):
             value = line[len("data:") :]
             if value.startswith(" "):  # strip exactly ONE leading space (SSE spec)
@@ -43,13 +50,21 @@ def sse_event_payloads(text: str) -> list[str]:
     return payloads
 
 
-def parse_mcp_response(content_type: str, text: str) -> dict[str, Any] | None:
+def parse_mcp_response(content_type: str, body: bytes | str) -> dict[str, Any] | None:
     """Parse a Streamable-HTTP MCP response body to its JSON-RPC dict.
 
     Accepts both negotiated shapes: a plain JSON body, or an SSE stream whose
     first ``result``/``error`` event carries the JSON-RPC response. Returns
     None when no such payload is present.
+
+    Pass the RAW BYTES where possible: SSE bodies are UTF-8 by spec, but the
+    server sends ``Content-Type: text/event-stream`` without a charset, so
+    ``requests``' ``.text`` decodes them as ISO-8859-1 — mangling every
+    multibyte character into stray bytes (0x85 among them) that then break
+    line framing and JSON parsing. Live-found against a real 258 KB
+    ``tools/list`` response.
     """
+    text = body.decode("utf-8", errors="replace") if isinstance(body, bytes) else body
     if "text/event-stream" in content_type:
         for payload in sse_event_payloads(text):
             try:
