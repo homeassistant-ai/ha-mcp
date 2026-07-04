@@ -92,12 +92,12 @@ token (LLAT). This is **by design**:
 The consent form explains this revocation path. Reports about token opacity
 (the LLAT being visible inside the token) will be closed as by-design.
 
-### In-process server (`ha_mcp_server` integration)
+### In-process server (`ha_mcp_tools` in-process server entry)
 
-The separate `ha_mcp_server` integration can run the ha-mcp server in-process
-inside Home Assistant and expose it through a Home Assistant webhook (see
-[docs/in-process-server.md](docs/in-process-server.md)). It offers two
-authentication postures, selected in the integration options:
+The `ha_mcp_tools` component's **in-process MCP server** config entry can run the
+ha-mcp server in-process inside Home Assistant and expose it through a Home
+Assistant webhook (see [docs/in-process-server.md](docs/in-process-server.md)).
+It offers two authentication postures, selected in the entry options:
 
 - **Secret webhook URL (default).** The webhook id is a high-entropy random
   string and *is* the credential — the same secret-URL trust model as standard
@@ -106,7 +106,7 @@ authentication postures, selected in the integration options:
   Any party that has the full webhook URL is a trusted principal; keep the URL
   secret.
 - **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
-  authorization server: the integration serves the discovery documents and
+  authorization server: the entry serves the discovery documents and
   validates inbound Bearer tokens against Home Assistant's own auth, so access
   is gated by a Home Assistant login — and restricted to **administrator**
   users. The server acts with its own provisioned admin token (the caller's
@@ -116,10 +116,10 @@ authentication postures, selected in the integration options:
   below — no bespoke authorization server or self-issued token is involved, and
   revoking the user's Home Assistant token/session revokes access.
 
-The server reaches Home Assistant with a dedicated admin token the integration
-provisions and stores in its config entry. The token is handed to the server
+The server reaches Home Assistant with a dedicated admin token the component
+provisions and stores in the config entry. The token is handed to the server
 in-memory (never through the Home Assistant process environment); removing the
-integration revokes it, and disabling the config entry stops the server. As with
+entry revokes it, and disabling the config entry stops the server. As with
 standard mode, that token's Home Assistant permissions define what the server can
 do.
 

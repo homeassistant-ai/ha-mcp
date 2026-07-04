@@ -1,13 +1,15 @@
 # Run the MCP server inside Home Assistant
 
-The **Home Assistant MCP Server** integration (`ha_mcp_server`) runs the **full
-ha-mcp server in-process**, inside the Home Assistant application, and exposes it
-remotely through a Home Assistant webhook. This is a fourth way to run ha-mcp,
-alongside the add-on, Docker, and the local stdio setup.
+The **HA-MCP Custom Component** (`ha_mcp_tools`) can run the **full ha-mcp server
+in-process**, inside the Home Assistant application, and expose it remotely
+through a Home Assistant webhook. This is a fourth way to run ha-mcp, alongside
+the add-on, Docker, and the local stdio setup.
 
-It is a standalone integration, separate from the `ha_mcp_tools` custom
-component. You can run either on its own, but they are complementary — see
-[Relationship to `ha_mcp_tools`](#relationship-to-ha_mcp_tools) below.
+The in-process server is one of **two config-entry types** the component offers.
+The other is the **HA MCP Tools** services entry (the privileged file / YAML
+services). They are complementary and independent — you can add either, or both,
+under the one integration — see [Relationship to the tools services
+entry](#relationship-to-the-tools-services-entry) below.
 
 ## Who it's for
 
@@ -27,7 +29,7 @@ Webhook Proxy add-on uses.
 
 ## How it works
 
-Once the integration's config entry exists, it:
+Once the in-process server config entry exists, it:
 
 1. Installs the `ha-mcp` package into Home Assistant at runtime (the first start
    takes a little longer while pip downloads it — see
@@ -43,24 +45,27 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 
 ## Setup
 
-1. **Install the integration.** A HACS listing is planned but not yet available,
-   so for now copy the `homeassistant-integration/ha_mcp_server` directory from
-   this repository into your Home Assistant `config/custom_components/` directory
-   (so you end up with `config/custom_components/ha_mcp_server/`), then restart
-   Home Assistant.
-2. **Add the integration.** Go to **Settings → Devices & Services → Add
-   Integration**, search for **Home Assistant MCP Server**, and submit the
-   confirmation. Creating the entry starts the server with the defaults.
+1. **Install the component.** Install **HA-MCP Custom Component** from HACS (the
+   same repository you use for ha-mcp — no second repository to add), or, without
+   HACS, copy the `custom_components/ha_mcp_tools` directory from this repository
+   into your Home Assistant `config/custom_components/` directory (so you end up
+   with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.
+2. **Add the in-process server entry.** Go to **Settings → Devices & Services →
+   Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
+   that appears — choose **In-process MCP server**, then submit the confirmation.
+   Creating the entry starts the server with the defaults. (If you already have
+   the **HA MCP Tools** services entry, use the same **Add Integration** flow;
+   the two entries appear together under the one integration tile.)
 3. **Copy your connect URL.** As soon as the server starts, a notification titled
-   **Home Assistant MCP Server** appears under **Settings → Notifications** with
-   the connect URL(s). The same URL is shown on the integration's **Configure**
-   screen and written to the Home Assistant log.
+   **HA-MCP in-process server** appears under **Settings → Notifications** with
+   the connect URL(s). The same URL is shown on the entry's **Configure** screen
+   and written to the Home Assistant log.
 4. **Connect your MCP client** to that URL.
 
-To pause the server, **disable** the config entry (**Settings → Devices &
-Services → Home Assistant MCP Server → ⋮ → Disable**); re-enable it to start it
-again. Removing the integration stops the server and revokes the provisioned
-token.
+To pause the server, **disable** its config entry (**Settings → Devices &
+Services → HA-MCP Custom Component → In-process MCP server → ⋮ → Disable**);
+re-enable it to start it again. Removing the entry stops the server and revokes
+the provisioned token.
 
 ## Connect URLs
 
@@ -92,8 +97,10 @@ another free one).
 
 ## Options
 
-Open **Settings → Devices & Services → Home Assistant MCP Server → Configure** to
-change these. Saving the options reloads the server so the changes take effect.
+Open **Settings → Devices & Services → HA-MCP Custom Component → In-process MCP
+server → Configure** to change these. Saving the options reloads the server so
+the changes take effect. (The **HA MCP Tools** services entry has no options — a
+Configure there just reports that.)
 
 | Option | Default | What it does |
 |--------|---------|--------------|
@@ -110,12 +117,12 @@ The **Release channel** option selects which build of the server is installed:
 
 - **`stable` (default):** the pinned `ha-mcp` release. Its version is kept in
   lockstep with the project's releases by the release pipeline, so it only
-  changes when you update the integration (and restart Home Assistant).
+  changes when you update the component (and restart Home Assistant).
 - **`dev`:** the latest development build, published to PyPI as `ha-mcp-dev` on
   every change to the project's main branch. Because it moves quickly, the
-  integration reinstalls the newest dev build on every entry reload and Home
-  Assistant restart — so a restart always lands on the current dev build. Use it
-  to try upcoming fixes, and expect the occasional rough edge.
+  server reinstalls the newest dev build on every entry reload and Home Assistant
+  restart — so a restart always lands on the current dev build. Use it to try
+  upcoming fixes, and expect the occasional rough edge.
 
 Switching channels reinstalls the server from the other channel on the next
 reload. `ha-mcp` and `ha-mcp-dev` share the same import package, so the previous
@@ -147,27 +154,28 @@ Both postures ride Home Assistant's own remote access (Nabu Casa / your reverse
 proxy) for TLS. If you expose the server to the internet, prefer `ha_auth`, or
 keep the `none` URL strictly private.
 
-The server reaches Home Assistant with a dedicated admin token the integration
+The server reaches Home Assistant with a dedicated admin token the component
 provisions and stores in the config entry; that token is handed to the server
 in-memory (never through the Home Assistant process environment). Removing the
-integration revokes it. As with every deployment, that token's Home Assistant
+entry revokes it. As with every deployment, that token's Home Assistant
 permissions define what the server can do.
 
 See [SECURITY.md](../SECURITY.md) for the full threat model.
 
-## Relationship to `ha_mcp_tools`
+## Relationship to the tools services entry
 
-`ha_mcp_server` (this integration) and `ha_mcp_tools` (the file/YAML services
-custom component) are independent. The server works on its own, but installing
-`ha_mcp_tools` alongside it is recommended: it provides the privileged file and
-YAML-configuration services that ha-mcp's file tools use — exactly as it does for
-the add-on, Docker, and pip deployments. Install `ha_mcp_tools` as described in
-the [README](../README.md#-custom-component-ha_mcp_tools-beta); it is optional and
-changes nothing about how the in-process server runs.
+The in-process server entry and the **HA MCP Tools** services entry are two
+config-entry types of the same **HA-MCP Custom Component** (`ha_mcp_tools`). They
+are independent: the server works on its own, but adding the tools services entry
+alongside it is recommended — it provides the privileged file and
+YAML-configuration services that ha-mcp's file tools use, exactly as it does for
+the add-on, Docker, and pip deployments. Add it from the same **Add Integration**
+menu (choose **HA MCP Tools**); it is optional and changes nothing about how the
+in-process server runs.
 
 ## First start takes a little longer
 
-The first time the server starts, the integration downloads and installs the
+The first time the server starts, the component downloads and installs the
 `ha-mcp` package with pip. This can take a minute or two — occasionally longer —
 depending on your connection and hardware; the server starts automatically once
 the install finishes. Later restarts are fast because the package is already
@@ -177,17 +185,17 @@ installed.
 
 **The server won't start.** If the server fails to come up — for example because
 the port is already in use, or token provisioning fails — a repair issue titled
-**The Home Assistant MCP Server failed to start** appears under **Settings →
+**The HA-MCP in-process server failed to start** appears under **Settings →
 Repairs**, carrying the specific reason. If the `ha-mcp` package itself can't be
-installed, the repair issue is titled **The Home Assistant MCP Server package
+installed, the repair issue is titled **The HA-MCP in-process server package
 could not be installed** instead. Fix the cause — check the Home Assistant log and
 your network connectivity for an install failure, or set a different **Server
-port** for a port conflict — then reload the integration (save the options, or use
+port** for a port conflict — then reload the entry (save the options, or use
 **⋮ → Reload**) to retry.
 
-**Nothing happens after updating the integration.** Home Assistant loads custom
-integration code at startup, so after you copy in a new version you must
-**restart Home Assistant** for the update to take effect.
+**Nothing happens after updating the component.** Home Assistant loads custom
+integration code at startup, so after HACS (or a manual copy) delivers a new
+version you must **restart Home Assistant** for the update to take effect.
 
 **Skill guidance is empty after installing from a GitHub tarball.** The **ha-mcp
 package (advanced)** field can install from a GitHub tarball URL, but a git
@@ -198,7 +206,7 @@ content); the tarball override is only meant for quick pre-release testing.
 
 **Where the logs are.** The in-process server logs into the normal Home Assistant
 log (**Settings → System → Logs**, or `home-assistant.log`). Its working data
-lives in `.ha_mcp_server/` under your Home Assistant config directory.
+lives in `.ha_mcp/` under your Home Assistant config directory.
 
 **The connect URL isn't in the notification.** If Home Assistant cannot determine
 an external or internal URL, the notification and Configure screen show the
