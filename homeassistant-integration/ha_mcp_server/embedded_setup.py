@@ -130,15 +130,15 @@ def _surface_connect_urls(
             cloud_base = async_remote_ui_url(hass)
             urls.append(f"{cloud_base}/api/webhook/{webhook_id}")
         except CloudNotAvailable:
-            pass
+            pass  # Cloud not logged in / remote UI off - no remote URL to show.
     except ImportError:
-        pass
+        pass  # Cloud integration not installed (e.g. HA Core) - local URL only.
 
     try:
         local_base = get_url(hass, allow_external=False, prefer_external=False)
         urls.append(f"{local_base}/api/webhook/{webhook_id}")
     except NoURLAvailableError:
-        pass
+        pass  # No internal/local URL configured - fall through to the hint form.
 
     if not urls:
         urls.append(f"/api/webhook/{webhook_id}  (prefix with your Home Assistant URL)")

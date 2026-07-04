@@ -145,7 +145,7 @@ def _seed_config(config_path: Path, wheel_name: str) -> None:
         try:
             path.chmod(0o777 if path.is_dir() else 0o666)
         except OSError:
-            pass
+            pass  # Best-effort chmod; some testcontainer mounts refuse it.
 
 
 def _wait_http_ok(url: str, headers: dict[str, str], timeout: int) -> None:
@@ -155,7 +155,7 @@ def _wait_http_ok(url: str, headers: dict[str, str], timeout: int) -> None:
             if requests.get(url, headers=headers, timeout=5).status_code == 200:
                 return
         except requests.exceptions.RequestException:
-            pass
+            pass  # HA still booting; retry until the deadline.
         time.sleep(2)
     raise AssertionError(f"{url} not ready within {timeout}s")
 

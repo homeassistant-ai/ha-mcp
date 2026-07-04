@@ -13,7 +13,6 @@ webhook ingress in :mod:`embedded_server` / :mod:`mcp_webhook`.
 from __future__ import annotations
 
 import asyncio
-import logging
 import secrets
 from contextlib import suppress
 from typing import TYPE_CHECKING
@@ -38,8 +37,6 @@ from .const import (
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
-
-_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

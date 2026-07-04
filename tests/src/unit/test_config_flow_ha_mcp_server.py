@@ -46,19 +46,6 @@ sys.modules["homeassistant.core"].callback = lambda func: func
 
 import ha_mcp_server.config_flow as cf  # noqa: E402
 import ha_mcp_server.const as const  # noqa: E402
-from ha_mcp_server.const import (  # noqa: E402
-    BIND_HOST_ALL,
-    DATA_SECRET_PATH,
-    DATA_WEBHOOK_ID,
-    DEFAULT_LOOPBACK_URL,
-    DOMAIN,
-    OPT_BIND_HOST,
-    OPT_PIP_SPEC,
-    OPT_SERVER_PORT,
-    OPT_SERVER_URL,
-    OPT_WEBHOOK_AUTH,
-    WEBHOOK_AUTH_HA,
-)
 
 
 def _make_flow() -> cf.HaMcpServerConfigFlow:
@@ -100,7 +87,7 @@ class TestConfigFlow:
     def test_single_instance_guard(self):
         flow = _make_flow()
         asyncio.run(flow.async_step_user(None))
-        flow.async_set_unique_id.assert_awaited_once_with(DOMAIN)
+        flow.async_set_unique_id.assert_awaited_once_with(const.DOMAIN)
         flow._abort_if_unique_id_configured.assert_called_once()
 
 
@@ -110,7 +97,7 @@ class TestOptionsFlow:
         assert isinstance(result, cf.HaMcpServerOptionsFlow)
 
     def test_init_shows_form_with_connect_url_placeholder(self):
-        flow = _make_options_flow(data={DATA_WEBHOOK_ID: "mcp_abc"})
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         form = asyncio.run(flow.async_step_init(None))
         assert form["type"] == "form"
         assert form["step_id"] == "init"
@@ -119,11 +106,11 @@ class TestOptionsFlow:
     def test_init_submit_round_trips_input_into_entry(self):
         flow = _make_options_flow()
         user_input = {
-            OPT_SERVER_PORT: 9999,
-            OPT_BIND_HOST: BIND_HOST_ALL,
-            OPT_WEBHOOK_AUTH: WEBHOOK_AUTH_HA,
-            OPT_PIP_SPEC: "ha-mcp==7.9.0",
-            OPT_SERVER_URL: DEFAULT_LOOPBACK_URL,
+            const.OPT_SERVER_PORT: 9999,
+            const.OPT_BIND_HOST: const.BIND_HOST_ALL,
+            const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
+            const.OPT_PIP_SPEC: "ha-mcp==7.9.0",
+            const.OPT_SERVER_URL: const.DEFAULT_LOOPBACK_URL,
         }
         result = asyncio.run(flow.async_step_init(user_input))
         assert result["type"] == "entry"
@@ -137,8 +124,11 @@ class TestOptionsFlow:
 
     def test_connect_url_hint_uses_configured_port(self):
         flow = _make_options_flow(
-            options={OPT_SERVER_PORT: 9999},
-            data={DATA_WEBHOOK_ID: "mcp_abc", DATA_SECRET_PATH: "/private_x"},
+            options={const.OPT_SERVER_PORT: 9999},
+            data={
+                const.DATA_WEBHOOK_ID: "mcp_abc",
+                const.DATA_SECRET_PATH: "/private_x",
+            },
         )
         hint = flow._connect_url_hint()
         assert "/api/webhook/mcp_abc" in hint

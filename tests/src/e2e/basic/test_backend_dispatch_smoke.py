@@ -81,8 +81,8 @@ _SKIP_CEILING_PER_LANE = {
     # haos=14, haos_inaddon=39 from the prose above), plus this PR's new
     # marker-gated skips, plus a 5-9 growth buffer.
     "container": 67,  # was 65; +1 read-only, +1 core_error_log inaddon test (@inaddon_only, skip here)
-    "haos": 34,  # was 32; +1 read-only, +1 core_error_log inaddon test (@inaddon_only, skip here)
-    "haos_inaddon": 58,  # was 55; +3 self-update notice tests (TestSelfUpdateNoticeSurfacedInTools, @external_only)
+    "haos": 36,  # was 34; +2 in-process ha_mcp_server tests (workflows/embedded, @container_only, run on the container lane only)
+    "haos_inaddon": 59,  # was 58; +1 net from the in-process ha_mcp_server tests (workflows/embedded, @container_only; observed lane count)
 }
 
 
