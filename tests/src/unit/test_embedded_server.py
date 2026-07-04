@@ -593,6 +593,51 @@ class TestThreadEnvStaging:
 
         private_reset.assert_called_once_with()
 
+    @pytest.mark.parametrize(
+        ("url", "token", "half"),
+        [
+            ("__oauth_mode_url__", "real-jwt", "url"),
+            ("http://127.0.0.1:8123", "__oauth_mode_token__", "token"),
+        ],
+    )
+    def test_serve_refuses_sentinel_connection_either_half(
+        self, tmp_path, monkeypatch, url, token, half
+    ):
+        # The guard must refuse to serve when EITHER half of the in-memory
+        # channel resolved to a sentinel (review finding: only the URL half
+        # raised while the log already computed the token half). Fake the
+        # whole ha_mcp surface so _serve reaches the guard hermetically.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+        settings = SimpleNamespace(homeassistant_url=url, homeassistant_token=token)
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_mod.__path__ = []  # package semantics for submodule imports
+        cfg = ModuleType("ha_mcp.config")
+        cfg.reset_global_settings = lambda: None
+        cfg.set_embedded_connection = lambda u, t: None
+        cfg.OAUTH_MODE_URL = "__oauth_mode_url__"
+        cfg.OAUTH_MODE_TOKEN = "__oauth_mode_token__"
+        cfg.get_global_settings = lambda: settings
+        server_mod = ModuleType("ha_mcp.server")
+        server_mod.HomeAssistantSmartMCPServer = lambda: SimpleNamespace(mcp=None)
+        ui_mod = ModuleType("ha_mcp.settings_ui")
+        ui_mod.register_settings_routes = lambda *a, **k: pytest.fail(
+            f"served despite sentinel {half}"
+        )
+        ha_mcp_mod.config = cfg
+        ha_mcp_mod.server = server_mod
+        ha_mcp_mod.settings_ui = ui_mod
+        monkeypatch.setitem(sys.modules, "ha_mcp", ha_mcp_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", cfg)
+        monkeypatch.setitem(sys.modules, "ha_mcp.server", server_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.settings_ui", ui_mod)
+
+        mgr._thread_main("tok-xyz")
+
+        assert isinstance(mgr._thread_exc, es.EmbeddedServerError)
+        assert "sentinel" in str(mgr._thread_exc).lower()
+
     def test_thread_crash_is_captured_not_raised(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
 
@@ -629,10 +674,12 @@ class TestTokenProvisioning:
         rt_kwargs = hass.auth.async_create_refresh_token.await_args.kwargs
         assert rt_kwargs["client_name"] == SERVER_TOKEN_CLIENT_NAME
         assert rt_kwargs["token_type"] == _TOKEN_TYPE_LLAT
-        # ids + access token persisted to entry.data.
+        # Only the REUSE ids are persisted; the access token stays in
+        # memory (review finding: it was stored but never read, leaving an
+        # unused admin JWT at rest + a config-entry rewrite every start).
         assert entry.data[DATA_SERVER_USER_ID] == "new-user"
         assert entry.data[DATA_REFRESH_TOKEN_ID] == "rt-new"
-        assert entry.data[DATA_ACCESS_TOKEN] == "access-token-xyz"
+        assert DATA_ACCESS_TOKEN not in entry.data
 
     async def test_reuse_across_restart_mints_only_access_token(self, tmp_path):
         user = _user("stored-user")

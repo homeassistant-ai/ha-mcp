@@ -164,8 +164,8 @@ def test_backend_dispatch_matches_workflow_env(
         # (not the addon path); embedded_webhook_url is the connect URL.
         assert backend == "haos_embedded", (
             f"Workflow set HAOS_TEST_IMAGE_PATH + HAOS_TEST_MODE=embedded "
-            f"but dispatch picked backend={backend!r}. The in-process "
-            f"the in-process MCP server is NOT the server-under-test for this run."
+            f"but dispatch picked backend={backend!r}. "
+            f"The in-process MCP server is NOT the server-under-test for this run."
         )
         assert ha_container_with_fresh_config["container"] is None
         assert ha_container_with_fresh_config["port"] is None

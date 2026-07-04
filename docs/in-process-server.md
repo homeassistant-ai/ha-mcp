@@ -109,8 +109,7 @@ another free one).
 
 ## Options
 
-Open **Settings → Devices & Services → HA-MCP Custom Component → In-process MCP
-server → Configure** to change these. Saving the options reloads the server so
+Open **Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure** to change these. Saving the options reloads the server so
 the changes take effect. (The **HA MCP Tools** services entry has no options — a
 Configure there just reports that.)
 

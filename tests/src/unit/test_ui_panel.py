@@ -221,6 +221,39 @@ class TestProxyForwarding:
         # Forwarded to the loopback settings route under the secret path.
         assert session.calls[0]["url"] == f"{_TARGET}/settings"
 
+    async def test_relay_strips_encoding_and_length_response_headers(self):
+        # aiohttp's read() transparently DECOMPRESSES the upstream body, so
+        # relaying the upstream's Content-Encoding / Content-Length /
+        # Transfer-Encoding would make the browser re-inflate an already
+        # inflated body (every gzipped settings response renders as garbage).
+        # Pin the response-side stripping (the request side is pinned above).
+        upstream = FakeUpstream(
+            status=200,
+            headers={
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Encoding": "gzip",
+                "Content-Length": "999",
+                "Transfer-Encoding": "chunked",
+                "Cache-Control": "no-store",
+            },
+            body=b"<html>inflated</html>",
+        )
+        session = FakeSession(upstream=upstream)
+        hass = _running_hass(session)
+        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
+
+        resp = await ui_panel._ProxyView().get(request, "settings")
+
+        assert resp.status == 200
+        assert "Content-Encoding" not in resp.headers
+        assert "Transfer-Encoding" not in resp.headers
+        # aiohttp recomputes Content-Length from the actual body if at all;
+        # the stale upstream value must not survive the relay.
+        assert resp.headers.get("Content-Length") != "999"
+        # Benign headers still pass through.
+        assert resp.headers["Content-Type"] == "text/html; charset=utf-8"
+        assert resp.headers["Cache-Control"] == "no-store"
+
     async def test_forwards_subpath_with_query_and_strips_sensitive_headers(self):
         session = FakeSession(upstream=FakeUpstream(body=b"{}"))
         hass = _running_hass(session)

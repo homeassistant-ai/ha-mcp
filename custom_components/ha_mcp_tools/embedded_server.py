@@ -455,12 +455,19 @@ class EmbeddedServerManager:
         # hass is untyped here (homeassistant mocked in unit tier); pin str.
         access_token = str(self._hass.auth.async_create_access_token(refresh_token))
 
+        # Persist only the ids needed to REUSE the credentials next start.
+        # The access token itself is deliberately NOT stored: it is handed to
+        # the worker in memory, nothing ever reads it back from entry.data,
+        # and a fresh JWT is minted each start - persisting it would leave an
+        # unused admin token in .storage AND rewrite the config entry on
+        # every start (each mint differs). Review finding; the revoke path
+        # still strips the legacy key from entries written by older builds.
         new_data = {
             **self._entry.data,
             DATA_SERVER_USER_ID: user.id,
             DATA_REFRESH_TOKEN_ID: refresh_token.id,
-            DATA_ACCESS_TOKEN: access_token,
         }
+        new_data.pop(DATA_ACCESS_TOKEN, None)
         if new_data != dict(self._entry.data):
             self._hass.config_entries.async_update_entry(self._entry, data=new_data)
         return access_token
@@ -522,6 +529,11 @@ class EmbeddedServerManager:
         )
         if _reset is not None:
             _reset()
+        else:
+            _LOGGER.debug(
+                "ha_mcp.config exposes no settings-reset seam; a reloaded "
+                "entry may serve stale override values until HA restarts"
+            )
 
         _hamcp_config.set_embedded_connection(self._server_url, access_token)
 
@@ -547,15 +559,21 @@ class EmbeddedServerManager:
             else "SENTINEL-MISSING",
             self._server_url,
         )
-        if resolved.homeassistant_url in ("", OAUTH_MODE_URL):
+        if resolved.homeassistant_url in (
+            "",
+            OAUTH_MODE_URL,
+        ) or resolved.homeassistant_token in ("", OAUTH_MODE_TOKEN):
             # Refuse to serve: a sentinel connection means every tool call
             # would fail while the bring-up still looked successful (webhook
             # registered, connect-URL notification shown). Raising propagates
             # via _thread_exc -> the readiness probe -> a repair issue, which
-            # is the honest outcome (live-found signal-swallow).
+            # is the honest outcome (live-found signal-swallow). URL and
+            # token are checked SYMMETRICALLY - today they can only fail
+            # jointly, but the guard must catch a future regression in
+            # either half of the in-memory channel.
             raise EmbeddedServerError(
                 "The in-process settings channel did not apply - the server "
-                "has no Home Assistant connection (sentinel URL). "
+                "has no Home Assistant connection (sentinel URL or token). "
                 "Refusing to start."
             )
 

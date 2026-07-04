@@ -496,7 +496,13 @@ class HaMcpServerPanel extends HTMLElement {{
   }}
 
   async _start() {{
-    if (!this._hass || !this._root || this._busy) return;
+    // _started gates the reactive path: Home Assistant re-assigns `hass` on
+    // essentially every state change, and without this flag each push would
+    // mint a fresh session + probe the app (request spam + a new server-side
+    // session entry per event). Set only on SUCCESS so failures keep
+    // retrying on the next push; the interval timer owns steady-state
+    // refresh.
+    if (!this._hass || !this._root || this._busy || this._started) return;
     this._busy = true;
     try {{
       await this._mint();
@@ -569,6 +575,7 @@ class HaMcpServerPanel extends HTMLElement {{
     }}
     this._msg.classList.add("hidden");
     this._frame.classList.remove("hidden");
+    this._started = true;
   }}
 
   _showMessage(text) {{

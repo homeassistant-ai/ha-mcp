@@ -271,7 +271,14 @@ class TestHaAuthGate:
         return mw.ResourceServer(hass, WEBHOOK_ID)
 
     async def test_valid_bearer_passes_through(self):
-        hass = _make_hass(validate_result=SimpleNamespace(id="refresh-token"))
+        hass = _make_hass(
+            validate_result=SimpleNamespace(
+                id="refresh-token",
+                user=SimpleNamespace(
+                    is_admin=True, is_active=True, system_generated=False
+                ),
+            )
+        )
         session = FakeSession(upstream=FakeUpstream(status=200))
         _store_cfg(
             hass,
@@ -348,10 +355,46 @@ class TestResourceServerValidation:
         assert await provider.validate_request(request) is False
         hass.auth.async_validate_access_token.assert_not_called()
 
-    async def test_valid_token_authorized(self):
-        provider, _ = self._provider(validate_result=SimpleNamespace(id="rt"))
+    @staticmethod
+    def _token_for(*, is_admin=True, is_active=True, system_generated=False):
+        return SimpleNamespace(
+            id="rt",
+            user=SimpleNamespace(
+                is_admin=is_admin,
+                is_active=is_active,
+                system_generated=system_generated,
+            ),
+        )
+
+    async def test_valid_admin_token_authorized(self):
+        provider, _ = self._provider(validate_result=self._token_for())
         request = make_request(headers={"Authorization": "Bearer tok"})
         assert await provider.validate_request(request) is True
+
+    async def test_non_admin_token_is_unauthorized(self):
+        # SECURITY CONTRACT (round-1 HIGH, restored after the original fix was
+        # lost in transit): the server acts with its own provisioned ADMIN
+        # token, so a non-admin household login must NOT be accepted.
+        provider, _ = self._provider(validate_result=self._token_for(is_admin=False))
+        request = make_request(headers={"Authorization": "Bearer tok"})
+        assert await provider.validate_request(request) is False
+
+    async def test_inactive_user_is_unauthorized(self):
+        provider, _ = self._provider(validate_result=self._token_for(is_active=False))
+        request = make_request(headers={"Authorization": "Bearer tok"})
+        assert await provider.validate_request(request) is False
+
+    async def test_system_generated_user_is_unauthorized(self):
+        provider, _ = self._provider(
+            validate_result=self._token_for(system_generated=True)
+        )
+        request = make_request(headers={"Authorization": "Bearer tok"})
+        assert await provider.validate_request(request) is False
+
+    async def test_userless_refresh_token_is_unauthorized(self):
+        provider, _ = self._provider(validate_result=SimpleNamespace(id="rt"))
+        request = make_request(headers={"Authorization": "Bearer tok"})
+        assert await provider.validate_request(request) is False
 
     async def test_validator_none_is_unauthorized(self):
         provider, _ = self._provider(validate_result=None)
@@ -367,7 +410,12 @@ class TestResourceServerValidation:
         hass = _make_hass()
 
         async def _async_validate(_token):
-            return SimpleNamespace(id="rt")
+            return SimpleNamespace(
+                id="rt",
+                user=SimpleNamespace(
+                    is_admin=True, is_active=True, system_generated=False
+                ),
+            )
 
         hass.auth.async_validate_access_token = MagicMock(side_effect=_async_validate)
         provider = mw.ResourceServer(hass, WEBHOOK_ID)

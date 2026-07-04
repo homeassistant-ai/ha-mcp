@@ -54,7 +54,7 @@ Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access to
 
 2. Install **"Home Assistant MCP Server"** from the App Store and click **Start**. *(Home Assistant 2026.2 renamed "Add-ons" to "Apps"; on older versions this is the Add-on Store.)*
 3. Open the **Logs** tab to find your unique MCP URL
-4. Connect your AI client to that URL — **no token or credential setup needed**
+5. Connect your AI client to that URL — **no token or credential setup needed**
 
 [Full add-on documentation →](homeassistant-addon/DOCS.md)
 
@@ -69,7 +69,7 @@ Not on Home Assistant OS? Home Assistant **Container** and **Core** installs can
 2. Add the integration (**Settings → Devices & Services → Add Integration → HA-MCP Custom Component**) and choose **HA-MCP Server** from the menu, then submit — creating the entry starts the server
 3. Copy the connect URL from the **HA-MCP Server** notification (also shown on the entry's Configure screen)
 4. Manage the server from the **HA-MCP** sidebar panel (admin-only web settings UI)
-4. Connect your AI client to that URL
+5. Connect your AI client to that URL
 
 [Full in-process server documentation →](docs/in-process-server.md)
 

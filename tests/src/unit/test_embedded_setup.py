@@ -271,6 +271,11 @@ class TestSurfaceConnectUrls:
         message = self._message()
         assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in message
         assert "http://192.168.1.5:8123/api/webhook/mcp_id" in message
+        # The rename commit's discoverability contract: the running
+        # notification links the sidebar settings panel and carries the
+        # HA-MCP Server title (the only path from "it is running" to the UI).
+        assert "[HA-MCP settings panel](/ha-mcp)" in message
+        assert self.notif.call_args.kwargs.get("title") == "HA-MCP Server"
 
     def test_falls_back_to_relative_url_when_none_available(self):
         _install_network_cloud(cloud_url=None, local_url=None)

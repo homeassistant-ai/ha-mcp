@@ -170,7 +170,20 @@ class ResourceServer:
                 exc_info=True,
             )
             return False
-        return result is not None
+        if result is None:
+            return False
+        # ADMIN-ONLY: the server performs every Home Assistant operation with
+        # its own provisioned ADMIN token, so accepting any valid login would
+        # grant every household member admin-equivalent control. Require an
+        # active, human, administrator account (mirrors the settings panel).
+        user = getattr(result, "user", None)
+        if user is None:
+            return False
+        if getattr(user, "system_generated", False):
+            return False
+        if not getattr(user, "is_active", False):
+            return False
+        return bool(getattr(user, "is_admin", False))
 
 
 # ---------------------------------------------------------------------------
