@@ -137,8 +137,11 @@ The in-process server offers two authentication postures, chosen with the
   Core acts as the OAuth authorization server. MCP clients that support OAuth
   (for example claude.ai and ChatGPT) discover the sign-in endpoints
   automatically and authenticate the user against Home Assistant; requests
-  without a valid Home Assistant token are rejected. There is no separate
-  password or credential to manage — it is your existing Home Assistant login.
+  without a valid Home Assistant token are rejected. Only **administrator**
+  accounts are accepted: the server performs its Home Assistant operations with
+  its own provisioned admin token, so a non-admin login is refused rather than
+  silently granted admin-equivalent control. There is no separate password or
+  credential to manage — it is your existing Home Assistant admin login.
 
 Both postures ride Home Assistant's own remote access (Nabu Casa / your reverse
 proxy) for TLS. If you expose the server to the internet, prefer `ha_auth`, or

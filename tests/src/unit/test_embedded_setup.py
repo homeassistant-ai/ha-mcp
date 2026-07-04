@@ -279,3 +279,25 @@ class TestSurfaceConnectUrls:
         esetup._surface_connect_urls(hass, entry, "ha_auth")
         self.notif.assert_called_once()
         assert "/api/webhook/mcp_id" in self._message()
+
+    def test_lan_bind_surfaces_direct_access_line(self):
+        # bind_host=0.0.0.0 is the user-visible signal that the server is
+        # exposed beyond loopback — the notification must say so, with the
+        # direct URL (review finding: branch previously uncovered).
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
+            options={esetup.OPT_BIND_HOST: "0.0.0.0", esetup.OPT_SERVER_PORT: 9999},
+        )
+        esetup._surface_connect_urls(hass, entry, "none")
+        message = self._message()
+        assert "Direct LAN access" in message
+        assert ":9999/priv" in message
+
+    def test_loopback_bind_omits_direct_access_line(self):
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
+        esetup._surface_connect_urls(hass, entry, "none")
+        assert "Direct LAN access" not in self._message()

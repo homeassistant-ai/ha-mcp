@@ -108,7 +108,11 @@ authentication postures, selected in the integration options:
 - **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
   authorization server: the integration serves the discovery documents and
   validates inbound Bearer tokens against Home Assistant's own auth, so access
-  is gated by a Home Assistant login. This is distinct from the beta OAuth mode
+  is gated by a Home Assistant login — and restricted to **administrator**
+  users. The server acts with its own provisioned admin token (the caller's
+  bearer is never forwarded), so accepting any valid login would grant every
+  household member admin-equivalent control; non-admin, inactive, and
+  system-generated users are rejected. This is distinct from the beta OAuth mode
   below — no bespoke authorization server or self-issued token is involved, and
   revoking the user's Home Assistant token/session revokes access.
 

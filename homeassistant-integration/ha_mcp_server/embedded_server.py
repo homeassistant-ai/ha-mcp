@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.metadata
+import importlib.util
 import logging
 import os
 import subprocess
@@ -37,7 +38,7 @@ import threading
 from contextlib import suppress
 from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from homeassistant.auth.const import GROUP_ID_ADMIN
 from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
@@ -111,7 +112,9 @@ class EmbeddedServerError(Exception):
     everything else (token provisioning, thread crash, readiness timeout).
     """
 
-    def __init__(self, message: str, *, kind: str = "start") -> None:
+    def __init__(
+        self, message: str, *, kind: Literal["package", "start"] = "start"
+    ) -> None:
         """Store the message and the failure ``kind`` (``package`` / ``start``)."""
         super().__init__(message)
         self.kind = kind
@@ -208,7 +211,12 @@ class EmbeddedServerManager:
         loop = self._loop
         stop_event = self._stop_event
         if loop is not None and stop_event is not None and not loop.is_closed():
-            loop.call_soon_threadsafe(stop_event.set)
+            try:
+                loop.call_soon_threadsafe(stop_event.set)
+            except RuntimeError:
+                # The worker's loop closed between the is_closed() check and
+                # this call (thread already exiting) - join below handles it.
+                pass
 
         await self._hass.async_add_executor_job(thread.join, _STOP_JOIN_TIMEOUT_SECONDS)
         if thread.is_alive():
@@ -220,6 +228,7 @@ class EmbeddedServerManager:
         self._thread = None
         self._loop = None
         self._stop_event = None
+        self._thread_exc = None
 
     async def async_revoke_credentials(self) -> None:
         """Revoke the provisioned refresh token and remove the server's user.
@@ -443,7 +452,8 @@ class EmbeddedServerManager:
                 access_token_expiration=_ACCESS_TOKEN_TTL,
             )
 
-        access_token = self._hass.auth.async_create_access_token(refresh_token)
+        # hass is untyped here (homeassistant mocked in unit tier); pin str.
+        access_token = str(self._hass.auth.async_create_access_token(refresh_token))
 
         new_data = {
             **self._entry.data,
@@ -522,9 +532,15 @@ class EmbeddedServerManager:
             self._server_url,
         )
         if resolved.homeassistant_url in ("", OAUTH_MODE_URL):
-            _LOGGER.error(
-                "Embedded connection did not apply (sentinel URL) — tool calls "
-                "will fail. This indicates the in-process settings channel broke."
+            # Refuse to serve: a sentinel connection means every tool call
+            # would fail while the bring-up still looked successful (webhook
+            # registered, connect-URL notification shown). Raising propagates
+            # via _thread_exc -> the readiness probe -> a repair issue, which
+            # is the honest outcome (live-found signal-swallow).
+            raise EmbeddedServerError(
+                "The in-process settings channel did not apply - the server "
+                "has no Home Assistant connection (sentinel URL). "
+                "Refusing to start."
             )
 
         # Parity with the CLI HTTP runner: serve the web settings UI under the
@@ -635,6 +651,12 @@ def _installed_ha_mcp_version() -> str | None:
     names, mirroring ``ha_mcp._version.get_version``.
     """
     importlib.invalidate_caches()
+    # Metadata alone is not proof: a channel switch's best-effort uninstall
+    # can leave ORPHANED .dist-info whose files are gone (the shared ha_mcp/
+    # tree belongs to whichever dist installed last). Require the import
+    # machinery to actually resolve the package before trusting any version.
+    if importlib.util.find_spec("ha_mcp") is None:
+        return None
     for dist_name in (DIST_NAME_STABLE, DIST_NAME_DEV):
         with suppress(importlib.metadata.PackageNotFoundError):
             return importlib.metadata.version(dist_name)

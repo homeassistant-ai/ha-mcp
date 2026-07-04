@@ -358,9 +358,18 @@ class TestResourceServerValidation:
 # ---------------------------------------------------------------------------
 
 
-def _live_hass(auth_mode: str = WEBHOOK_AUTH_HA) -> MagicMock:
+def _live_hass(
+    auth_mode: str = WEBHOOK_AUTH_HA, webhook_id: str = WEBHOOK_ID
+) -> MagicMock:
     hass = _make_hass()
-    hass.data[DOMAIN] = {DATA_WEBHOOK: {"auth_mode": auth_mode}}
+    # Mirrors async_register_webhook's runtime cfg: the views resolve the
+    # ACTIVE provider from here per request (stale-binding fix).
+    hass.data[DOMAIN] = {
+        DATA_WEBHOOK: {
+            "auth_mode": auth_mode,
+            "resource_server": mw.ResourceServer(hass, webhook_id),
+        }
+    }
     return hass
 
 
@@ -393,7 +402,7 @@ class TestDiscoveryViews:
 
     async def test_protected_resource_view_payload_when_live(self):
         hass = _live_hass()
-        view = mw._ProtectedResourceMetadataView(mw.ResourceServer(hass, WEBHOOK_ID))
+        view = mw._ProtectedResourceMetadataView(hass)
         request = make_request(headers={"Host": "abc.ui.nabu.casa"})
         resp = await view.get(request)
         assert resp.status == 200
@@ -406,33 +415,57 @@ class TestDiscoveryViews:
 
     async def test_protected_resource_view_404_when_not_live(self):
         hass = _live_hass(auth_mode=WEBHOOK_AUTH_NONE)
-        view = mw._ProtectedResourceMetadataView(mw.ResourceServer(hass, WEBHOOK_ID))
+        view = mw._ProtectedResourceMetadataView(hass)
         resp = await view.get(make_request(headers={"Host": "x"}))
         assert resp.status == 404
 
     async def test_authorization_server_view_payload_when_live(self):
         hass = _live_hass()
-        view = mw._AuthorizationServerMetadataView(mw.ResourceServer(hass, WEBHOOK_ID))
+        view = mw._AuthorizationServerMetadataView(hass)
         resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
         assert resp.status == 200
         assert resp.json_body["token_endpoint"] == "https://abc.ui.nabu.casa/auth/token"
 
     async def test_authorization_server_view_404_when_entry_unloaded(self):
         hass = _make_hass()  # no DOMAIN data at all
-        view = mw._AuthorizationServerMetadataView(mw.ResourceServer(hass, WEBHOOK_ID))
+        view = mw._AuthorizationServerMetadataView(hass)
         resp = await view.get(make_request(headers={"Host": "x"}))
         assert resp.status == 404
 
-    def test_wellknown_protected_resource_url_embeds_webhook_id(self):
-        provider = mw.ResourceServer(_make_hass(), WEBHOOK_ID)
-        view = mw._WellKnownProtectedResourceView(provider)
-        assert view.url == (
-            f"/.well-known/oauth-protected-resource/api/webhook/{WEBHOOK_ID}"
+    def test_wellknown_protected_resource_url_is_parameterized(self):
+        # Stale-binding fix: the webhook id is a route PARAMETER, so the one
+        # bound view serves whichever entry is currently live (a remove+re-add
+        # mints a new id in the same HA session).
+        assert mw._WellKnownProtectedResourceView.url == (
+            "/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
+        )
+
+    async def test_wellknown_protected_resource_serves_only_current_id(self):
+        hass = _live_hass()
+        view = mw._WellKnownProtectedResourceView(hass)
+        request = make_request(headers={"Host": "abc.ui.nabu.casa"})
+        ok = await view.get(request, webhook_id=WEBHOOK_ID)
+        assert ok.status == 200
+        stale = await view.get(request, webhook_id="mcp_stale_previous_entry")
+        assert stale.status == 404
+
+    async def test_views_serve_new_provider_after_entry_recreate(self):
+        # The live-found stale-binding scenario: views registered during the
+        # FIRST entry keep working for a SECOND entry with a new webhook id.
+        hass = _live_hass()
+        view = mw._ProtectedResourceMetadataView(hass)
+        hass.data[DOMAIN][DATA_WEBHOOK] = {
+            "auth_mode": WEBHOOK_AUTH_HA,
+            "resource_server": mw.ResourceServer(hass, "mcp_second_entry_id"),
+        }
+        resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
+        assert resp.status == 200
+        assert resp.json_body["resource"] == (
+            "https://abc.ui.nabu.casa/api/webhook/mcp_second_entry_id"
         )
 
     def test_metadata_views_bundle_is_seven_unique_named_views(self):
-        provider = mw.ResourceServer(_make_hass(), WEBHOOK_ID)
-        views = mw._metadata_views(provider)
+        views = mw._metadata_views(_make_hass())
         assert len(views) == 7
         names = {v.name for v in views}
         assert len(names) == 7  # all unique route names
@@ -513,6 +546,38 @@ class TestRegisterWebhook:
         # Seven discovery views were bound on hass.http.
         assert hass.http.register_view.call_count == 7
         assert hass.data.get(mw._OAUTH_VIEWS_REGISTERED_KEY) is True
+
+    async def test_ha_auth_re_enable_reuses_bound_views(self, monkeypatch):
+        # aiohttp cannot unregister a bound view; the once-per-session guard
+        # lives at a TOP-LEVEL hass.data key precisely so a none->ha_auth->
+        # none->ha_auth cycle re-USES the 7 views instead of re-binding them
+        # (which raises and takes the whole bring-up down). Review finding:
+        # only the first registration was tested.
+        hass = _register_hass()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_HA,
+        )
+        assert hass.http.register_view.call_count == 7
+        await mw.async_unregister_webhook(hass)
+
+        # Second enable in the same HA session: no new bindings, no raise.
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_HA,
+        )
+        assert hass.http.register_view.call_count == 7
+        assert isinstance(
+            hass.data[DOMAIN][DATA_WEBHOOK]["resource_server"], mw.ResourceServer
+        )
 
     async def test_registration_failure_closes_session_and_unregisters(
         self, monkeypatch

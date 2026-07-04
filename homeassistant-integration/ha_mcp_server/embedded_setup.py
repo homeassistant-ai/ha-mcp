@@ -176,9 +176,19 @@ def _surface_connect_urls(
     )
 
 
+_ISSUE_BY_KIND = {
+    "package": ISSUE_PACKAGE_FAILED,
+    "start": ISSUE_START_FAILED,
+}
+
+
 def _create_issue(hass: HomeAssistant, kind: str, detail: str) -> None:
-    """File the repair issue matching the failure ``kind`` (package / start)."""
-    issue_id = ISSUE_PACKAGE_FAILED if kind == "package" else ISSUE_START_FAILED
+    """File the repair issue matching the failure ``kind`` (package / start).
+
+    Exhaustive lookup on purpose: an unknown kind is a coding error and must
+    raise here rather than silently filing the wrong user-facing repair issue.
+    """
+    issue_id = _ISSUE_BY_KIND[kind]
     ir.async_create_issue(
         hass,
         DOMAIN,

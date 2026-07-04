@@ -277,6 +277,10 @@ class TestEnsurePackage:
         with pytest.raises(es.EmbeddedServerError) as exc:
             await mgr._async_ensure_package()
         assert exc.value.kind == "package"
+        # A FAILED install must never persist the spec: a poisoned
+        # DATA_LAST_PIP_SPEC would make the next reload take the fast path and
+        # never self-heal (review finding).
+        assert DATA_LAST_PIP_SPEC not in _entry.data
 
     async def test_installed_but_not_importable_raises_package_error(
         self, tmp_path, monkeypatch
@@ -289,6 +293,7 @@ class TestEnsurePackage:
         with pytest.raises(es.EmbeddedServerError) as exc:
             await mgr._async_ensure_package()
         assert exc.value.kind == "package"
+        assert DATA_LAST_PIP_SPEC not in _entry.data
 
     async def test_dev_channel_always_forces_install(self, tmp_path, monkeypatch):
         # Dev channel skips the fast path even when the stored spec matches and
@@ -338,6 +343,32 @@ class TestEnsurePackage:
         uninstall.assert_called_once_with(DIST_NAME_STABLE)
         install_pkg.assert_called_once()
         assert install_pkg.call_args.args[0] == DEV_PIP_SPEC
+
+    async def test_channel_switch_downgrade_uninstalls_dev_dist(
+        self, tmp_path, monkeypatch
+    ):
+        # The motivating case for _async_remove_conflicting_dist: dev -> stable
+        # must uninstall ha-mcp-dev BEFORE the pinned stable reinstall, or the
+        # orphaned dev metadata makes the pin look satisfied and the user keeps
+        # running dev builds (review finding: only stable -> dev was wired-tested).
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_STABLE},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEV_PIP_SPEC},
+        )
+        install_pkg = MagicMock(return_value=True)
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_dist_installed", lambda name: name == DIST_NAME_DEV)
+        uninstall = MagicMock()
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_called_once_with(DIST_NAME_DEV)
+        install_pkg.assert_called_once()
+        assert install_pkg.call_args.args[0] == DEFAULT_PIP_SPEC
 
     async def test_no_uninstall_for_explicit_override(self, tmp_path, monkeypatch):
         # An explicit override has an unknown distribution name, so nothing is
@@ -405,6 +436,14 @@ class TestDistHelpers:
 
 
 class TestInstalledVersion:
+    @pytest.fixture(autouse=True)
+    def _importable(self, monkeypatch):
+        # The guard now also requires the import machinery to resolve ha_mcp
+        # (orphaned-metadata hazard); default to importable, tests override.
+        monkeypatch.setattr(
+            es.importlib.util, "find_spec", lambda name: object(), raising=True
+        )
+
     def test_returns_stable_dist_version(self, monkeypatch):
         monkeypatch.setattr(importlib.metadata, "version", lambda name: "7.9.0")
         assert es._installed_ha_mcp_version() == "7.9.0"
@@ -423,6 +462,16 @@ class TestInstalledVersion:
             raise importlib.metadata.PackageNotFoundError(name)
 
         monkeypatch.setattr(importlib.metadata, "version", _version)
+        assert es._installed_ha_mcp_version() is None
+
+    def test_orphaned_metadata_without_importable_package_is_none(self, monkeypatch):
+        # Regression (review finding): a channel switch's best-effort uninstall
+        # can leave the OTHER dist's .dist-info while the shared ha_mcp/ files
+        # are gone — metadata alone must not count as installed, or the
+        # post-install guard passes and the worker thread crashes on import
+        # (surfaced as the WRONG repair issue).
+        monkeypatch.setattr(importlib.metadata, "version", lambda name: "7.9.0")
+        monkeypatch.setattr(es.importlib.util, "find_spec", lambda name: None)
         assert es._installed_ha_mcp_version() is None
 
 
@@ -764,6 +813,81 @@ class TestLifecycle:
         mgr, _hass, _entry = _manager(tmp_path)
         await mgr.async_stop()  # must not raise
         assert mgr.is_running is False
+
+    async def test_stop_signals_and_joins_bounded_then_orphans(self, tmp_path):
+        # HA-shutdown safety contract (review finding: untested): async_stop
+        # must schedule the stop event threadsafe, join with the BOUNDED
+        # timeout, and when the thread refuses to die, orphan it (clearing all
+        # worker state) instead of blocking Home Assistant shutdown.
+        mgr, _hass, _entry = _manager(tmp_path)
+        joins: list[object] = []
+
+        class _FakeThread:
+            def is_alive(self):
+                return True  # wedged thread: join times out
+
+            def join(self, timeout=None):
+                joins.append(timeout)
+
+        class _FakeLoop:
+            def __init__(self):
+                self.scheduled = []
+
+            def is_closed(self):
+                return False
+
+            def call_soon_threadsafe(self, cb):
+                self.scheduled.append(cb)
+
+        class _FakeEvent:
+            def set(self):
+                pass
+
+        loop = _FakeLoop()
+        mgr._thread = _FakeThread()
+        mgr._loop = loop
+        mgr._stop_event = _FakeEvent()
+        mgr._thread_exc = RuntimeError("stale")
+
+        await mgr.async_stop()
+
+        assert len(loop.scheduled) == 1  # stop event scheduled threadsafe
+        assert joins == [es._STOP_JOIN_TIMEOUT_SECONDS]  # bounded join
+        # Worker state fully cleared even for the orphaned thread.
+        assert mgr._thread is None
+        assert mgr._loop is None
+        assert mgr._stop_event is None
+        assert mgr._thread_exc is None
+
+    async def test_stop_survives_loop_closing_race(self, tmp_path):
+        # The loop can close between is_closed() and call_soon_threadsafe
+        # (worker exiting) — the RuntimeError must not escape async_stop.
+        mgr, _hass, _entry = _manager(tmp_path)
+
+        class _RacyLoop:
+            def is_closed(self):
+                return False
+
+            def call_soon_threadsafe(self, cb):
+                raise RuntimeError("Event loop is closed")
+
+        class _DeadThread:
+            def is_alive(self):
+                return False
+
+            def join(self, timeout=None):
+                pass
+
+        class _FakeEvent:
+            def set(self):
+                pass
+
+        mgr._thread = _DeadThread()
+        mgr._loop = _RacyLoop()
+        mgr._stop_event = _FakeEvent()
+
+        await mgr.async_stop()  # must not raise
+        assert mgr._thread is None
 
     def test_prepare_config_dir_creates_directory(self, tmp_path):
         mgr, _hass, _entry = _manager(tmp_path)

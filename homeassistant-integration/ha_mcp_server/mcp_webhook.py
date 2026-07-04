@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -40,6 +41,7 @@ from .const import (
     DOMAIN,
     OAUTH_BASE,
     WEBHOOK_AUTH_HA,
+    WEBHOOK_AUTH_NONE,
 )
 
 if TYPE_CHECKING:
@@ -176,18 +178,24 @@ class ResourceServer:
 # ---------------------------------------------------------------------------
 
 
-def _ha_auth_live(hass: HomeAssistant) -> bool:
-    """Return True while an entry is set up with ha_auth webhook auth.
+def _active_resource_server(hass: HomeAssistant) -> ResourceServer | None:
+    """Return the CURRENT entry's ha_auth resource server, or None.
 
-    The discovery views consult this per request so that, once the entry is
-    unloaded or switched away from ha_auth, the still-bound views 404 like an
-    unregistered route (HA can't drop a bound view until it restarts).
+    The discovery views resolve this per request instead of binding a provider
+    at registration time: aiohttp can't drop a bound view until HA restarts, so
+    a remove + re-add of the config entry (which mints a NEW webhook id in the
+    same HA session) would otherwise leave the views advertising the old id.
+    Returns None when no entry is live or the webhook auth mode is not ha_auth
+    — the views then 404 like an unregistered route.
     """
     domain_data = hass.data.get(DOMAIN)
     if not isinstance(domain_data, dict):
-        return False
+        return None
     cfg = domain_data.get(DATA_WEBHOOK)
-    return isinstance(cfg, dict) and cfg.get("auth_mode") == WEBHOOK_AUTH_HA
+    if not isinstance(cfg, dict) or cfg.get("auth_mode") != WEBHOOK_AUTH_HA:
+        return None
+    provider = cfg.get("resource_server")
+    return provider if isinstance(provider, ResourceServer) else None
 
 
 def _json_not_found() -> web.Response:
@@ -203,21 +211,20 @@ class _ProtectedResourceMetadataView(HomeAssistantView):
     url = f"{OAUTH_BASE}/protected-resource"
     name = "ha_mcp_server:oauth:protected-resource"
 
-    def __init__(self, provider: ResourceServer) -> None:
-        """Bind the view to its ha_auth resource server."""
-        self._provider = provider
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Bind the view to the HA instance; the provider is resolved per request."""
+        self._hass = hass
 
     async def get(self, request: web.Request) -> web.Response:
         """Serve the protected-resource document (or 404 when ha_auth is off)."""
-        if not _ha_auth_live(self._provider._hass):
+        provider = _active_resource_server(self._hass)
+        if provider is None:
             return _json_not_found()
         base = _build_base_url(request)
         return web.json_response(
             {
-                "resource": self._provider.resource_url(base),
-                "authorization_servers": [
-                    self._provider.authorization_server_url(base)
-                ],
+                "resource": provider.resource_url(base),
+                "authorization_servers": [provider.authorization_server_url(base)],
                 "bearer_methods_supported": ["header"],
                 "resource_documentation": "https://github.com/homeassistant-ai/ha-mcp",
             }
@@ -232,13 +239,13 @@ class _AuthorizationServerMetadataView(HomeAssistantView):
     url = f"{OAUTH_BASE}/authorization-server"
     name = "ha_mcp_server:oauth:authorization-server"
 
-    def __init__(self, provider: ResourceServer) -> None:
-        """Bind the view to its ha_auth resource server."""
-        self._provider = provider
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Bind the view to the HA instance; liveness is resolved per request."""
+        self._hass = hass
 
     async def get(self, request: web.Request) -> web.Response:
         """Serve the authorization-server document (or 404 when ha_auth is off)."""
-        if not _ha_auth_live(self._provider._hass):
+        if _active_resource_server(self._hass) is None:
             return _json_not_found()
         base = _build_base_url(request)
         return web.json_response(_authorization_server_document(base))
@@ -249,17 +256,23 @@ class _WellKnownProtectedResourceView(_ProtectedResourceMetadataView):
 
     Same document, served at the well-known location derived from the webhook
     resource URL — claude.ai's first fallback probe when the 401's
-    ``resource_metadata`` pointer is missing.
+    ``resource_metadata`` pointer is missing. The webhook id is a ROUTE
+    PARAMETER (not baked into the path at registration): a remove + re-add of
+    the entry mints a new webhook id in the same HA session, and the bound view
+    must serve whichever id is currently live (404 for any other).
     """
 
     name = "ha_mcp_server:oauth:wellknown-protected-resource"
+    url = "/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
 
-    def __init__(self, provider: ResourceServer) -> None:
-        """Bind and set the per-install well-known URL embedding the webhook id."""
-        super().__init__(provider)
-        self.url = (
-            f"/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
-        )
+    async def get(  # type: ignore[override]
+        self, request: web.Request, webhook_id: str
+    ) -> web.Response:
+        """Serve the document only for the CURRENT entry's webhook id."""
+        provider = _active_resource_server(self._hass)
+        if provider is None or webhook_id != provider.webhook_id:
+            return _json_not_found()
+        return await super().get(request)
 
 
 class _WellKnownAuthorizationServerMetadataView(_AuthorizationServerMetadataView):
@@ -269,19 +282,19 @@ class _WellKnownAuthorizationServerMetadataView(_AuthorizationServerMetadataView
     well-known URLs MCP clients actually probe for the issuer.
     """
 
-    def __init__(self, provider: ResourceServer, url: str, name: str) -> None:
+    def __init__(self, hass: HomeAssistant, url: str, name: str) -> None:
         """Bind and set an explicit well-known URL + unique view name."""
-        super().__init__(provider)
+        super().__init__(hass)
         self.url = url
         self.name = name
 
 
-def _metadata_views(provider: ResourceServer) -> list[HomeAssistantView]:
-    """Build the seven ha_auth discovery-document views bound to ``provider``."""
+def _metadata_views(hass: HomeAssistant) -> list[HomeAssistantView]:
+    """Build the seven ha_auth discovery-document views (provider-agnostic)."""
     views: list[HomeAssistantView] = [
-        _ProtectedResourceMetadataView(provider),
-        _AuthorizationServerMetadataView(provider),
-        _WellKnownProtectedResourceView(provider),
+        _ProtectedResourceMetadataView(hass),
+        _AuthorizationServerMetadataView(hass),
+        _WellKnownProtectedResourceView(hass),
     ]
     for url, name in (
         (
@@ -302,22 +315,23 @@ def _metadata_views(provider: ResourceServer) -> list[HomeAssistantView]:
         ),
     ):
         views.append(
-            _WellKnownAuthorizationServerMetadataView(provider, url=url, name=name)
+            _WellKnownAuthorizationServerMetadataView(hass, url=url, name=name)
         )
     return views
 
 
-def _register_metadata_views(hass: HomeAssistant, provider: ResourceServer) -> None:
+def _register_metadata_views(hass: HomeAssistant) -> None:
     """Register the ha_auth discovery views at most once per HA session.
 
-    aiohttp cannot unregister a bound view, so a reload / re-enable must reuse the
-    already-bound views (they read live state per request) rather than stack
-    silently-shadowed duplicates. The guard flag lives at a top-level hass.data
-    key that survives config-entry teardown.
+    aiohttp cannot unregister a bound view, so a reload / re-enable / re-add must
+    reuse the already-bound views — they resolve the ACTIVE provider from
+    hass.data per request, so a later entry (even with a new webhook id) is
+    served correctly. The guard flag lives at a top-level hass.data key that
+    survives config-entry teardown.
     """
     if hass.data.get(_OAUTH_VIEWS_REGISTERED_KEY):
         return
-    for view in _metadata_views(provider):
+    for view in _metadata_views(hass):
         hass.http.register_view(view)
     hass.data[_OAUTH_VIEWS_REGISTERED_KEY] = True
 
@@ -361,9 +375,12 @@ async def _async_handle_webhook(
 
     # Auth gate. ``none`` = the secret webhook URL is the credential; ``ha_auth``
     # = validate the bearer via HA core, and on failure emit the 401 discovery
-    # challenge so the client can start the OAuth flow.
-    if cfg.get("auth_mode") == WEBHOOK_AUTH_HA:
-        provider: ResourceServer = cfg["resource_server"]
+    # challenge so the client can start the OAuth flow. Gate on the PROVIDER
+    # (constructed only for ha_auth) rather than a string compare, so the
+    # coupling "provider present <=> ha_auth" has a single owner and an
+    # inconsistent cfg cannot fail open.
+    provider = cfg.get("resource_server")
+    if provider is not None:
         if not await provider.validate_request(request):
             return _build_unauthorized_response(request, provider)
 
@@ -404,9 +421,22 @@ async def _async_handle_webhook(
                     status=upstream_resp.status, headers=resp_headers
                 )
                 await response.prepare(request)
-                async for chunk in upstream_resp.content.iter_any():
-                    await response.write(chunk)
-                await response.write_eof()
+                # Once prepare() has sent the 200 + headers, a mid-stream
+                # upstream failure can no longer become a 502 — returning a
+                # fresh Response here would be silently dropped and the client
+                # would see only a truncated stream with no log trail. End the
+                # prepared stream deterministically and log instead.
+                try:
+                    async for chunk in upstream_resp.content.iter_any():
+                        await response.write(chunk)
+                except aiohttp.ClientError as err:
+                    _LOGGER.error(
+                        "MCP webhook: upstream dropped mid-stream after %d bytes: %s",
+                        response.body_length or 0,
+                        err,
+                    )
+                with suppress(ConnectionResetError):
+                    await response.write_eof()
                 return response
 
             if not any(ct in content_type for ct in _ALLOWED_CONTENT_TYPES):
@@ -445,6 +475,12 @@ async def async_register_webhook(
     live. ``webhook`` is a manifest dependency, so HA guarantees it is set up
     before this runs.
     """
+    if auth_mode not in (WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA):
+        # Fail CLOSED on an unknown mode (corrupt/migrated options): refusing
+        # bring-up files a repair issue, instead of an unrecognized string
+        # silently taking the unauthenticated forward path.
+        raise ValueError(f"Unknown webhook auth mode: {auth_mode!r}")
+
     webhook_id: str = entry.data[DATA_WEBHOOK_ID]
     target_url = f"http://127.0.0.1:{port}{secret_path}"
     session = aiohttp.ClientSession(timeout=_CLIENT_TIMEOUT)
@@ -471,7 +507,7 @@ async def async_register_webhook(
         )
         if auth_mode == WEBHOOK_AUTH_HA:
             provider = ResourceServer(hass, webhook_id)
-            _register_metadata_views(hass, provider)
+            _register_metadata_views(hass)
             cfg["resource_server"] = provider
     except Exception:
         # Never leave a live endpoint (or a leaked session) behind a failed
