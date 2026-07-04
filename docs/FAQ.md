@@ -238,6 +238,16 @@ source ~/.zshrc
 4. If "Home Assistant" is not listed, check your config file syntax
 5. Try asking Claude: "Can you list your available tools?"
 
+### Claude Desktop shows the server connected but exposes zero tools
+
+**Fingerprint:** The server shows as connected and both `initialize` and `tools/list` complete successfully in `mcp.log` and the per-server log, yet the model sees no tools – and nothing surfaces an error in the UI or the logs.
+
+**Fix:** Check the server's key in `claude_desktop_config.json` for parentheses and remove them. For example, renaming the key from `"Home Assistant (ha-mcp)"` to `"HASS ha-mcp"` (same URL, everything else unchanged) makes the full tool catalog reappear after a restart. Spaces in the key are fine; parentheses are the characters observed to trigger the drop. If in doubt, keep the key to letters, digits, spaces, `_`, and `-`.
+
+**Why:** The Anthropic API requires every tool name to match `^[a-zA-Z0-9_-]{1,64}$` ([tool-definition docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools)), and Claude Desktop appears to derive each exposed tool's namespaced name from the `mcpServers` key. Spaces in a key are fine (the reporter confirmed spaces work), but a key with `(` or `)` leaves the derived names outside that grammar, so the client discards the affected tools before it ever calls the API – which is why the drop leaves no trace in the logs. (Claude Desktop's exact key-to-name handling is not publicly documented; this explanation is inferred from the reporter's bidirectional repro – same URL, only the key changes – together with the published name constraint.)
+
+None of the shipped example configs use parentheses in the key, so a default setup never hits this – it is specifically a hand-authored key like `Home Assistant (ha-mcp)` that trips it. This is a Claude Desktop client behavior, not a ha-mcp problem: ha-mcp's own tool names are all valid `snake_case`. See [#1743](https://github.com/homeassistant-ai/ha-mcp/issues/1743).
+
 ### Can't connect remotely? Try the Webhook Proxy add-on {#webhook-proxy}
 
 If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the **Webhook Proxy add-on** may be a simpler alternative.
