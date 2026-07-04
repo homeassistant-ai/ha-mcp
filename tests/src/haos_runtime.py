@@ -617,30 +617,26 @@ def inject_hacs_token_in_qcow2(image_path: Path) -> None:
 
 
 def _build_embedded_server_wheel(dest_dir: Path) -> Path:
-    """Build a ``--no-deps`` ha-mcp wheel from the checkout into ``dest_dir``.
+    """Build a ha-mcp wheel from the checkout into ``dest_dir`` using ``uv build``.
 
-    Mirrors the testcontainer embedded-server test's ``_build_wheel``
-    (tests/src/e2e/workflows/embedded/test_embedded_server.py): the wheel's
-    dependencies (fastmcp etc.) still resolve from PyPI inside HAOS under HA's
-    constraints file when the entry is enabled — which is exactly the real-HAOS
-    ``install_package`` behavior the E2E proves. Returns the built wheel path.
+    Builds only the project (no deps) — the fastmcp tree still resolves from PyPI
+    inside HAOS under HA's constraints file when the entry is enabled, which is
+    exactly the real-HAOS ``install_package`` behavior the E2E proves.
+
+    Uses ``uv build``, NOT ``sys.executable -m pip wheel``: the E2E lanes run
+    under ``uv run pytest`` in a uv-created venv that ships no ``pip``, so a
+    ``python -m pip wheel`` call exits non-zero (verified on CI run 28705609217 —
+    it is also why the container-lane embedded test silently skips). ``uv`` is
+    always on PATH (setup-uv) and provisions the setuptools build backend from
+    its cache (already warmed by the lane's ``uv sync``). Returns the wheel path.
     """
-    import sys
+    import shutil as _shutil
 
     repo_root = Path(__file__).resolve().parent.parent.parent
     dest_dir.mkdir(parents=True, exist_ok=True)
+    uv_bin = _shutil.which("uv") or "uv"
     subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "wheel",
-            "--no-deps",
-            "--no-build-isolation",
-            "--wheel-dir",
-            str(dest_dir),
-            str(repo_root),
-        ],
+        [uv_bin, "build", "--wheel", "--out-dir", str(dest_dir), str(repo_root)],
         check=True,
         capture_output=True,
         text=True,
@@ -668,6 +664,46 @@ def _set_embedded_server_pip_spec(
     return False
 
 
+def _embedded_staging_status_path() -> Path:
+    """Per-xdist-worker path where the wheel-staging outcome is recorded.
+
+    Keyed by ``PYTEST_XDIST_WORKER`` because the staging (in the session fixture)
+    and the embedded-server test run on the SAME worker under ``--dist loadscope``;
+    keying avoids one worker's status clobbering another's. ``master`` when not
+    under xdist.
+    """
+    import tempfile
+
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    return Path(tempfile.gettempdir()) / f"ha_mcp_embedded_staging_{worker}.json"
+
+
+def _write_embedded_staging_status(ok: bool, detail: str) -> None:
+    """Record the wheel-staging outcome for the embedded-server test to read.
+
+    This module's logs run during SESSION-fixture setup, which is not captured in
+    the pytest step's output (verified on CI run 28705609217: none of the
+    pre-boot refreshers' log lines appear, and the triggering test passes so its
+    captured setup output is never shown). So a warning here is invisible. The
+    embedded-server test reads this status and folds it into its own (captured)
+    failure message, making a delivery failure diagnosable either way.
+    """
+    try:
+        _embedded_staging_status_path().write_text(
+            json.dumps({"ok": ok, "detail": detail}), encoding="utf-8"
+        )
+    except OSError as exc:
+        LOG.warning("Could not record embedded staging status: %r", exc)
+
+
+def read_embedded_staging_status() -> dict[str, Any] | None:
+    """Return this worker's ha_mcp_server wheel-staging outcome, or None if unset."""
+    try:
+        return json.loads(_embedded_staging_status_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
     """Deliver the checkout's ha-mcp wheel into the qcow2 for the embedded E2E.
 
@@ -685,7 +721,9 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
     failure degrades to a warning (that one test then fails on bring-up while the
     rest of the HAOS suite is unaffected) rather than raising and taking down the
     whole session. A hard raise would be a much worse blast radius than the
-    single test it protects.
+    single test it protects. The outcome is also recorded via
+    ``_write_embedded_staging_status`` so the test can surface it (this module's
+    session-fixture logs are not captured in the pytest output).
     """
     import tempfile
 
@@ -699,14 +737,17 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
             RuntimeError,
         ) as err:
             stderr = (getattr(err, "stderr", "") or "").strip()
+            detail = f"wheel build failed: {type(err).__name__}" + (
+                f": {stderr[-300:]}" if stderr else ""
+            )
             LOG.warning(
                 "Could not build the ha-mcp wheel for the embedded HAOS test "
-                "(%s%s) — the ha_mcp_server entry keeps its placeholder pip_spec; "
+                "(%s) — the ha_mcp_server entry keeps its placeholder pip_spec; "
                 "the embedded-server test will fail on bring-up, rest of the "
                 "suite is unaffected",
-                type(err).__name__,
-                f": {stderr[-300:]}" if stderr else "",
+                detail,
             )
+            _write_embedded_staging_status(False, detail)
             return
 
         storage_path = "/supervisor/homeassistant/.storage/core.config_entries"
@@ -736,12 +777,12 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
             doc = json.loads(local.read_text(encoding="utf-8"))
             pip_spec = f"ha-mcp @ file:///config/{wheel.name}"
             if not _set_embedded_server_pip_spec(doc, pip_spec):
-                LOG.warning(
-                    "No ha_mcp_server config entry in %s — the bake may not have "
-                    "seeded it (check build_image.bake_test_state); the embedded-"
-                    "server test will fail",
-                    image_path,
+                detail = (
+                    "no ha_mcp_server config entry in the image — the bake may "
+                    "not have seeded it (check build_image.bake_test_state)"
                 )
+                LOG.warning("%s; the embedded-server test will fail", detail)
+                _write_embedded_staging_status(False, detail)
                 return
             local.write_text(json.dumps(doc, indent=2), encoding="utf-8")
             subprocess.run(
@@ -769,22 +810,22 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
                 text=True,
                 timeout=180,
             )
-            LOG.info(
-                "Delivered ha-mcp wheel %s and set ha_mcp_server pip_spec=%s in %s",
-                wheel.name,
-                pip_spec,
-                image_path,
-            )
+            detail = f"delivered {wheel.name}, pip_spec={pip_spec}"
+            LOG.info("%s in %s", detail, image_path)
+            _write_embedded_staging_status(True, detail)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             stderr = (getattr(exc, "stderr", "") or "").strip()
+            detail = f"guestfish delivery failed: {type(exc).__name__}" + (
+                f": {stderr[-300:]}" if stderr else ""
+            )
             LOG.warning(
-                "Embedded-server wheel delivery failed for %s (%s%s) — the "
+                "Embedded-server wheel delivery failed for %s (%s) — the "
                 "embedded-server test will fail on bring-up; rest of the suite "
                 "unaffected",
                 image_path,
-                type(exc).__name__,
-                f": {stderr[-300:]}" if stderr else "",
+                detail,
             )
+            _write_embedded_staging_status(False, detail)
     finally:
         import shutil as _shutil
 

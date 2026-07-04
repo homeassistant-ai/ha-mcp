@@ -49,6 +49,7 @@ from haos_runtime import (
     HA_MCP_SERVER_ENTRY_ID,
     HA_MCP_SERVER_WEBHOOK_ID,
     enable_config_entry,
+    read_embedded_staging_status,
 )
 
 LOG = logging.getLogger(__name__)
@@ -178,13 +179,19 @@ def embedded_server(
             break
         time.sleep(_READY_POLL_S)
     if not ready:
+        # The pre-boot wheel staging logs to a session-fixture logger that CI
+        # does not capture, so read its recorded outcome and fold it in — this
+        # distinguishes "wheel delivery failed" from "delivery ok but the in-VM
+        # install/start failed" without digging through the diagnostics artifact.
+        staging = read_embedded_staging_status()
         raise AssertionError(
             "The in-process ha_mcp_server did not become reachable via its "
             f"webhook within {_READY_TIMEOUT_S}s of enabling {HA_MCP_SERVER_ENTRY_ID}. "
-            "The runtime pip install may have failed, the server thread may not "
-            "have started, or the wheel delivery "
-            "(haos_runtime.stage_embedded_server_wheel_in_qcow2) did not land — "
-            "check the ha-core-runtime.log in the HAOS diagnostics artifact."
+            f"Wheel-staging status for this worker: {staging}. "
+            "If staging ok=True, the runtime pip install of the fastmcp tree or "
+            "the server thread start failed (see ha-core-runtime.log in the HAOS "
+            "diagnostics artifact); if ok=False or None, the checkout wheel never "
+            "reached the VM (haos_runtime.stage_embedded_server_wheel_in_qcow2)."
         )
     yield base_url, session_id, info
 
