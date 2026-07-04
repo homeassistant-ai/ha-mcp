@@ -1298,6 +1298,16 @@ def set_embedded_connection(url: str, token: str) -> None:
     _EMBEDDED_CONNECTION["token"] = token
 
 
+def _reset_embedded_connection() -> None:
+    """Drop the registered embedded connection (test seam).
+
+    Sibling to :func:`_reset_global_settings`; lets suites that exercise the
+    in-process token channel isolate state between tests. Not used in production —
+    the connection is registered once per worker thread and is meant to persist.
+    """
+    _EMBEDDED_CONNECTION.clear()
+
+
 # Names of beta sub-flags the master gate has already logged a
 # force-False line for in this process. Used to dedup the gate's
 # INFO log so we don't spam addon logs on every Settings rebuild
