@@ -5008,6 +5008,11 @@ class TestHaAuthMode:
         — plus the accepted case, and never includes the token itself.
         validate_request stays the bool-only wrapper over the same logic."""
         _mod, _oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        # Capability gate, not file-existence: stable ships auth_native since
+        # 2.0.0 but gains the detailed validator only at the next promote, so
+        # the coarse _ha_auth_supported() gate is not enough here.
+        if not hasattr(auth_native.ResourceServer, "validate_request_detailed"):
+            pytest.skip("flavor does not ship the detailed bearer validator yet")
         hass = MagicMock()
         rs = auth_native.ResourceServer(hass, "wh")
 
@@ -5052,6 +5057,10 @@ class TestHaAuthMode:
         """With debug logging on, the 401 line names WHY ha_auth rejected the
         bearer (the issue #1714 OIDC-leg diagnosis aid) — never the token."""
         mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        # Capability gate (see test_validate_request_detailed_reason_matrix):
+        # the gate's reason plumbing ships together with the detailed validator.
+        if not hasattr(auth_native.ResourceServer, "validate_request_detailed"):
+            pytest.skip("flavor does not ship the detailed bearer validator yet")
         hass = self._gate_hass(mod, auth_native, None)  # validator -> None
         hass.data[mod.DOMAIN]["debug_logging"] = True
         request = MagicMock()
