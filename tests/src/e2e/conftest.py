@@ -70,6 +70,7 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 
 # Import test utilities
 from .utilities.assertions import parse_mcp_result
+from .utilities.streamable_http import parse_mcp_response
 from .utilities.supervisor_mock import (
     _supervisor_mock_server,  # noqa: F401  (session fixture supervisor_mock depends on)
     supervisor_mock,  # noqa: F401  (re-exported fixture)
@@ -827,61 +828,9 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
     )
 
 
-def _embedded_sse_event_payloads(text: str) -> list[str]:
-    """Yield each SSE event's payload from a Streamable-HTTP body.
-
-    An SSE event is a run of lines ended by a blank line; its ``data:`` fields are
-    concatenated with ``\\n`` (one optional leading space stripped per field). A
-    large ``initialize`` / ``tools/list`` result is split across several ``data:``
-    lines within ONE event, so parsing each line on its own hits mid-JSON and
-    fails — accumulate per event. (Same fix as the smoke test's / HAOS probe's
-    ``_sse_event_payloads``; the naive single-line version silently made the
-    readiness gate miss a valid but multi-line initialize response.)
-    """
-    payloads: list[str] = []
-    data_lines: list[str] = []
-
-    def _flush() -> None:
-        if data_lines:
-            payloads.append("\n".join(data_lines))
-            data_lines.clear()
-
-    for line in text.splitlines():
-        if line.startswith("data:"):
-            value = line[len("data:") :]
-            if value.startswith(" "):  # strip exactly ONE leading space (SSE spec)
-                value = value[1:]
-            data_lines.append(value)
-        elif line == "":
-            _flush()  # blank line terminates the event
-        # event:/id:/retry:/comment lines carry no payload — ignore them.
-    _flush()  # a trailing event with no terminating blank line
-    return payloads
-
-
 def _embedded_mcp_result(resp: requests.Response) -> dict[str, Any] | None:
-    """Parse a Streamable-HTTP MCP response (JSON body or SSE) to a JSON-RPC dict.
-
-    Mirrors the workflows/embedded smoke test's ``_parse_mcp`` — the embedded
-    server may answer ``initialize`` with either a JSON body or an SSE stream
-    depending on negotiation, and the readiness probe must accept both (including
-    a multi-line-``data:`` SSE event, hence ``_embedded_sse_event_payloads``).
-    """
-    ctype = resp.headers.get("Content-Type", "")
-    if "text/event-stream" in ctype:
-        for payload in _embedded_sse_event_payloads(resp.text):
-            try:
-                obj = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict) and ("result" in obj or "error" in obj):
-                return obj
-        return None
-    try:
-        obj = json.loads(resp.text)
-    except json.JSONDecodeError:
-        return None
-    return obj if isinstance(obj, dict) else None
+    """Parse a Streamable-HTTP MCP response (JSON body or SSE) to a JSON-RPC dict."""
+    return parse_mcp_response(resp.headers.get("Content-Type", ""), resp.text)
 
 
 def _wait_for_embedded_webhook_ready(webhook_url: str, timeout: int) -> bool:

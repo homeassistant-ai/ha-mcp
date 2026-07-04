@@ -333,7 +333,9 @@ jobs:
     # docs/website-only PR doesn't wedge the merge waiting on these lanes.
     if: needs.changes.outputs.run == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # 20 (was 15): headroom for the embedded smoke test's cold bring-up
+    # (runtime pip install of the server tree inside its dedicated container).
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

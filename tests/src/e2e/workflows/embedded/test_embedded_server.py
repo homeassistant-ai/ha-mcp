@@ -42,6 +42,8 @@ import pytest
 import requests
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN
 
+from ...utilities.streamable_http import parse_mcp_response
+
 # ``not_on_embedded``: this test boots its OWN dedicated ha_mcp_server container to
 # prove the install method end to end. The embedded backend (E2E_BACKEND=embedded)
 # already exercises that exact path as its session backend for every test in the
@@ -188,58 +190,9 @@ def _mcp_post(
     )
 
 
-def _sse_event_payloads(text: str) -> list[str]:
-    """Yield each SSE event's payload from a Streamable-HTTP body.
-
-    Per the SSE framing an event is a run of lines ended by a blank line, and its
-    ``data:`` fields are concatenated with ``\\n`` (one optional leading space
-    stripped per field). A single ``data:`` line per event is NOT a safe
-    assumption: a large ``tools/list`` (78 tool schemas here) is split across
-    several ``data:`` lines within one ``event: message`` block, so parsing each
-    line on its own hits mid-JSON and fails. Accumulate per event instead.
-
-    (Same fix as the HAOS embedded probe's ``_sse_event_payloads`` — see
-    tests/src/e2e/haos_only/test_embedded_server_haos.py.)
-    """
-    payloads: list[str] = []
-    data_lines: list[str] = []
-
-    def _flush() -> None:
-        if data_lines:
-            payloads.append("\n".join(data_lines))
-            data_lines.clear()
-
-    for line in text.splitlines():
-        if line.startswith("data:"):
-            value = line[len("data:") :]
-            if value.startswith(" "):  # strip exactly ONE leading space (SSE spec)
-                value = value[1:]
-            data_lines.append(value)
-        elif line == "":
-            _flush()  # blank line terminates the event
-        # event:/id:/retry:/comment lines carry no payload — ignore them.
-    _flush()  # a trailing event with no terminating blank line
-    return payloads
-
-
 def _parse_mcp(resp: requests.Response) -> dict[str, Any] | None:
     """Parse a Streamable-HTTP MCP response (JSON body or SSE) to a JSON-RPC dict."""
-    ctype = resp.headers.get("Content-Type", "")
-    text = resp.text
-    if "text/event-stream" in ctype:
-        for payload in _sse_event_payloads(text):
-            try:
-                obj = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict) and ("result" in obj or "error" in obj):
-                return obj
-        return None
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    return obj if isinstance(obj, dict) else None
+    return parse_mcp_response(resp.headers.get("Content-Type", ""), resp.text)
 
 
 def _initialize(base_url: str) -> tuple[bool, str | None]:
