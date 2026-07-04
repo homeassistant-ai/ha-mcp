@@ -201,6 +201,9 @@ dev = [
     "pytest-cov>=5.0.0",
     "pytest-timeout>=2.3.0",
     "pytest-rerunfailures>=15.0",
+    # Real voluptuous for the ha_mcp_server flow tests (the integration's
+    # config_flow imports it; HA provides it at runtime, tests need it here).
+    "voluptuous>=0.15.2",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
     "lefthook>=1.10.0",
