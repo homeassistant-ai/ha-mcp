@@ -30,6 +30,7 @@ on:
       - 'tests/initial_test_state/**'
       - 'custom_components/ha_mcp_tools/**'
       - 'homeassistant-addon-webhook-proxy/**'
+      - 'homeassistant-integration/ha_mcp_server/**'
       - 'homeassistant-addon-dev/**'
       # The workflow itself — bumping the build script or env triggers a cache refresh.
       - '.github/workflows/build-haos-test-image.yml'
@@ -261,6 +262,7 @@ jobs:
             tests/initial_test_state \
             custom_components/ha_mcp_tools \
             homeassistant-addon-webhook-proxy \
+            homeassistant-integration/ha_mcp_server \
             | sha256sum | cut -d' ' -f1 | head -c16)
           echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
 

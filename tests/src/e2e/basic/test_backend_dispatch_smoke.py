@@ -80,9 +80,9 @@ _SKIP_CEILING_PER_LANE = {
     # Baselines are the observed skip counts as of 2026-05-22 (container=46,
     # haos=14, haos_inaddon=39 from the prose above), plus this PR's new
     # marker-gated skips, plus a 5-9 growth buffer.
-    "container": 68,  # was 67; +1 addon debug-log-level test (@inaddon_only, skip here)
-    "haos": 37,  # was 35; +2 in-process ha_mcp_server tests (workflows/embedded, @container_only, run on the container lane only)
-    "haos_inaddon": 59,  # was 58; +1 net from the in-process ha_mcp_server tests (workflows/embedded, @container_only; observed lane count)
+    "container": 71,  # was 68; +3 in-process ha_mcp_server HAOS tests (haos_only/test_embedded_server_haos.py, skip on the container lane)
+    "haos": 37,  # was 35; +2 in-process ha_mcp_server tests (workflows/embedded, @container_only, run on the container lane only). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
+    "haos_inaddon": 59,  # was 58; +1 net from the in-process ha_mcp_server tests (workflows/embedded, @container_only; observed lane count). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
 }
 
 

@@ -86,6 +86,23 @@ HAOS_IMAGE_ENV = "HAOS_TEST_IMAGE_PATH"
 # and a cross-package import here would pull qemu/websockets build deps
 # into the test runtime path.
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
+
+# In-process ha_mcp_server integration constants (#1527). The bake seeds a
+# DISABLED config entry with these ids into the qcow2's
+# .storage/core.config_entries (build_image._stage_embedded_server_integration);
+# stage_embedded_server_wheel_in_qcow2 below delivers a checkout-built wheel and
+# rewrites the entry's pip_spec to point at it, and the HAOS embedded-server E2E
+# (tests/src/e2e/haos_only/test_embedded_server_haos.py) enables the entry then
+# drives the webhook. These MUST stay in sync with the copies in
+# tests/haos_image_build/build_image.py (kept manually, like
+# HA_MCP_TEST_SECRET_PATH — a cross-package import would pull the qemu build
+# deps into the test runtime path).
+HA_MCP_SERVER_DOMAIN = "ha_mcp_server"
+HA_MCP_SERVER_ENTRY_ID = "e2e_test_ha_mcp_server_entry"
+HA_MCP_SERVER_WEBHOOK_ID = "mcp_e2e_ha_mcp_server_haos"
+HA_MCP_SERVER_SECRET_PATH = "/private_e2e_ha_mcp_server_haos"
+HA_MCP_SERVER_PORT = 9584
+
 # Slug Supervisor assigns to a local addon staged under
 # /supervisor/addons/local/<dir>/. Derived from config.yaml's slug ``ha_mcp_dev``
 # with the ``local_`` prefix that Supervisor applies to local-store
@@ -597,6 +614,242 @@ def inject_hacs_token_in_qcow2(image_path: Path) -> None:
             )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _build_embedded_server_wheel(dest_dir: Path) -> Path:
+    """Build a ``--no-deps`` ha-mcp wheel from the checkout into ``dest_dir``.
+
+    Mirrors the testcontainer embedded-server test's ``_build_wheel``
+    (tests/src/e2e/workflows/embedded/test_embedded_server.py): the wheel's
+    dependencies (fastmcp etc.) still resolve from PyPI inside HAOS under HA's
+    constraints file when the entry is enabled — which is exactly the real-HAOS
+    ``install_package`` behavior the E2E proves. Returns the built wheel path.
+    """
+    import sys
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--no-build-isolation",
+            "--wheel-dir",
+            str(dest_dir),
+            str(repo_root),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    wheels = list(dest_dir.glob("ha_mcp-*.whl"))
+    if not wheels:
+        raise RuntimeError(f"no ha_mcp wheel built in {dest_dir}")
+    return wheels[0]
+
+
+def _set_embedded_server_pip_spec(
+    config_entries_doc: dict[str, Any], pip_spec: str
+) -> bool:
+    """Point the baked ha_mcp_server entry's ``options.pip_spec`` at ``pip_spec``.
+
+    Mutates ``config_entries_doc`` (a parsed ``.storage/core.config_entries``)
+    in place. Returns True if the ha_mcp_server entry was found and patched,
+    False if the document has none (doc left untouched).
+    """
+    for entry in config_entries_doc.get("data", {}).get("entries", []):
+        if entry.get("domain") == HA_MCP_SERVER_DOMAIN:
+            entry.setdefault("options", {})["pip_spec"] = pip_spec
+            return True
+    return False
+
+
+def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
+    """Deliver the checkout's ha-mcp wheel into the qcow2 for the embedded E2E.
+
+    Builds a ``--no-deps`` ha-mcp wheel from the working tree, copies it into the
+    qcow2's ``/config`` (``/supervisor/homeassistant``), and rewrites the baked
+    ha_mcp_server config entry's ``options.pip_spec`` to a ``file://`` URL
+    pointing at it — so when the HAOS embedded-server test enables the entry, the
+    in-process server installs from the PR's own source (checkout fidelity for
+    the ``src/ha_mcp`` embedded-mode routing under test) rather than PyPI. Runs
+    once per session before ``boot_haos_qemu``, like the recorder / HACS-token
+    qcow2 refreshers.
+
+    Best-effort by design: the baked entry is disabled and only the one
+    embedded-server test consumes this delivery, so a wheel-build or guestfish
+    failure degrades to a warning (that one test then fails on bring-up while the
+    rest of the HAOS suite is unaffected) rather than raising and taking down the
+    whole session. A hard raise would be a much worse blast radius than the
+    single test it protects.
+    """
+    import tempfile
+
+    workdir = Path(tempfile.mkdtemp(prefix="haos-embedded-wheel-"))
+    try:
+        try:
+            wheel = _build_embedded_server_wheel(workdir)
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            RuntimeError,
+        ) as err:
+            stderr = (getattr(err, "stderr", "") or "").strip()
+            LOG.warning(
+                "Could not build the ha-mcp wheel for the embedded HAOS test "
+                "(%s%s) — the ha_mcp_server entry keeps its placeholder pip_spec; "
+                "the embedded-server test will fail on bring-up, rest of the "
+                "suite is unaffected",
+                type(err).__name__,
+                f": {stderr[-300:]}" if stderr else "",
+            )
+            return
+
+        storage_path = "/supervisor/homeassistant/.storage/core.config_entries"
+        try:
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--ro",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    "copy-out",
+                    storage_path,
+                    str(workdir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            local = workdir / "core.config_entries"
+            doc = json.loads(local.read_text(encoding="utf-8"))
+            pip_spec = f"ha-mcp @ file:///config/{wheel.name}"
+            if not _set_embedded_server_pip_spec(doc, pip_spec):
+                LOG.warning(
+                    "No ha_mcp_server config entry in %s — the bake may not have "
+                    "seeded it (check build_image.bake_test_state); the embedded-"
+                    "server test will fail",
+                    image_path,
+                )
+                return
+            local.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--rw",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    "copy-in",
+                    str(wheel),
+                    "/supervisor/homeassistant/",
+                    ":",
+                    "copy-in",
+                    str(local),
+                    "/supervisor/homeassistant/.storage/",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            LOG.info(
+                "Delivered ha-mcp wheel %s and set ha_mcp_server pip_spec=%s in %s",
+                wheel.name,
+                pip_spec,
+                image_path,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            stderr = (getattr(exc, "stderr", "") or "").strip()
+            LOG.warning(
+                "Embedded-server wheel delivery failed for %s (%s%s) — the "
+                "embedded-server test will fail on bring-up; rest of the suite "
+                "unaffected",
+                image_path,
+                type(exc).__name__,
+                f": {stderr[-300:]}" if stderr else "",
+            )
+    finally:
+        import shutil as _shutil
+
+        _shutil.rmtree(workdir, ignore_errors=True)
+
+
+def enable_config_entry(
+    base_url: str, token: str, entry_id: str, *, timeout: float = 60.0
+) -> None:
+    """Enable a disabled config entry via the HA ``config_entries/disable`` WS command.
+
+    Sending ``config_entries/disable`` with ``disabled_by=null`` is exactly how
+    the HA frontend re-enables an entry: it clears the disabled flag and sets the
+    entry up (calling ``async_setup_entry``). Used by the HAOS embedded-server
+    E2E to turn on the baked-disabled ha_mcp_server entry so only that test's
+    session pays the server bring-up cost. Raises on a WS-level failure (e.g. an
+    unknown entry id) so the test surfaces a clear cause instead of a downstream
+    webhook timeout.
+    """
+    import websockets.sync.client
+
+    ws_url = (
+        base_url.replace("http://", "ws://").replace("https://", "wss://")
+        + "/api/websocket"
+    )
+    with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
+        first = json.loads(ws.recv())
+        if first.get("type") != "auth_required":
+            raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_resp = json.loads(ws.recv())
+        if auth_resp.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+        msg_id = 1
+        ws.send(
+            json.dumps(
+                {
+                    "id": msg_id,
+                    "type": "config_entries/disable",
+                    "entry_id": entry_id,
+                    "disabled_by": None,
+                }
+            )
+        )
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
+            except TimeoutError:
+                continue
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            resp = json.loads(raw)
+            if resp.get("id") != msg_id:
+                continue
+            if not resp.get("success", False):
+                raise RuntimeError(
+                    f"config_entries/disable for {entry_id!r} failed: "
+                    f"{resp.get('error') or resp!r}"
+                )
+            return
+        raise TimeoutError(
+            f"config_entries/disable for {entry_id!r} got no response within {timeout}s"
+        )
 
 
 def _resolve_local_store_dir(image_path: Path) -> str:

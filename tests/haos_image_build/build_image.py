@@ -190,6 +190,36 @@ HA_MCP_ADDON_REPO = "https://github.com/homeassistant-ai/ha-mcp"
 HA_MCP_DEV_ADDON_SLUG = "local_ha_mcp_dev"
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 
+# In-process ha_mcp_server integration baked into the qcow2 for the HAOS-lane
+# embedded-server E2E (#1527). Its source lives at
+# ``homeassistant-integration/ha_mcp_server/`` and is copied into
+# ``/config/custom_components/ha_mcp_server`` by ``bake_test_state`` (mirroring
+# the ha_mcp_tools staging), together with a config entry seeded DISABLED. The
+# entry is baked disabled on purpose: enabling it triggers a multi-minute
+# runtime pip install of the fastmcp tree plus a server thread, and we only want
+# that cost on the one session that runs the embedded-server test (the
+# ``tests/src/e2e/haos_only/test_embedded_server_haos.py`` fixture enables it via
+# the ``config_entries/disable`` WS command). The ``pip_spec`` is a placeholder
+# here; the conftest HAOS branch overwrites it with a ``file://`` URL to a wheel
+# built from the checkout before boot (haos_runtime.stage_embedded_server_wheel_in_qcow2).
+#
+# These constants MUST stay in sync with tests/src/haos_runtime.py's copies
+# (same manual-sync arrangement as HA_MCP_TEST_SECRET_PATH above); a cross-
+# package import here would pull the qemu/websockets test runtime into the
+# standalone build script.
+HA_MCP_SERVER_DOMAIN = "ha_mcp_server"
+HA_MCP_SERVER_ENTRY_ID = "e2e_test_ha_mcp_server_entry"
+HA_MCP_SERVER_WEBHOOK_ID = "mcp_e2e_ha_mcp_server_haos"
+HA_MCP_SERVER_SECRET_PATH = "/private_e2e_ha_mcp_server_haos"
+HA_MCP_SERVER_PORT = 9584
+# Placeholder file:// wheel spec — deliberately points at a nonexistent wheel so
+# that if the conftest delivery step ever fails to overwrite it, the entry's
+# bring-up fails cleanly (repair issue, webhook never registers) and only the
+# embedded-server test times out, rather than silently installing wrong code.
+HA_MCP_SERVER_PLACEHOLDER_PIP_SPEC = (
+    "ha-mcp @ file:///config/ha_mcp-0.0.0-py3-none-any.whl"
+)
+
 # Webhook-proxy addon baked into the qcow2 from local source so the addon's
 # ``start.py`` runtime (Supervisor auto-discovery of the MCP addon, webhook
 # registration, OAuth gate, webhook-ID persistence) gets real HAOS-tier
@@ -1581,6 +1611,92 @@ def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) ->
     )
 
 
+def _stage_embedded_server_integration(
+    repo_root: Path, staging: Path, cc_dir: Path
+) -> None:
+    """Stage the ha_mcp_server integration + a DISABLED config entry into ``staging``.
+
+    Copies ``homeassistant-integration/ha_mcp_server`` into
+    ``custom_components/ha_mcp_server`` (so a real HA finds it on boot) and
+    injects a config entry seeded with the webhook id / secret / options the
+    HAOS embedded-server E2E addresses. The entry is ``disabled_by="user"`` so
+    the multi-minute server bring-up only fires when the test enables it — every
+    other HAOS session boots with the entry present but inert. The ``pip_spec``
+    is a placeholder; the conftest HAOS branch rewrites it to a ``file://`` wheel
+    built from the checkout before boot.
+    """
+    src = repo_root / "homeassistant-integration" / HA_MCP_SERVER_DOMAIN
+    if not src.exists():
+        raise RuntimeError(
+            f"ha_mcp_server integration source missing: {src} — checkout is "
+            f"incomplete; the image cannot be built."
+        )
+    dest = cc_dir / HA_MCP_SERVER_DOMAIN
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__"))
+    LOG.info(
+        "Staged custom component %s ← homeassistant-integration/%s (disabled entry)",
+        HA_MCP_SERVER_DOMAIN,
+        HA_MCP_SERVER_DOMAIN,
+    )
+
+    ce_path = staging / ".storage" / "core.config_entries"
+    ce_data = json.loads(ce_path.read_text())
+    # Same shape guard the loop above uses — a malformed file here would wipe
+    # the seed integrations on write.
+    if (
+        not isinstance(ce_data, dict)
+        or not isinstance(ce_data.get("data"), dict)
+        or not isinstance(ce_data["data"].get("entries"), list)
+    ):
+        raise RuntimeError(
+            f"core.config_entries at {ce_path} has unexpected shape — expected "
+            f"dict with data.entries list; HA storage schema may have bumped."
+        )
+    entries = ce_data["data"]["entries"]
+    if not any(e.get("domain") == HA_MCP_SERVER_DOMAIN for e in entries):
+        entries.append(
+            {
+                "created_at": "2025-09-07T23:56:28.040744+00:00",
+                # entry.data carries the stable ids/secrets the test addresses;
+                # the integration's _ensure_secrets keeps them because they are
+                # already present.
+                "data": {
+                    "webhook_id": HA_MCP_SERVER_WEBHOOK_ID,
+                    "secret_path": HA_MCP_SERVER_SECRET_PATH,
+                },
+                # Baked disabled — the embedded-server HAOS test enables it via
+                # the config_entries/disable WS command (disabled_by=null).
+                "disabled_by": "user",
+                "discovery_keys": {},
+                "domain": HA_MCP_SERVER_DOMAIN,
+                "entry_id": HA_MCP_SERVER_ENTRY_ID,
+                "minor_version": 1,
+                "modified_at": "2025-09-07T23:56:28.040747+00:00",
+                "options": {
+                    # Overwritten with the checkout wheel by the conftest HAOS
+                    # branch before boot; placeholder points at a nonexistent
+                    # wheel so an un-delivered entry fails loudly rather than
+                    # installing wrong code.
+                    "pip_spec": HA_MCP_SERVER_PLACEHOLDER_PIP_SPEC,
+                    "server_port": HA_MCP_SERVER_PORT,
+                    "bind_host": "127.0.0.1",
+                    "webhook_auth": "none",
+                },
+                "pref_disable_new_entities": False,
+                "pref_disable_polling": False,
+                "source": "import",
+                "subentries": [],
+                "title": "Home Assistant MCP Server",
+                "unique_id": HA_MCP_SERVER_DOMAIN,
+                "version": 1,
+            }
+        )
+        ce_path.write_text(json.dumps(ce_data, indent=2))
+        LOG.info("Injected DISABLED config entry for %s", HA_MCP_SERVER_DOMAIN)
+
+
 def bake_test_state(qcow2: Path) -> None:
     """Inject tests/initial_test_state into the qcow2 via libguestfs.
 
@@ -1592,7 +1708,8 @@ def bake_test_state(qcow2: Path) -> None:
     their config entries — the testcontainer dispatch installs them
     dynamically via _install_custom_component, but on HAOS we bake them
     directly into the image at this step so HA Core finds them on first
-    boot.
+    boot. The in-process ha_mcp_server integration (#1527) is staged the same
+    way via ``_stage_embedded_server_integration``, but with a DISABLED entry.
     """
     repo_root = Path(__file__).resolve().parent.parent.parent
     tests_dir = repo_root / "tests"
@@ -1686,6 +1803,15 @@ def bake_test_state(qcow2: Path) -> None:
                 )
                 ce_path.write_text(json.dumps(ce_data, indent=2))
                 LOG.info("Injected config entry for %s", domain)
+
+        # In-process ha_mcp_server integration (#1527): staged like the two
+        # components above but with a tailored, DISABLED config entry. The
+        # source lives outside custom_components/ (at
+        # homeassistant-integration/ha_mcp_server) so HACS resolves this repo's
+        # listing via ha_mcp_tools rather than hijacking it; the bake copies it
+        # into /config/custom_components/ha_mcp_server so a real HA finds it on
+        # boot. See the HA_MCP_SERVER_* constants for why the entry is disabled.
+        _stage_embedded_server_integration(repo_root, staging, cc_dir)
 
         # mcp_proxy reads target_url + webhook_id from this file on setup —
         # the testcontainer dispatch writes the same JSON before container

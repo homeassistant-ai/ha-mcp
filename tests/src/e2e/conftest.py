@@ -59,6 +59,7 @@ from haos_runtime import (
     refresh_dev_addon_source_in_qcow2,
     refresh_recorder_in_qcow2,
     set_default_backup_password,
+    stage_embedded_server_wheel_in_qcow2,
     trigger_dev_addon_update,
     wait_for_addon_mcp_ready,
 )
@@ -1247,6 +1248,12 @@ def ha_container_with_fresh_config(request):
         # ride the shared-IP 60 req/h unauthenticated GitHub budget —
         # the long-standing HACS-install flake. Must run before boot.
         inject_hacs_token_in_qcow2(image_path)
+        # Deliver a checkout-built ha-mcp wheel into /config and point the baked
+        # (disabled) ha_mcp_server config entry's pip_spec at it, so the HAOS
+        # embedded-server E2E (#1527) exercises the PR's own src/ha_mcp when it
+        # enables the entry. Best-effort — a failure only affects that one test.
+        # Must run before boot (offline qcow2 edit), like the refreshers above.
+        stage_embedded_server_wheel_in_qcow2(image_path)
         # Inaddon mode: overwrite the baked addon source with PR's current
         # source + bump config.yaml version so Supervisor detects an
         # update-available on next boot. The Supervisor WS API trigger
