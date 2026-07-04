@@ -8,6 +8,12 @@ reads to choose a backend:
 | e2e-tests.yml (testcontainer) | unset                | unset          | ``container``    |
 | haos-e2e-tests.yml (external) | set                  | unset          | ``haos``         |
 | haos-e2e-inaddon-tests.yml    | set                  | ``inaddon``    | ``haos_inaddon`` |
+| haos-e2e-embedded-tests.yml   | set                  | ``embedded``   | ``haos_embedded``|
+
+The testcontainer ``embedded`` backend (#1527) is a fourth variant selected by a
+separate axis, ``E2E_BACKEND=embedded`` (not ``HAOS_TEST_MODE``): same container
+HA, but the server-under-test is the in-process ha_mcp_server integration inside
+the container.
 
 Three layers of guard, each catching a different silent-failure mode:
 
@@ -97,6 +103,24 @@ _SKIP_CEILING_PER_LANE = {
     # same way the container ceiling (71) sits above its ~62 def-skips; the first
     # green embedded CI run reveals the exact item count for a follow-up tighten.
     "embedded": 119,  # observed exact count (round 6, run 28709196071): haos/inaddon-lane skips + the external_only in-process-server class (alternative coverage on the container lane) + the 2 self-referential smoke tests
+    # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
+    # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
+    # PLUS two haos_embedded-specific additions:
+    #   - external_only tests skip here (their server is out-of-process inside the
+    #     HAOS core container, unreachable by test-process env/monkeypatch — same
+    #     reason as inaddon/container-embedded; alternative coverage on the external
+    #     HAOS lane, where the in-process FastMCP server IS in the test process), and
+    #   - the 3 haos_only embedded smoke tests skip (not_on_haos_embedded) because
+    #     the session backend already enables the entry + drives the server.
+    # Static def-level derivation (Docker/HAOS-less locally, so parametrize
+    # item-inflation isn't visible): container_only 11 + inaddon_only 19 +
+    # external_only 39 + smoke 3 = 72 (no overlaps: no external_only test is also
+    # container_only/inaddon_only, and the 2 not_on_embedded tests are already
+    # container_only). Applying the ~1.16x parametrize inflation the other HAOS
+    # lanes show (haos def 30 → ~35 observed; haos_inaddon def 50 → ~58) gives
+    # ~84; set to 90 with a small buffer. Round-1 CI pins it exactly, the
+    # established pattern on this branch (see the embedded entry above).
+    "haos_embedded": 90,
 }
 
 
@@ -133,6 +157,25 @@ def test_backend_dispatch_matches_workflow_env(
         assert ha_container_with_fresh_config["container"] is None
         assert ha_container_with_fresh_config["port"] is None
         assert ha_container_with_fresh_config["config_path"] is None
+    elif image_path and mode == "embedded":
+        # haos_embedded (#1527): a HAOS backend whose server-under-test is the
+        # baked in-process ha_mcp_server, driven over its ingress webhook on the
+        # booted VM. Container keys are None (HAOS path); addon_mcp_url is None
+        # (not the addon path); embedded_webhook_url is the connect URL.
+        assert backend == "haos_embedded", (
+            f"Workflow set HAOS_TEST_IMAGE_PATH + HAOS_TEST_MODE=embedded "
+            f"but dispatch picked backend={backend!r}. The in-process "
+            f"ha_mcp_server is NOT the server-under-test for this run."
+        )
+        assert ha_container_with_fresh_config["container"] is None
+        assert ha_container_with_fresh_config["port"] is None
+        assert ha_container_with_fresh_config["config_path"] is None
+        assert ha_container_with_fresh_config.get("addon_mcp_url") is None
+        webhook_url = ha_container_with_fresh_config.get("embedded_webhook_url")
+        assert webhook_url and webhook_url.startswith("http"), (
+            f"haos_embedded backend reported but embedded_webhook_url is "
+            f"{webhook_url!r}; the mcp_client fixture would route nowhere."
+        )
     elif image_path:
         assert backend == "haos", (
             f"Workflow set HAOS_TEST_IMAGE_PATH but dispatch picked "
@@ -205,7 +248,12 @@ async def test_supervisor_addon_tool_behavior_matches_backend(
     backend = ha_container_with_fresh_config["backend"]
     result = await safe_call_tool(mcp_client, "ha_get_addon", {})
 
-    if backend in ("haos", "haos_inaddon"):
+    # All HAOS backends run against a real Supervisor, so ha_get_addon succeeds —
+    # including haos_embedded, whose in-process server reaches Supervisor through
+    # HA Core's supervisor/api WS proxy (it runs standalone with HA_MCP_EMBEDDED,
+    # so it does not use SUPERVISOR_TOKEN directly, but the proxy path still works
+    # because HA Core itself is supervised).
+    if backend in ("haos", "haos_inaddon", "haos_embedded"):
         assert result.get("success") is True, (
             f"ha_get_addon failed on {backend} backend; Supervisor must "
             f"be running. Result: {result!r}"

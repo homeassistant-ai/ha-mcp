@@ -256,6 +256,25 @@ def is_haos_inaddon_mode() -> bool:
     return os.environ.get("HAOS_TEST_MODE", "external") == "inaddon"
 
 
+def is_haos_embedded_mode() -> bool:
+    """True iff this run targets the embedded-server HAOS tier (#1527).
+
+    The embedded mode points ``mcp_client`` at the baked in-process
+    ``ha_mcp_server`` integration's ingress webhook inside the booted HAOS
+    (``/api/webhook/<HA_MCP_SERVER_WEBHOOK_ID>``) instead of an external
+    in-process FastMCP server (external mode) or the dev add-on's HTTP MCP
+    endpoint (inaddon mode). The session fixture enables the baked-disabled
+    entry ONCE at setup and waits for the server to come up; the whole E2E
+    suite then runs through it, exercising the standalone in-process routing
+    (``is_running_in_addon()`` False despite ``SUPERVISOR_TOKEN`` in the core
+    env) end to end on real HAOS.
+
+    Mutually exclusive with ``is_haos_inaddon_mode`` — ``HAOS_TEST_MODE`` is a
+    single value (``external`` default / ``inaddon`` / ``embedded``).
+    """
+    return os.environ.get("HAOS_TEST_MODE", "external") == "embedded"
+
+
 def is_haos_backend_selected() -> bool:
     """True iff the workflow has staged a HAOS qcow2 for this run."""
     raw = os.environ.get(HAOS_IMAGE_ENV)
@@ -829,6 +848,100 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
     finally:
         import shutil as _shutil
 
+        _shutil.rmtree(workdir, ignore_errors=True)
+
+
+# HA config dir inside the qcow2 (``/config`` on HAOS) and the in-process
+# server's data subdir under it. Mirrors the integration's
+# ``const.SERVER_CONFIG_SUBDIR`` (".ha_mcp_server"): the integration hands
+# ha_mcp ``HA_MCP_CONFIG_DIR=<config>/.ha_mcp_server`` and ha_mcp.config reads
+# its ``feature_flags.json`` override from there. Hardcoded here for the same
+# reason the storage paths above are (no cross-package import into the build/test
+# runtime); kept in step with the container backend's ``_EMBEDDED_SERVER_CONFIG_SUBDIR``.
+_HAOS_CONFIG_DIR = "/supervisor/homeassistant"
+_HAOS_EMBEDDED_SERVER_DATA_DIR = f"{_HAOS_CONFIG_DIR}/.ha_mcp_server"
+
+
+def stage_embedded_server_feature_flags_in_qcow2(
+    image_path: Path, feature_flags: dict[str, bool]
+) -> None:
+    """Write the in-process server's feature-flag override into the qcow2 (#1527).
+
+    Only the ``haos_embedded`` lane calls this. On that lane the WHOLE E2E suite
+    runs through the in-process ha_mcp_server, so it needs the same feature flags
+    the container ``embedded`` backend injects (yaml-config editing, filesystem
+    tools, custom-component integration, …). The container backend delivers those
+    as pytest-process env vars for its in-process server; the HAOS embedded server
+    runs inside the core container and can't read that env, so the equivalent
+    values go to ``<config>/.ha_mcp_server/feature_flags.json`` — the override
+    layer ``ha_mcp.config`` reads in a standalone deployment. The server is
+    standalone here (``is_running_in_addon()`` is False in embedded mode despite
+    ``SUPERVISOR_TOKEN`` in the core env), so the file is honored rather than
+    short-circuited by Supervisor.
+
+    Delivered pre-boot via guestfish (mkdir-p the data dir + copy-in the file),
+    the same offline-qcow2 mechanism as ``stage_embedded_server_wheel_in_qcow2``
+    and the recorder / HACS-token refreshers — deterministic (present before HA
+    boots and before the entry is enabled) with no post-boot service-availability
+    or ordering dependency, which is why it's preferred over calling the baked
+    ``ha_mcp_tools`` write_file service after boot. The integration's
+    ``_prepare_config_dir`` does ``os.makedirs(..., exist_ok=True)``, so a
+    pre-created dir + file is picked up rather than clobbered (proven on the
+    container embedded lane, which pre-seeds the identical file).
+
+    Unlike the best-effort wheel staging, a failure here RAISES: the whole
+    haos_embedded suite depends on these flags, so failing session setup loudly
+    with a clear message beats letting dozens of feature-gated tests fail
+    confusingly downstream.
+    """
+    import shutil as _shutil
+    import tempfile
+
+    workdir = Path(tempfile.mkdtemp(prefix="haos-embedded-flags-"))
+    try:
+        local = workdir / "feature_flags.json"
+        local.write_text(json.dumps(feature_flags, indent=2), encoding="utf-8")
+        try:
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--rw",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    "mkdir-p",
+                    _HAOS_EMBEDDED_SERVER_DATA_DIR,
+                    ":",
+                    "copy-in",
+                    str(local),
+                    _HAOS_EMBEDDED_SERVER_DATA_DIR,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            stderr = (getattr(exc, "stderr", "") or "").strip()
+            raise RuntimeError(
+                f"Failed to stage the embedded-server feature_flags.json into "
+                f"{image_path} ({type(exc).__name__}"
+                + (f": {stderr[-300:]}" if stderr else "")
+                + "). The haos_embedded suite needs these flags; aborting session "
+                "setup rather than running the whole suite with default flags."
+            ) from exc
+        LOG.info(
+            "Staged embedded-server feature_flags.json (%d flags) into %s in %s",
+            len(feature_flags),
+            _HAOS_EMBEDDED_SERVER_DATA_DIR,
+            image_path,
+        )
+    finally:
         _shutil.rmtree(workdir, ignore_errors=True)
 
 

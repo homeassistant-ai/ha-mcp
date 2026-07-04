@@ -102,21 +102,31 @@ jobs:
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Lane 1 of the in-process ha_mcp_server backend (#1527): the SAME full E2E
-  # suite, but the server-under-test is the ha_mcp_server integration running
-  # in-process inside each worker's testcontainer (E2E_BACKEND=embedded), driven
-  # over its ingress webhook. Runs in parallel with the container lane above (a
-  # separate job — it does not extend that job's runtime). Only ubuntu-latest for
-  # now; the arm64 + HAOS-embedded lanes are follow-ups (kept as clean seams).
-  # -n2 (vs the container lane's -n3): each worker additionally builds a ha-mcp
-  # wheel and its container preinstalls the fastmcp dependency tree before HA
-  # boots, so a lower worker count keeps peak memory + concurrent-pip pressure in
-  # check on the 2-vCPU/15GB runner. The larger timeout covers that per-worker
-  # preinstall window.
+  # In-process ha_mcp_server backend (#1527): the SAME full E2E suite, but the
+  # server-under-test is the ha_mcp_server integration running in-process inside
+  # each worker's testcontainer (E2E_BACKEND=embedded), driven over its ingress
+  # webhook. Runs in parallel with the container lane above (a separate job — it
+  # does not extend that job's runtime). Matrixed x64 + arm64 to mirror the PR
+  # lane (pr.yml's e2e-validation-embedded). -n2/-n3 (vs the container lane's -n3):
+  # each worker additionally builds a ha-mcp wheel and its container preinstalls
+  # the fastmcp dependency tree before HA boots, so a lower worker count keeps peak
+  # memory + concurrent-pip pressure in check (arm gets +1). The larger timeout
+  # covers that per-worker preinstall window.
   e2e-tests-embedded:
-    name: E2E Tests (Embedded Server)
-    runs-on: ubuntu-latest
+    name: E2E Tests (Embedded Server, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest           # Linux x64
+          - ubuntu-24.04-arm        # Linux ARM64
+        include:
+          - os: ubuntu-latest
+            pytest_workers: 2
+          - os: ubuntu-24.04-arm
+            pytest_workers: 3
 
     steps:
     - uses: actions/checkout@v7
@@ -172,9 +182,9 @@ jobs:
 
     - name: Run full E2E test suite (embedded backend)
       run: |
-        echo "🚀 Running full E2E suite through the in-process ha_mcp_server (embedded backend)..."
+        echo "🚀 Running full E2E suite through the in-process ha_mcp_server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
         uv run pytest tests/src/e2e/ \
-          -n2 \
+          -n${{ matrix.pytest_workers }} \
           --dist loadscope \
           --tb=short \
           -v

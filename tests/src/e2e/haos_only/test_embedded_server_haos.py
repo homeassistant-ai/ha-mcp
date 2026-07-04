@@ -71,6 +71,12 @@ _READY_POLL_S = 5
 pytestmark = [
     pytest.mark.slow,
     pytest.mark.haos_only,
+    # These 3 tests enable the baked entry and drive the webhook per-test. On the
+    # haos_embedded lane the session backend already enables the entry ONCE and
+    # runs the whole suite through the in-process server, so running them there
+    # would double-enable the entry and race that backend — skip. They stay the
+    # sole proof of the mechanism on the external + inaddon HAOS lanes.
+    pytest.mark.not_on_haos_embedded,
     pytest.mark.timeout(_READY_TIMEOUT_S + 120),
 ]
 
