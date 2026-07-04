@@ -48,14 +48,34 @@ def is_dev_version(version: str) -> bool:
     return ".dev" in version
 
 
+def is_embedded() -> bool:
+    """Return True when ha-mcp runs in-process inside Home Assistant core.
+
+    Set to ``1`` by the ``ha_mcp_tools`` custom component's embedded-server
+    runner (``HA_MCP_EMBEDDED``) before the first ``ha_mcp`` import. On HAOS the
+    HA core container itself carries ``SUPERVISOR_TOKEN``, so without this flag
+    :func:`is_running_in_addon` would report True in-process and route log,
+    add-on-management, and settings-persistence logic down the add-on path. The
+    embedded server is an ordinary admin client of HA core (loopback URL +
+    provisioned token), so those call sites must take their non-add-on branch.
+    """
+    return bool(os.environ.get("HA_MCP_EMBEDDED"))
+
+
 def is_running_in_addon() -> bool:
     """Return True when running inside a Home Assistant add-on container.
 
     The HA Supervisor injects ``SUPERVISOR_TOKEN`` into every add-on's env.
     Checked so the standalone-Docker ``:stable`` banner isn't shown to add-on
     users, who already see the dev/stable distinction in the HAOS add-on UI.
+
+    Returns False in embedded mode (:func:`is_embedded`) even though the HA core
+    container carries ``SUPERVISOR_TOKEN``: the in-process server is a plain
+    admin client of HA core, not a Supervisor-managed add-on, so add-on-only
+    behavior (Supervisor-direct log fetch, add-on settings routing) must not
+    apply.
     """
-    return bool(os.environ.get("SUPERVISOR_TOKEN"))
+    return bool(os.environ.get("SUPERVISOR_TOKEN")) and not is_embedded()
 
 
 def get_supervisor_base_url() -> str:

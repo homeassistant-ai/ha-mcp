@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from ha_mcp._version import get_version
+from ha_mcp._version import get_version, is_running_in_addon
 
 logger = logging.getLogger(__name__)
 
@@ -913,7 +913,12 @@ def get_feature_flag_origin(env_name: str) -> str:
     )
     is_master = field_name == "enable_beta_features"
     is_beta_sub = field_name in BETA_FEATURE_FIELDS
-    in_addon = bool(os.environ.get("SUPERVISOR_TOKEN"))
+    # is_running_in_addon() (not a raw SUPERVISOR_TOKEN read) so the in-process
+    # embedded server — which carries SUPERVISOR_TOKEN on HAOS but is not an
+    # add-on — is treated as a standalone deployment: its settings-UI edits
+    # persist to override files under HA_MCP_CONFIG_DIR instead of being routed
+    # to a Supervisor add-on that does not exist.
+    in_addon = is_running_in_addon()
 
     if in_addon:
         if is_master or is_beta_sub:
@@ -1332,7 +1337,11 @@ def get_backup_setting_origin(env_name: str) -> str:
     - ``"default"``: no env var and no override file entry; the
       pydantic field default applies. Web UI edits create the file.
     """
-    if os.environ.get("SUPERVISOR_TOKEN"):
+    # is_running_in_addon() rather than a raw SUPERVISOR_TOKEN read so the
+    # embedded in-process server (SUPERVISOR_TOKEN present on HAOS, but not an
+    # add-on) is labeled a standalone deployment and its backup settings persist
+    # to the override file instead of a non-existent Supervisor add-on.
+    if is_running_in_addon():
         return "addon"
     if os.environ.get(env_name) is not None:
         return "env"
@@ -1424,7 +1433,10 @@ def _apply_backup_overrides(settings: "Settings") -> None:
     corrupt override file can't push values out of range; out-of-range
     or untypable entries are silently skipped.
     """
-    if os.environ.get("SUPERVISOR_TOKEN"):
+    # is_running_in_addon() (embedded-aware) so the in-process server applies
+    # its backup override file like a standalone deployment; see the matching
+    # rationale in _apply_feature_flag_overrides / get_backup_setting_origin.
+    if is_running_in_addon():
         return
     overrides = _read_backup_override_file()
     if not overrides:
