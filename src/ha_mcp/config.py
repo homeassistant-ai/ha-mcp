@@ -1620,6 +1620,18 @@ def get_global_settings() -> Settings:
     return _settings
 
 
+def reset_global_settings() -> None:
+    """Public seam to drop the cached settings singleton.
+
+    The in-process (embedded) server calls this at every start: a config-entry
+    reload reuses the same Python process, so without an explicit reset the
+    singleton built on the FIRST start would keep serving stale feature-flag /
+    override values forever (the add-on gets fresh settings for free from its
+    process restart).
+    """
+    _reset_global_settings()
+
+
 def _reset_global_settings() -> None:
     """Drop the cached settings singleton.
 

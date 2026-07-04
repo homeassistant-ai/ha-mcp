@@ -550,6 +550,49 @@ class TestThreadEnvStaging:
         # _serve raised on the ha_mcp.server import → captured, thread didn't hang.
         assert mgr._thread_exc is not None
 
+    def test_serve_resets_cached_settings_before_registering_connection(
+        self, tmp_path, monkeypatch
+    ):
+        # Entry-reload parity with an add-on restart (live-found): the same
+        # Python process keeps ha_mcp imported, so without an explicit reset
+        # the settings singleton built on the FIRST start serves stale
+        # feature-flag/override values to every later start. _serve must call
+        # reset_global_settings() BEFORE set_embedded_connection.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+        order: list[str] = []
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_config = ModuleType("ha_mcp.config")
+        ha_mcp_config.reset_global_settings = lambda: order.append("reset")
+        ha_mcp_config.set_embedded_connection = lambda url, tok: order.append("connect")
+        monkeypatch.setitem(sys.modules, "ha_mcp", ha_mcp_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ha_mcp_config)
+        monkeypatch.delitem(sys.modules, "ha_mcp.server", raising=False)
+
+        mgr._thread_main("tok-xyz")
+
+        assert order == ["reset", "connect"]
+
+    def test_serve_falls_back_to_private_reset_seam(self, tmp_path, monkeypatch):
+        # Releases predating the public alias only have _reset_global_settings;
+        # the manager must still reset (this is what runs against ha-mcp 7.9.0).
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+        private_reset = MagicMock(name="_reset_global_settings")
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_config = ModuleType("ha_mcp.config")
+        ha_mcp_config._reset_global_settings = private_reset
+        ha_mcp_config.set_embedded_connection = MagicMock()
+        monkeypatch.setitem(sys.modules, "ha_mcp", ha_mcp_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ha_mcp_config)
+        monkeypatch.delitem(sys.modules, "ha_mcp.server", raising=False)
+
+        mgr._thread_main("tok-xyz")
+
+        private_reset.assert_called_once_with()
+
     def test_thread_crash_is_captured_not_raised(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
 

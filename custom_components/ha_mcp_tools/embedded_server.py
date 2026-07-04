@@ -508,9 +508,22 @@ class EmbeddedServerManager:
         # Hand ha-mcp the loopback URL + provisioned admin token in memory, before
         # the server (and its settings singleton) is built. Keeping the token out
         # of os.environ is the whole point of the in-process channel.
-        from ha_mcp.config import set_embedded_connection
+        import ha_mcp.config as _hamcp_config
 
-        set_embedded_connection(self._server_url, access_token)
+        # Drop any settings singleton cached by a PREVIOUS start in this same
+        # Python process: an entry reload must re-read the override files
+        # (feature flags, advanced settings) exactly like an add-on restart
+        # does. Fall back to the private seam on releases that predate the
+        # public alias.
+        _reset = getattr(
+            _hamcp_config,
+            "reset_global_settings",
+            getattr(_hamcp_config, "_reset_global_settings", None),
+        )
+        if _reset is not None:
+            _reset()
+
+        _hamcp_config.set_embedded_connection(self._server_url, access_token)
 
         # Imported here, in the worker thread, after the connection is registered.
         from ha_mcp.server import HomeAssistantSmartMCPServer
