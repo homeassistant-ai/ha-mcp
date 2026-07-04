@@ -66,8 +66,8 @@ Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access to
 Not on Home Assistant OS? Home Assistant **Container** and **Core** installs can't run add-ons, but the **HA-MCP Custom Component** (`ha_mcp_tools`) can run the **full ha-mcp server in-process**, inside Home Assistant — no separate Docker container, no token to manage. It works on Home Assistant OS too, and coexists with the add-on. The connect URL is a Home Assistant webhook, so it reaches remote MCP clients through **Nabu Casa** (or any reverse proxy) with no extra tunnel.
 
 1. Install **HA-MCP Custom Component** from HACS (the same repository you use for ha-mcp), or copy `custom_components/ha_mcp_tools` from this repository into your Home Assistant `config/custom_components/` directory; then restart Home Assistant
-2. Add the integration (**Settings → Devices & Services → Add Integration → HA-MCP Custom Component**) and choose **In-process MCP server** from the menu, then submit — creating the entry starts the server
-3. Copy the connect URL from the **HA-MCP in-process server** notification (also shown on the entry's Configure screen)
+2. Add the integration (**Settings → Devices & Services → Add Integration → HA-MCP Custom Component**) and choose **HA-MCP Server** from the menu, then submit — creating the entry starts the server
+3. Copy the connect URL from the **HA-MCP Server** notification (also shown on the entry's Configure screen)
 4. Manage the server from the **HA-MCP** sidebar panel (admin-only web settings UI)
 4. Connect your AI client to that URL
 
@@ -291,10 +291,10 @@ Copy `custom_components/ha_mcp_tools/` from this repository into your HA `config
 
 ### Run the MCP server inside Home Assistant (in-process server entry)
 
-The **HA-MCP Custom Component** offers a second config-entry type, **In-process MCP server**, that runs the **full ha-mcp server in-process**, inside Home Assistant, and exposes it remotely through a Home Assistant webhook. This is a full install method in its own right — useful for **Home Assistant Container / Core** users who can't run add-ons, and available on Home Assistant OS too (it coexists with the add-on on a different default port, `9584` vs `9583`).
+The **HA-MCP Custom Component** offers a second config-entry type, **HA-MCP Server**, that runs the **full ha-mcp server in-process**, inside Home Assistant, and exposes it remotely through a Home Assistant webhook. This is a full install method in its own right — useful for **Home Assistant Container / Core** users who can't run add-ons, and available on Home Assistant OS too (it coexists with the add-on on a different default port, `9584` vs `9583`).
 
-- **Install:** install **HA-MCP Custom Component** from HACS (the same repository you use for ha-mcp), or copy `custom_components/ha_mcp_tools` into your `config/custom_components/` directory and restart Home Assistant. Then **Add Integration → HA-MCP Custom Component → In-process MCP server** and submit — creating the entry starts the server.
-- **Connect URL:** appears in the **HA-MCP in-process server** notification and on the entry's Configure screen. It's a Home Assistant webhook — `https://<nabu-casa-domain>/api/webhook/<id>` remotely (through Nabu Casa or any reverse proxy) or `http://<home-assistant-host>:8123/api/webhook/<id>` locally. Setting the bind address to `0.0.0.0` also exposes the server directly on its port.
+- **Install:** install **HA-MCP Custom Component** from HACS (the same repository you use for ha-mcp), or copy `custom_components/ha_mcp_tools` into your `config/custom_components/` directory and restart Home Assistant. Then **Add Integration → HA-MCP Custom Component → HA-MCP Server** and submit — creating the entry starts the server.
+- **Connect URL:** appears in the **HA-MCP Server** notification and on the entry's Configure screen. It's a Home Assistant webhook — `https://<nabu-casa-domain>/api/webhook/<id>` remotely (through Nabu Casa or any reverse proxy) or `http://<home-assistant-host>:8123/api/webhook/<id>` locally. Setting the bind address to `0.0.0.0` also exposes the server directly on its port.
 - **Settings panel:** while the server runs, an admin-only **HA-MCP** panel in the Home Assistant sidebar opens its web settings UI (enable/disable/pin tools, feature flags, backups, themes) through Home Assistant itself — no loopback URL needed, the same idea as the add-on's "Open Web UI" button.
 - **Authentication:** by default the secret webhook URL is the credential; optionally require Home Assistant account sign-in (`ha_auth`) for clients that support it.
 - **Release channel:** the entry options let you pick `stable` (the pinned release) or `dev` (the latest development build, refreshed on every reload/restart).

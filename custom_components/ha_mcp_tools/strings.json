@@ -3,10 +3,10 @@
         "step": {
             "user": {
                 "title": "HA-MCP Custom Component",
-                "description": "Choose what to add. **HA MCP Tools** enables the privileged file and YAML configuration services used by ha-mcp. **In-process MCP server** runs the full ha-mcp server inside Home Assistant and exposes it remotely through a webhook. You can add both.",
+                "description": "Choose what to add. **HA MCP Tools** enables the privileged file and YAML configuration services used by ha-mcp. **HA-MCP Server** runs the full ha-mcp server inside Home Assistant and exposes it remotely through a webhook. You can add both.",
                 "menu_options": {
                     "tools": "HA MCP Tools (file & YAML services)",
-                    "server": "In-process MCP server"
+                    "server": "HA-MCP Server"
                 }
             },
             "tools": {
@@ -25,7 +25,7 @@
                 "description": "The add-on could not be installed automatically:\n\n{error}\n\nThe add-on repository may already have been added for you, so you only need to install the **Home Assistant MCP Server** add-on from the Add-on Store. The integration's services will still be set up — select **Submit** to finish."
             },
             "server": {
-                "title": "In-process MCP server",
+                "title": "HA-MCP Server",
                 "description": "This runs the full ha-mcp server inside Home Assistant and exposes it remotely through a Home Assistant webhook (reachable via Nabu Casa or any reverse proxy). Select **Submit** to start it; you can change the port, binding, and authentication afterward in the integration options."
             }
         },
@@ -42,8 +42,8 @@
         },
         "step": {
             "init": {
-                "title": "In-process MCP server",
-                "description": "Configure the in-process MCP server. Changes are applied on save.\n\n{connect_url}",
+                "title": "HA-MCP Server",
+                "description": "Configure the HA-MCP server. Open the [HA-MCP settings panel](/ha-mcp) for tool management and server settings. Changes here are applied on save.\n\n{connect_url}",
                 "data": {
                     "channel": "Release channel",
                     "server_port": "Server port",

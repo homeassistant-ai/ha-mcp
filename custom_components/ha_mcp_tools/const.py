@@ -171,7 +171,7 @@ RESERVED_DASHBOARD_URL_PATHS = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# In-process MCP server entry (issue #1527)
+# HA-MCP Server entry (issue #1527)
 #
 # Folded in from the former standalone ``ha_mcp_server`` integration. The
 # "server" config-entry type runs the full ha-mcp FastMCP server in-process
@@ -262,8 +262,8 @@ SERVER_CONFIG_SUBDIR = ".ha_mcp"
 # recognizable in Settings -> People -> <user> -> tokens. "HA-MCP" phrasing (not
 # "Home Assistant MCP Server") to avoid confusion with HA's official MCP Server
 # integration.
-SERVER_TOKEN_CLIENT_NAME = "HA-MCP in-process server"
-SERVER_USER_NAME = "HA-MCP in-process server"
+SERVER_TOKEN_CLIENT_NAME = "HA-MCP Server"
+SERVER_USER_NAME = "HA-MCP Server"
 
 # RFC 8414 / RFC 9728 discovery documents for ha_auth mode are served under this
 # namespace (mirrors the webhook-proxy add-on's /api/mcp_proxy/oauth base).

@@ -62,7 +62,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Titles shown for each entry in the integration tile's entry list.
 _TOOLS_ENTRY_TITLE = "HA MCP Tools"
-_SERVER_ENTRY_TITLE = "In-process MCP server"
+_SERVER_ENTRY_TITLE = "HA-MCP Server"
 _CONF_INSTALL_ADDON = "install_addon"
 
 # The single-instance server entry's unique id — distinct from the tools entry's

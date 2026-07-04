@@ -87,7 +87,7 @@ HAOS_IMAGE_ENV = "HAOS_TEST_IMAGE_PATH"
 # into the test runtime path.
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
 
-# In-process MCP server config-entry constants (#1527). The in-process server is
+# HA-MCP Server config-entry constants (#1527). The in-process server is
 # a SECOND config entry of the ha_mcp_tools component (``entry_type="server"``);
 # the bake seeds it DISABLED into the qcow2's .storage/core.config_entries
 # (build_image._stage_embedded_server_integration); stage_embedded_server_wheel_in_qcow2

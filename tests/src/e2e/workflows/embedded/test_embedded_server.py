@@ -146,7 +146,7 @@ def _seed_config(config_path: Path, wheel_name: str) -> None:
             "pref_disable_polling": False,
             "source": "import",
             "subentries": [],
-            "title": "In-process MCP server",
+            "title": "HA-MCP Server",
             "unique_id": _UNIQUE_ID,
             "version": 1,
         }

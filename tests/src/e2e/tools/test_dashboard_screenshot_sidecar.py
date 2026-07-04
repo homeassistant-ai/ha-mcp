@@ -141,7 +141,7 @@ def fake_engine():
 async def screenshot_mcp_client(
     ha_container_with_fresh_config: Any, fake_engine: _FakeEngine, monkeypatch
 ):
-    """In-process MCP server with the screenshot beta feature enabled.
+    """HA-MCP Server with the screenshot beta feature enabled.
 
     Mirrors the production gate: both the master beta flag and the
     dashboard-screenshot sub-flag must be on for the tool to register. Points

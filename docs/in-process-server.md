@@ -52,7 +52,7 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.
 2. **Add the in-process server entry.** Go to **Settings → Devices & Services →
    Add Integration**, search for **HA-MCP Custom Component**, and — on the menu
-   that appears — choose **In-process MCP server**, then submit the confirmation.
+   that appears — choose **HA-MCP Server**, then submit the confirmation.
    Creating the entry starts the server with the defaults. (If you already have
    the **HA MCP Tools** services entry, use the same **Add Integration** flow;
    the two entries appear together under the one integration tile.)
@@ -63,7 +63,7 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 4. **Connect your MCP client** to that URL.
 
 To pause the server, **disable** its config entry (**Settings → Devices &
-Services → HA-MCP Custom Component → In-process MCP server → ⋮ → Disable**);
+Services → HA-MCP Custom Component → HA-MCP Server → ⋮ → Disable**);
 re-enable it to start it again. Removing the entry stops the server and revokes
 the provisioned token.
 

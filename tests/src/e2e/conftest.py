@@ -853,7 +853,7 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
                 "pref_disable_polling": False,
                 "source": "import",
                 "subentries": [],
-                "title": "In-process MCP server",
+                "title": "HA-MCP Server",
                 "unique_id": _EMBEDDED_UNIQUE_ID,
                 "version": 1,
             }

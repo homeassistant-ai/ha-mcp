@@ -158,7 +158,8 @@ def _surface_connect_urls(
         auth_note,
     )
     message = (
-        "The HA-MCP in-process server is now running inside Home Assistant.\n\n"
+        "The HA-MCP Server is now running inside Home Assistant.\n\n"
+        "Manage it from the [HA-MCP settings panel](/ha-mcp) in the sidebar.\n\n"
         "Connect your MCP client to:\n"
         f"{url_lines}\n\n"
         f"{auth_note}\n"
@@ -171,7 +172,7 @@ def _surface_connect_urls(
     persistent_notification.async_create(
         hass,
         message,
-        title="HA-MCP in-process server",
+        title="HA-MCP Server",
         notification_id=_NOTIFICATION_ID,
     )
 
