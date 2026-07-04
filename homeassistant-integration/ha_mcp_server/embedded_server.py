@@ -436,36 +436,48 @@ class EmbeddedServerManager:
         # same secret path as the MCP endpoint.
         register_settings_routes(server.mcp, server, secret_path=self._secret_path)
 
-        run_coro = server.mcp.run_async(
-            transport="http",
+        # Own the uvicorn server instead of calling mcp.run_async(): cancelling
+        # run_async's task does NOT release the listening socket in-process
+        # (live-found: the next bring-up failed with EADDRINUSE and uvicorn's
+        # lifespan generator raised "athrow(): asynchronous generator is
+        # already running"). The CLI never sees this because its process exits.
+        # This mirrors fastmcp 3.4.2's run_http_async internals (http_app +
+        # uvicorn.Config defaults + _lifespan_manager), pinned by ha-mcp.
+        import uvicorn
+
+        app = server.mcp.http_app(path=self._secret_path, stateless_http=True)
+        config = uvicorn.Config(
+            app,
             host=self._bind_host,
             port=self._port,
-            path=self._secret_path,
-            stateless_http=True,
-            show_banner=False,
+            timeout_graceful_shutdown=2,
+            lifespan="on",
+            ws="websockets-sansio",
             # Leave Home Assistant's logging untouched — do not let uvicorn
             # reconfigure the root logger from this thread.
-            uvicorn_config={"log_config": None},
+            log_config=None,
         )
-        server_task = asyncio.ensure_future(run_coro)
+        uv_server = uvicorn.Server(config)
+
         assert self._stop_event is not None
         stop_task = asyncio.ensure_future(self._stop_event.wait())
-
-        done, _pending = await asyncio.wait(
-            {server_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-        if stop_task in done:
-            # Cancelling the run_async task triggers uvicorn's graceful shutdown
-            # (the same mechanism ha_mcp.__main__ uses for signal shutdown).
-            server_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await server_task
-        else:
-            stop_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await stop_task
-            # Surface a server task that exited on its own (bind failure, etc.).
-            server_task.result()
+        async with server.mcp._lifespan_manager():
+            serve_task = asyncio.ensure_future(uv_server.serve())
+            done, _pending = await asyncio.wait(
+                {serve_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if stop_task in done:
+                # Graceful shutdown through uvicorn's own path: waits out
+                # in-flight requests (2s cap), runs lifespan shutdown, and
+                # deterministically releases the socket for the next bring-up.
+                uv_server.should_exit = True
+                await serve_task
+            else:
+                stop_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await stop_task
+                # Surface a server that exited on its own (bind failure, etc.).
+                serve_task.result()
 
     async def _async_wait_until_ready(self) -> None:
         """Poll a loopback TCP connect until the server accepts, or fail.
