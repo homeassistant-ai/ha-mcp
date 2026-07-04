@@ -68,6 +68,7 @@ Not on Home Assistant OS? Home Assistant **Container** and **Core** installs can
 1. Install **HA-MCP Custom Component** from HACS (the same repository you use for ha-mcp), or copy `custom_components/ha_mcp_tools` from this repository into your Home Assistant `config/custom_components/` directory; then restart Home Assistant
 2. Add the integration (**Settings → Devices & Services → Add Integration → HA-MCP Custom Component**) and choose **In-process MCP server** from the menu, then submit — creating the entry starts the server
 3. Copy the connect URL from the **HA-MCP in-process server** notification (also shown on the entry's Configure screen)
+4. Manage the server from the **HA-MCP** sidebar panel (admin-only web settings UI)
 4. Connect your AI client to that URL
 
 [Full in-process server documentation →](docs/in-process-server.md)

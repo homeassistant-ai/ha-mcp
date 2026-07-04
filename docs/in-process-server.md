@@ -87,6 +87,18 @@ The remote and local webhook URLs are listed in the notification and on the
 Configure screen; the direct URL is listed too whenever the bind address is
 `0.0.0.0`.
 
+## Settings panel ("HA-MCP" in the sidebar)
+
+While a server entry is running, the integration adds an **HA-MCP** panel
+to the Home Assistant sidebar. It opens the server web settings UI (tool
+enable/disable/pin, feature flags, backups, themes) without needing the
+loopback URL - the same experience as the add-on "Open Web UI" button.
+
+The panel is admin-only. Opening it establishes a short-lived session for
+your Home Assistant login, and every request re-checks that the account is
+still an active administrator. No token or secret ever appears in a URL,
+and the secret path stays on the loopback side of the proxy.
+
 ## Coexisting with the add-on
 
 The in-process server defaults to port **9584**, while the Home Assistant MCP

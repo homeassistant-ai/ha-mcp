@@ -156,7 +156,7 @@
   main {
     max-width: 1280px;
     margin: 0 auto;
-    padding: 0 16px 32px;
+    padding: 0 16px 40px;
   }
 
   /* ── SKIP LINK ───────────────────────────────────────────────────────── */
@@ -209,7 +209,7 @@
   }
   .tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-  .panel { display: none; padding-top: 16px; }
+  .panel { display: none; padding-top: 24px; }
   .panel.active { display: block; }
 
   /* ── ALERTS (HA ha-alert) ────────────────────────────────────────────── */
@@ -309,7 +309,7 @@
   .group {
     background: var(--surface);
     border-radius: 12px;
-    margin-bottom: 8px;
+    margin-bottom: 12px;
     overflow: hidden;
     border: var(--card-border);
     box-shadow: var(--card-shadow);
@@ -336,7 +336,7 @@
   /* ── INDIVIDUAL TOOLS ────────────────────────────────────────────────── */
   .tool {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
     transition: background 0.1s;
   }
   .tool:last-child { border-bottom: none; }
