@@ -96,7 +96,7 @@ _SKIP_CEILING_PER_LANE = {
     # 1) + not_on_embedded 2 = 99. Set to 115 to absorb parametrize inflation the
     # same way the container ceiling (71) sits above its ~62 def-skips; the first
     # green embedded CI run reveals the exact item count for a follow-up tighten.
-    "embedded": 115,
+    "embedded": 119,  # observed exact count (round 6, run 28709196071): haos/inaddon-lane skips + the external_only in-process-server class (alternative coverage on the container lane) + the 2 self-referential smoke tests
 }
 
 
