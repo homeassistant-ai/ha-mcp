@@ -36,6 +36,7 @@ import re
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -104,7 +105,11 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
         # when the bearer token is wrong. Routing/404 happens only after.
         if not self._check_auth():
             return
-        if m := _SERVICE_LOGS_RE.match(self.path):
+        # Route on the bare path — real Supervisor's aiohttp router matches
+        # paths without the query string (?lines= on the /logs endpoints is
+        # parsed by the handler, supervisor/api/host.py).
+        path = urlsplit(self.path).path
+        if m := _SERVICE_LOGS_RE.match(path):
             service = m.group(1)
             if service not in SYSTEM_SERVICES:
                 self._send_json(
@@ -119,7 +124,7 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if m := _ADDON_LOGS_RE.match(self.path):
+        if m := _ADDON_LOGS_RE.match(path):
             slug = m.group(1)
             self._send_text(
                 200,
@@ -134,7 +139,7 @@ class _SupervisorMockHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._check_auth():
             return
-        if self.path == "/addons/self/restart":
+        if urlsplit(self.path).path == "/addons/self/restart":
             # Real Supervisor returns this envelope on success; the call site
             # discards the body but checks the status code.
             self._send_json(200, {"result": "ok", "data": {}})

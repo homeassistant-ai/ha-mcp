@@ -131,6 +131,16 @@ def _custom_tool_write(args: dict[str, Any]) -> str | None:
     return "sandbox code execution"
 
 
+def _updates_write(args: dict[str, Any]) -> str | None:
+    # ``action`` defaults to "list" at the schema layer, so a missing action
+    # executes as a read (the middleware sees RAW pre-validation arguments —
+    # an absent key here means the tool itself will run the list branch).
+    action = args.get("action")
+    if action in (None, "list", "get"):
+        return None
+    return f"action={action!r}"
+
+
 def _radio_write(args: dict[str, Any]) -> str | None:
     action = args.get("action")
     # Reads (allowed): per-node diagnostics, the integration/network summary,
@@ -199,6 +209,14 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
         "('network_status'), the active reachability probe ('ping'), a Zigbee "
         "cluster-attribute read ('cluster_read'), and the Thread dataset "
         "listing ('list_datasets')",
+    ),
+    # Update listing/details exist only here — ha_get_updates was merged
+    # into this tool (issue #1726), so hiding it would remove the read
+    # surface entirely.
+    "ha_manage_updates": ReadOnlyExemption(
+        _updates_write,
+        "listing pending updates (action='list', the default) and reading "
+        "update details/release notes (action='get')",
     ),
 }
 

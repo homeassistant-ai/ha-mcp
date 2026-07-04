@@ -2304,3 +2304,127 @@ class TestPluralKeyTolerance:
         }
         warnings = check_automation_config(config)
         assert _has_warning_containing(warnings, "motion", "mode: restart")
+
+
+# ---------------------------------------------------------------------------
+# HA 2026.7 renamed purpose-specific keys + trigger behavior values
+# ---------------------------------------------------------------------------
+
+
+class TestRenamedPurposeSpecificKeys:
+    """2026.7 renamed trigger/condition keys and options.behavior values."""
+
+    def test_renamed_trigger_key_warns(self):
+        config = {
+            "triggers": [
+                {"trigger": "vacuum.docked", "target": {"entity_id": "vacuum.robo"}}
+            ],
+            "actions": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(
+            warnings, "vacuum.docked", "vacuum.returned_to_dock", "2026.7"
+        )
+
+    def test_all_renamed_trigger_keys_warn(self):
+        from ha_mcp.tools.best_practice_checker import _RENAMED_TRIGGER_KEYS
+
+        for old, new in _RENAMED_TRIGGER_KEYS.items():
+            config = {"triggers": [{"trigger": old}], "actions": []}
+            warnings = check_automation_config(config)
+            assert _has_warning_containing(warnings, f"`{old}`", f"`{new}`"), old
+
+    def test_new_trigger_key_clean(self):
+        config = {
+            "triggers": [
+                {
+                    "trigger": "vacuum.returned_to_dock",
+                    "target": {"entity_id": "vacuum.robo"},
+                }
+            ],
+            "actions": [],
+        }
+        assert check_automation_config(config) == []
+
+    def test_renamed_condition_key_warns(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "climate.x"}],
+            "conditions": [
+                {
+                    "condition": "climate.target_temperature",
+                    "target": {"entity_id": "climate.x"},
+                }
+            ],
+            "actions": [],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(
+            warnings, "climate.target_temperature", "climate.is_target_temperature"
+        )
+
+    def test_new_condition_key_clean(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "climate.x"}],
+            "conditions": [
+                {
+                    "condition": "climate.is_target_temperature",
+                    "target": {"entity_id": "climate.x"},
+                }
+            ],
+            "actions": [],
+        }
+        assert check_automation_config(config) == []
+
+    def test_renamed_condition_key_in_action_tree_warns(self):
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "light.x"}],
+            "actions": [{"if": [{"condition": "climate.target_humidity"}], "then": []}],
+        }
+        warnings = check_automation_config(config)
+        assert _has_warning_containing(warnings, "climate.is_target_humidity")
+
+    def test_deprecated_trigger_behavior_warns(self):
+        for old, new in (("any", "each"), ("last", "all")):
+            config = {
+                "triggers": [
+                    {
+                        "trigger": "motion.detected",
+                        "target": {"area_id": "living_room"},
+                        "options": {"behavior": old},
+                    }
+                ],
+                "actions": [],
+            }
+            warnings = check_automation_config(config)
+            assert _has_warning_containing(
+                warnings, f"behavior: {old}", f"`{new}`", "2026.7"
+            ), old
+
+    def test_current_trigger_behavior_clean(self):
+        for value in ("each", "first", "all"):
+            config = {
+                "triggers": [
+                    {
+                        "trigger": "motion.detected",
+                        "target": {"area_id": "living_room"},
+                        "options": {"behavior": value},
+                    }
+                ],
+                "actions": [],
+            }
+            assert check_automation_config(config) == [], value
+
+    def test_condition_behavior_any_not_flagged(self):
+        # Conditions keep any/all — only trigger options.behavior was renamed.
+        config = {
+            "triggers": [{"trigger": "state", "entity_id": "light.x"}],
+            "conditions": [
+                {
+                    "condition": "battery.is_low",
+                    "target": {"label_id": "critical_devices"},
+                    "options": {"behavior": "any"},
+                }
+            ],
+            "actions": [],
+        }
+        assert check_automation_config(config) == []

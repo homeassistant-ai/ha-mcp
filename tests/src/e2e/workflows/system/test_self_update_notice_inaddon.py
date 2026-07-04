@@ -25,7 +25,7 @@ pytestmark = [pytest.mark.inaddon_only, pytest.mark.system]
 
 
 @pytest.mark.parametrize(
-    "tool", ["ha_get_overview", "ha_get_system_health", "ha_get_updates"]
+    "tool", ["ha_get_overview", "ha_get_system_health", "ha_manage_updates"]
 )
 async def test_dev_addon_surfaces_update_field_from_supervisor(
     mcp_client, tool: str

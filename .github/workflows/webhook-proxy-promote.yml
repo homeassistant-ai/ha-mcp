@@ -28,7 +28,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install ruff + pytest
-        run: pip install ruff pytest pytest-asyncio
+        run: pip install ruff pytest pytest-asyncio pytest-timeout
 
       - name: Run the promote transform in place
         id: promote

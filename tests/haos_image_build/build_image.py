@@ -1360,7 +1360,6 @@ def install_ha_mcp_dev_addon(ws: HAWebSocket) -> str:
                 "disabled_tools": "",
                 "pinned_tools": "",
                 "verify_ssl": True,
-                "advanced_debug_logging": True,
             },
             "boot": "auto",
         },

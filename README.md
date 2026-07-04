@@ -226,7 +226,7 @@ Spend less time configuring, more time enjoying your smart home.
 | **Scripts** | `ha_config_get_script`, `ha_config_remove_script`, `ha_config_set_script` |
 | **Search & Discovery** | `ha_get_overview`, `ha_get_state`, `ha_search` |
 | **Service & Device Control** | `ha_bulk_control`, `ha_call_event`, `ha_call_service`, `ha_get_operation_status`, `ha_list_services` |
-| **System** | `ha_config_set_yaml` *(beta)*, `ha_get_updates`, `ha_manage_backup`, `ha_manage_custom_tool` *(beta)*, `ha_manage_theme`, `ha_reload_core`, `ha_restart` |
+| **System** | `ha_config_set_yaml` *(beta)*, `ha_manage_backup`, `ha_manage_custom_tool` *(beta)*, `ha_manage_theme`, `ha_manage_updates`, `ha_reload_core`, `ha_restart` |
 | **Todo Lists** | `ha_get_todo`, `ha_remove_todo_item`, `ha_set_todo_item` |
 | **Utilities** | `ha_eval_template`, `ha_install_mcp_tools` *(beta)*, `ha_report_issue` |
 | **Zones** | `ha_get_zone`, `ha_remove_zone`, `ha_set_zone` |
@@ -456,7 +456,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@L1AD](https://github.com/L1AD)** — Filed #966 proposing tool security policies; pointed to PolicyLayer's MCP-security work as prior art that inspired the predicate DSL shape.
 - **[@nightcityblade](https://github.com/nightcityblade)** — Updated stale Home Assistant Advanced Mode references after HA 2026.6 made formerly advanced options available by default (#1533).
 - **[@emmelutzer](https://github.com/emmelutzer)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
-
+- **[@pkkr](https://github.com/pkkr)** — `ha_knx_get_project` tool exposing KNX group addresses from an uploaded ETS project file.
+- **[@cbowns](https://github.com/cbowns)** — Fixed inconsistent hyphen in setup.astro Codex CLI docs.
+- **[@Shaan-alpha](https://github.com/Shaan-alpha)** — Extended `ha_restart` known-good error patterns to cover 502/503 responses from reverse proxies.
+- **[@rebelancap](https://github.com/rebelancap)** — Fixed UTC-to-local timezone conversion in `add_timezone_metadata`.
+- **[@saevras](https://github.com/saevras)** — Fixed blueprint import E2E test to use local URL instead of host-to-container networking.
+- **[@jasonjhofmann](https://github.com/jasonjhofmann)** — Recurring calendar events via `rrule` support in `ha_config_set_calendar_event`.
+- **[@vpciii](https://github.com/vpciii)** — Coerce JSON-encoded strings on dict/list tool params.
+- **[@pburtchaell](https://github.com/pburtchaell)** — Financial support via [GitHub Sponsors](https://github.com/sponsors/julienld). Thank you! ☕
 ---
 
 ## 💬 Community

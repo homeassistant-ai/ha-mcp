@@ -230,9 +230,9 @@ class TestAddonStructure:
         then showed an unlabelled checkbox. Lock the parity so the
         same class of silent gap can't recur.
         """
-        with open(f"{addon_dir}/config.yaml") as f:
+        with open(f"{addon_dir}/config.yaml", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
-        with open(f"{addon_dir}/translations/en.yaml") as f:
+        with open(f"{addon_dir}/translations/en.yaml", encoding="utf-8") as f:
             translations = yaml.safe_load(f)
         schema_keys = set(cfg.get("schema", {}).keys())
         # ``secret_path`` is intentionally undocumented in user-facing

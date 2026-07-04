@@ -345,6 +345,91 @@ class TestResolveBoolOption:
         )
 
 
+class TestResolveEffectiveLogLevel:
+    """Unit tests for resolve_effective_log_level (#1721).
+
+    The addon hardcoded ``logging.basicConfig(level=logging.INFO)``, so the
+    web Settings UI's "Log level" advanced setting could never reach the
+    addon container log — reporters asked to "enable debug logging" saw
+    INFO-only output. The helper reads the effective settings (including
+    the feature_flags.json override) and falls back to INFO on any failure
+    so logging config can never block addon startup.
+    """
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    def _patch_level(self, monkeypatch, level_name):
+        class _FakeSettings:
+            log_level = level_name
+
+        monkeypatch.setattr("ha_mcp.config.get_global_settings", _FakeSettings)
+
+    def test_debug_setting_yields_debug_level(self, monkeypatch):
+        import logging
+
+        self._patch_level(monkeypatch, "DEBUG")
+        assert self.addon.resolve_effective_log_level() == logging.DEBUG
+
+    def test_default_info(self, monkeypatch):
+        import logging
+
+        self._patch_level(monkeypatch, "INFO")
+        assert self.addon.resolve_effective_log_level() == logging.INFO
+
+    def test_unknown_level_falls_back_to_info(self, monkeypatch):
+        import logging
+
+        self._patch_level(monkeypatch, "VERBOSE")
+        assert self.addon.resolve_effective_log_level() == logging.INFO
+
+    def test_settings_failure_falls_back_to_info(self, monkeypatch, capsys):
+        import logging
+
+        def _boom():
+            raise RuntimeError("settings unavailable")
+
+        monkeypatch.setattr("ha_mcp.config.get_global_settings", _boom)
+        assert self.addon.resolve_effective_log_level() == logging.INFO
+        # The fallback must be LOUD — a silent INFO fallback recreates
+        # the "user set DEBUG, nothing happened, no clue why" bug class.
+        captured = capsys.readouterr()
+        assert "web-UI Log level not applied" in captured.err
+        assert "settings unavailable" in captured.err
+
+    def test_advanced_debug_logging_toggle_removed(self):
+        """The confusing addon-config toggle is gone everywhere.
+
+        Kill-signal diagnostics now arm when the effective log level is
+        DEBUG; no separate toggle. Guards against reintroduction in any
+        addon flavor (functional config is hand-mirrored, not synced).
+        """
+        repo_root = Path(__file__).parents[2]
+        for rel in (
+            "homeassistant-addon/start.py",
+            "homeassistant-addon/config.yaml",
+            "homeassistant-addon/translations/en.yaml",
+            "homeassistant-addon-dev/config.yaml",
+            "homeassistant-addon-dev/translations/en.yaml",
+            "tests/haos_image_build/build_image.py",
+        ):
+            content = (repo_root / rel).read_text(encoding="utf-8")
+            assert "advanced_debug_logging" not in content, (
+                f"{rel} still references the removed advanced_debug_logging toggle"
+            )
+
+    def test_start_py_arms_kill_diagnostics_on_debug(self):
+        """start.py still installs kill-signal diagnostics — gated on the
+        effective DEBUG level instead of the removed toggle."""
+        repo_root = Path(__file__).parents[2]
+        content = (repo_root / "homeassistant-addon/start.py").read_text(
+            encoding="utf-8"
+        )
+        assert "schedule_install_after_uvicorn" in content
+        assert "resolve_effective_log_level" in content
+
+
 class TestCleanupStaleMigrationMarker:
     """Unit tests for cleanup_stale_migration_marker.
 
@@ -462,6 +547,14 @@ class TestAddonStartup:
             # Should not have errors
             assert "[ERROR] Failed to start MCP server:" not in logs
 
+            # Default config = INFO level: the DEBUG canary must be
+            # absent and kill-signal diagnostics must NOT arm. Guards
+            # the arming gate against regressing to always-on (the
+            # SA_SIGINFO handler must stay opt-in via DEBUG).
+            assert "Debug logging active (log_level applied from settings)" not in logs
+            assert "arming kill-signal diagnostics" not in logs
+            assert "kill-signal diagnostics installed for" not in logs
+
         finally:
             container.stop()
 
@@ -504,6 +597,54 @@ class TestAddonStartup:
             )
             assert "Secret Path: /my_custom_secret" in logs
 
+        finally:
+            container.stop()
+
+    def test_web_ui_debug_log_level_reaches_addon_logs(self, tmp_path):
+        """Regression for the #1721 diagnosis: the web Settings UI
+        "Log level" advanced setting (persisted to
+        ``/data/feature_flags.json``) must actually change addon log
+        verbosity. start.py hardcoded ``basicConfig(level=INFO)``, so
+        reporters asked to "enable debug logging" could never produce
+        DEBUG output. Also covers the DEBUG-armed kill-signal
+        diagnostics (which replaced the advanced_debug_logging toggle).
+        """
+        config_file = tmp_path / "options.json"
+        with open(config_file, "w") as f:
+            json.dump({"backup_hint": "normal", "secret_path": ""}, f)
+        with open(tmp_path / "feature_flags.json", "w") as f:
+            json.dump({"log_level": "DEBUG"}, f)
+
+        container = (
+            DockerContainer(image=IMAGE_TAG)
+            .with_env("SUPERVISOR_TOKEN", "test-supervisor-token")
+            .with_env("HOMEASSISTANT_URL", "http://supervisor/core")
+            .with_volume_mapping(str(tmp_path), "/data", mode="rw")
+        )
+        container.waiting_for(
+            LogMessageWaitStrategy("Uvicorn running on").with_startup_timeout(30)
+        )
+        container.start()
+
+        try:
+            # The install-confirmation line is emitted by the deferred
+            # install thread slightly AFTER uvicorn logs "running", so
+            # poll briefly instead of single-shot reading the logs.
+            deadline = time.monotonic() + 15.0
+            logs = ""
+            while time.monotonic() < deadline:
+                stdout, stderr = container.get_logs()
+                logs = stdout.decode("utf-8") + "\n" + stderr.decode("utf-8")
+                if "kill-signal diagnostics installed for" in logs:
+                    break
+                time.sleep(0.5)
+
+            # The canary is emitted at DEBUG through the logging system,
+            # so its presence proves the level override was applied.
+            assert "Debug logging active (log_level applied from settings)" in logs
+            # DEBUG also arms the kill-signal diagnostics.
+            assert "arming kill-signal diagnostics" in logs
+            assert "kill-signal diagnostics installed for" in logs
         finally:
             container.stop()
 

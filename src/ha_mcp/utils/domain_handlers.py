@@ -176,7 +176,16 @@ DOMAIN_HANDLERS = {
         "valid_actions": [],
         "parameters": [],
         "quick_actions": [],
-        "state_attributes": ["state", "latitude", "longitude"],
+        # in_zones (all containing zones, smallest first) and tracking_type
+        # ("connection"/"location") were added in HA 2026.7; latitude/longitude
+        # may be absent when a person/tracker is located by a presence scanner.
+        "state_attributes": [
+            "state",
+            "latitude",
+            "longitude",
+            "in_zones",
+            "tracking_type",
+        ],
         "read_only": True,
         "provides_location": True,
     },

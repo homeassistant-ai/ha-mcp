@@ -202,6 +202,40 @@ def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool
     return default
 
 
+def resolve_effective_log_level() -> int:
+    """Return the root log level from ha-mcp's effective settings.
+
+    Reads the web Settings UI "Log level" advanced setting (persisted
+    under ``/data`` and applied by ``get_global_settings()``) so the
+    addon log actually honors it — ``main()`` configures logging before
+    ha-mcp is imported, so it can only hardcode INFO at that point and
+    must re-apply the real level after the import (#1721).
+
+    Call only after ``main()`` has exported ``HOMEASSISTANT_URL`` /
+    ``HOMEASSISTANT_TOKEN``: ``get_global_settings()`` caches a
+    singleton, so an earlier call would pin placeholder connection
+    settings for the process. Any failure falls back to INFO — logging
+    config must never block addon startup.
+    """
+    import logging
+
+    try:
+        from ha_mcp.config import get_global_settings
+
+        return getattr(logging, get_global_settings().log_level, logging.INFO)
+    except Exception as e:
+        # Loud fallback: without this line, a user who set DEBUG in the
+        # web UI can't tell "I'm on INFO" from "my DEBUG request crashed
+        # on load" — the same silent-no-op class this fix exists to kill.
+        # print-based so it reaches the addon log regardless of logging
+        # state.
+        log_warning(
+            f"Could not resolve effective log level from settings; "
+            f"defaulting to INFO (web-UI Log level not applied): {e!r}"
+        )
+        return logging.INFO
+
+
 _DEV_ADDON_BETA_KEYS = (
     "enable_yaml_config_editing",
     # Per-key sub-gates of enable_yaml_config_editing. Kept in lockstep
@@ -353,7 +387,6 @@ def main() -> int:
     disabled_tools_raw = ""  # default
     pinned_tools_raw = ""  # default
     verify_ssl = True  # default
-    advanced_debug_logging = False  # default
 
     if config_file.exists():
         try:
@@ -493,9 +526,6 @@ def main() -> int:
             raw_pinned = config.get("pinned_tools", "")
             pinned_tools_raw = raw_pinned if isinstance(raw_pinned, str) else ""
             verify_ssl = resolve_bool_option(config, "verify_ssl", True)
-            advanced_debug_logging = resolve_bool_option(
-                config, "advanced_debug_logging", False
-            )
         except Exception as e:
             log_error(f"Failed to read config: {e}, using defaults")
             # Persistent "you lost your features" line so an operator
@@ -528,7 +558,6 @@ def main() -> int:
 
     log_info(f"Backup hint mode: {backup_hint}")
     log_info(f"Verify SSL: {verify_ssl}")
-    log_info(f"Advanced debug logging: {advanced_debug_logging}")
 
     # Set up environment for ha-mcp
     os.environ["HOMEASSISTANT_URL"] = "http://supervisor/core"
@@ -711,7 +740,22 @@ def main() -> int:
     # FastMCP surfaces its update notice in these same startup logs.
     _log_startup_version()
 
-    if advanced_debug_logging:
+    # Re-apply the effective log level now that ha_mcp is imported —
+    # the basicConfig above could only hardcode INFO. Without this, the
+    # web Settings UI "Log level" setting never reaches the addon log
+    # (#1721).
+    effective_log_level = resolve_effective_log_level()
+    logging.getLogger().setLevel(effective_log_level)
+    # Proof-of-application canary: emitted through the logging system
+    # (not print), so it reaches the addon log ONLY when the DEBUG level
+    # actually took effect. Support threads can key on this line to tell
+    # "user set DEBUG" apart from "DEBUG is really active".
+    logging.getLogger("addon_start").debug(
+        "Debug logging active (log_level applied from settings)"
+    )
+
+    if effective_log_level == logging.DEBUG:
+        log_info("Debug log level active — arming kill-signal diagnostics")
         # Defers SA_SIGINFO install until uvicorn's capture_signals has
         # run. Otherwise uvicorn's signal.signal() call would overwrite
         # our handler before any signal arrived.
@@ -723,7 +767,7 @@ def main() -> int:
 
             schedule_install_after_uvicorn()
         except Exception as e:
-            log_error(f"advanced_debug_logging install failed: {e!r}; continuing")
+            log_error(f"kill-signal diagnostics install failed: {e!r}; continuing")
 
     register_browser_landing(mcp, secret_path)
     # Mount settings UI routes both at root (for HA ingress proxy) and

@@ -329,11 +329,19 @@ async def _poll_backup_completion(
         )
 
         if event_state == "failed":
+            # Surface the failure event verbatim — HA's failed event
+            # carries the cause (e.g. another backup already in
+            # progress), and dropping it left CI failures reading
+            # "Backup creation failed: Backup creation failed" with
+            # nothing to diagnose.
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Backup creation failed",
-                    context={"backup_job_id": backup_job_id},
+                    context={
+                        "backup_job_id": backup_job_id,
+                        "last_action_event": last_event,
+                    },
                 )
             )
 
@@ -410,7 +418,11 @@ async def _poll_backup_completion(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Backup creation failed (observed at post-timeout lookup)",
-                    context={"backup_job_id": backup_job_id, "name": name},
+                    context={
+                        "backup_job_id": backup_job_id,
+                        "name": name,
+                        "last_action_event": last_event,
+                    },
                 )
             )
         if state != "idle":
