@@ -321,7 +321,20 @@ direct `ha_get_state` / `ha_get_entity` on its `entity_id`, and still appears in
 automation, dashboard, and template content, so do not rely on it as a security
 boundary.
 
-The filter is off until you create `entity_visibility.json` in the ha-mcp data
+**Reads only – it does not gate control tools.** The filter scopes what the
+*collection read* tools return. It does **not** stop an agent from calling a
+service on a hidden `entity_id`: gating writes is a separate concern handled by
+the Tool Security Policies engine (which matches on a call's arguments), not by
+visibility. Visibility is deliberately read-scoping only, precisely because it
+is noise reduction and cannot be a security boundary (content-bearing reads such
+as automation and template bodies would leak hidden entities anyway).
+
+The easiest way to configure it is the **Entity Visibility** tab in the ha-mcp
+settings UI (enable toggle, category checkboxes, area/label fields, per-entity
+denylist). It reads and writes the same file described below, so either surface
+works.
+
+The filter is off until `entity_visibility.json` exists in the ha-mcp data
 directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
 `"enabled": true`:
 
@@ -339,10 +352,16 @@ directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
 
 An entity is hidden when its `entity_category` is in `exclude_categories`, its
 `entity_id` is in `deny_entity_ids`, or its area/label is in `exclude_areas` /
-`exclude_labels`. Set `exclude_hidden: true` to also fold in entities already
-marked hidden in Home Assistant. `version` is reserved for future use; leave it
-at `1`. The config is read live per request, so edits apply on the next call; a
-missing or invalid file leaves the filter off.
+`exclude_labels`. `exclude_categories` accepts only Home Assistant's two entity
+categories (`diagnostic`, `config`); an unknown value is ignored and surfaced as
+a `warnings` entry on the next read rather than silently doing nothing. Set
+`exclude_hidden: true` to also fold in entities already marked hidden in Home
+Assistant. `version` drives optimistic-concurrency for the settings UI (it bumps
+on each save so two tabs can't clobber each other); when hand-editing the file,
+leave it as-is. The config is read live per request, so edits apply on the next
+call; a missing or invalid file leaves the filter off (and, when enabled but the
+registry read degrades, results are unfiltered with a `warnings` note rather than
+silently wrong).
 
 ---
 
