@@ -181,3 +181,27 @@ class TestAsyncRemove:
         flow = cf.HaMcpToolsConfigFlow()
         flow._install_task = None
         flow.async_remove()  # must not raise
+
+
+class TestRevertedToMaster:
+    """Regression guard for the #1527 design pivot: the in-process server moved to
+    the standalone ha_mcp_server integration, so ha_mcp_tools is back to its
+    pre-feature master state — no embedded options flow, no embedded config-flow
+    field, no OPT_EMBEDDED_ENABLED const."""
+
+    def test_no_options_flow(self):
+        assert not hasattr(cf, "HaMcpToolsOptionsFlow")
+        assert not hasattr(cf.HaMcpToolsConfigFlow, "async_get_options_flow")
+
+    def test_no_embedded_enabled_const(self):
+        from custom_components.ha_mcp_tools import const
+
+        assert not hasattr(const, "OPT_EMBEDDED_ENABLED")
+
+    def test_non_supervisor_user_step_is_plain_confirm(self):
+        # The non-hassio path shows a plain confirm form and creates an entry with
+        # no embedded options — the master behavior.
+        flow = _make_flow(is_hassio=False)
+        entry = asyncio.run(flow.async_step_user({}))
+        assert entry["type"] == "entry"
+        assert entry.get("options") is None
