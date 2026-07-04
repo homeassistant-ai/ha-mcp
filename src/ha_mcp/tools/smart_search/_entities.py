@@ -5,8 +5,9 @@ import logging
 from typing import Any
 
 from ...utils.fuzzy_search import calculate_partial_ratio
-from ...visibility.resolver import load_hidden_set, merge_visibility_warnings
+from ...visibility.resolver import load_hidden_set
 from ..helpers import exception_to_structured_error
+from ..util_helpers import merge_visibility_warnings
 from ._base import _SearchBase
 
 logger = logging.getLogger(__name__)

@@ -17,7 +17,7 @@ from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.fuzzy_search import apply_hidden_penalty
-from ..visibility.resolver import load_hidden_set, merge_visibility_warnings
+from ..visibility.resolver import load_hidden_set
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -29,6 +29,7 @@ from .util_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
     filter_active_repairs,
+    merge_visibility_warnings,
     parse_string_list_param,
     project_fields,
     project_records,
@@ -1789,8 +1790,10 @@ class SearchTools:
                 domain_filter, results, per_domain_limit_int, parsed_result_fields
             )
 
-        merge_visibility_warnings(domain_list_data, visibility_warnings)
-        return await add_timezone_metadata(self._client, domain_list_data)
+        return await add_timezone_metadata(
+            self._client,
+            merge_visibility_warnings(domain_list_data, visibility_warnings),
+        )
 
     async def _search_regular(
         self,

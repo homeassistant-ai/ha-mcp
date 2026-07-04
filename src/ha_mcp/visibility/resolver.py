@@ -62,7 +62,7 @@ def hidden_entity_ids(
             "unusable; degrading to unfiltered for this request"
         )
         warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
-        return set(denied), warnings
+        return denied, warnings
 
     areas = set(config.exclude_areas)
     labels = set(config.exclude_labels)
@@ -82,7 +82,7 @@ def hidden_entity_ids(
             "a list; degrading to unfiltered for this request"
         )
         warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
-        return set(denied), warnings
+        return denied, warnings
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -133,13 +133,3 @@ async def load_hidden_set(registry_result: object) -> tuple[set[str], list[str]]
         return set(), [
             "Entity visibility config could not be loaded; the filter is disabled."
         ]
-
-
-def merge_visibility_warnings(
-    response: dict[str, Any], warnings: list[str]
-) -> dict[str, Any]:
-    """Attach visibility ``warnings`` to a tool response's top-level ``warnings``
-    list (create-or-extend). Returns ``response`` for ``return`` composition."""
-    if warnings:
-        response.setdefault("warnings", []).extend(warnings)
-    return response

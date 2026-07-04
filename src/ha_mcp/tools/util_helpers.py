@@ -2196,3 +2196,13 @@ def augment_tool_error_with_skill_content(
         return te
     augment_error_dict_with_skill_content(error_dict, bp_warnings)
     return ToolError(json.dumps(error_dict, indent=2, default=str))
+
+
+def merge_visibility_warnings(
+    response: dict[str, Any], warnings: list[str]
+) -> dict[str, Any]:
+    """Attach ``warnings`` to a tool response's top-level ``warnings`` list
+    (create-or-extend). Returns ``response`` for ``return`` composition."""
+    if warnings:
+        response.setdefault("warnings", []).extend(warnings)
+    return response

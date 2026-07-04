@@ -1270,7 +1270,5 @@ class TestVisibilityHandlers:
         assert resp.json()["current_version"] == 2
 
     def test_put_rejects_invalid_payload(self, tmp_data_dir: Path) -> None:
-        resp = self._client().put(
-            "/api/visibility/config", json={"version": "abc"}
-        )
+        resp = self._client().put("/api/visibility/config", json={"version": "abc"})
         assert resp.status_code == 400
