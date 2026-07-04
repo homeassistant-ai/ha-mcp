@@ -211,7 +211,9 @@ class EntitySearchMixin(_SearchBase):
         # entity_category/hidden_by/area_id/labels are present (the slim map
         # below drops them). Fails open; do NOT wrap in try/except or the
         # failure mode inverts.
-        visibility_hidden, visibility_warnings = await load_hidden_set(results[1])
+        visibility_hidden, visibility_warnings = await load_hidden_set(
+            results[1], results[0], self.client
+        )
         registry_slim = self._build_registry_slim(results[1])
         survivor_ids, survivor_states = self._filter_hidden_entities(
             entities, registry_slim, include_hidden, visibility_hidden
@@ -321,7 +323,9 @@ class EntitySearchMixin(_SearchBase):
             # Opt-in visibility filter. results[2] is the unprojected entity
             # registry, so entity_category/hidden_by/area_id/labels are present.
             # Fails open (empty set on any error / non-dict payload).
-            visibility_hidden, visibility_warnings = await load_hidden_set(results[2])
+            visibility_hidden, visibility_warnings = await load_hidden_set(
+                results[2], results[0], self.client
+            )
             area_registry = self._parse_area_registry(results[1])
             entity_reg_map = self._parse_entity_reg_map(results[2])
             device_area_map = self._parse_device_area_map(results[3])

@@ -192,3 +192,155 @@ def test_enabled_default_config_hides_both_diagnostic_and_config():
     hidden, warnings = hidden_entity_ids(reg, VisibilityConfig(enabled=True))
     assert hidden == {"sensor.diag", "number.cfg"}
     assert warnings == []
+
+
+# --- Allowlist dimension (opt-in restrict mode) ---
+
+
+def _states(*entries):
+    return list(entries)
+
+
+def test_allowlist_area_hides_non_matching():
+    reg = _reg(
+        {"entity_id": "light.kitchen", "area_id": "kitchen"},
+        {"entity_id": "light.bedroom", "area_id": "bedroom"},
+    )
+    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_areas=["kitchen"])
+    assert _hidden(reg, cfg) == {"light.bedroom"}
+
+
+def test_allowlist_entity_id_literal():
+    reg = _reg({"entity_id": "light.a"}, {"entity_id": "light.b"})
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], allow_entity_ids=["light.a"]
+    )
+    assert _hidden(reg, cfg) == {"light.b"}
+
+
+def test_allowlist_labels():
+    reg = _reg(
+        {"entity_id": "light.a", "labels": ["voice"]},
+        {"entity_id": "light.b", "labels": ["other"]},
+    )
+    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_labels=["voice"])
+    assert _hidden(reg, cfg) == {"light.b"}
+
+
+def test_allowlist_inactive_hides_nothing():
+    # Empty allow_* => allowlist inactive => nothing hidden by it.
+    reg = _reg({"entity_id": "light.a", "area_id": "x"})
+    cfg = VisibilityConfig(enabled=True, exclude_categories=[])
+    assert _hidden(reg, cfg) == set()
+
+
+def test_allowlist_hides_states_only_entity():
+    # M1 fix: a states-only entity (no registry entry) under an active allowlist
+    # must be hidden unless literally allowed - the resolver reaches it via the
+    # states list, not just the registry.
+    reg = _reg({"entity_id": "light.kitchen", "area_id": "kitchen"})
+    states = _states(
+        {"entity_id": "light.kitchen"},
+        {"entity_id": "sensor.yaml_only"},  # not in registry
+    )
+    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_areas=["kitchen"])
+    hidden, _ = hidden_entity_ids(reg, cfg, states)
+    assert "sensor.yaml_only" in hidden  # states-only, not allowed => hidden
+    assert "light.kitchen" not in hidden  # allowed via area
+
+
+def test_allowlist_states_only_entity_allowed_by_id():
+    reg = _reg()
+    states = _states({"entity_id": "sensor.yaml_only"})
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], allow_entity_ids=["sensor.yaml_only"]
+    )
+    hidden, _ = hidden_entity_ids(reg, cfg, states)
+    assert hidden == set()
+
+
+def test_allowlist_deny_still_wins():
+    reg = _reg({"entity_id": "light.kitchen", "area_id": "kitchen"})
+    cfg = VisibilityConfig(
+        enabled=True,
+        exclude_categories=[],
+        allow_areas=["kitchen"],
+        deny_entity_ids=["light.kitchen"],
+    )
+    assert _hidden(reg, cfg) == {"light.kitchen"}
+
+
+# --- Assist-exposure dimension (respect_assist_exposure) ---
+
+
+def _assist_cfg(**kw):
+    return VisibilityConfig(
+        enabled=True, exclude_categories=[], respect_assist_exposure=True, **kw
+    )
+
+
+def test_assist_explicit_override_false_hides():
+    reg = _reg({"entity_id": "light.a"})
+    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {"light.a": False}, True)
+    assert hidden == {"light.a"}
+
+
+def test_assist_explicit_override_true_shows_even_diagnostic():
+    # Override wins outright, even over entity_category (matches async_should_expose).
+    reg = _reg({"entity_id": "sensor.x", "entity_category": "diagnostic"})
+    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {"sensor.x": True}, True)
+    assert hidden == set()
+
+
+def test_assist_default_exposed_domain_shown():
+    reg = _reg({"entity_id": "light.a"})
+    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, True)
+    assert hidden == set()  # light is a default-exposed domain
+
+
+def test_assist_non_default_domain_hidden():
+    reg = _reg({"entity_id": "sensor.random"})  # sensor, no device_class
+    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, True)
+    assert hidden == {"sensor.random"}
+
+
+def test_assist_binary_sensor_device_class_shown():
+    # B1 regression: binary_sensor is NOT a default domain, but device_class door
+    # IS a default-exposed device class - without the device-class set this would
+    # be wrongly hidden.
+    reg = _reg({"entity_id": "binary_sensor.front", "device_class": "door"})
+    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, True)
+    assert hidden == set()
+
+
+def test_assist_sensor_device_class_from_state_attr():
+    # device_class absent from registry but present in state attributes (HA reads
+    # it from the live entity) still counts.
+    reg = _reg({"entity_id": "sensor.temp"})
+    states = _states(
+        {"entity_id": "sensor.temp", "attributes": {"device_class": "temperature"}}
+    )
+    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), states, {}, True)
+    assert hidden == set()
+
+
+def test_assist_entity_category_blocks_default():
+    # B2 regression: a default-domain entity with entity_category is not exposed.
+    reg = _reg({"entity_id": "light.cfg", "entity_category": "config"})
+    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, True)
+    assert hidden == {"light.cfg"}
+
+
+def test_assist_expose_new_off_hides_unconfigured():
+    reg = _reg({"entity_id": "light.a"})
+    hidden, _ = hidden_entity_ids(reg, _assist_cfg(), None, {}, False)
+    assert hidden == {"light.a"}
+
+
+def test_assist_missing_data_warns_and_skips():
+    # respect_assist_exposure on but the seam could not supply data (None):
+    # dimension is skipped (not fail-closed) and a warning surfaces.
+    reg = _reg({"entity_id": "light.a"})
+    hidden, warnings = hidden_entity_ids(reg, _assist_cfg(), None, None, False)
+    assert hidden == set()
+    assert any("Assist exposure data was unavailable" in w for w in warnings)

@@ -448,6 +448,22 @@
   </section>
 
   <section class="a11y-section">
+    <h2 class="a11y-section-title">Restrict to an allowlist</h2>
+    <p class="a11y-section-help">Advanced: when any allowlist field is set the filter inverts – only entities matching an allowlist stay visible, everything else is hidden (including entities added later). Leave all three empty to disable.</p>
+    <label class="visibility-field">Allowed areas <input type="text" id="visibility-allow-areas" placeholder="living_room, kitchen"></label>
+    <label class="visibility-field">Allowed labels <input type="text" id="visibility-allow-labels" placeholder="voice, main_floor"></label>
+    <p class="a11y-section-help">Allowed entity IDs, one per line.</p>
+    <label class="visibility-field visually-hidden" for="visibility-allow-entities">Allowed entity IDs</label>
+    <textarea id="visibility-allow-entities" class="visibility-textarea" rows="3" placeholder="light.living_room&#10;switch.desk"></textarea>
+  </section>
+
+  <section class="a11y-section">
+    <h2 class="a11y-section-title">Respect Assist exposure</h2>
+    <p class="a11y-section-help">Hide entities not exposed to Home Assistant's Assist (&ldquo;conversation&rdquo;) voice assistant, mirroring the Settings &gt; Voice assistants &gt; Expose list. Adds two websocket reads per search while enabled.</p>
+    <label class="a11y-option"><input type="checkbox" id="visibility-respect-assist"> Only show entities exposed to Assist</label>
+  </section>
+
+  <section class="a11y-section">
     <button id="visibility-save-btn" class="restart-btn" type="button">Save</button>
     <span id="visibility-save-status" class="status" role="status" aria-live="polite"></span>
   </section>

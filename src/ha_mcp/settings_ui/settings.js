@@ -3629,6 +3629,10 @@ async function visibilityLoadConfig() {
   document.getElementById('visibility-areas').value = (c.exclude_areas || []).join(', ');
   document.getElementById('visibility-labels').value = (c.exclude_labels || []).join(', ');
   document.getElementById('visibility-deny').value = (c.deny_entity_ids || []).join('\n');
+  document.getElementById('visibility-allow-areas').value = (c.allow_areas || []).join(', ');
+  document.getElementById('visibility-allow-labels').value = (c.allow_labels || []).join(', ');
+  document.getElementById('visibility-allow-entities').value = (c.allow_entity_ids || []).join('\n');
+  document.getElementById('visibility-respect-assist').checked = !!c.respect_assist_exposure;
 }
 
 async function visibilitySaveConfig() {
@@ -3644,6 +3648,10 @@ async function visibilitySaveConfig() {
     deny_entity_ids: _visibilityParseList(document.getElementById('visibility-deny').value, '\n'),
     exclude_areas: _visibilityParseList(document.getElementById('visibility-areas').value, ','),
     exclude_labels: _visibilityParseList(document.getElementById('visibility-labels').value, ','),
+    allow_areas: _visibilityParseList(document.getElementById('visibility-allow-areas').value, ','),
+    allow_labels: _visibilityParseList(document.getElementById('visibility-allow-labels').value, ','),
+    allow_entity_ids: _visibilityParseList(document.getElementById('visibility-allow-entities').value, '\n'),
+    respect_assist_exposure: document.getElementById('visibility-respect-assist').checked,
   };
   statusEl.textContent = 'Saving...';
   let resp;

@@ -1,4 +1,11 @@
-"""Pure resolver: compute the hidden entity_id set from a registry list + config."""
+"""Pure resolver: compute the hidden entity_id set from a registry list + config.
+
+The filter is a conjunction of independent hide dimensions: an entity is shown
+only if it passes *all* active dimensions (deny, allowlist, Assist exposure,
+excludes). Because every dimension can only *hide*, never un-hide, the order in
+which they are applied does not affect the final set - there is no priority
+ladder to reason about, only a union of hide reasons.
+"""
 
 from __future__ import annotations
 
@@ -18,22 +25,130 @@ logger = logging.getLogger(__name__)
 # whole filter open; the drop is surfaced through the response warnings channel.
 KNOWN_ENTITY_CATEGORIES = frozenset({"config", "diagnostic"})
 
+# Mirror of HA-core's default-exposure constants for the Assist ("conversation")
+# assistant, from homeassistant/components/homeassistant/exposed_entities.py
+# (home-assistant/core dev, verified 2026-07-04). HA has no websocket command
+# that returns computed effective exposure, so respect_assist_exposure must
+# reconstruct async_should_expose client-side. These are small and stable but do
+# couple to HA internals: if HA changes them, the mirror drifts until updated.
+DEFAULT_EXPOSED_DOMAINS = frozenset(
+    {
+        "climate",
+        "cover",
+        "fan",
+        "humidifier",
+        "light",
+        "media_player",
+        "scene",
+        "switch",
+        "todo",
+        "vacuum",
+        "water_heater",
+    }
+)
+DEFAULT_EXPOSED_BINARY_SENSOR_DEVICE_CLASSES = frozenset(
+    {"door", "garage_door", "lock", "motion", "opening", "presence", "window"}
+)
+DEFAULT_EXPOSED_SENSOR_DEVICE_CLASSES = frozenset(
+    {
+        "aqi",
+        "co",
+        "co2",
+        "humidity",
+        "pm10",
+        "pm25",
+        "temperature",
+        "volatile_organic_compounds",
+    }
+)
+
 _REGISTRY_UNAVAILABLE_WARNING = (
     "Entity visibility filter is enabled but the entity registry was "
     "unavailable; results are unfiltered (the denylist still applies)."
 )
+_ASSIST_UNAVAILABLE_WARNING = (
+    "Entity visibility filter is enabled with respect_assist_exposure but the "
+    "Assist exposure data was unavailable; that dimension is skipped for this "
+    "request (other dimensions still apply)."
+)
+
+
+def _normalize_labels(raw: object) -> list[str]:
+    """Coerce a registry entry's ``labels`` field to a list for set ops.
+
+    A bare string counts as one label (not char-iterated); an unexpected
+    non-iterable payload skips label matching for that entry rather than raising
+    and fail-open-disabling the whole filter.
+    """
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, (list, tuple, set)):
+        return list(raw)
+    return []
+
+
+def _is_assist_exposed(
+    eid: str,
+    entry: dict[str, Any] | None,
+    device_class: str | None,
+    overrides: dict[str, bool],
+    expose_new: bool,
+) -> bool:
+    """Reconstruct HA-core ``async_should_expose`` for the conversation assistant.
+
+    Precedence (exposed_entities.py, verified 2026-07-04): an explicit per-entity
+    override wins outright (even over entity_category/hidden_by); otherwise, if
+    the instance exposes new entities, fall back to ``_is_default_exposed``
+    (blocked by entity_category/hidden_by, then domain, then device-class);
+    otherwise not exposed.
+    """
+    if eid in overrides:
+        return overrides[eid]
+    if not expose_new:
+        return False
+    # _is_default_exposed: config/diagnostic or hidden entities are never a
+    # default exposure, regardless of domain.
+    if entry is not None and (
+        entry.get("entity_category") is not None or entry.get("hidden_by") is not None
+    ):
+        return False
+    domain = eid.split(".")[0]
+    if domain in DEFAULT_EXPOSED_DOMAINS:
+        return True
+    if domain == "binary_sensor":
+        return device_class in DEFAULT_EXPOSED_BINARY_SENSOR_DEVICE_CLASSES
+    if domain == "sensor":
+        return device_class in DEFAULT_EXPOSED_SENSOR_DEVICE_CLASSES
+    return False
 
 
 def hidden_entity_ids(
-    registry_result: object, config: VisibilityConfig
+    registry_result: object,
+    config: VisibilityConfig,
+    states_result: object | None = None,
+    assist_overrides: dict[str, bool] | None = None,
+    expose_new: bool = False,
 ) -> tuple[set[str], list[str]]:
     """Return ``(hidden_entity_ids, warnings)``.
 
     ``hidden`` is empty when disabled or the registry payload is unusable
     (fail-open — never hide on bad input), except the denylist which needs no
     registry data and is honored regardless. ``warnings`` carries operator-facing
-    notes (degraded registry, dropped unknown categories) for the caller to
-    surface at the response level.
+    notes (degraded registry, dropped unknown categories, missing Assist data)
+    for the caller to surface at the response level.
+
+    ``states_result`` (the live states list the seam already holds) is used for
+    two things when provided: it widens the allowlist and Assist dimensions to
+    states-only entities (YAML/template entities absent from the registry), and
+    it supplies the effective ``device_class`` (HA reads it from the live entity,
+    not the registry) for the Assist default-exposure check. Without it, both
+    dimensions degrade to registry-only.
+
+    This is a pure function: the seam fetches ``assist_overrides`` (explicit
+    ``conversation`` exposure) and ``expose_new`` over websocket and passes them
+    in. Note the ha-mcp visibility precedence (a conjunction of hide dimensions)
+    is separate from HA's own async_should_expose precedence, which only the
+    Assist dimension mirrors.
     """
     if not config.enabled:
         return set(), []
@@ -64,17 +179,6 @@ def hidden_entity_ids(
         warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
         return denied, warnings
 
-    areas = set(config.exclude_areas)
-    labels = set(config.exclude_labels)
-
-    # Seed with the explicit denylist: deny is a literal entity_id match and must
-    # hide an entity even when it has no entity-registry entry (legacy YAML /
-    # template entities live only in states, not the registry). The
-    # registry-derived dimensions below still require a registry entry. Because
-    # deny needs no registry data, the degraded early returns (above and below)
-    # still honor it (fail-fully-open was not the goal); only the
-    # registry-derived dimensions degrade to open on a bad read.
-    hidden: set[str] = set(denied)
     entries: Any = registry_result.get("result", [])
     if not isinstance(entries, list):
         logger.warning(
@@ -83,12 +187,46 @@ def hidden_entity_ids(
         )
         warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
         return denied, warnings
+
+    # Index the registry by entity_id and index the live states for device_class
+    # lookups (Assist reads the effective device_class from the entity, not the
+    # registry) plus the states-only entity universe (allowlist/Assist must be
+    # able to hide YAML/template entities that have no registry entry).
+    registry_by_id: dict[str, dict[str, Any]] = {}
     for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        eid = entry.get("entity_id")
-        if not eid:
-            continue
+        if isinstance(entry, dict) and entry.get("entity_id"):
+            registry_by_id[entry["entity_id"]] = entry
+
+    state_device_class: dict[str, str | None] = {}
+    if isinstance(states_result, list):
+        for state in states_result:
+            if isinstance(state, dict) and state.get("entity_id"):
+                attrs = state.get("attributes")
+                dc = attrs.get("device_class") if isinstance(attrs, dict) else None
+                state_device_class[state["entity_id"]] = dc
+
+    areas = set(config.exclude_areas)
+    labels = set(config.exclude_labels)
+    allow_areas = set(config.allow_areas)
+    allow_labels = set(config.allow_labels)
+    allow_entity_ids = set(config.allow_entity_ids)
+    # An allowlist is active only when at least one allow_* dimension is set. When
+    # active it inverts the default: an entity is hidden unless it matches one of
+    # the allow dimensions. Empty allow_* => inactive => nothing hidden by allow.
+    allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
+
+    # Seed with the explicit denylist: deny is a literal entity_id match and must
+    # hide an entity even when it has no entity-registry entry (legacy YAML /
+    # template entities live only in states, not the registry). Because deny needs
+    # no registry data, the degraded early returns above still honor it
+    # (fail-fully-open was not the goal); only the registry-derived dimensions
+    # degrade to open on a bad read.
+    hidden: set[str] = set(denied)
+
+    # Exclude dimensions are registry-derived: they hide an entity that *has* a
+    # matching category/hidden flag/area/label. A states-only entity has none of
+    # these, so (correctly) is never excluded - the loop stays registry-based.
+    for eid, entry in registry_by_id.items():
         if eid in denied:
             continue  # already hidden via the seed above
         if categories and entry.get("entity_category") in categories:
@@ -100,32 +238,117 @@ def hidden_entity_ids(
         if areas and entry.get("area_id") in areas:
             hidden.add(eid)
             continue
-        entry_labels = entry.get("labels") or []
-        if isinstance(entry_labels, str):
-            # A label served as a bare string (unexpected payload / mock) must
-            # count as one label, not be char-iterated by set.intersection —
-            # else a single-char exclude entry could spuriously hide it.
-            entry_labels = [entry_labels]
-        elif not isinstance(entry_labels, (list, tuple, set)):
-            # An unexpected non-iterable payload (int/dict/…) skips just this
-            # entry's label check instead of raising and fail-open-disabling the
-            # whole filter for every other entity.
-            entry_labels = []
-        if labels and labels.intersection(entry_labels):
+        if labels and labels.intersection(_normalize_labels(entry.get("labels"))):
             hidden.add(eid)
+
+    # Allowlist + Assist are conjunctive filters that must also reach states-only
+    # entities, so they iterate the full candidate universe (registry ∪ states)
+    # rather than just the registry. Without a states list they degrade to the
+    # registry set.
+    if allow_active or config.respect_assist_exposure:
+        candidate_ids = set(registry_by_id)
+        candidate_ids |= set(state_device_class)
+        if config.respect_assist_exposure and assist_overrides is None:
+            # The seam could not supply Assist data; skip that dimension rather
+            # than hide everything, and tell the operator.
+            warnings.append(_ASSIST_UNAVAILABLE_WARNING)
+        overrides = assist_overrides or {}
+        for eid in candidate_ids:
+            if eid in hidden:
+                continue
+            entry = registry_by_id.get(eid)
+            if allow_active and not (
+                eid in allow_entity_ids
+                or (entry is not None and entry.get("area_id") in allow_areas)
+                or (
+                    entry is not None
+                    and allow_labels.intersection(
+                        _normalize_labels(entry.get("labels"))
+                    )
+                )
+            ):
+                hidden.add(eid)
+                continue
+            if config.respect_assist_exposure and assist_overrides is not None:
+                # Effective device_class: a registry override wins, else the live
+                # entity's (from state attributes) - matching get_device_class.
+                device_class = (
+                    entry.get("device_class") if entry is not None else None
+                ) or state_device_class.get(eid)
+                if not _is_assist_exposed(
+                    eid, entry, device_class, overrides, expose_new
+                ):
+                    hidden.add(eid)
+
     return hidden, warnings
 
 
-async def load_hidden_set(registry_result: object) -> tuple[set[str], list[str]]:
+async def _fetch_assist_exposure(
+    client: Any,
+) -> tuple[dict[str, bool] | None, bool]:
+    """Fetch the ``conversation`` Assist exposure inputs over websocket.
+
+    Returns ``(overrides, expose_new)`` where ``overrides`` maps entity_id to its
+    explicit conversation exposure. Fails soft: on any error returns
+    ``(None, False)`` so only the Assist dimension degrades (the resolver then
+    warns and applies the other dimensions) rather than the whole filter failing.
+    """
+    try:
+        list_msg = {"type": "homeassistant/expose_entity/list"}
+        new_msg = {
+            "type": "homeassistant/expose_new_entities/get",
+            "assistant": "conversation",
+        }
+        list_res, new_res = await asyncio.gather(
+            client.send_websocket_message(list_msg),
+            client.send_websocket_message(new_msg),
+        )
+        if not (isinstance(list_res, dict) and list_res.get("success")):
+            return None, False
+        exposed = list_res.get("result", {}).get("exposed_entities", {})
+        overrides: dict[str, bool] = {}
+        if isinstance(exposed, dict):
+            for eid, per_assistant in exposed.items():
+                if isinstance(per_assistant, dict) and "conversation" in per_assistant:
+                    overrides[eid] = bool(per_assistant["conversation"])
+        if not (isinstance(new_res, dict) and new_res.get("success")):
+            # Without the expose_new flag the default-exposure branch can't be
+            # computed; degrade the whole dimension (skip + warn) rather than
+            # assume a value - assuming False would wrongly hide default-domain
+            # entities whenever the instance actually exposes new entities.
+            return None, False
+        expose_new = bool(new_res.get("result", {}).get("expose_new", False))
+        return overrides, expose_new
+    except Exception:
+        logger.warning("assist exposure fetch failed; dimension skipped", exc_info=True)
+        return None, False
+
+
+async def load_hidden_set(
+    registry_result: object,
+    states_result: object | None = None,
+    client: Any | None = None,
+) -> tuple[set[str], list[str]]:
     """Load the visibility config off-loop and resolve ``(hidden, warnings)``.
 
     Fail-open: any error (missing/corrupt config, unexpected exception) yields an
     empty hidden set so a config problem never blanks the instance from the
-    agent; a genuine load failure is surfaced as a warning.
+    agent; a genuine load failure is surfaced as a warning. ``states_result`` is
+    passed through to widen the allowlist/Assist dimensions to states-only
+    entities and supply device_class. When the config enables
+    ``respect_assist_exposure`` and a ``client`` is given, the two Assist
+    exposure websocket reads are fetched here (once per call, in parallel) and
+    fed to the pure resolver; the fetch fails soft (only that dimension drops).
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
-        return hidden_entity_ids(registry_result, config)
+        assist_overrides: dict[str, bool] | None = None
+        expose_new = False
+        if config.enabled and config.respect_assist_exposure and client is not None:
+            assist_overrides, expose_new = await _fetch_assist_exposure(client)
+        return hidden_entity_ids(
+            registry_result, config, states_result, assist_overrides, expose_new
+        )
     except Exception:
         logger.warning(
             "entity visibility config load failed; filter disabled", exc_info=True

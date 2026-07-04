@@ -346,17 +346,39 @@ directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
   "exclude_hidden": false,
   "deny_entity_ids": [],
   "exclude_areas": [],
-  "exclude_labels": []
+  "exclude_labels": [],
+  "allow_entity_ids": [],
+  "allow_areas": [],
+  "allow_labels": [],
+  "respect_assist_exposure": false
 }
 ```
 
-An entity is hidden when its `entity_category` is in `exclude_categories`, its
-`entity_id` is in `deny_entity_ids`, or its area/label is in `exclude_areas` /
-`exclude_labels`. `exclude_categories` accepts only Home Assistant's two entity
-categories (`diagnostic`, `config`); an unknown value is ignored and surfaced as
-a `warnings` entry on the next read rather than silently doing nothing. Set
-`exclude_hidden: true` to also fold in entities already marked hidden in Home
-Assistant. `version` drives optimistic-concurrency for the settings UI (it bumps
+The filter is a conjunction of independent dimensions: an entity is shown only if
+it passes every active one.
+
+- **Excludes / denylist.** An entity is hidden when its `entity_category` is in
+  `exclude_categories`, its `entity_id` is in `deny_entity_ids`, or its area/label
+  is in `exclude_areas` / `exclude_labels`. `exclude_categories` accepts only Home
+  Assistant's two entity categories (`diagnostic`, `config`); an unknown value is
+  ignored and surfaced as a `warnings` entry on the next read rather than silently
+  doing nothing. Set `exclude_hidden: true` to also fold in entities already
+  marked hidden in Home Assistant.
+- **Allowlist.** The moment any of `allow_entity_ids` / `allow_areas` /
+  `allow_labels` is non-empty, the filter inverts to *restrict* mode: only
+  entities matching an allowlist stay visible and everything else – including
+  entities added later – is hidden. Leave all three empty to keep the allowlist
+  off. `deny_entity_ids` still wins over an allow match.
+- **Respect Assist exposure.** With `respect_assist_exposure: true` the filter
+  hides entities not effectively exposed to Home Assistant's Assist
+  (`conversation`) assistant, mirroring `async_should_expose` (an explicit
+  per-entity exposure override wins; otherwise, if the instance exposes new
+  entities, the entity's domain and device-class defaults decide). Because HA
+  offers no single "effective exposure" API, the decision is reconstructed
+  client-side from two extra websocket reads per search; if that read fails the
+  dimension is skipped with a `warnings` note rather than hiding everything.
+
+`version` drives optimistic-concurrency for the settings UI (it bumps
 on each save so two tabs can't clobber each other); when hand-editing the file,
 leave it as-is. The config is read live per request, so edits apply on the next
 call; a missing or invalid file leaves the filter off (and, when enabled but the

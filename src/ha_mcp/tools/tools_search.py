@@ -725,7 +725,11 @@ async def _exact_match_search(
     # penalty). Fails open — load_hidden_set returns an empty set on any
     # config/load error, so a bad config never blanks results. Do NOT wrap in
     # try/except here, or the failure mode inverts to fail-closed (hide all).
-    visibility_hidden, visibility_warnings = await load_hidden_set(registry_result)
+    # states + client let the allowlist reach states-only entities and the
+    # opt-in Assist-exposure dimension fetch its data.
+    visibility_hidden, visibility_warnings = await load_hidden_set(
+        registry_result, state_result, client
+    )
 
     query_lower = query.lower().strip()
 
@@ -1731,8 +1735,12 @@ class SearchTools:
 
         hidden_ids = _build_hidden_ids(registry_result)
         # Opt-in visibility filter: hard exclude, fails open (empty set on any
-        # error). Do NOT wrap in try/except or the failure mode inverts.
-        visibility_hidden, visibility_warnings = await load_hidden_set(registry_result)
+        # error). Do NOT wrap in try/except or the failure mode inverts. states +
+        # client widen the allowlist to states-only entities and drive the opt-in
+        # Assist-exposure fetch.
+        visibility_hidden, visibility_warnings = await load_hidden_set(
+            registry_result, states_result, self._client
+        )
 
         # Filter by domain. Hidden entities are kept by default (with score
         # penalty applied below); ``include_hidden=False`` filters them out.

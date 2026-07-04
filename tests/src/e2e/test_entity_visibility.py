@@ -195,3 +195,62 @@ async def test_visibility_label_dimension_hides_entity_from_search(
         )
         if label_id:
             await mcp_client.call_tool("ha_config_remove_label", {"label_id": label_id})
+
+
+@pytest.mark.asyncio
+@pytest.mark.external_only
+async def test_visibility_allowlist_hides_unlisted_entity_from_search(
+    mcp_client, ha_container_with_fresh_config, tmp_path, monkeypatch
+):
+    """An active allowlist inverts the filter: an entity NOT on the allowlist is
+    hidden from ha_search even though no exclude/deny dimension targets it.
+    Exercises the restrict-mode branch end-to-end through real MCP dispatch."""
+    probe_name = "Zzvis Allow Probe E2E"
+    probe_entity_id = "input_boolean.zzvis_allow_probe_e2e"
+    probe_query = "zzvis_allow_probe_e2e"
+    probe_target = "zzvis_allow_probe_e2e"
+
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": probe_name},
+    )
+    assert_mcp_success(create_result, "Create allowlist probe helper")
+
+    try:
+        # Baseline (filter OFF): probe is searchable.
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search",
+            arguments={"query": probe_query, "limit": 10},
+            predicate=lambda d: probe_entity_id in _entity_ids(d),
+            description="baseline search finds allowlist probe",
+        )
+
+        # Act: enable an allowlist that does NOT include the probe. Restrict mode
+        # then hides everything unmatched, including this probe.
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(
+                enabled=True,
+                exclude_categories=[],
+                allow_entity_ids=["input_boolean.some_other_allowed_entity"],
+            ),
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+        filtered = parse_mcp_result(
+            await mcp_client.call_tool("ha_search", {"query": probe_query, "limit": 10})
+        )
+        assert filtered.get("success") is True
+        assert probe_entity_id not in _entity_ids(filtered)
+        assert filtered.get("entity_total_matches") == 0
+
+    finally:
+        await mcp_client.call_tool(
+            "ha_remove_helpers_integrations",
+            {
+                "helper_type": "input_boolean",
+                "target": probe_target,
+                "confirm": True,
+            },
+        )
