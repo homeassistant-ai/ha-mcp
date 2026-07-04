@@ -203,6 +203,16 @@ def _json_not_found() -> web.Response:
     return web.json_response({"error": "not_found"}, status=404)
 
 
+def _protected_resource_document(provider: ResourceServer, base: str) -> dict[str, Any]:
+    """RFC 9728 protected-resource document for ``provider`` under ``base``."""
+    return {
+        "resource": provider.resource_url(base),
+        "authorization_servers": [provider.authorization_server_url(base)],
+        "bearer_methods_supported": ["header"],
+        "resource_documentation": "https://github.com/homeassistant-ai/ha-mcp",
+    }
+
+
 class _ProtectedResourceMetadataView(HomeAssistantView):
     """RFC 9728 Protected Resource Metadata."""
 
@@ -220,14 +230,8 @@ class _ProtectedResourceMetadataView(HomeAssistantView):
         provider = _active_resource_server(self._hass)
         if provider is None:
             return _json_not_found()
-        base = _build_base_url(request)
         return web.json_response(
-            {
-                "resource": provider.resource_url(base),
-                "authorization_servers": [provider.authorization_server_url(base)],
-                "bearer_methods_supported": ["header"],
-                "resource_documentation": "https://github.com/homeassistant-ai/ha-mcp",
-            }
+            _protected_resource_document(provider, _build_base_url(request))
         )
 
 
@@ -251,28 +255,36 @@ class _AuthorizationServerMetadataView(HomeAssistantView):
         return web.json_response(_authorization_server_document(base))
 
 
-class _WellKnownProtectedResourceView(_ProtectedResourceMetadataView):
+class _WellKnownProtectedResourceView(HomeAssistantView):
     """RFC 9728 §3.1 path-scoped Protected Resource Metadata.
 
-    Same document, served at the well-known location derived from the webhook
-    resource URL — claude.ai's first fallback probe when the 401's
-    ``resource_metadata`` pointer is missing. The webhook id is a ROUTE
-    PARAMETER (not baked into the path at registration): a remove + re-add of
-    the entry mints a new webhook id in the same HA session, and the bound view
-    must serve whichever id is currently live (404 for any other).
+    Same document as :class:`_ProtectedResourceMetadataView`, served at the
+    well-known location derived from the webhook resource URL — claude.ai's
+    first fallback probe when the 401's ``resource_metadata`` pointer is
+    missing. The webhook id is a ROUTE PARAMETER (not baked into the path at
+    registration): a remove + re-add of the entry mints a new webhook id in the
+    same HA session, and the bound view must serve whichever id is currently
+    live (404 for any other). Standalone view (not a subclass of the plain
+    document view) because its handler takes the extra route parameter.
     """
 
+    requires_auth = False
+    cors_allowed = True
     name = "ha_mcp_server:oauth:wellknown-protected-resource"
     url = "/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
 
-    async def get(  # type: ignore[override]
-        self, request: web.Request, webhook_id: str
-    ) -> web.Response:
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Bind the view to the HA instance; the provider is resolved per request."""
+        self._hass = hass
+
+    async def get(self, request: web.Request, webhook_id: str) -> web.Response:
         """Serve the document only for the CURRENT entry's webhook id."""
         provider = _active_resource_server(self._hass)
         if provider is None or webhook_id != provider.webhook_id:
             return _json_not_found()
-        return await super().get(request)
+        return web.json_response(
+            _protected_resource_document(provider, _build_base_url(request))
+        )
 
 
 class _WellKnownAuthorizationServerMetadataView(_AuthorizationServerMetadataView):
