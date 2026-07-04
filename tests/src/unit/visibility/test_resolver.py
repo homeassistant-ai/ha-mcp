@@ -121,6 +121,20 @@ def test_label_string_value_is_not_char_iterated():
     assert hidden_entity_ids(reg, exact_cfg) == {"sensor.s"}
 
 
+def test_label_non_iterable_value_skips_entry_not_whole_filter():
+    # A labels payload of an unexpected non-iterable type (int/dict) must not
+    # raise (which would fail-open-disable the filter for every entity); the one
+    # bad entry is skipped while a well-formed sibling still gets hidden.
+    reg = _reg(
+        {"entity_id": "sensor.bad", "labels": 5},
+        {"entity_id": "sensor.good", "labels": ["noise"]},
+    )
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_labels=["noise"]
+    )
+    assert hidden_entity_ids(reg, cfg) == {"sensor.good"}
+
+
 def test_malformed_registry_returns_empty():
     cfg = VisibilityConfig(enabled=True)
     assert hidden_entity_ids({"success": False}, cfg) == set()

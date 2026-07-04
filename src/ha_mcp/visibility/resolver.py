@@ -69,6 +69,11 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
             # count as one label, not be char-iterated by set.intersection —
             # else a single-char exclude entry could spuriously hide it.
             entry_labels = [entry_labels]
+        elif not isinstance(entry_labels, (list, tuple, set)):
+            # An unexpected non-iterable payload (int/dict/…) skips just this
+            # entry's label check instead of raising and fail-open-disabling the
+            # whole filter for every other entity.
+            entry_labels = []
         if labels and labels.intersection(entry_labels):
             hidden.add(eid)
     return hidden
