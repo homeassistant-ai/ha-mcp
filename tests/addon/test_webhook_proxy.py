@@ -5002,6 +5002,73 @@ class TestHaAuthMode:
         # Malformed/missing header rejected WITHOUT invoking the HA validator.
         hass.auth.async_validate_access_token.assert_not_called()
 
+    async def test_validate_request_detailed_reason_matrix(self, tmp_path):
+        """The diagnostic reason distinguishes every rejection class — no
+        usable bearer, empty token, hass.auth returned None, validator raised
+        — plus the accepted case, and never includes the token itself.
+        validate_request stays the bool-only wrapper over the same logic."""
+        _mod, _oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = MagicMock()
+        rs = auth_native.ResourceServer(hass, "wh")
+
+        def req(headers):
+            r = MagicMock()
+            r.headers = headers
+            return r
+
+        hass.auth.async_validate_access_token = MagicMock(return_value=None)
+        assert await rs.validate_request_detailed(req({})) == (
+            False,
+            "no bearer header",
+        )
+        assert await rs.validate_request_detailed(
+            req({"Authorization": "Basic abc"})
+        ) == (False, "no bearer header")
+        assert await rs.validate_request_detailed(
+            req({"Authorization": "Bearer   "})
+        ) == (False, "empty bearer token")
+        assert await rs.validate_request_detailed(
+            req({"Authorization": "Bearer sekret-tok"})
+        ) == (False, "token rejected by hass.auth (returned None)")
+        hass.auth.async_validate_access_token = MagicMock(
+            side_effect=ValueError("boom")
+        )
+        ok, reason = await rs.validate_request_detailed(
+            req({"Authorization": "Bearer sekret-tok"})
+        )
+        assert (ok, reason) == (False, "validator raised ValueError")
+        assert "sekret-tok" not in reason
+        hass.auth.async_validate_access_token = MagicMock(return_value=object())
+        assert await rs.validate_request_detailed(
+            req({"Authorization": "Bearer sekret-tok"})
+        ) == (True, "valid")
+        # Wrapper parity: same logic, bool-only contract.
+        assert (
+            await rs.validate_request(req({"Authorization": "Bearer sekret-tok"}))
+            is True
+        )
+
+    async def test_gate_debug_log_carries_rejection_reason(self, tmp_path):
+        """With debug logging on, the 401 line names WHY ha_auth rejected the
+        bearer (the issue #1714 OIDC-leg diagnosis aid) — never the token."""
+        mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        hass = self._gate_hass(mod, auth_native, None)  # validator -> None
+        hass.data[mod.DOMAIN]["debug_logging"] = True
+        request = MagicMock()
+        request.headers = {"Authorization": "Bearer sekret-tok", "Host": "h"}
+        request.read = AsyncMock(return_value=b"")
+        request.method = "POST"
+        request.scheme = "https"
+        with (
+            patch.object(mod, "_debug_log", new=AsyncMock()) as dbg,
+            patch.object(oauth.web, "Response") as response_ctor,
+        ):
+            await mod._handle_webhook(hass, "mcp_test", request)
+        assert response_ctor.call_args.kwargs.get("status") == 401
+        logged = " ".join(str(c.args[1]) for c in dbg.call_args_list)
+        assert "token rejected by hass.auth (returned None)" in logged
+        assert "sekret-tok" not in logged
+
     async def test_validator_raises_gate_returns_401_not_500(self, tmp_path):
         """A crafted token can make hass.auth.async_validate_access_token raise
         (outside jwt.InvalidTokenError). ResourceServer.validate_request must
