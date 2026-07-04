@@ -4,20 +4,17 @@ Covers the soft-only, opt-in visibility filter (#1728) at the outermost seam a
 user actually hits: the ``ha_search`` MCP tool dispatched against a live Home
 Assistant, with a real entity registered in the registry.
 
-LOCAL VERIFICATION NOTE
------------------------
+CONFIG-DIR SEAM NOTE
+--------------------
 Authored against the *container* / *haos-external* e2e backends, where the MCP
 server runs IN-PROCESS in the pytest host (see the ``mcp_server`` fixture in
 ``conftest.py`` — ``HomeAssistantSmartMCPServer(client=client)`` + in-memory
 transport). Because the server shares this process, the config-dir seam
 (``resolver.get_data_dir``) can be redirected with ``monkeypatch`` — no
 container bind-mount staging is required (the config is read by the host
-process, not inside the HA container).
-
-This file was NOT executed locally in the authoring environment (no Docker
-available there); CI is the verification gate for it. The filter *logic* is
-additionally covered by runnable in-process tests in
-``tests/src/unit/visibility/`` that do not need Docker.
+process, not inside the HA container). The filter *logic* is additionally
+covered by runnable in-process unit tests in ``tests/src/unit/visibility/``
+that do not need Docker.
 
 The ``external_only`` marker skips the HAOS-inaddon backend, where the server
 runs in a *separate* addon container and in-process ``monkeypatch`` cannot
@@ -117,3 +114,84 @@ async def test_visibility_denylist_hides_entity_from_search_but_get_state_return
                 "confirm": True,
             },
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.external_only
+async def test_visibility_label_dimension_hides_entity_from_search(
+    mcp_client, ha_container_with_fresh_config, tmp_path, monkeypatch
+):
+    """A registry-derived dimension (exclude_labels) end-to-end: a label assigned
+    to the probe helper hides it from ha_search. Exercises the registry-join path
+    (the resolver reading entry["labels"]), not just the registry-independent
+    denylist the sibling test covers."""
+    probe_name = "Zzvis Label Probe E2E"
+    probe_entity_id = "input_boolean.zzvis_label_probe_e2e"
+    probe_query = "zzvis_label_probe_e2e"
+    probe_target = "zzvis_label_probe_e2e"
+    label_id = None
+
+    create_result = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": probe_name},
+    )
+    assert_mcp_success(create_result, "Create label-probe helper")
+
+    try:
+        # Create a label and assign it to the probe so the entity-registry entry
+        # carries it (the resolver matches config.exclude_labels against
+        # entry["labels"]).
+        label_result = await mcp_client.call_tool(
+            "ha_config_set_label", {"name": "Zzvis E2E Hidden Label"}
+        )
+        label_data = assert_mcp_success(label_result, "Create probe label")
+        label_id = label_data.get("label_id")
+        assert label_id, f"label_id missing from create response: {label_data}"
+
+        assign_result = await mcp_client.call_tool(
+            "ha_set_entity", {"entity_id": probe_entity_id, "labels": [label_id]}
+        )
+        assert_mcp_success(assign_result, "Assign label to probe helper")
+
+        # Baseline (filter OFF): probe is searchable. The wait also lets the
+        # registry label write propagate before the filter reads it.
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search",
+            arguments={"query": probe_query, "limit": 10},
+            predicate=lambda d: probe_entity_id in _entity_ids(d),
+            description="baseline search finds labelled visibility probe",
+        )
+
+        # Act: enable the filter excluding that label (registry-derived dimension).
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(
+                enabled=True,
+                exclude_categories=[],
+                exclude_labels=[label_id],
+            ),
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+        # Assert: search now omits it via the label match. Unique query => the
+        # only match was excluded => post-filter total is 0 (filter is
+        # pre-pagination, so the count stays coherent).
+        filtered = parse_mcp_result(
+            await mcp_client.call_tool("ha_search", {"query": probe_query, "limit": 10})
+        )
+        assert filtered.get("success") is True
+        assert probe_entity_id not in _entity_ids(filtered)
+        assert filtered.get("entity_total_matches") == 0
+
+    finally:
+        await mcp_client.call_tool(
+            "ha_remove_helpers_integrations",
+            {
+                "helper_type": "input_boolean",
+                "target": probe_target,
+                "confirm": True,
+            },
+        )
+        if label_id:
+            await mcp_client.call_tool("ha_config_remove_label", {"label_id": label_id})

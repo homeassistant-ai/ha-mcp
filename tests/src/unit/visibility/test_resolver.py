@@ -177,3 +177,18 @@ def test_disabled_returns_no_warnings():
     )
     assert hidden == set()
     assert warnings == []
+
+
+def test_enabled_default_config_hides_both_diagnostic_and_config():
+    # The shipped default exclude_categories is ["diagnostic", "config"]. Every
+    # other test overrides that field, so this is the only one that fires the
+    # actual default and proves BOTH default categories hide (config was never
+    # exercised before).
+    reg = _reg(
+        {"entity_id": "sensor.diag", "entity_category": "diagnostic"},
+        {"entity_id": "number.cfg", "entity_category": "config"},
+        {"entity_id": "light.normal", "entity_category": None},
+    )
+    hidden, warnings = hidden_entity_ids(reg, VisibilityConfig(enabled=True))
+    assert hidden == {"sensor.diag", "number.cfg"}
+    assert warnings == []
