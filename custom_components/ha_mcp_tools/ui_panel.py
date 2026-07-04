@@ -109,8 +109,6 @@ _STRIPPED_RESPONSE_HEADERS = frozenset(
     }
 )
 
-_CLIENT_TIMEOUT = aiohttp.ClientTimeout(total=300, sock_connect=10, sock_read=300)
-
 
 # ---------------------------------------------------------------------------
 # Session store (server-side; no secret ever placed in a URL)
