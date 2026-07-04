@@ -3,7 +3,13 @@
         "step": {
             "user": {
                 "title": "Home Assistant MCP Server Custom Component",
-                "description": "This integration provides the advanced file and YAML configuration services used by ha-mcp. No Home Assistant Supervisor was detected, so the MCP Server add-on can't be installed automatically here — run ha-mcp via Docker or pip instead. Select **Submit** to enable the services."
+                "description": "This integration provides the advanced file and YAML configuration services used by ha-mcp. No Home Assistant Supervisor was detected, so the MCP Server add-on can't be installed automatically here. You can instead run the MCP server inside Home Assistant (recommended), or run it separately via Docker or pip.",
+                "data": {
+                    "embedded_server_enabled": "Run the MCP server inside Home Assistant"
+                },
+                "data_description": {
+                    "embedded_server_enabled": "Runs the full ha-mcp server in-process and exposes it through a Home Assistant webhook for remote access. You can change this later in the integration options."
+                }
             },
             "addon": {
                 "title": "Install the Home Assistant MCP Server add-on",
@@ -22,6 +28,39 @@
         },
         "abort": {
             "already_configured": "The Home Assistant MCP Server Custom Component is already set up."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "In-process MCP server",
+                "description": "Run the full ha-mcp server inside Home Assistant and expose it remotely through a Home Assistant webhook (reachable via Nabu Casa or any reverse proxy). All settings below apply only when the server is enabled.\n\n{connect_url}",
+                "data": {
+                    "embedded_server_enabled": "Run the MCP server inside Home Assistant",
+                    "server_port": "Server port",
+                    "bind_host": "Bind address",
+                    "webhook_auth": "Webhook authentication",
+                    "pip_spec": "ha-mcp package (advanced)",
+                    "server_url": "Home Assistant URL for the server (advanced)"
+                },
+                "data_description": {
+                    "server_port": "Local TCP port the in-process server listens on. Defaults to 9584 so it can coexist with the MCP Server add-on.",
+                    "bind_host": "127.0.0.1 keeps the server loopback-only (remote access is via the webhook). 0.0.0.0 additionally allows direct access from your LAN.",
+                    "webhook_auth": "none: the secret webhook URL is the credential (default). ha_auth: clients sign in with your Home Assistant account.",
+                    "pip_spec": "Pip requirement installed at runtime. Leave as the default unless testing a pre-release (for example a GitHub tarball URL).",
+                    "server_url": "How the in-process server reaches Home Assistant. The loopback default works for almost everyone."
+                }
+            }
+        }
+    },
+    "issues": {
+        "embedded_server_start_failed": {
+            "title": "The in-process MCP server failed to start",
+            "description": "The Home Assistant MCP Server could not be started inside Home Assistant:\n\n{detail}\n\nThe integration's file and YAML services are unaffected. Check the Home Assistant logs, then disable and re-enable the in-process server in the integration options to retry."
+        },
+        "embedded_package_install_failed": {
+            "title": "The in-process MCP server package could not be installed",
+            "description": "Installing the ha-mcp package for the in-process server failed:\n\n{detail}\n\nCheck the Home Assistant logs and network connectivity, then retry from the integration options."
         }
     }
 }
