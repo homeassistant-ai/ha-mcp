@@ -33,7 +33,6 @@ import contextlib
 import json
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -84,23 +83,22 @@ def _docker_available() -> bool:
 
 
 def _build_wheel(dest_dir: Path) -> Path:
-    """Build a --no-deps ha-mcp wheel from the local checkout into ``dest_dir``."""
+    """Build a ha-mcp wheel from the local checkout into ``dest_dir`` via ``uv build``.
+
+    Uses ``uv build``, NOT ``sys.executable -m pip wheel``: the E2E lanes run under
+    ``uv run pytest`` in a uv-created venv that ships no ``pip``, so ``python -m pip
+    wheel`` exits non-zero — which used to make this test green-by-SKIP on every CI
+    run (its wheel path never actually executed). ``uv`` is always on PATH (setup-uv)
+    and builds in an isolated env without needing pip in the venv, matching
+    conftest._build_embedded_server_wheel.
+    """
     dest_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "wheel",
-            "--no-deps",
-            "--no-build-isolation",
-            "--wheel-dir",
-            str(dest_dir),
-            str(_REPO_ROOT),
-        ],
+        ["uv", "build", "--wheel", "--out-dir", str(dest_dir), str(_REPO_ROOT)],
         check=True,
         capture_output=True,
         text=True,
+        timeout=600,
     )
     wheels = list(dest_dir.glob("ha_mcp-*.whl"))
     if not wheels:
@@ -261,8 +259,15 @@ def embedded_ha():
     wheel_dir = Path(tempfile.mkdtemp(prefix="ha_mcp_wheel_"))
     try:
         wheel = _build_wheel(wheel_dir)
-    except (subprocess.CalledProcessError, AssertionError) as err:
-        pytest.skip(f"could not build the ha-mcp wheel: {err}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as err:
+        # FAIL, don't skip: a wheel that can't be built is a real problem this
+        # test exists to catch. Skipping here is exactly what hid the pip-less
+        # venv bug (green-by-skip on every CI run). Surface the build stderr so
+        # the failure is actionable.
+        stderr = (getattr(err, "stderr", "") or "").strip()
+        pytest.fail(f"could not build the ha-mcp wheel: {err}\nstderr:\n{stderr}")
+    except AssertionError as err:
+        pytest.fail(str(err))
 
     config_path = Path(tempfile.mkdtemp(prefix="ha_mcp_server_e2e_"))
     shutil.copy2(wheel, config_path / wheel.name)

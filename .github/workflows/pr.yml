@@ -83,7 +83,7 @@ jobs:
     # variants: it always runs, passes when the suite was skipped (docs/website)
     # or every variant succeeded, and fails if any variant failed.
     name: E2E Validation Gate
-    needs: [changes, e2e-validation]
+    needs: [changes, e2e-validation, e2e-validation-embedded]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -94,10 +94,14 @@ jobs:
             echo "Docs/website-only PR — E2E Validation skipped; gate passes."
             exit 0
           fi
-          result="${{ needs.e2e-validation.result }}"
-          echo "e2e-validation result: $result"
-          if [ "$result" != "success" ]; then
-            echo "::error::E2E Validation did not succeed (result=$result)."
+          container_result="${{ needs.e2e-validation.result }}"
+          embedded_result="${{ needs.e2e-validation-embedded.result }}"
+          echo "e2e-validation result: $container_result"
+          echo "e2e-validation-embedded result: $embedded_result"
+          # Both the container-backend matrix AND the in-process ha_mcp_server
+          # lane must pass. Either failing wedges the required gate.
+          if [ "$container_result" != "success" ] || [ "$embedded_result" != "success" ]; then
+            echo "::error::E2E Validation did not succeed (container=$container_result, embedded=$embedded_result)."
             exit 1
           fi
 
@@ -404,6 +408,92 @@ jobs:
           -v
         echo "✅ Full E2E test suite passed"
       env:
+        HAMCP_ENV_FILE: "tests/.env.test"
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Lane 1 of the in-process ha_mcp_server backend (#1527): the SAME full E2E
+  # suite, but the server-under-test is the ha_mcp_server integration running
+  # in-process inside each worker's testcontainer (E2E_BACKEND=embedded), driven
+  # over its ingress webhook. Parallel to e2e-validation and gated the same way:
+  # skips on docs/website-only PRs (needs.changes) and folds into the
+  # e2e-validation-gate required check. ubuntu-latest only for now; the arm64 +
+  # HAOS-embedded lanes are follow-ups (clean seams). -n2 (vs the container
+  # matrix's 3/4) because each worker additionally builds a ha-mcp wheel and its
+  # container preinstalls the fastmcp dependency tree before HA boots, so a lower
+  # worker count keeps peak memory + concurrent-pip pressure in check; the larger
+  # timeout covers that per-worker preinstall window.
+  e2e-validation-embedded:
+    name: E2E Validation (embedded)
+    needs: changes
+    # A skipped job reports Success, so a docs/website-only PR doesn't wedge the
+    # gate waiting on this lane (mirrors e2e-validation).
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: true
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+      with:
+        cache-binary: true
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Cache HA Docker image
+      id: cache-ha-image
+      uses: actions/cache@v6
+      with:
+        path: /tmp/ha-image.tar
+        key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
+
+    - name: Load cached HA image
+      if: steps.cache-ha-image.outputs.cache-hit == 'true'
+      run: docker load -i /tmp/ha-image.tar
+
+    - name: Pull HA image (GHCR → Docker Hub fallback)
+      if: steps.cache-ha-image.outputs.cache-hit != 'true'
+      run: |
+        HA_VERSION="${HA_IMAGE_GHCR##*:}"
+        HA_IMAGE_DOCKERHUB="homeassistant/home-assistant:${HA_VERSION}"
+        for registry in "$HA_IMAGE_GHCR" "$HA_IMAGE_DOCKERHUB"; do
+          echo "Trying $registry..."
+          if docker pull "$registry"; then
+            if [ "$registry" != "$HA_IMAGE_GHCR" ]; then
+              docker tag "$registry" "$HA_IMAGE_GHCR"
+            fi
+            docker save "$HA_IMAGE_GHCR" -o /tmp/ha-image.tar
+            echo "Pulled and cached from $registry"
+            exit 0
+          fi
+          echo "Failed to pull from $registry, trying next..."
+          sleep 15
+        done
+        echo "All registries failed" && exit 1
+
+    - name: Run full E2E test suite (embedded backend)
+      run: |
+        echo "🚀 Running full E2E suite through the in-process ha_mcp_server (embedded backend)..."
+        uv run pytest tests/src/e2e/ \
+          -n2 \
+          --dist loadscope \
+          --tb=short \
+          -v
+        echo "✅ Full E2E test suite (embedded backend) passed"
+      env:
+        E2E_BACKEND: "embedded"
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
