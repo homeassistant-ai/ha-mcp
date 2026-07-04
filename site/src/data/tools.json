@@ -389,7 +389,7 @@
     "inputSchema": {
       "properties": {
         "config": {
-          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Complete automation configuration with required fields: 'alias', 'triggers', 'actions'. Optional: 'description', 'conditions', 'mode', 'max', 'initial_state', 'variables'. Mutually exclusive with python_transform.\", default=None)]",
+          "type": "Annotated[dict[str, Any] | None, JSON_STRING_COERCION, Field(description=\"Complete automation configuration with required fields: 'alias', 'triggers', 'actions'. Optional: 'description', 'conditions', 'mode', 'max', 'initial_state', 'variables'. Purpose-specific triggers/conditions (HA 2026.7+ default: 'trigger': '<domain>.<name>' with 'target'/'options') are valid config. Mutually exclusive with python_transform.\", default=None)]",
           "default": null
         },
         "identifier": {
@@ -2893,36 +2893,6 @@
     "source_file": "tools_yaml_config.py"
   },
   {
-    "name": "ha_get_updates",
-    "title": "Get Updates",
-    "description": "Get update information -- list all updates or get details for a specific one.\n\nWithout an entity_id: Lists all available updates across the system including\nHome Assistant Core, add-ons, device firmware, HACS, and OS updates.\n\nWith an entity_id: Returns detailed information about a specific update including\nversion info, category, and release notes (if available).\n\nWith include_release_notes=True (Core updates only): Also fetches HA release\nblog posts for every monthly version between installed and latest. Returns\nstructured breaking changes and installed integration domains for cross-referencing.\n\nEXAMPLES:\n- List all updates: ha_get_updates()\n- List including skipped: ha_get_updates(include_skipped=True)\n- Get specific update: ha_get_updates(entity_id=\"update.home_assistant_core_update\")\n- Pre-update analysis: ha_get_updates(entity_id=\"update.home_assistant_core_update\", include_release_notes=True)\n\nRETURNS (when listing):\n- updates_available: Count of available updates\n- updates: List of update entities with version info\n- categories: Updates grouped by category (core, addons, devices, hacs, os)\n- ha_mcp_update: This MCP server's own update status\n  {current, latest, update_available} — so you can flag a newer ha-mcp\n  release (from PyPI for pip/Docker, the Supervisor add-on store for the\n  add-on). Present on all install types; omitted only for the unknown\n  version and when HA_MCP_DISABLE_UPDATE_CHECK is set.\n\nRETURNS (when getting specific update):\n- Update details including installed/latest versions\n- Release notes (fetched from WebSocket API or GitHub)\n- Category and installation status\n\nRETURNS (with include_release_notes=True, Core only):\n- breaking_changes.entries[]: Each has integration, description, version\n- multi_version_release_notes[]: Full text per version {version, content, source_url}\n- installed_integrations: Your integration domains for cross-referencing",
-    "inputSchema": {
-      "properties": {
-        "entity_id": {
-          "type": "Annotated[str | None, Field(description=\"Update entity ID to get details for (e.g., 'update.home_assistant_core_update'). If omitted, lists all available updates.\", default=None)]",
-          "default": null
-        },
-        "include_skipped": {
-          "type": "Annotated[bool, Field(description='When listing all updates, include updates that have been skipped (default: False)', default=False)]",
-          "default": false
-        },
-        "include_release_notes": {
-          "type": "Annotated[bool, Field(description='When getting a Core update entity, fetch multi-version release notes and breaking changes for all versions between installed and latest (default: False). Adds breaking_changes, multi_version_release_notes, and installed_integrations to the response.', default=False)]",
-          "default": false
-        }
-      }
-    },
-    "annotations": {
-      "idempotentHint": true,
-      "openWorldHint": true,
-      "readOnlyHint": true
-    },
-    "tags": [
-      "System"
-    ],
-    "source_file": "tools_updates.py"
-  },
-  {
     "name": "ha_manage_backup",
     "title": "Manage Backups",
     "description": "Polymorphic backup tool. See the tool description for the routing matrix.",
@@ -3050,6 +3020,47 @@
       "System"
     ],
     "source_file": "tools_themes.py"
+  },
+  {
+    "name": "ha_manage_updates",
+    "title": "Manage Updates",
+    "description": "Manage Home Assistant updates -- list, read details, batch install, skip, or un-skip.\n\nCovers Core, OS, supervisor, apps (add-ons), device firmware, and HACS\nupdate entities. In Read Only Mode the read actions ('list', 'get') stay\navailable; write actions are blocked.\n\nInstalls run asynchronously in Home Assistant and can take minutes:\n'install' returns once the service calls are accepted, with per-entity\nresults. Poll action='list' to watch in_progress until installed_version\nreaches latest_version.\n\nEXAMPLES:\n- List all updates: ha_manage_updates()\n- Pre-update analysis: ha_manage_updates(action=\"get\", entity_ids=[\"update.home_assistant_core_update\"], include_release_notes=True)\n- Update everything pending in a category: ha_manage_updates(action=\"install\", categories=[\"addons\", \"hacs\"])\n\nRETURNS (action='list'): updates_available, updates, categories, and\nha_mcp_update -- this MCP server's own update status {current, latest,\nupdate_available}, so a newer ha-mcp release can be flagged.\n\nRETURNS (action='get'): update details, release notes; with\ninclude_release_notes=True on Core also breaking_changes.entries[],\nmulti_version_release_notes[], and installed_integrations.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "type": "Annotated[str, Field(description=\"'list' (all pending updates, default), 'get' (details/release notes for one update), 'install' (apply pending updates), 'skip' (hide the offered version), or 'clear_skipped' (re-offer a skipped version).\", default='list')]",
+          "default": "list"
+        },
+        "entity_ids": {
+          "type": "Annotated[list[str] | str | None, JSON_STRING_COERCION, Field(description=\"Update entity_id(s) to act on. 'get' takes exactly one; skip/clear_skipped require at least one; for install, mutually exclusive with categories.\", default=None)]",
+          "default": null
+        },
+        "categories": {
+          "type": "Annotated[list[str] | str | None, JSON_STRING_COERCION, Field(description=\"For install: apply every pending update in these categories ('addons', 'hacs', 'devices', 'other'). Mirrors the HA 2026.7 'Update all' button: core/os/supervisor are excluded by design (target those individually via entity_ids) and skipped updates are never included.\", default=None)]",
+          "default": null
+        },
+        "include_skipped": {
+          "type": "Annotated[bool, Field(description='For list: include updates that have been skipped (default: False).', default=False)]",
+          "default": false
+        },
+        "include_release_notes": {
+          "type": "Annotated[bool, Field(description='For get on a Core update entity: fetch multi-version release notes and breaking changes for all versions between installed and latest (default: False). Adds breaking_changes, multi_version_release_notes, and installed_integrations to the response.', default=False)]",
+          "default": false
+        },
+        "backup": {
+          "type": "Annotated[bool, Field(description='For install: create a backup before installing where the update entity supports it (apps/add-ons). Default: False.', default=False)]",
+          "default": false
+        }
+      }
+    },
+    "annotations": {
+      "destructiveHint": true,
+      "openWorldHint": true
+    },
+    "tags": [
+      "System"
+    ],
+    "source_file": "tools_updates.py"
   },
   {
     "name": "ha_reload_core",
