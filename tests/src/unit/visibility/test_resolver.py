@@ -139,3 +139,20 @@ def test_malformed_registry_returns_empty():
     cfg = VisibilityConfig(enabled=True)
     assert hidden_entity_ids({"success": False}, cfg) == set()
     assert hidden_entity_ids("nonsense", cfg) == set()
+
+
+def test_deny_honored_on_unusable_registry():
+    # deny_entity_ids is a literal entity_id match, registry-independent. A
+    # transient unusable-registry read must NOT silently drop it (fail-fully-open
+    # was not the goal): both degraded early returns still yield the deny seed.
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
+    )
+    # non-dict / unsuccessful payload
+    assert hidden_entity_ids({"success": False}, cfg) == {"sensor.ghost"}
+    assert hidden_entity_ids("nonsense", cfg) == {"sensor.ghost"}
+    # dict-success payload but result is not a list
+    assert (
+        hidden_entity_ids({"success": True, "result": "nope"}, cfg)
+        == {"sensor.ghost"}
+    )

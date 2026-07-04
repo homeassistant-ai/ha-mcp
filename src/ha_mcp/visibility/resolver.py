@@ -19,13 +19,15 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
     if not config.enabled:
         return set()
     # Enabled past this point, so an unusable registry is a real degradation the
-    # operator should see (spec §7: degrade with a warning). Fail open regardless.
+    # operator should see (spec §7: degrade with a warning). Honor the denylist
+    # regardless (it needs no registry data); only the registry-derived
+    # dimensions degrade to open.
     if not isinstance(registry_result, dict) or not registry_result.get("success"):
         logger.warning(
             "entity visibility filter enabled but the registry payload was "
             "unusable; degrading to unfiltered for this request"
         )
-        return set()
+        return set(config.deny_entity_ids)
 
     categories = set(config.exclude_categories)
     denied = set(config.deny_entity_ids)
@@ -35,9 +37,10 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
     # Seed with the explicit denylist: deny is a literal entity_id match and must
     # hide an entity even when it has no entity-registry entry (legacy YAML /
     # template entities live only in states, not the registry). The
-    # registry-derived dimensions below still require a registry entry. On a
-    # failed registry read the two early returns above still fail open — a
-    # transient outage is not when a denylist should suddenly start mattering.
+    # registry-derived dimensions below still require a registry entry. Because
+    # deny needs no registry data, the degraded early returns (above and below)
+    # still honor it (fail-fully-open was not the goal); only the
+    # registry-derived dimensions degrade to open on a bad read.
     hidden: set[str] = set(denied)
     entries: Any = registry_result.get("result", [])
     if not isinstance(entries, list):
@@ -45,7 +48,7 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
             "entity visibility filter enabled but the registry 'result' was not "
             "a list; degrading to unfiltered for this request"
         )
-        return set()
+        return set(denied)
     for entry in entries:
         if not isinstance(entry, dict):
             continue
