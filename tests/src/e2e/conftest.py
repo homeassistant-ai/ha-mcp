@@ -825,8 +825,7 @@ def _install_embedded_server(config_path: Path, wheel_name: str) -> None:
     # Dedupe by entry_id, not domain: the domain (ha_mcp_tools) is shared with the
     # tools services entry seeded by _install_custom_component.
     if not any(
-        isinstance(e, dict) and e.get("entry_id") == _EMBEDDED_ENTRY_ID
-        for e in entries
+        isinstance(e, dict) and e.get("entry_id") == _EMBEDDED_ENTRY_ID for e in entries
     ):
         entries.append(
             {
