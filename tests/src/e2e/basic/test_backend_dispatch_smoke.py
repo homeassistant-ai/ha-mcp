@@ -82,7 +82,7 @@ _SKIP_CEILING_PER_LANE = {
     # marker-gated skips, plus a 5-9 growth buffer.
     "container": 68,  # was 67; +1 addon debug-log-level test (@inaddon_only, skip here)
     "haos": 35,  # was 34; +1 addon debug-log-level test (@inaddon_only, skip here)
-    "haos_inaddon": 58,  # was 55; +3 self-update notice tests (TestSelfUpdateNoticeSurfacedInTools, @external_only)
+    "haos_inaddon": 60,  # was 58; entity-visibility filter adds @external_only e2e tests (denylist/label/allowlist) that skip on this lane (observed 60)
 }
 
 
