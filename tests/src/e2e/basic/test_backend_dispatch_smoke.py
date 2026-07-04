@@ -39,7 +39,7 @@ Three layers of guard, each catching a different silent-failure mode:
    tests transition pass→skip silently because a marker was applied
    too broadly. The conftest documents a prior incident of this kind
    (PR #1375 audit, 14 ``supervisor_mock`` tests silently skipping on
-   every testcontainer run — see ``tests/src/e2e/conftest.py:158-166``).
+   every testcontainer run — see the PR #1375 audit comment in ``tests/src/e2e/conftest.py``).
 
 This file is placed under ``basic/`` (NOT ``haos_only/``) on purpose: the
 auto-applied ``haos_only`` marker would skip these whenever
@@ -99,9 +99,9 @@ _SKIP_CEILING_PER_LANE = {
     # Static def-level derivation (Docker-less, so parametrize item-inflation isn't
     # visible locally): haos_only 51 + inaddon_only-outside-haos 11 + external_only
     # 35 (auto_backup 18, supervisor_mock 15, self_update_notice 1, file_operations
-    # 1) + not_on_embedded 2 = 99. Set to 115 to absorb parametrize inflation the
-    # same way the container ceiling (71) sits above its ~62 def-skips; the first
-    # green embedded CI run reveals the exact item count for a follow-up tighten.
+    # 1) + not_on_embedded 2 = 99. Initially set to 115 as a buffer for
+    # parametrize item-inflation; round 6 (run 28709196071) observed the exact
+    # item count and the entry below is pinned to it.
     "embedded": 119,  # observed exact count (round 6, run 28709196071): haos/inaddon-lane skips + the external_only in-process-server class (alternative coverage on the container lane) + the 2 self-referential smoke tests
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
@@ -118,9 +118,9 @@ _SKIP_CEILING_PER_LANE = {
     # container_only/inaddon_only, and the 2 not_on_embedded tests are already
     # container_only). Applying the ~1.16x parametrize inflation the other HAOS
     # lanes show (haos def 30 → ~35 observed; haos_inaddon def 50 → ~58) gives
-    # ~84; set to 90 with a small buffer. Round-1 CI pins it exactly, the
-    # established pattern on this branch (see the embedded entry above).
-    "haos_embedded": 90,
+    # ~84; initially set to 90 with a small buffer, and round 8 observed
+    # exactly 90 — the entry below is pinned to the observed count.
+    "haos_embedded": 90,  # observed exact count (round 8): haos-lane skips + external_only + inaddon_only + the 3 lane-aware smoke tests
 }
 
 
@@ -305,7 +305,7 @@ def test_session_skipped_count_below_ceiling(
     ``pytest_collection_modifyitems`` hook.
 
     The conftest itself documents a real prior incident of this kind
-    (``tests/src/e2e/conftest.py:158-166`` — PR #1375 audit, 14
+    (the PR #1375 audit comment in ``tests/src/e2e/conftest.py`` — 14
     ``supervisor_mock`` tests silently skipping on every testcontainer
     run because an ``external_only`` skip was scoped wrong). A
     skip-count ceiling per lane catches that whole class of bug.
@@ -333,7 +333,7 @@ def test_session_skipped_count_below_ceiling(
         f"{skipped} tests have skip markers on the {backend} lane, "
         f"which exceeds the ceiling of {ceiling}. A marker may be "
         f"applied too broadly in pytest_collection_modifyitems — "
-        f"check tests/src/e2e/conftest.py:115-168 for recent changes. "
+        f"check pytest_collection_modifyitems in tests/src/e2e/conftest.py for recent changes. "
         f"If the increase is intentional (legitimate new marker-gated "
         f"tests), bump _SKIP_CEILING_PER_LANE[{backend!r}] in this file."
     )
