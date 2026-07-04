@@ -31,6 +31,8 @@ import importlib
 import importlib.metadata
 import logging
 import os
+import subprocess
+import sys
 import threading
 from contextlib import suppress
 from datetime import timedelta
@@ -48,17 +50,23 @@ from homeassistant.requirements import (
 from homeassistant.util.package import install_package
 
 from .const import (
+    CHANNEL_DEV,
     DATA_ACCESS_TOKEN,
     DATA_LAST_PIP_SPEC,
     DATA_REFRESH_TOKEN_ID,
     DATA_SECRET_PATH,
     DATA_SERVER_USER_ID,
     DEFAULT_BIND_HOST,
+    DEFAULT_CHANNEL,
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
+    DEV_PIP_SPEC,
+    DIST_NAME_DEV,
+    DIST_NAME_STABLE,
     DOMAIN,
     OPT_BIND_HOST,
+    OPT_CHANNEL,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
@@ -90,6 +98,10 @@ _STOP_JOIN_TIMEOUT_SECONDS = 10.0
 # whole fastmcp tree, well beyond HA's 60s requirements default.
 _PIP_INSTALL_TIMEOUT_SECONDS = 300
 
+# Uninstall just removes files/metadata, so it is quick; cap it so a wedged
+# subprocess can never tie up an executor thread indefinitely.
+_PIP_UNINSTALL_TIMEOUT_SECONDS = 120
+
 
 class EmbeddedServerError(Exception):
     """Raised when the in-process ha-mcp server could not be installed or started.
@@ -119,7 +131,17 @@ class EmbeddedServerManager:
         self._server_url: str = str(
             options.get(OPT_SERVER_URL) or DEFAULT_LOOPBACK_URL
         ).rstrip("/")
-        self._pip_spec: str = str(options.get(OPT_PIP_SPEC) or DEFAULT_PIP_SPEC)
+        self._channel: str = str(options.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
+        # An explicit pip-spec override (the pre-release test channel) wins over
+        # the channel selector. DEFAULT_PIP_SPEC in the field means "no override,
+        # use the channel" — the value moves with each release, so it must never
+        # be treated as an intentional pin (the options flow also normalizes it
+        # away on save; this guard keeps legacy/direct entries correct too).
+        raw_pip_spec = str(options.get(OPT_PIP_SPEC) or "").strip()
+        self._pip_spec_override: str = (
+            raw_pip_spec if raw_pip_spec and raw_pip_spec != DEFAULT_PIP_SPEC else ""
+        )
+        self._pip_spec: str = self._resolve_pip_spec()
         self._secret_path: str = str(entry.data.get(DATA_SECRET_PATH, ""))
         self._config_dir: str = hass.config.path(SERVER_CONFIG_SUBDIR)
 
@@ -228,6 +250,32 @@ class EmbeddedServerManager:
 
     # -- package install ---------------------------------------------------
 
+    def _resolve_pip_spec(self) -> str:
+        """Return the effective pip requirement for the configured channel.
+
+        An explicit override wins (any pip requirement string — a version pin, a
+        GitHub tarball URL — the pre-release test channel). Otherwise the channel
+        picks the distribution: ``dev`` → the unpinned ``ha-mcp-dev`` (latest dev
+        build), ``stable`` → the pinned ``ha-mcp==<PINNED>``.
+        """
+        if self._pip_spec_override:
+            return self._pip_spec_override
+        if self._channel == CHANNEL_DEV:
+            return DEV_PIP_SPEC
+        return DEFAULT_PIP_SPEC
+
+    def _conflicting_dist_name(self) -> str | None:
+        """Return the other channel's distribution name, or None to skip.
+
+        ``dev`` installs ``ha-mcp-dev`` (conflicts with ``ha-mcp``) and ``stable``
+        installs ``ha-mcp`` (conflicts with ``ha-mcp-dev``). Returns None for an
+        explicit override, whose distribution name is unknown so nothing is
+        removed.
+        """
+        if self._pip_spec_override:
+            return None
+        return DIST_NAME_STABLE if self._channel == CHANNEL_DEV else DIST_NAME_DEV
+
     async def _async_ensure_package(self) -> None:
         """Ensure ``ha-mcp`` is importable, installing the pip spec if needed.
 
@@ -236,17 +284,36 @@ class EmbeddedServerManager:
         Home Assistant's requirements manager. Otherwise (spec changed — the
         pre-release test channel — or the package is missing) force a real
         reinstall that bypasses the requirements manager's is-installed shortcut,
-        so a changed spec actually takes effect. Never imports ``ha_mcp`` in this
-        (main) process — that happens only inside the worker thread.
+        so a changed spec actually takes effect.
+
+        The ``dev`` channel ALWAYS takes the force-install path so every entry
+        reload / HA restart picks up the newest ``ha-mcp-dev`` build. This runs in
+        a background task, so it never blocks HA startup, and uv no-ops quickly
+        when the newest build is already installed.
+
+        On a channel switch the other channel's distribution is uninstalled first
+        (:meth:`_async_remove_conflicting_dist`): ``ha-mcp`` and ``ha-mcp-dev``
+        share the ``ha_mcp`` import package, so leaving both installed would make a
+        pinned reinstall a no-op (breaking a dev→stable downgrade) and the reported
+        version ambiguous.
+
+        Never imports ``ha_mcp`` in this (main) process — that happens only inside
+        the worker thread.
         """
         stored_spec = self._entry.data.get(DATA_LAST_PIP_SPEC)
         installed_version = await self._hass.async_add_executor_job(
             _installed_ha_mcp_version
         )
 
-        if stored_spec == self._pip_spec and installed_version is not None:
+        fast_path_ok = (
+            self._channel != CHANNEL_DEV
+            and stored_spec == self._pip_spec
+            and installed_version is not None
+        )
+        if fast_path_ok:
             await self._async_process_requirements_fast()
         else:
+            await self._async_remove_conflicting_dist()
             await self._async_force_install()
 
         version = await self._hass.async_add_executor_job(_installed_ha_mcp_version)
@@ -297,6 +364,34 @@ class EmbeddedServerManager:
                 "Home Assistant log for the pip output.",
                 kind="package",
             )
+
+    async def _async_remove_conflicting_dist(self) -> None:
+        """Uninstall the other release channel's distribution before installing.
+
+        ``ha-mcp`` (stable) and ``ha-mcp-dev`` (dev) ship the *same* ``ha_mcp``
+        import package, so installing one over the other overwrites the shared
+        files while leaving both distributions' metadata behind. That stale
+        metadata makes a later pinned reinstall a no-op (``ha-mcp==X`` looks
+        already-satisfied, so a dev→stable downgrade would leave dev files on
+        disk) and makes the reported version ambiguous. Removing the other
+        channel's distribution first keeps exactly one installed.
+
+        Best-effort: a failed uninstall is logged, not raised — the forced
+        (re)install that follows still writes the correct channel's files, and the
+        next reload retries the cleanup. Skipped for an explicit override, whose
+        distribution name is unknown.
+        """
+        other = self._conflicting_dist_name()
+        if other is None:
+            return
+        if not await self._hass.async_add_executor_job(_dist_installed, other):
+            return
+        _LOGGER.info(
+            "Removing the other release channel's package %r before installing %r",
+            other,
+            self._pip_spec,
+        )
+        await self._hass.async_add_executor_job(_uninstall_distribution, other)
 
     def _store_installed_spec(self) -> None:
         """Persist the pip spec just installed so a restart skips the reinstall."""
@@ -540,7 +635,60 @@ def _installed_ha_mcp_version() -> str | None:
     names, mirroring ``ha_mcp._version.get_version``.
     """
     importlib.invalidate_caches()
-    for dist_name in ("ha-mcp", "ha-mcp-dev"):
+    for dist_name in (DIST_NAME_STABLE, DIST_NAME_DEV):
         with suppress(importlib.metadata.PackageNotFoundError):
             return importlib.metadata.version(dist_name)
     return None
+
+
+def _dist_installed(dist_name: str) -> bool:
+    """Return True if the named distribution has installed metadata (blocking).
+
+    Invalidates the import caches first so a just-completed (un)install is seen.
+    """
+    importlib.invalidate_caches()
+    try:
+        importlib.metadata.version(dist_name)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return True
+
+
+def _uninstall_distribution(dist_name: str) -> None:
+    """Uninstall a distribution by name (blocking), best-effort.
+
+    Mirrors ``homeassistant.util.package.install_package``'s invocation style —
+    ``<python> -m uv pip ...`` with an explicit ``--python`` and no shell — so it
+    targets the same interpreter environment Home Assistant installed the package
+    into. A failure is logged but not raised; the caller treats the cleanup as
+    best-effort.
+    """
+    args = [
+        sys.executable,
+        "-m",
+        "uv",
+        "pip",
+        "uninstall",
+        "--python",
+        sys.executable,
+        dist_name,
+    ]
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=_PIP_UNINSTALL_TIMEOUT_SECONDS,
+            check=False,
+            env=os.environ.copy(),
+        )
+    except (OSError, subprocess.SubprocessError) as err:
+        _LOGGER.warning("Could not uninstall %r: %s", dist_name, err)
+        return
+    if result.returncode != 0:
+        _LOGGER.warning(
+            "Uninstall of %r exited %d: %s",
+            dist_name,
+            result.returncode,
+            (result.stderr or "").strip(),
+        )

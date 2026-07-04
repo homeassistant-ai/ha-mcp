@@ -97,11 +97,31 @@ change these. Saving the options reloads the server so the changes take effect.
 
 | Option | Default | What it does |
 |--------|---------|--------------|
+| **Release channel** | `stable` | `stable` installs the pinned, tested release; `dev` installs the latest development build, refreshed on every reload or restart. See [Release channels](#release-channels). |
 | **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the add-on's `9583` so both can run at once. |
 | **Bind address** | `127.0.0.1` | `127.0.0.1` keeps the server loopback-only (remote access is via the webhook). `0.0.0.0` additionally allows direct access from your LAN at the secret path. |
 | **Webhook authentication** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. See [Security](#security). |
-| **ha-mcp package (advanced)** | `ha-mcp==7.9.0` | The pip requirement installed at runtime. Leave it unless you are testing a pre-release — it accepts any pip requirement string, including a GitHub tarball URL. Changing it forces a reinstall on the next reload. |
+| **ha-mcp package (advanced)** | `ha-mcp==7.9.0` | The pip requirement installed at runtime. Leave it unless you are testing a pre-release — it accepts any pip requirement string, including a GitHub tarball URL. An explicit value overrides the release channel, and changing it forces a reinstall on the next reload. |
 | **Home Assistant URL for the server (advanced)** | `http://127.0.0.1:8123` | How the in-process server reaches Home Assistant. The loopback default works for almost everyone; only change it for unusual SSL-only setups. |
+
+### Release channels
+
+The **Release channel** option selects which build of the server is installed:
+
+- **`stable` (default):** the pinned `ha-mcp` release. Its version is kept in
+  lockstep with the project's releases by the release pipeline, so it only
+  changes when you update the integration (and restart Home Assistant).
+- **`dev`:** the latest development build, published to PyPI as `ha-mcp-dev` on
+  every change to the project's main branch. Because it moves quickly, the
+  integration reinstalls the newest dev build on every entry reload and Home
+  Assistant restart — so a restart always lands on the current dev build. Use it
+  to try upcoming fixes, and expect the occasional rough edge.
+
+Switching channels reinstalls the server from the other channel on the next
+reload. `ha-mcp` and `ha-mcp-dev` share the same import package, so the previous
+channel's package is uninstalled first — only one is ever installed at a time.
+The **ha-mcp package (advanced)** field overrides the channel entirely: set it to
+pin a specific version or install from a URL for pre-release testing.
 
 ## Security
 
@@ -165,6 +185,13 @@ port** for a port conflict — then reload the integration (save the options, or
 **Nothing happens after updating the integration.** Home Assistant loads custom
 integration code at startup, so after you copy in a new version you must
 **restart Home Assistant** for the update to take effect.
+
+**Skill guidance is empty after installing from a GitHub tarball.** The **ha-mcp
+package (advanced)** field can install from a GitHub tarball URL, but a git
+archive excludes submodules — and the bundled skill content ships as a submodule.
+A tarball install therefore omits it, so the skill-guidance tools report empty
+listings. Install from PyPI instead (either release channel includes the skill
+content); the tarball override is only meant for quick pre-release testing.
 
 **Where the logs are.** The in-process server logs into the normal Home Assistant
 log (**Settings → System → Logs**, or `home-assistant.log`). Its working data

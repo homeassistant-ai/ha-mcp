@@ -15,14 +15,18 @@ from homeassistant.core import callback
 
 from .const import (
     BIND_HOST_ALL,
+    CHANNEL_DEV,
+    CHANNEL_STABLE,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
     DEFAULT_BIND_HOST,
+    DEFAULT_CHANNEL,
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
     DOMAIN,
     OPT_BIND_HOST,
+    OPT_CHANNEL,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
@@ -70,11 +74,15 @@ class HaMcpServerOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Show / apply the server options."""
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            return self.async_create_entry(title="", data=self._normalize(user_input))
 
         opts = self.config_entry.options
         schema = vol.Schema(
             {
+                vol.Required(
+                    OPT_CHANNEL,
+                    default=opts.get(OPT_CHANNEL, DEFAULT_CHANNEL),
+                ): vol.In([CHANNEL_STABLE, CHANNEL_DEV]),
                 vol.Required(
                     OPT_SERVER_PORT,
                     default=opts.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT),
@@ -89,7 +97,9 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ): vol.In([WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA]),
                 vol.Optional(
                     OPT_PIP_SPEC,
-                    default=opts.get(OPT_PIP_SPEC, DEFAULT_PIP_SPEC),
+                    # ``or DEFAULT_PIP_SPEC`` so a stored-empty spec (the normalized
+                    # "no override" state) re-displays the pinned default as a hint.
+                    default=opts.get(OPT_PIP_SPEC) or DEFAULT_PIP_SPEC,
                 ): str,
                 vol.Optional(
                     OPT_SERVER_URL,
@@ -102,6 +112,22 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             data_schema=schema,
             description_placeholders={"connect_url": self._connect_url_hint()},
         )
+
+    @staticmethod
+    def _normalize(user_input: dict[str, Any]) -> dict[str, Any]:
+        """Store the pinned default pip spec as empty so it is not an override.
+
+        The pip-spec field is pre-filled with ``DEFAULT_PIP_SPEC``, whose version
+        moves with each release. Persisting that value verbatim would later read
+        as an intentional pin once the default changes, freezing a stable-channel
+        entry on the old version. Collapsing "equals the default" to empty keeps
+        the entry tracking the selected channel across upgrades; a genuine
+        override (any other string) is stored as-is.
+        """
+        cleaned = dict(user_input)
+        if cleaned.get(OPT_PIP_SPEC, "").strip() in ("", DEFAULT_PIP_SPEC):
+            cleaned[OPT_PIP_SPEC] = ""
+        return cleaned
 
     def _connect_url_hint(self) -> str:
         """Return a human-readable connect-URL hint for the options form."""

@@ -28,12 +28,19 @@ install()
 
 import ha_mcp_server.embedded_server as es  # noqa: E402
 from ha_mcp_server.const import (  # noqa: E402
+    CHANNEL_DEV,
+    CHANNEL_STABLE,
     DATA_ACCESS_TOKEN,
     DATA_LAST_PIP_SPEC,
     DATA_REFRESH_TOKEN_ID,
     DATA_SECRET_PATH,
     DATA_SERVER_USER_ID,
+    DEFAULT_PIP_SPEC,
+    DEV_PIP_SPEC,
+    DIST_NAME_DEV,
+    DIST_NAME_STABLE,
     OPT_BIND_HOST,
+    OPT_CHANNEL,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
@@ -130,6 +137,50 @@ class TestConstruction:
         assert mgr._bind_host == "0.0.0.0"
         assert mgr._server_url == "http://ha.local:8123"
         assert mgr._pip_spec == "ha-mcp @ https://example/tarball.tgz"
+
+
+class TestChannelResolution:
+    def test_default_channel_is_stable_pinned(self, tmp_path):
+        mgr, _hass, _entry = _manager(tmp_path)
+        assert mgr._channel == CHANNEL_STABLE
+        assert mgr._pip_spec == DEFAULT_PIP_SPEC
+
+    def test_dev_channel_uses_dev_dist(self, tmp_path):
+        mgr, _hass, _entry = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
+        assert mgr._pip_spec == DEV_PIP_SPEC
+
+    def test_explicit_override_wins_over_channel(self, tmp_path):
+        # A real override (a tarball URL) beats the channel selector even on dev.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_CHANNEL: CHANNEL_DEV,
+                OPT_PIP_SPEC: "ha-mcp @ https://example/tarball.tgz",
+            },
+        )
+        assert mgr._pip_spec == "ha-mcp @ https://example/tarball.tgz"
+
+    def test_default_pip_spec_is_not_an_override(self, tmp_path):
+        # The pinned default in the pip-spec field means "no override": a dev
+        # entry that stored it must still resolve to the dev distribution.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: DEFAULT_PIP_SPEC},
+        )
+        assert mgr._pip_spec == DEV_PIP_SPEC
+
+    def test_conflicting_dist_name_by_channel(self, tmp_path):
+        stable, _h, _e = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_STABLE})
+        dev, _h2, _e2 = _manager(tmp_path, options={OPT_CHANNEL: CHANNEL_DEV})
+        assert stable._conflicting_dist_name() == DIST_NAME_DEV
+        assert dev._conflicting_dist_name() == DIST_NAME_STABLE
+
+    def test_conflicting_dist_name_none_for_override(self, tmp_path):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==7.8.0"},
+        )
+        assert mgr._conflicting_dist_name() is None
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +289,119 @@ class TestEnsurePackage:
         with pytest.raises(es.EmbeddedServerError) as exc:
             await mgr._async_ensure_package()
         assert exc.value.kind == "package"
+
+    async def test_dev_channel_always_forces_install(self, tmp_path, monkeypatch):
+        # Dev channel skips the fast path even when the stored spec matches and
+        # the package is present, so every reload pulls the newest dev build.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEV_PIP_SPEC},
+        )
+        proc = AsyncMock()
+        install_pkg = MagicMock(return_value=True)
+        monkeypatch.setattr(es, "async_process_requirements", proc)
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0.dev5")
+        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        uninstall = MagicMock()
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        proc.assert_not_awaited()
+        install_pkg.assert_called_once()
+        assert install_pkg.call_args.args[0] == DEV_PIP_SPEC
+        uninstall.assert_not_called()  # the other dist was absent
+
+    async def test_channel_switch_uninstalls_other_dist(self, tmp_path, monkeypatch):
+        # Switching to dev while stable's distribution is installed uninstalls
+        # ha-mcp first (shared ha_mcp import package) before installing dev.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: DEFAULT_PIP_SPEC},
+        )
+        install_pkg = MagicMock(return_value=True)
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(
+            es, "_dist_installed", lambda name: name == DIST_NAME_STABLE
+        )
+        uninstall = MagicMock()
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+
+        uninstall.assert_called_once_with(DIST_NAME_STABLE)
+        install_pkg.assert_called_once()
+        assert install_pkg.call_args.args[0] == DEV_PIP_SPEC
+
+    async def test_no_uninstall_for_explicit_override(self, tmp_path, monkeypatch):
+        # An explicit override has an unknown distribution name, so nothing is
+        # uninstalled even when the other channel's package is present.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_DEV, OPT_PIP_SPEC: "ha-mcp==7.8.0"},
+            data={DATA_SECRET_PATH: "/p"},
+        )
+        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.8.0")
+        monkeypatch.setattr(es, "_dist_installed", lambda name: True)
+        uninstall = MagicMock()
+        monkeypatch.setattr(es, "_uninstall_distribution", uninstall)
+
+        await mgr._async_ensure_package()
+        uninstall.assert_not_called()
+
+
+class TestDistHelpers:
+    def test_dist_installed_true(self, monkeypatch):
+        monkeypatch.setattr(importlib.metadata, "version", lambda name: "1.0")
+        assert es._dist_installed(DIST_NAME_DEV) is True
+
+    def test_dist_installed_false(self, monkeypatch):
+        def _version(name):
+            raise importlib.metadata.PackageNotFoundError(name)
+
+        monkeypatch.setattr(importlib.metadata, "version", _version)
+        assert es._dist_installed(DIST_NAME_DEV) is False
+
+    def test_uninstall_builds_uv_pip_command_no_shell(self, monkeypatch):
+        calls = {}
+
+        def _run(args, **kwargs):
+            calls["args"] = args
+            calls["kwargs"] = kwargs
+            return SimpleNamespace(returncode=0, stderr="")
+
+        monkeypatch.setattr(es.subprocess, "run", _run)
+        es._uninstall_distribution(DIST_NAME_DEV)
+
+        args = calls["args"]
+        assert args[0] == sys.executable
+        assert args[1:6] == ["-m", "uv", "pip", "uninstall", "--python"]
+        assert args[-1] == DIST_NAME_DEV
+        # No shell, and a non-zero exit is tolerated rather than raising.
+        assert calls["kwargs"]["check"] is False
+
+    def test_uninstall_nonzero_exit_is_swallowed(self, monkeypatch):
+        monkeypatch.setattr(
+            es.subprocess,
+            "run",
+            lambda *a, **k: SimpleNamespace(returncode=1, stderr="boom"),
+        )
+        es._uninstall_distribution(DIST_NAME_DEV)  # must not raise
+
+    def test_uninstall_subprocess_error_is_swallowed(self, monkeypatch):
+        def _boom(*a, **k):
+            raise OSError("no uv")
+
+        monkeypatch.setattr(es.subprocess, "run", _boom)
+        es._uninstall_distribution(DIST_NAME_DEV)  # must not raise
 
 
 class TestInstalledVersion:

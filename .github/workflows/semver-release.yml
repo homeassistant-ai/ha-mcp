@@ -179,6 +179,21 @@ jobs:
         git diff --staged --quiet || git commit -m "chore(addon): sync changelog for Home Assistant add-on [skip ci]"
         git push
 
+    - name: Sync pinned ha-mcp version to in-process integration
+      if: steps.semantic.outputs.released == 'true'
+      run: |
+        set -e
+        VERSION="${{ steps.semantic.outputs.version }}"
+        # Keep the in-process server integration's stable pin in lockstep with the
+        # release; DEFAULT_PIP_SPEC is derived from PINNED_HA_MCP_VERSION.
+        sed -i "s/^PINNED_HA_MCP_VERSION = .*/PINNED_HA_MCP_VERSION = \"$VERSION\"/" \
+          homeassistant-integration/ha_mcp_server/const.py
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add homeassistant-integration/ha_mcp_server/const.py
+        git diff --staged --quiet || git commit -m "chore: sync in-process server pinned ha-mcp version to $VERSION [skip ci]"
+        git push
+
     - name: Update stable git tag
       if: steps.semantic.outputs.released == 'true'
       run: |

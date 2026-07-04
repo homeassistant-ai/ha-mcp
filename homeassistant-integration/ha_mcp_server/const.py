@@ -18,9 +18,28 @@ DOMAIN = "ha_mcp_server"
 # field overrides this with any pip spec (e.g. a GitHub tarball URL) for
 # pre-release testing.
 PINNED_HA_MCP_VERSION = "7.9.0"
-DEFAULT_PIP_SPEC = f"ha-mcp=={PINNED_HA_MCP_VERSION}"
+
+# PyPI distribution names. Stable ships as ``ha-mcp`` (pinned above); the dev
+# channel ships as ``ha-mcp-dev`` — published on every master push, unpinned so
+# the newest dev build resolves at install time. Both wheels contain the *same*
+# ``ha_mcp`` import package (publish-dev.yml only renames the distribution), so
+# only one may be installed at a time — see EmbeddedServerManager's channel-
+# switch handling.
+DIST_NAME_STABLE = "ha-mcp"
+DIST_NAME_DEV = "ha-mcp-dev"
+
+DEFAULT_PIP_SPEC = f"{DIST_NAME_STABLE}=={PINNED_HA_MCP_VERSION}"
+DEV_PIP_SPEC = DIST_NAME_DEV
+
+# Release channels (options-flow selector). ``stable`` installs the pinned
+# DEFAULT_PIP_SPEC; ``dev`` installs the latest ha-mcp-dev, refreshed on every
+# entry reload / HA restart. An explicit OPT_PIP_SPEC override wins over both.
+CHANNEL_STABLE = "stable"
+CHANNEL_DEV = "dev"
+DEFAULT_CHANNEL = CHANNEL_STABLE
 
 # Options-flow keys (stored in entry.options).
+OPT_CHANNEL = "channel"
 OPT_SERVER_PORT = "server_port"
 OPT_BIND_HOST = "bind_host"
 OPT_WEBHOOK_AUTH = "webhook_auth"

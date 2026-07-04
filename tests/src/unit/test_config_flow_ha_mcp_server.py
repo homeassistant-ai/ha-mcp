@@ -103,19 +103,50 @@ class TestOptionsFlow:
         assert form["step_id"] == "init"
         assert "mcp_abc" in form["description_placeholders"]["connect_url"]
 
+    def test_channel_is_first_option_field(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        markers = list(form["data_schema"].schema)
+        assert markers[0].schema == const.OPT_CHANNEL
+
+    def test_channel_defaults_to_stable(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        channel = next(
+            m for m in form["data_schema"].schema if m.schema == const.OPT_CHANNEL
+        )
+        assert channel.default() == const.CHANNEL_STABLE
+
     def test_init_submit_round_trips_input_into_entry(self):
         flow = _make_options_flow()
         user_input = {
+            const.OPT_CHANNEL: const.CHANNEL_DEV,
             const.OPT_SERVER_PORT: 9999,
             const.OPT_BIND_HOST: const.BIND_HOST_ALL,
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
-            const.OPT_PIP_SPEC: "ha-mcp==7.9.0",
+            const.OPT_PIP_SPEC: "ha-mcp @ https://example/x.tgz",  # real override
             const.OPT_SERVER_URL: const.DEFAULT_LOOPBACK_URL,
         }
         result = asyncio.run(flow.async_step_init(user_input))
         assert result["type"] == "entry"
         assert result["title"] == ""
+        # A genuine override is stored verbatim; the channel rides along.
         assert result["data"] == user_input
+
+    def test_default_pip_spec_normalized_to_empty(self):
+        # Saving with the pinned default in the pip-spec field must not persist it
+        # as an override — the default moves with each release, so it is collapsed
+        # to empty ("use the selected channel").
+        flow = _make_options_flow()
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    const.OPT_CHANNEL: const.CHANNEL_STABLE,
+                    const.OPT_PIP_SPEC: const.DEFAULT_PIP_SPEC,
+                }
+            )
+        )
+        assert result["data"][const.OPT_PIP_SPEC] == ""
 
     def test_no_enable_toggle_option_exists(self):
         # Regression guard for the single-instance pivot: the enable/disable

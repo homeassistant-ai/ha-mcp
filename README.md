@@ -295,6 +295,7 @@ A separate integration, **Home Assistant MCP Server** (`ha_mcp_server`), can run
 - **Install:** copy `homeassistant-integration/ha_mcp_server` from this repository into your `config/custom_components/` directory and restart Home Assistant (a HACS listing is planned). Then add the **Home Assistant MCP Server** integration and submit — creating the entry starts the server.
 - **Connect URL:** appears in the **Home Assistant MCP Server** notification and on the integration's Configure screen. It's a Home Assistant webhook — `https://<nabu-casa-domain>/api/webhook/<id>` remotely (through Nabu Casa or any reverse proxy) or `http://<home-assistant-host>:8123/api/webhook/<id>` locally. Setting the bind address to `0.0.0.0` also exposes the server directly on its port.
 - **Authentication:** by default the secret webhook URL is the credential; optionally require Home Assistant account sign-in (`ha_auth`) for clients that support it.
+- **Release channel:** the integration options let you pick `stable` (the pinned release) or `dev` (the latest development build, refreshed on every reload/restart).
 - **`ha_mcp_tools` is optional but recommended alongside it** — it provides the privileged file/YAML services the server's file tools use, exactly as with the add-on, Docker, and pip installs.
 
 [Full in-process server documentation →](docs/in-process-server.md)
