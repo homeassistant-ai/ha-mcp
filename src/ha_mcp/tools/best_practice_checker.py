@@ -162,6 +162,28 @@ _TARGET_FIELDS = ("entity_id", "device_id", "area_id", "floor_id", "label_id")
 # ``service:`` (legacy) and ``action:`` (modern, 2024+) for the same field.
 _SERVICE_KEYS = ("service", "action")
 
+# Purpose-specific trigger/condition keys renamed in HA 2026.7 — the old keys
+# no longer load (home-assistant/core#174463).
+_RENAMED_TRIGGER_KEYS = {
+    "battery.low": "battery.became_low",
+    "battery.not_low": "battery.no_longer_low",
+    "lawn_mower.docked": "lawn_mower.returned_to_dock",
+    "schedule.turned_on": "schedule.block_started",
+    "schedule.turned_off": "schedule.block_ended",
+    "timer.time_remaining": "timer.remaining_time_reached",
+    "update.update_became_available": "update.became_available",
+    "vacuum.docked": "vacuum.returned_to_dock",
+}
+_RENAMED_CONDITION_KEYS = {
+    "climate.target_temperature": "climate.is_target_temperature",
+    "climate.target_humidity": "climate.is_target_humidity",
+}
+# Trigger ``options.behavior`` values renamed in HA 2026.7: any→each,
+# last→all (home-assistant/core#173259). The old values still load but raise
+# an HA repair issue and face removal. Condition ``options.behavior`` keeps
+# ``any``/``all`` — conditions are never flagged.
+_DEPRECATED_TRIGGER_BEHAVIOR = {"any": "each", "last": "all"}
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -318,6 +340,23 @@ def _check_condition_templates(
             # Shorthand template condition
             _check_template_string(cond, warnings, skill_prefix, "condition")
         elif isinstance(cond, dict):
+            # 2026.7 renamed purpose-specific condition keys — old keys no
+            # longer load.
+            condition_key = cond.get("condition")
+            renamed_condition = (
+                _RENAMED_CONDITION_KEYS.get(condition_key)
+                if isinstance(condition_key, str)
+                else None
+            )
+            if renamed_condition:
+                _emit(
+                    warnings,
+                    f"Condition key `{condition_key}` was renamed to "
+                    f"`{renamed_condition}` in HA 2026.7 and the old key no "
+                    f"longer loads — use `condition: {renamed_condition}`.",
+                    skill_prefix,
+                    "automation-patterns.md#native-conditions",
+                )
             if cond.get("condition") == "template":
                 vt = cond.get("value_template", "")
                 if isinstance(vt, str):
@@ -655,12 +694,44 @@ def _check_triggers(
 
         platform = trigger.get("platform", trigger.get("trigger", ""))
 
+        # 2026.7 renamed purpose-specific trigger keys — old keys no longer load.
+        renamed_trigger = (
+            _RENAMED_TRIGGER_KEYS.get(platform) if isinstance(platform, str) else None
+        )
+        if renamed_trigger:
+            _emit(
+                warnings,
+                f"Trigger key `{platform}` was renamed to `{renamed_trigger}` "
+                "in HA 2026.7 and the old key no longer loads — use "
+                f"`trigger: {renamed_trigger}`.",
+                skill_prefix,
+                "automation-patterns.md#trigger-types",
+            )
+
+        # 2026.7 renamed trigger `options.behavior` values (any→each, last→all).
+        options = trigger.get("options")
+        if isinstance(options, dict):
+            behavior = options.get("behavior")
+            if isinstance(behavior, str) and behavior in _DEPRECATED_TRIGGER_BEHAVIOR:
+                _emit(
+                    warnings,
+                    f"Trigger `options.behavior: {behavior}` was renamed to "
+                    f"`{_DEPRECATED_TRIGGER_BEHAVIOR[behavior]}` in HA 2026.7 — "
+                    "the old value still loads but raises a repair issue and "
+                    "will be removed. Valid trigger values: `each`, `first`, "
+                    "`all` (conditions keep `any`/`all`).",
+                    skill_prefix,
+                    "automation-patterns.md#trigger-types",
+                )
+
         # Device trigger → prefer entity_id-based triggers
         if platform == "device":
             _emit(
                 warnings,
-                "Trigger uses `device` platform with `device_id` — prefer "
-                "`state` or `event` trigger with `entity_id` when possible "
+                "Trigger uses `device` platform with `device_id` — prefer a "
+                "purpose-specific trigger (`<domain>.<name>` with a `target:` "
+                "of entities/areas/floors/labels, HA 2026.7+) or a `state`/"
+                "`event` trigger with `entity_id` when possible "
                 "(device_id breaks on re-add).",
                 skill_prefix,
                 "device-control.md#entity-id-vs-device-id",

@@ -3,7 +3,7 @@
 An operator can sit on an old build without ever knowing. This does a
 fail-silent check, holds the result in memory for the process, and surfaces a
 newer release via a startup log banner and the ``ha_get_overview`` /
-``ha_get_system_health`` / ``ha_get_updates`` tool fields.
+``ha_get_system_health`` / ``ha_manage_updates`` tool fields.
 
 The comparison reference depends on how ha-mcp is deployed, because the running
 version only means something against the matching source:
@@ -216,7 +216,7 @@ async def get_update_field() -> UpdateField | None:
     so it never blocks the event loop, and shapes the result for embedding under
     an ``ha_mcp_update`` key. Never raises — a hiccup yields None (the tool omits
     the field) and is logged at debug. Shared by every status tool that surfaces
-    the notice (``ha_get_overview`` / ``ha_get_system_health`` / ``ha_get_updates``)
+    the notice (``ha_get_overview`` / ``ha_get_system_health`` / ``ha_manage_updates``)
     so the shaping and event-loop offload live in one place.
     """
     try:

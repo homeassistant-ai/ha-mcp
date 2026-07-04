@@ -201,6 +201,27 @@ class TestExemptionRules:
     @pytest.mark.parametrize(
         ("args", "allowed"),
         [
+            # action defaults to "list" at the schema layer, so an absent
+            # action key executes the list branch — a read.
+            ({}, True),
+            ({"action": "list"}, True),
+            ({"action": "list", "include_skipped": True}, True),
+            ({"action": "get", "entity_ids": ["update.core"]}, True),
+            ({"action": "install", "categories": ["addons"]}, False),
+            ({"action": "install", "entity_ids": ["update.x"]}, False),
+            ({"action": "skip", "entity_ids": ["update.x"]}, False),
+            ({"action": "clear_skipped", "entity_ids": ["update.x"]}, False),
+            # Unknown actions fail closed.
+            ({"action": "uninstall"}, False),
+        ],
+    )
+    def test_manage_updates(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_updates"].blocked_write
+        assert (rule(args) is None) is allowed
+
+    @pytest.mark.parametrize(
+        ("args", "allowed"),
+        [
             ({"radio": "matter", "action": "diagnostics", "device_id": "d1"}, True),
             ({"radio": "zwave", "action": "network_status"}, True),
             ({"radio": "matter", "action": "ping", "device_id": "d1"}, True),
@@ -465,6 +486,7 @@ class TestExemptTableContract:
             "ha_manage_pipeline",
             "ha_manage_custom_tool",
             "ha_manage_radio",
+            "ha_manage_updates",
         }
 
     def test_every_exemption_describes_whats_allowed(self):
@@ -486,6 +508,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_pipeline": "tools_voice_assistant.py",
     "ha_manage_custom_tool": "tools_code.py",
     "ha_manage_radio": "tools_radio.py",
+    "ha_manage_updates": "tools_updates.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -513,6 +536,7 @@ _EXEMPT_INSPECTED_ARGS = {
     "ha_manage_pipeline": {"action"},
     "ha_manage_custom_tool": {"list_saved", "code", "run_saved"},
     "ha_manage_radio": {"action"},
+    "ha_manage_updates": {"action"},
 }
 
 # The subset of the addon manifest that ``_addon_write`` iterates as
@@ -623,6 +647,16 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         "entity_id",
         "params",
         "confirm",
+    },
+    "ha_manage_updates": {
+        # Targets/scope for the write actions (install/skip/clear_skipped),
+        # all blocked by the inspected ``action`` dispatch before use.
+        "entity_ids",
+        "categories",
+        "backup",
+        # Read-path modifiers of the allowed list/get actions.
+        "include_skipped",
+        "include_release_notes",
     },
 }
 

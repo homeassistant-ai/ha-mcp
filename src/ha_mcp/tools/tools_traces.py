@@ -712,6 +712,8 @@ def _populate_trigger_info(
             )
         if "entity_id" in trigger_vars:
             result["trigger"]["entity_id"] = trigger_vars["entity_id"]
+        if "error" in trigger_step:
+            result["trigger"]["error"] = trigger_step["error"]
 
     if "trigger" not in result and "trigger" in trace:
         result["trigger"] = {"description": trace["trigger"]}
@@ -731,6 +733,11 @@ def _populate_condition_results(
             }
             if "timestamp" in cond:
                 cond_result["timestamp"] = cond["timestamp"]
+            # HA 2026.7+ always records template errors on the failing step
+            # (core #172917) — dropping this field would hide the reason a
+            # condition evaluated to None.
+            if "error" in cond:
+                cond_result["error"] = cond["error"]
             condition_results.append(cond_result)
         result["condition_results"] = condition_results
 
