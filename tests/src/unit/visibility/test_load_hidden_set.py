@@ -14,7 +14,7 @@ def test_load_hidden_set_reads_config(tmp_path, monkeypatch):
         "success": True,
         "result": [{"entity_id": "s.b", "entity_category": "diagnostic"}],
     }
-    assert asyncio.run(resolver.load_hidden_set(reg)) == {"s.b"}
+    assert asyncio.run(resolver.load_hidden_set(reg))[0] == {"s.b"}
 
 
 def test_load_hidden_set_fails_open_on_bad_config(tmp_path, monkeypatch):
@@ -24,4 +24,6 @@ def test_load_hidden_set_fails_open_on_bad_config(tmp_path, monkeypatch):
         "success": True,
         "result": [{"entity_id": "s.b", "entity_category": "diagnostic"}],
     }
-    assert asyncio.run(resolver.load_hidden_set(reg)) == set()
+    hidden, warnings = asyncio.run(resolver.load_hidden_set(reg))
+    assert hidden == set()
+    assert any("could not be loaded" in w for w in warnings)

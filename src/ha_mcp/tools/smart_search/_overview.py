@@ -81,14 +81,16 @@ class SystemOverviewMixin(_SearchBase):
             # overview universe before any domain stats/samples are computed, so
             # every count stays coherent. results[3] is the raw entity registry.
             # Fails open (empty set on any error); do NOT wrap in try/except.
-            visibility_hidden = await load_hidden_set(results[3])
+            visibility_hidden, visibility_warnings = await load_hidden_set(results[3])
             if visibility_hidden:
                 entities = [
                     e for e in entities if e.get("entity_id") not in visibility_hidden
                 ]
 
             # Services failure affects total count + catalog; log at warning.
-            partial_warnings: list[str] = []
+            # Seed with any visibility-filter warnings (degraded registry, dropped
+            # unknown categories) so they surface at the overview response level.
+            partial_warnings: list[str] = list(visibility_warnings)
             if isinstance(results[1], Exception):
                 logger.warning(f"Could not fetch services: {results[1]}")
                 partial_warnings.append(f"Services unavailable: {results[1]}")

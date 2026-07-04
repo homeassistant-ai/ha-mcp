@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from ...utils.fuzzy_search import calculate_partial_ratio
-from ...visibility.resolver import load_hidden_set
+from ...visibility.resolver import load_hidden_set, merge_visibility_warnings
 from ..helpers import exception_to_structured_error
 from ._base import _SearchBase
 
@@ -48,7 +48,9 @@ class EntitySearchMixin(_SearchBase):
             if domain_filter:
                 domain_filter = domain_filter.strip().lower()
 
-            entities = await self._fetch_search_entities(domain_filter, include_hidden)
+            entities, visibility_warnings = await self._fetch_search_entities(
+                domain_filter, include_hidden
+            )
 
             # Perform fuzzy search - returns (paginated_results, total_count)
             matches, total_matches = self.fuzzy_searcher.search_entities(
@@ -74,7 +76,7 @@ class EntitySearchMixin(_SearchBase):
                     entities, query
                 )
 
-            return response
+            return merge_visibility_warnings(response, visibility_warnings)
 
         except Exception as e:
             logger.error(f"Error in smart_entity_search: {e}")
@@ -179,7 +181,7 @@ class EntitySearchMixin(_SearchBase):
 
     async def _fetch_search_entities(
         self, domain_filter: str | None, include_hidden: bool
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         """Fetch + enrich the entity set fed into the fuzzy search layer.
 
         Fetches states + the slim entity-registry list in parallel (the slim
@@ -208,7 +210,7 @@ class EntitySearchMixin(_SearchBase):
         # entity_category/hidden_by/area_id/labels are present (the slim map
         # below drops them). Fails open; do NOT wrap in try/except or the
         # failure mode inverts.
-        visibility_hidden = await load_hidden_set(results[1])
+        visibility_hidden, visibility_warnings = await load_hidden_set(results[1])
         registry_slim = self._build_registry_slim(results[1])
         survivor_ids, survivor_states = self._filter_hidden_entities(
             entities, registry_slim, include_hidden, visibility_hidden
@@ -235,7 +237,7 @@ class EntitySearchMixin(_SearchBase):
                 for e in enriched
                 if e.get("entity_id", "").startswith(f"{domain_filter}.")
             ]
-        return enriched
+        return enriched, visibility_warnings
 
     @staticmethod
     def _format_entity_matches(
@@ -318,7 +320,7 @@ class EntitySearchMixin(_SearchBase):
             # Opt-in visibility filter. results[2] is the unprojected entity
             # registry, so entity_category/hidden_by/area_id/labels are present.
             # Fails open (empty set on any error / non-dict payload).
-            visibility_hidden = await load_hidden_set(results[2])
+            visibility_hidden, visibility_warnings = await load_hidden_set(results[2])
             area_registry = self._parse_area_registry(results[1])
             entity_reg_map = self._parse_entity_reg_map(results[2])
             device_area_map = self._parse_device_area_map(results[3])
@@ -327,16 +329,19 @@ class EntitySearchMixin(_SearchBase):
             matched_area_ids = self._match_area_ids(area_registry, area_query_lower)
 
             if not matched_area_ids:
-                return {
-                    "area_query": area_query,
-                    "total_areas_found": 0,
-                    "total_entities": 0,
-                    "areas": {},
-                    "available_areas": [
-                        {"area_id": aid, "name": ainfo.get("name", aid)}
-                        for aid, ainfo in area_registry.items()
-                    ],
-                }
+                return merge_visibility_warnings(
+                    {
+                        "area_query": area_query,
+                        "total_areas_found": 0,
+                        "total_entities": 0,
+                        "areas": {},
+                        "available_areas": [
+                            {"area_id": aid, "name": ainfo.get("name", aid)}
+                            for aid, ainfo in area_registry.items()
+                        ],
+                    },
+                    visibility_warnings,
+                )
 
             entity_area_resolved, hidden_entity_ids = self._resolve_entity_areas(
                 entity_reg_map, device_area_map, include_hidden, visibility_hidden
@@ -351,12 +356,15 @@ class EntitySearchMixin(_SearchBase):
                 group_by_domain,
             )
 
-            return {
-                "area_query": area_query,
-                "total_areas_found": len(formatted_areas),
-                "total_entities": total_entities,
-                "areas": formatted_areas,
-            }
+            return merge_visibility_warnings(
+                {
+                    "area_query": area_query,
+                    "total_areas_found": len(formatted_areas),
+                    "total_entities": total_entities,
+                    "areas": formatted_areas,
+                },
+                visibility_warnings,
+            )
 
         except Exception as e:
             logger.error(f"Error in get_entities_by_area: {e}")

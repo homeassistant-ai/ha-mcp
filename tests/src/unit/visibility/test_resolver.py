@@ -8,10 +8,15 @@ def _reg(*entries):
     return {"success": True, "result": list(entries)}
 
 
+def _hidden(registry_result, config):
+    """Just the hidden set (drops the warnings tuple element) for set-equality tests."""
+    return hidden_entity_ids(registry_result, config)[0]
+
+
 def test_enabled_bad_payload_warns_and_fails_open(caplog):
     with caplog.at_level(logging.WARNING):
         assert (
-            hidden_entity_ids({"success": False}, VisibilityConfig(enabled=True))
+            _hidden({"success": False}, VisibilityConfig(enabled=True))
             == set()
         )
     assert any("unusable" in r.message for r in caplog.records)
@@ -22,7 +27,7 @@ def test_enabled_exception_payload_fails_open(caplog):
     # registry payload; it is non-dict, so the filter degrades to empty (open).
     with caplog.at_level(logging.WARNING):
         assert (
-            hidden_entity_ids(RuntimeError("boom"), VisibilityConfig(enabled=True))
+            _hidden(RuntimeError("boom"), VisibilityConfig(enabled=True))
             == set()
         )
     assert any("unusable" in r.message for r in caplog.records)
@@ -31,7 +36,7 @@ def test_enabled_exception_payload_fails_open(caplog):
 def test_enabled_non_list_result_warns_and_fails_open(caplog):
     with caplog.at_level(logging.WARNING):
         assert (
-            hidden_entity_ids(
+            _hidden(
                 {"success": True, "result": "nope"}, VisibilityConfig(enabled=True)
             )
             == set()
@@ -43,7 +48,7 @@ def test_disabled_bad_payload_stays_silent(caplog):
     # Disabled is the default no-op; it must NOT warn on every call.
     with caplog.at_level(logging.WARNING):
         assert (
-            hidden_entity_ids({"success": False}, VisibilityConfig(enabled=False))
+            _hidden({"success": False}, VisibilityConfig(enabled=False))
             == set()
         )
     assert not caplog.records
@@ -51,7 +56,7 @@ def test_disabled_bad_payload_stays_silent(caplog):
 
 def test_disabled_config_hides_nothing():
     reg = _reg({"entity_id": "sensor.a", "entity_category": "diagnostic"})
-    assert hidden_entity_ids(reg, VisibilityConfig(enabled=False)) == set()
+    assert _hidden(reg, VisibilityConfig(enabled=False)) == set()
 
 
 def test_category_exclude():
@@ -60,7 +65,7 @@ def test_category_exclude():
         {"entity_id": "light.lr", "entity_category": None},
     )
     cfg = VisibilityConfig(enabled=True, exclude_categories=["diagnostic"])
-    assert hidden_entity_ids(reg, cfg) == {"sensor.batt"}
+    assert _hidden(reg, cfg) == {"sensor.batt"}
 
 
 def test_denylist_and_area_and_label_union():
@@ -76,7 +81,7 @@ def test_denylist_and_area_and_label_union():
         exclude_areas=["garage"],
         exclude_labels=["noise"],
     )
-    assert hidden_entity_ids(reg, cfg) == {"sensor.x", "sensor.y", "sensor.z"}
+    assert _hidden(reg, cfg) == {"sensor.x", "sensor.y", "sensor.z"}
 
 
 def test_deny_hides_entity_absent_from_registry():
@@ -88,7 +93,7 @@ def test_deny_hides_entity_absent_from_registry():
     cfg = VisibilityConfig(
         enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
     )
-    assert hidden_entity_ids(reg, cfg) == {"sensor.ghost"}
+    assert _hidden(reg, cfg) == {"sensor.ghost"}
 
 
 def test_deny_applies_over_empty_registry():
@@ -96,13 +101,13 @@ def test_deny_applies_over_empty_registry():
     cfg = VisibilityConfig(
         enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
     )
-    assert hidden_entity_ids(_reg(), cfg) == {"sensor.ghost"}
+    assert _hidden(_reg(), cfg) == {"sensor.ghost"}
 
 
 def test_exclude_hidden_flag():
     reg = _reg({"entity_id": "sensor.h", "hidden_by": "user"})
     cfg = VisibilityConfig(enabled=True, exclude_categories=[], exclude_hidden=True)
-    assert hidden_entity_ids(reg, cfg) == {"sensor.h"}
+    assert _hidden(reg, cfg) == {"sensor.h"}
 
 
 def test_label_string_value_is_not_char_iterated():
@@ -113,12 +118,12 @@ def test_label_string_value_is_not_char_iterated():
     char_cfg = VisibilityConfig(
         enabled=True, exclude_categories=[], exclude_labels=["n"]
     )
-    assert hidden_entity_ids(reg, char_cfg) == set()
+    assert _hidden(reg, char_cfg) == set()
     # The exact whole-string label DOES hide.
     exact_cfg = VisibilityConfig(
         enabled=True, exclude_categories=[], exclude_labels=["noise"]
     )
-    assert hidden_entity_ids(reg, exact_cfg) == {"sensor.s"}
+    assert _hidden(reg, exact_cfg) == {"sensor.s"}
 
 
 def test_label_non_iterable_value_skips_entry_not_whole_filter():
@@ -132,13 +137,13 @@ def test_label_non_iterable_value_skips_entry_not_whole_filter():
     cfg = VisibilityConfig(
         enabled=True, exclude_categories=[], exclude_labels=["noise"]
     )
-    assert hidden_entity_ids(reg, cfg) == {"sensor.good"}
+    assert _hidden(reg, cfg) == {"sensor.good"}
 
 
 def test_malformed_registry_returns_empty():
     cfg = VisibilityConfig(enabled=True)
-    assert hidden_entity_ids({"success": False}, cfg) == set()
-    assert hidden_entity_ids("nonsense", cfg) == set()
+    assert _hidden({"success": False}, cfg) == set()
+    assert _hidden("nonsense", cfg) == set()
 
 
 def test_deny_honored_on_unusable_registry():
@@ -149,10 +154,40 @@ def test_deny_honored_on_unusable_registry():
         enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
     )
     # non-dict / unsuccessful payload
-    assert hidden_entity_ids({"success": False}, cfg) == {"sensor.ghost"}
-    assert hidden_entity_ids("nonsense", cfg) == {"sensor.ghost"}
+    assert _hidden({"success": False}, cfg) == {"sensor.ghost"}
+    assert _hidden("nonsense", cfg) == {"sensor.ghost"}
     # dict-success payload but result is not a list
     assert (
-        hidden_entity_ids({"success": True, "result": "nope"}, cfg)
+        _hidden({"success": True, "result": "nope"}, cfg)
         == {"sensor.ghost"}
     )
+
+
+def test_degraded_registry_surfaces_warning():
+    # An enabled-but-degraded read returns the deny seed AND a caller-facing
+    # warning so the response can signal the degradation, not just log it.
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], deny_entity_ids=["sensor.ghost"]
+    )
+    hidden, warnings = hidden_entity_ids({"success": False}, cfg)
+    assert hidden == {"sensor.ghost"}
+    assert any("unavailable" in w for w in warnings)
+
+
+def test_unknown_category_dropped_with_warning():
+    # A typo'd / unknown category is dropped (not hard-rejected) and surfaced as a
+    # warning; the valid sibling category still hides.
+    reg = _reg({"entity_id": "sensor.d", "entity_category": "diagnostic"})
+    hidden, warnings = hidden_entity_ids(
+        reg, VisibilityConfig(enabled=True, exclude_categories=["diagnostic", "typo"])
+    )
+    assert hidden == {"sensor.d"}
+    assert any("typo" in w for w in warnings)
+
+
+def test_disabled_returns_no_warnings():
+    hidden, warnings = hidden_entity_ids(
+        {"success": False}, VisibilityConfig(enabled=False)
+    )
+    assert hidden == set()
+    assert warnings == []

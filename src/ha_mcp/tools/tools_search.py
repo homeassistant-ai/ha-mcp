@@ -17,7 +17,7 @@ from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.fuzzy_search import apply_hidden_penalty
-from ..visibility.resolver import load_hidden_set
+from ..visibility.resolver import load_hidden_set, merge_visibility_warnings
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -724,7 +724,7 @@ async def _exact_match_search(
     # penalty). Fails open — load_hidden_set returns an empty set on any
     # config/load error, so a bad config never blanks results. Do NOT wrap in
     # try/except here, or the failure mode inverts to fail-closed (hide all).
-    visibility_hidden = await load_hidden_set(registry_result)
+    visibility_hidden, visibility_warnings = await load_hidden_set(registry_result)
 
     query_lower = query.lower().strip()
 
@@ -771,13 +771,16 @@ async def _exact_match_search(
     # hits at 100, hidden ones at 80 etc).
     results.sort(key=lambda x: (-x["score"], x["entity_id"]))
     paginated = results[offset : offset + limit]
-    return {
-        "success": True,
-        "query": query,
-        **_build_pagination_metadata(len(results), offset, limit, paginated),
-        "results": paginated,
-        "search_type": "exact_match",
-    }
+    return merge_visibility_warnings(
+        {
+            "success": True,
+            "query": query,
+            **_build_pagination_metadata(len(results), offset, limit, paginated),
+            "results": paginated,
+            "search_type": "exact_match",
+        },
+        visibility_warnings,
+    )
 
 
 class SearchTools:
@@ -1728,7 +1731,7 @@ class SearchTools:
         hidden_ids = _build_hidden_ids(registry_result)
         # Opt-in visibility filter: hard exclude, fails open (empty set on any
         # error). Do NOT wrap in try/except or the failure mode inverts.
-        visibility_hidden = await load_hidden_set(registry_result)
+        visibility_hidden, visibility_warnings = await load_hidden_set(registry_result)
 
         # Filter by domain. Hidden entities are kept by default (with score
         # penalty applied below); ``include_hidden=False`` filters them out.
@@ -1786,6 +1789,7 @@ class SearchTools:
                 domain_filter, results, per_domain_limit_int, parsed_result_fields
             )
 
+        merge_visibility_warnings(domain_list_data, visibility_warnings)
         return await add_timezone_metadata(self._client, domain_list_data)
 
     async def _search_regular(

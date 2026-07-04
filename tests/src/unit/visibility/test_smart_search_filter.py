@@ -130,7 +130,7 @@ def test_fetch_search_entities_excludes_denied_end_to_end(tmp_path, monkeypatch)
     _enable_diagnostic_filter(tmp_path, monkeypatch)
     mixin = EntitySearchMixin()
     mixin.client = _FetchClient()
-    out = asyncio.run(
+    out, _ = asyncio.run(
         mixin._fetch_search_entities(domain_filter=None, include_hidden=True)
     )
     ids = [e["entity_id"] for e in out]

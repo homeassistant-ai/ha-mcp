@@ -12,25 +12,58 @@ from .persistence import load_visibility_config
 
 logger = logging.getLogger(__name__)
 
+# HA's EntityCategory enum has exactly these two values (homeassistant.const).
+# Unknown categories are dropped with a warning rather than hard-rejected, so a
+# future HA category can never turn a config into a load failure that fails the
+# whole filter open; the drop is surfaced through the response warnings channel.
+KNOWN_ENTITY_CATEGORIES = frozenset({"config", "diagnostic"})
 
-def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[str]:
-    """Return the set of entity_ids to hide. Empty when disabled or the
-    registry payload is unusable (fail-open — never hide on bad input)."""
+_REGISTRY_UNAVAILABLE_WARNING = (
+    "Entity visibility filter is enabled but the entity registry was "
+    "unavailable; results are unfiltered (the denylist still applies)."
+)
+
+
+def hidden_entity_ids(
+    registry_result: object, config: VisibilityConfig
+) -> tuple[set[str], list[str]]:
+    """Return ``(hidden_entity_ids, warnings)``.
+
+    ``hidden`` is empty when disabled or the registry payload is unusable
+    (fail-open — never hide on bad input), except the denylist which needs no
+    registry data and is honored regardless. ``warnings`` carries operator-facing
+    notes (degraded registry, dropped unknown categories) for the caller to
+    surface at the response level.
+    """
     if not config.enabled:
-        return set()
+        return set(), []
+
+    warnings: list[str] = []
+    # Categories are validated independently of the registry: an unknown value is
+    # dropped with a warning (not hard-rejected), so a typo silently hides nothing
+    # yet is still surfaced.
+    requested_categories = set(config.exclude_categories)
+    categories = requested_categories & KNOWN_ENTITY_CATEGORIES
+    unknown_categories = requested_categories - KNOWN_ENTITY_CATEGORIES
+    if unknown_categories:
+        warnings.append(
+            "Entity visibility: ignoring unknown exclude_categories "
+            f"{sorted(unknown_categories)} (valid: config, diagnostic)."
+        )
+
+    denied = set(config.deny_entity_ids)
+
     # Enabled past this point, so an unusable registry is a real degradation the
-    # operator should see (spec §7: degrade with a warning). Honor the denylist
-    # regardless (it needs no registry data); only the registry-derived
-    # dimensions degrade to open.
+    # operator should see as a warning. Honor the denylist regardless (it needs no
+    # registry data); only the registry-derived dimensions degrade to open.
     if not isinstance(registry_result, dict) or not registry_result.get("success"):
         logger.warning(
             "entity visibility filter enabled but the registry payload was "
             "unusable; degrading to unfiltered for this request"
         )
-        return set(config.deny_entity_ids)
+        warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
+        return set(denied), warnings
 
-    categories = set(config.exclude_categories)
-    denied = set(config.deny_entity_ids)
     areas = set(config.exclude_areas)
     labels = set(config.exclude_labels)
 
@@ -48,7 +81,8 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
             "entity visibility filter enabled but the registry 'result' was not "
             "a list; degrading to unfiltered for this request"
         )
-        return set(denied)
+        warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
+        return set(denied), warnings
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -79,14 +113,15 @@ def hidden_entity_ids(registry_result: object, config: VisibilityConfig) -> set[
             entry_labels = []
         if labels and labels.intersection(entry_labels):
             hidden.add(eid)
-    return hidden
+    return hidden, warnings
 
 
-async def load_hidden_set(registry_result: object) -> set[str]:
-    """Load the visibility config off-loop and resolve the hidden set.
+async def load_hidden_set(registry_result: object) -> tuple[set[str], list[str]]:
+    """Load the visibility config off-loop and resolve ``(hidden, warnings)``.
 
-    Fail-open: any error (missing/corrupt config, unexpected exception) returns
-    an empty set so a config problem never blanks the instance from the agent.
+    Fail-open: any error (missing/corrupt config, unexpected exception) yields an
+    empty hidden set so a config problem never blanks the instance from the
+    agent; a genuine load failure is surfaced as a warning.
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
@@ -95,4 +130,16 @@ async def load_hidden_set(registry_result: object) -> set[str]:
         logger.warning(
             "entity visibility config load failed; filter disabled", exc_info=True
         )
-        return set()
+        return set(), [
+            "Entity visibility config could not be loaded; the filter is disabled."
+        ]
+
+
+def merge_visibility_warnings(
+    response: dict[str, Any], warnings: list[str]
+) -> dict[str, Any]:
+    """Attach visibility ``warnings`` to a tool response's top-level ``warnings``
+    list (create-or-extend). Returns ``response`` for ``return`` composition."""
+    if warnings:
+        response.setdefault("warnings", []).extend(warnings)
+    return response
