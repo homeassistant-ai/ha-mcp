@@ -92,6 +92,31 @@ token (LLAT). This is **by design**:
 The consent form explains this revocation path. Reports about token opacity
 (the LLAT being visible inside the token) will be closed as by-design.
 
+### In-process server (custom component)
+
+The `ha_mcp_tools` custom component can run the ha-mcp server in-process inside
+Home Assistant and expose it through a Home Assistant webhook (see
+[docs/in-process-server.md](docs/in-process-server.md)). It offers two
+authentication postures, selected in the integration options:
+
+- **Secret webhook URL (default).** The webhook id is a high-entropy random
+  string and *is* the credential — the same secret-URL trust model as standard
+  mode above, except the URL is designed to be reached remotely through Home
+  Assistant's own remote access (Nabu Casa or a TLS-terminating reverse proxy).
+  Any party that has the full webhook URL is a trusted principal; keep the URL
+  secret.
+- **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
+  authorization server: the component serves the discovery documents and
+  validates inbound Bearer tokens against Home Assistant's own auth, so access
+  is gated by a Home Assistant login. This is distinct from the beta OAuth mode
+  below — no bespoke authorization server or self-issued token is involved, and
+  revoking the user's Home Assistant token/session revokes access.
+
+The embedded server reaches Home Assistant with a dedicated admin token the
+component provisions and stores in the config entry; disabling the server or
+removing the integration revokes it. As with standard mode, that token's Home
+Assistant permissions define what the server can do.
+
 ## Scope
 
 **In scope** — please report these:

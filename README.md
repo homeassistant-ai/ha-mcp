@@ -60,6 +60,20 @@ Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access to
 
 > ⚠️ **Two ways to run ha-mcp — don't mix them.** The add-on above is the recommended path. The local **stdio** path below runs ha-mcp on your own computer; it is more advanced, has fewer features, and is behind most connection problems. If you use the add-on, your Claude Desktop config points at the add-on URL through `mcp-proxy` with **no token** — do **not** also keep a local `uvx ha-mcp@latest` entry (with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`) in your Claude Desktop config. Running both at once is a known cause of connection hangs.
 
+<details>
+<summary><b>Run inside Home Assistant (Container / Core — no add-on)</b></summary>
+
+Not on Home Assistant OS? Home Assistant **Container** and **Core** installs can't run add-ons, but the `ha_mcp_tools` custom component can run the **full ha-mcp server in-process**, inside Home Assistant — no separate Docker container, no token to manage. It works on Home Assistant OS too, and coexists with the add-on. The connect URL is a Home Assistant webhook, so it reaches remote MCP clients through **Nabu Casa** (or any reverse proxy) with no extra tunnel.
+
+1. Install the custom component with HACS (see [Custom Component](#-custom-component-ha_mcp_tools-beta) below) and restart Home Assistant
+2. Add the **Home Assistant MCP Server Custom Component** integration; on Container / Core, tick **Run the MCP server inside Home Assistant** during setup (or enable it later under **Configure**)
+3. Copy the connect URL from the **Home Assistant MCP Server (in-process)** notification (also shown on the Configure screen)
+4. Connect your AI client to that URL
+
+[Full in-process server documentation →](docs/in-process-server.md)
+
+</details>
+
 ### 💻 Run locally with Claude Desktop (stdio · advanced)
 
 *No paid subscription required.* This runs ha-mcp on your own machine over stdio.
@@ -273,6 +287,16 @@ On **Home Assistant OS / Supervised**, the integration offers to add the add-on 
 ### Install manually
 
 Copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory. Restart Home Assistant, then add the integration as described above.
+
+### Run the MCP server inside Home Assistant (in-process)
+
+Beyond the file/YAML services, the component can optionally run the **full ha-mcp server in-process**, inside Home Assistant, and expose it remotely through a Home Assistant webhook. This is a full install method in its own right — useful for **Home Assistant Container / Core** users who can't run add-ons, and available on Home Assistant OS too (it coexists with the add-on on a different default port, `9584` vs `9583`).
+
+- **Enable it:** on Container / Core, tick **Run the MCP server inside Home Assistant** when adding the integration; on any install, enable it later under **Configure**.
+- **Connect URL:** appears in the **Home Assistant MCP Server (in-process)** notification and on the Configure screen. It's a Home Assistant webhook — `https://<nabu-casa-domain>/api/webhook/<id>` remotely (through Nabu Casa or any reverse proxy) or `http://<home-assistant-host>:8123/api/webhook/<id>` locally. Setting the bind address to `0.0.0.0` also exposes the server directly on its port.
+- **Authentication:** by default the secret webhook URL is the credential; optionally require Home Assistant account sign-in (`ha_auth`) for clients that support it.
+
+[Full in-process server documentation →](docs/in-process-server.md)
 
 ---
 
