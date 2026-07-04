@@ -222,6 +222,28 @@ class TestForwardingHandler:
         resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, make_request())
         assert resp.headers["Mcp-Session-Id"] == "stream-sess"
 
+    async def test_sse_mid_stream_drop_logs_forwarded_bytes_and_ends_stream(
+        self, caplog
+    ):
+        chunk = b"data: 1\n\n"
+        upstream = FakeUpstream(
+            status=200,
+            headers={"Content-Type": "text/event-stream"},
+            chunks=[chunk],
+            stream_exc=mw.aiohttp.ClientError("upstream reset"),
+        )
+        session = FakeSession(upstream=upstream)
+        hass = _make_hass()
+        _store_cfg(hass, session=session)
+
+        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, make_request())
+
+        # The prepared stream is ended deterministically, not remapped to 502.
+        assert isinstance(resp, mw.web.StreamResponse)
+        assert resp.written == [chunk]
+        assert resp.eof is True
+        assert f"dropped mid-stream after {len(chunk)} bytes" in caplog.text
+
     async def test_client_error_maps_to_502(self):
         session = FakeSession(exc=mw.aiohttp.ClientError("connection refused"))
         hass = _make_hass()

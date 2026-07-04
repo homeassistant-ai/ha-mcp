@@ -437,13 +437,17 @@ async def _async_handle_webhook(
                 # fresh Response here would be silently dropped and the client
                 # would see only a truncated stream with no log trail. End the
                 # prepared stream deterministically and log instead.
+                # Count forwarded bytes manually: StreamResponse.body_length
+                # is only assigned in write_eof(), so it is still 0 here.
+                bytes_forwarded = 0
                 try:
                     async for chunk in upstream_resp.content.iter_any():
                         await response.write(chunk)
+                        bytes_forwarded += len(chunk)
                 except aiohttp.ClientError as err:
                     _LOGGER.error(
                         "MCP webhook: upstream dropped mid-stream after %d bytes: %s",
-                        response.body_length or 0,
+                        bytes_forwarded,
                         err,
                     )
                 with suppress(ConnectionResetError):

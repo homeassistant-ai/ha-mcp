@@ -261,11 +261,13 @@ class FakeUpstream:
         headers: dict[str, str] | None = None,
         body: bytes = b"",
         chunks: list[bytes] | None = None,
+        stream_exc: BaseException | None = None,
     ) -> None:
         self.status = status
         self.headers = dict(headers or {})
         self._body = body
         self._chunks = chunks or []
+        self._stream_exc = stream_exc
         self.content = SimpleNamespace(iter_any=self._iter_any)
 
     async def read(self) -> bytes:
@@ -274,6 +276,8 @@ class FakeUpstream:
     async def _iter_any(self):
         for chunk in self._chunks:
             yield chunk
+        if self._stream_exc is not None:
+            raise self._stream_exc
 
 
 class _UpstreamCtx:
