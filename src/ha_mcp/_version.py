@@ -51,8 +51,8 @@ def is_dev_version(version: str) -> bool:
 def is_embedded() -> bool:
     """Return True when ha-mcp runs in-process inside Home Assistant core.
 
-    Set to ``1`` by the ``ha_mcp_server`` custom integration's embedded-server
-    runner (``HA_MCP_EMBEDDED``) before the first ``ha_mcp`` import. On HAOS the
+    Set to ``1`` by the ha_mcp_tools custom component's in-process server entry
+    (``HA_MCP_EMBEDDED``) before the first ``ha_mcp`` import. On HAOS the
     HA core container itself carries ``SUPERVISOR_TOKEN``, so without this flag
     :func:`is_running_in_addon` would report True in-process and route log,
     add-on-management, and settings-persistence logic down the add-on path. The

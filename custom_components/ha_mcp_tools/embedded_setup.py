@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-_NOTIFICATION_ID = "ha_mcp_server_connect"
+_NOTIFICATION_ID = "ha_mcp_tools_server_connect"
 _ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED)
 
 
@@ -80,11 +80,11 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         await async_teardown_server(hass)
         raise
     except EmbeddedServerError as err:
-        _LOGGER.error("Home Assistant MCP Server failed to start: %s", err)
+        _LOGGER.error("HA-MCP in-process server failed to start: %s", err)
         await async_teardown_server(hass)
         _create_issue(hass, err.kind, str(err))
     except Exception as err:
-        _LOGGER.exception("Home Assistant MCP Server: bring-up failed")
+        _LOGGER.exception("HA-MCP in-process server: bring-up failed")
         await async_teardown_server(hass)
         _create_issue(hass, "start", str(err))
 
@@ -153,12 +153,12 @@ def _surface_connect_urls(
 
     url_lines = "\n".join(f"- {url}" for url in urls)
     _LOGGER.info(
-        "Home Assistant MCP Server is running. Connect URL(s):\n%s\n%s",
+        "HA-MCP in-process server is running. Connect URL(s):\n%s\n%s",
         url_lines,
         auth_note,
     )
     message = (
-        "The Home Assistant MCP server is now running inside Home Assistant.\n\n"
+        "The HA-MCP in-process server is now running inside Home Assistant.\n\n"
         "Connect your MCP client to:\n"
         f"{url_lines}\n\n"
         f"{auth_note}\n"
@@ -171,7 +171,7 @@ def _surface_connect_urls(
     persistent_notification.async_create(
         hass,
         message,
-        title="Home Assistant MCP Server",
+        title="HA-MCP in-process server",
         notification_id=_NOTIFICATION_ID,
     )
 

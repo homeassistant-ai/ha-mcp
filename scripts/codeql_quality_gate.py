@@ -48,7 +48,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
-        "homeassistant-integration/ha_mcp_server/__init__.py",
+        "custom_components/ha_mcp_tools/embedded_entry.py",
         "This statement has no effect",
         "False positive on a bare 'await task' inside contextlib.suppress: "
         "awaiting a cancelled task IS the effect (it waits for the task to "
@@ -56,7 +56,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
-        "homeassistant-integration/ha_mcp_server/embedded_server.py",
+        "custom_components/ha_mcp_tools/embedded_server.py",
         "This statement has no effect",
         "False positive on bare 'await server_task' / 'await stop_task' inside "
         "contextlib.suppress: the await drives the cancelled task to "

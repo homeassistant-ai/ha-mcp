@@ -98,7 +98,7 @@ jobs:
           embedded_result="${{ needs.e2e-validation-embedded.result }}"
           echo "e2e-validation result: $container_result"
           echo "e2e-validation-embedded result: $embedded_result"
-          # Both the container-backend matrix AND the in-process ha_mcp_server
+          # Both the container-backend matrix AND the in-process MCP server
           # lane must pass. Either failing wedges the required gate.
           if [ "$container_result" != "success" ] || [ "$embedded_result" != "success" ]; then
             echo "::error::E2E Validation did not succeed (container=$container_result, embedded=$embedded_result)."
@@ -190,7 +190,7 @@ jobs:
       run: uv sync --dev
 
     - name: Run ruff check
-      run: uv run ruff check src/ tests/ custom_components/ homeassistant-integration/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ scripts/
+      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ scripts/
 
     - name: Run ruff format check on changed Python files
       run: |
@@ -252,7 +252,7 @@ jobs:
 
     - name: Run mypy
       run: |
-        uv run mypy src/ custom_components/ homeassistant-integration/ homeassistant-addon/ scripts/
+        uv run mypy src/ custom_components/ homeassistant-addon/ scripts/
         uv run mypy homeassistant-addon-webhook-proxy/
         uv run mypy homeassistant-addon-webhook-proxy-dev/
 
@@ -413,8 +413,8 @@ jobs:
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # In-process ha_mcp_server backend (#1527): the SAME full E2E suite, but the
-  # server-under-test is the ha_mcp_server integration running in-process inside
+  # In-process MCP server backend (#1527): the SAME full E2E suite, but the
+  # server-under-test is the in-process MCP server (ha_mcp_tools entry) running inside
   # each worker's testcontainer (E2E_BACKEND=embedded), driven over its ingress
   # webhook. Matrixed x64 + arm64 to mirror e2e-validation (the container matrix);
   # ``needs.e2e-validation-embedded.result`` aggregates the variants, so the
@@ -499,7 +499,7 @@ jobs:
 
     - name: Run full E2E test suite (embedded backend)
       run: |
-        echo "🚀 Running full E2E suite through the in-process ha_mcp_server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
+        echo "🚀 Running full E2E suite through the in-process MCP server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
         uv run pytest tests/src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \

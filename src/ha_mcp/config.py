@@ -1278,8 +1278,9 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
 _settings: Settings | None = None
 
 # In-process (embedded) HA connection, set only when ha-mcp runs inside Home
-# Assistant core via the ha_mcp_server integration. The integration hands the
-# loopback URL + a provisioned admin token to ha-mcp THROUGH THIS DICT — never
+# Assistant core via the ha_mcp_tools custom component's in-process server entry.
+# The component hands the loopback URL + a provisioned admin token to ha-mcp
+# THROUGH THIS DICT — never
 # via os.environ — so the admin token can't be read from the shared HA process
 # environment. Applied onto the Settings singleton in ``get_global_settings``.
 _EMBEDDED_CONNECTION: dict[str, str] = {}
@@ -1288,8 +1289,9 @@ _EMBEDDED_CONNECTION: dict[str, str] = {}
 def set_embedded_connection(url: str, token: str) -> None:
     """Register the in-process HA connection for embedded mode.
 
-    Embedded-mode only: called by the ``ha_mcp_server`` integration inside its
-    server worker thread, before the server is constructed, so the loopback URL
+    Embedded-mode only: called by the ha_mcp_tools custom component's in-process
+    server entry inside its server worker thread, before the server is
+    constructed, so the loopback URL
     and admin token reach ``Settings`` in memory instead of through ``os.environ``.
     The values survive ``_reset_global_settings()``: the settings-UI reset+rebuild
     path re-applies them on the next ``get_global_settings()`` call.

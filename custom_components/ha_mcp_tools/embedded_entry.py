@@ -1,13 +1,16 @@
-"""Home Assistant MCP Server integration (issue #1527).
+"""Config-entry wiring for the in-process MCP server entry type (issue #1527).
 
 Runs the full ha-mcp FastMCP server in-process inside Home Assistant and exposes
-it remotely through a Home Assistant webhook. Creating the config entry starts the
-server; disabling the entry pauses it (HA calls :func:`async_unload_entry`);
+it remotely through a Home Assistant webhook. Creating the "server" config entry
+starts the server; disabling the entry pauses it (HA calls
+:func:`async_unload_server_entry` via the domain dispatcher in ``__init__``);
 removing the entry revokes the provisioned credentials.
 
-This module is intentionally thin — the HA entry-point wiring only. The bring-up /
-teardown orchestration lives in :mod:`embedded_setup`, and the server thread +
-webhook ingress in :mod:`embedded_server` / :mod:`mcp_webhook`.
+``__init__.async_setup_entry`` dispatches to these functions for the "server"
+entry type; the "tools" services entry is handled separately. This module is
+intentionally thin — the HA entry-point wiring only. The bring-up / teardown
+orchestration lives in :mod:`embedded_setup`, and the server thread + webhook
+ingress in :mod:`embedded_server` / :mod:`mcp_webhook`.
 """
 
 from __future__ import annotations
@@ -39,8 +42,8 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up the integration: schedule the server bring-up as a background task.
+async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up the server entry: schedule the server bring-up as a background task.
 
     The bring-up (first pip install of the fastmcp tree, token provisioning,
     thread start, webhook registration) can take minutes, so it must not stall HA
@@ -70,7 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Stop the server + ingress webhook (reload-safe; keeps the provisioned token).
 
     Cancels the bring-up task first so a still-in-flight install/start is torn
@@ -90,8 +93,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Revoke the provisioned credentials when the config entry is removed."""
+async def async_remove_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Revoke the provisioned credentials when the server config entry is removed."""
     from .embedded_setup import (  # lazy (see import note)
         async_revoke_credentials_on_remove,
     )

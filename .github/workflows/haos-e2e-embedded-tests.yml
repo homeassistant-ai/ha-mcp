@@ -2,7 +2,7 @@ name: HAOS E2E Tests (embedded)
 
 # Parallel to haos-e2e-tests.yml / haos-e2e-inaddon-tests.yml — exercises the
 # SAME full E2E suite against the SAME cached qcow2, but routes ``mcp_client`` to
-# the baked in-process ``ha_mcp_server`` integration's ingress webhook INSIDE the
+# the baked in-process MCP server's ingress webhook INSIDE the
 # booted HAOS (``/api/webhook/<HA_MCP_SERVER_WEBHOOK_ID>``) instead of an
 # in-process FastMCP server (external) or the dev add-on's HTTP endpoint (inaddon).
 # This is the in-HA deployment path: the server runs standalone inside the HA
@@ -138,11 +138,11 @@ jobs:
         id: key
         # Shared with haos-e2e-tests.yml + haos-e2e-inaddon-tests.yml: all three
         # lanes consume the same byte-identical qcow2. The bake seeds the
-        # ha_mcp_server integration + a DISABLED config entry into the image
+        # in-process MCP server config entry (of ha_mcp_tools) into the image
         # (build_image._stage_embedded_server_integration), and the per-worker
         # wheel/feature-flag staging happens IN-VM at test time on each worker's
         # overlay — never on the cached base — so this lane needs no distinct key.
-        # ``homeassistant-integration/ha_mcp_server`` is already one of the hashed
+        # ``custom_components/ha_mcp_tools`` is already one of the hashed
         # paths, so a change to the integration invalidates the shared image.
         run: |
           hash=$(git ls-tree -r HEAD \
@@ -150,7 +150,6 @@ jobs:
             tests/initial_test_state \
             custom_components/ha_mcp_tools \
             homeassistant-addon-webhook-proxy \
-            homeassistant-integration/ha_mcp_server \
             | sha256sum | cut -d' ' -f1 | head -c16)
           echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
 
@@ -236,7 +235,7 @@ jobs:
         # HAOS_TEST_MODE=embedded flips conftest.py's HAOS dispatch into the
         # embedded branch: pre-boot it stages the feature-flag override next to
         # the wheel staging, then the session fixture enables the baked-disabled
-        # ha_mcp_server entry once, waits for the in-process server's webhook, and
+        # in-process server entry once, waits for the in-process server's webhook, and
         # mcp_client drives that webhook for the whole suite. external_only tests
         # (out-of-process server unreachable by test-process env/monkeypatch) and
         # the 3 self-referential haos_only embedded smoke tests skip automatically.
@@ -264,7 +263,7 @@ jobs:
           mkdir -p /tmp/haos-embedded-diagnostics
           # Under pytest-xdist (-n2) each worker boots its OWN backing-file overlay
           # (haos-test-image-<worker>.qcow2); the base /tmp/haos-test-image.qcow2 is
-          # never booted, so the enabled ha_mcp_server entry + the in-process
+          # never booted, so the enabled in-process server entry + the in-process
           # server's runtime state live on the OVERLAYS, not the base. Probe every
           # overlay; fall back to the base only for a single-worker (master) run.
           shopt -s nullglob
@@ -278,13 +277,13 @@ jobs:
             mkdir -p "$outdir"
             echo "=== extracting diagnostics from $img ==="
             # Full config-dir listing (captures whatever HA writes, incl. the
-            # in-process server's .ha_mcp_server data dir + any repair issue).
+            # in-process server's .ha_mcp data dir + any repair issue).
             guestfish --ro -a "$img" run \
               : mount /dev/sda8 / \
               : ll /supervisor/homeassistant \
               > "$outdir/config-dir-listing.txt" 2>&1 \
               || echo "directory listing failed for $img"
-            # .storage carries core.config_entries — the ha_mcp_server entry's
+            # .storage carries core.config_entries — the in-process server entry's
             # state (loaded / setup_error / not_loaded) is the first thing to
             # check when the webhook never came up.
             guestfish --ro -a "$img" run \

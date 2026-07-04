@@ -102,8 +102,8 @@ jobs:
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # In-process ha_mcp_server backend (#1527): the SAME full E2E suite, but the
-  # server-under-test is the ha_mcp_server integration running in-process inside
+  # In-process MCP server backend (#1527): the SAME full E2E suite, but the
+  # server-under-test is the in-process MCP server (ha_mcp_tools entry) running inside
   # each worker's testcontainer (E2E_BACKEND=embedded), driven over its ingress
   # webhook. Runs in parallel with the container lane above (a separate job — it
   # does not extend that job's runtime). Matrixed x64 + arm64 to mirror the PR
@@ -182,7 +182,7 @@ jobs:
 
     - name: Run full E2E test suite (embedded backend)
       run: |
-        echo "🚀 Running full E2E suite through the in-process ha_mcp_server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
+        echo "🚀 Running full E2E suite through the in-process MCP server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
         uv run pytest tests/src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \

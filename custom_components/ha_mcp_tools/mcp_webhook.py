@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 # Human-readable webhook name shown in the HA webhook registry.
-_WEBHOOK_NAME = "Home Assistant MCP Server"
+_WEBHOOK_NAME = "HA-MCP in-process server"
 
 # Hop-by-hop / sensitive request headers never forwarded upstream (identical set
 # to mcp_proxy). ``authorization`` is stripped because the server authenticates
@@ -77,7 +77,7 @@ _CLIENT_TIMEOUT = aiohttp.ClientTimeout(total=300, sock_connect=10, sock_read=30
 # for this HA session. Deliberately NOT under DOMAIN so it survives
 # async_unload_entry's teardown — aiohttp cannot unregister an HTTP view until HA
 # restarts, so the views (and this ownership flag) must outlive the config entry.
-_OAUTH_VIEWS_REGISTERED_KEY = "ha_mcp_server_oauth_metadata_views_registered"
+_OAUTH_VIEWS_REGISTERED_KEY = "ha_mcp_tools_oauth_metadata_views_registered"
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ class _ProtectedResourceMetadataView(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/protected-resource"
-    name = "ha_mcp_server:oauth:protected-resource"
+    name = "ha_mcp_tools:oauth:protected-resource"
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Bind the view to the HA instance; the provider is resolved per request."""
@@ -241,7 +241,7 @@ class _AuthorizationServerMetadataView(HomeAssistantView):
     requires_auth = False
     cors_allowed = True
     url = f"{OAUTH_BASE}/authorization-server"
-    name = "ha_mcp_server:oauth:authorization-server"
+    name = "ha_mcp_tools:oauth:authorization-server"
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Bind the view to the HA instance; liveness is resolved per request."""
@@ -270,7 +270,7 @@ class _WellKnownProtectedResourceView(HomeAssistantView):
 
     requires_auth = False
     cors_allowed = True
-    name = "ha_mcp_server:oauth:wellknown-protected-resource"
+    name = "ha_mcp_tools:oauth:wellknown-protected-resource"
     url = "/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -311,19 +311,19 @@ def _metadata_views(hass: HomeAssistant) -> list[HomeAssistantView]:
     for url, name in (
         (
             f"/.well-known/oauth-authorization-server{OAUTH_BASE}",
-            "ha_mcp_server:oauth:wellknown-as-rfc8414",
+            "ha_mcp_tools:oauth:wellknown-as-rfc8414",
         ),
         (
             f"/.well-known/openid-configuration{OAUTH_BASE}",
-            "ha_mcp_server:oauth:wellknown-oidc-prefixed",
+            "ha_mcp_tools:oauth:wellknown-oidc-prefixed",
         ),
         (
             f"{OAUTH_BASE}/.well-known/openid-configuration",
-            "ha_mcp_server:oauth:wellknown-oidc-suffixed",
+            "ha_mcp_tools:oauth:wellknown-oidc-suffixed",
         ),
         (
             f"{OAUTH_BASE}/.well-known/oauth-authorization-server",
-            "ha_mcp_server:oauth:wellknown-as-suffixed",
+            "ha_mcp_tools:oauth:wellknown-as-suffixed",
         ),
     ):
         views.append(
@@ -364,8 +364,7 @@ def _build_unauthorized_response(
         text="Unauthorized",
         headers={
             "WWW-Authenticate": (
-                f'Bearer realm="Home Assistant MCP Server", '
-                f'resource_metadata="{metadata_url}"'
+                f'Bearer realm="HA-MCP", resource_metadata="{metadata_url}"'
             )
         },
     )

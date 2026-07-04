@@ -221,7 +221,7 @@ class EmbeddedServerManager:
         await self._hass.async_add_executor_job(thread.join, _STOP_JOIN_TIMEOUT_SECONDS)
         if thread.is_alive():
             _LOGGER.warning(
-                "Home Assistant MCP Server thread did not stop within %.0fs; "
+                "HA-MCP in-process server thread did not stop within %.0fs; "
                 "leaving it to terminate with the process.",
                 _STOP_JOIN_TIMEOUT_SECONDS,
             )
@@ -332,7 +332,7 @@ class EmbeddedServerManager:
                 "'ha-mcp' package is still not importable.",
                 kind="package",
             )
-        _LOGGER.info("Home Assistant MCP Server package ready (version %s)", version)
+        _LOGGER.info("HA-MCP in-process server package ready (version %s)", version)
         if stored_spec != self._pip_spec:
             self._store_installed_spec()
 
@@ -491,7 +491,7 @@ class EmbeddedServerManager:
             loop.run_until_complete(self._serve(access_token))
         except Exception as err:
             self._thread_exc = err
-            _LOGGER.exception("Home Assistant MCP Server thread crashed")
+            _LOGGER.exception("HA-MCP in-process server thread crashed")
         finally:
             with suppress(Exception):
                 loop.run_until_complete(loop.shutdown_asyncgens())
@@ -601,15 +601,15 @@ class EmbeddedServerManager:
         while self._hass.loop.time() < deadline:
             if self._thread_exc is not None:
                 raise EmbeddedServerError(
-                    f"Home Assistant MCP Server failed to start: {self._thread_exc}"
+                    f"HA-MCP in-process server failed to start: {self._thread_exc}"
                 ) from self._thread_exc
             if self._thread is not None and not self._thread.is_alive():
                 raise EmbeddedServerError(
-                    "Home Assistant MCP Server thread exited during startup."
+                    "HA-MCP in-process server thread exited during startup."
                 )
             if await self._async_probe_port():
                 _LOGGER.info(
-                    "Home Assistant MCP Server is listening on %s:%d",
+                    "HA-MCP in-process server is listening on %s:%d",
                     self._bind_host,
                     self._port,
                 )
@@ -620,7 +620,7 @@ class EmbeddedServerManager:
         # server behind an unregistered webhook.
         await self.async_stop()
         raise EmbeddedServerError(
-            f"Home Assistant MCP Server did not become reachable on port "
+            f"HA-MCP in-process server did not become reachable on port "
             f"{self._port} within {_READY_TIMEOUT_SECONDS:.0f}s."
         )
 
