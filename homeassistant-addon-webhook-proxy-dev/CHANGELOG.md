@@ -9,6 +9,15 @@ history from before the fork.
 -->
 
 
+## v1.2.3.dev6 (2026-07-05)
+
+### Documentation
+
+- Note that this proxy is unnecessary with the HA-MCP custom component's
+  in-process server, which has its own built-in webhook for remote access.
+  The proxy remains for the add-on / Docker / pip server installs.
+
+
 ## v1.2.3.dev5 (2026-07-04)
 
 ### Added
