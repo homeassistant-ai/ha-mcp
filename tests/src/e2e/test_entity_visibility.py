@@ -254,3 +254,221 @@ async def test_visibility_allowlist_hides_unlisted_entity_from_search(
                 "confirm": True,
             },
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.external_only
+async def test_visibility_allowlist_keeps_allowed_visible_and_deny_wins(
+    mcp_client, ha_container_with_fresh_config, tmp_path, monkeypatch
+):
+    """The allowlist positive side + precedence the one-sided sibling misses: an
+    allowlisted entity stays visible while an unlisted one is hidden, and deny
+    wins over an allow match (so a restrict-mode-hides-everything regression could
+    not pass this)."""
+    allowed_id = "input_boolean.zzvis_allowlisted_e2e"
+    allowed_query = "zzvis_allowlisted_e2e"
+    unlisted_id = "input_boolean.zzvis_unlisted_e2e"
+    unlisted_query = "zzvis_unlisted_e2e"
+
+    r1 = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": "Zzvis Allowlisted E2E"},
+    )
+    assert_mcp_success(r1, "Create allowlisted probe")
+    r2 = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": "Zzvis Unlisted E2E"},
+    )
+    assert_mcp_success(r2, "Create unlisted probe")
+
+    try:
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search",
+            arguments={"query": allowed_query, "limit": 10},
+            predicate=lambda d: allowed_id in _entity_ids(d),
+            description="baseline search finds allowlisted probe",
+        )
+
+        # Allowlist contains only the allowed probe -> restrict mode.
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(
+                enabled=True,
+                exclude_categories=[],
+                allow_entity_ids=[allowed_id],
+            ),
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+        # Positive side: the allowlisted entity stays visible.
+        allowed_res = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_search", {"query": allowed_query, "limit": 10}
+            )
+        )
+        assert allowed_res.get("success") is True
+        assert allowed_id in _entity_ids(allowed_res)
+
+        # Negative side: an unlisted entity is hidden by the restriction.
+        unlisted_res = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_search", {"query": unlisted_query, "limit": 10}
+            )
+        )
+        assert unlisted_id not in _entity_ids(unlisted_res)
+        assert unlisted_res.get("entity_total_matches") == 0
+
+        # Deny wins over allow: denying the allowlisted entity hides it despite the
+        # allow match.
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(
+                enabled=True,
+                exclude_categories=[],
+                allow_entity_ids=[allowed_id],
+                deny_entity_ids=[allowed_id],
+            ),
+        )
+        denied_res = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_search", {"query": allowed_query, "limit": 10}
+            )
+        )
+        assert allowed_id not in _entity_ids(denied_res)
+        assert denied_res.get("entity_total_matches") == 0
+
+    finally:
+        for target in (allowed_query, unlisted_query):
+            await mcp_client.call_tool(
+                "ha_remove_helpers_integrations",
+                {"helper_type": "input_boolean", "target": target, "confirm": True},
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.external_only
+async def test_visibility_filter_applies_to_get_overview(
+    mcp_client, ha_container_with_fresh_config, tmp_path, monkeypatch
+):
+    """ha_get_overview — the second filtered collection tool, previously with no
+    e2e — honors the filter: a denied probe drops out of the overview's entity
+    total (the filter sits before the counts, so the total stays coherent)."""
+    probe_id = "input_boolean.zzvis_overview_probe_e2e"
+    probe_query = "zzvis_overview_probe_e2e"
+
+    create = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": "Zzvis Overview Probe E2E"},
+    )
+    assert_mcp_success(create, "Create overview probe")
+
+    try:
+        # Ensure the probe is registered (also the filter-OFF baseline).
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search",
+            arguments={"query": probe_query, "limit": 10},
+            predicate=lambda d: probe_id in _entity_ids(d),
+            description="baseline search finds overview probe",
+        )
+        baseline = parse_mcp_result(
+            await mcp_client.call_tool("ha_get_overview", {"detail_level": "full"})
+        )
+        baseline_total = baseline["system_summary"]["total_entities"]
+
+        # Enable the filter denying the probe.
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(
+                enabled=True,
+                exclude_categories=[],
+                deny_entity_ids=[probe_id],
+            ),
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+        filtered = parse_mcp_result(
+            await mcp_client.call_tool("ha_get_overview", {"detail_level": "full"})
+        )
+        assert filtered.get("success") is True
+        # Exactly the denied probe left the counted universe.
+        assert filtered["system_summary"]["total_entities"] == baseline_total - 1
+
+    finally:
+        await mcp_client.call_tool(
+            "ha_remove_helpers_integrations",
+            {"helper_type": "input_boolean", "target": probe_query, "confirm": True},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.external_only
+async def test_visibility_respect_assist_honors_explicit_unexpose(
+    mcp_client, ha_container_with_fresh_config, tmp_path, monkeypatch
+):
+    """respect_assist_exposure reads the explicit per-entity ``should_expose`` from
+    the registry entry options (get_entries), so an explicitly un-exposed entity
+    is hidden — the regression for the round-2 Assist finding, where exposure was
+    read from expose_entity/list (True-only) and an explicit un-expose was
+    invisible. The explicit expose->unexpose transition keeps the assertion
+    independent of domain defaults (input_boolean is not default-exposed, so the
+    visible baseline can only come from the explicit True override)."""
+    probe_id = "input_boolean.zzvis_assist_probe_e2e"
+    probe_query = "zzvis_assist_probe_e2e"
+
+    create = await mcp_client.call_tool(
+        "ha_config_set_helper",
+        {"helper_type": "input_boolean", "name": "Zzvis Assist Probe E2E"},
+    )
+    assert_mcp_success(create, "Create assist probe")
+
+    try:
+        # Explicitly expose to conversation: options.conversation.should_expose=True.
+        expose = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": probe_id, "expose_to": {"conversation": True}},
+        )
+        assert_mcp_success(expose, "Expose probe to conversation")
+
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(
+                enabled=True,
+                exclude_categories=[],
+                respect_assist_exposure=True,
+            ),
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+        # Explicitly exposed -> stays visible (proves the override is read; an
+        # input_boolean is not default-exposed, so nothing else would show it).
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search",
+            arguments={"query": probe_query, "limit": 10},
+            predicate=lambda d: probe_id in _entity_ids(d),
+            description="explicitly exposed probe stays visible under respect_assist",
+        )
+
+        # Explicitly un-expose: options.conversation.should_expose=False. The
+        # round-2 bug could not read this False; the fix reads it via get_entries.
+        unexpose = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": probe_id, "expose_to": {"conversation": False}},
+        )
+        assert_mcp_success(unexpose, "Un-expose probe from conversation")
+
+        await wait_for_tool_result(
+            mcp_client,
+            tool_name="ha_search",
+            arguments={"query": probe_query, "limit": 10},
+            predicate=lambda d: probe_id not in _entity_ids(d),
+            description="explicitly un-exposed probe is hidden under respect_assist",
+        )
+
+    finally:
+        await mcp_client.call_tool(
+            "ha_remove_helpers_integrations",
+            {"helper_type": "input_boolean", "target": probe_query, "confirm": True},
+        )
