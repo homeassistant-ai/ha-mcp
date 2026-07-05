@@ -1074,6 +1074,15 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     const dockerPlatformCard = document.querySelector('[data-platform="docker"]');
     if (dockerPlatformCard) dockerPlatformCard.classList.toggle('hidden', method !== 'stdio-local');
 
+    // With the component's built-in webhook, remote access is the easy path —
+    // the Advanced badge on the Remote scope card only fits the tunnel/proxy methods.
+    const remoteScopeBadge = document.querySelector('[data-scope="remote"] .complexity-badge');
+    if (remoteScopeBadge) {
+      const quickRemote = method === 'ha-component';
+      remoteScopeBadge.dataset.complexity = quickRemote ? 'quick' : 'advanced';
+      remoteScopeBadge.textContent = quickRemote ? 'Quick' : 'Advanced';
+    }
+
     // Context-specific platform help text
     const platformHelp = document.getElementById('platform-help');
     if (platformHelp) {
