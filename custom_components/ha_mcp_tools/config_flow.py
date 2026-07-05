@@ -57,6 +57,7 @@ from .const import (
     ENTRY_TYPE_TOOLS,
     OPT_BIND_HOST,
     OPT_CHANNEL,
+    OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_PIP_SPEC,
     OPT_REGENERATE_SECRETS,
@@ -315,6 +316,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_SERVER_URL,
                     default=opts.get(OPT_SERVER_URL, DEFAULT_LOOPBACK_URL),
                 ): str,
+                vol.Required(
+                    OPT_ENABLE_WEBHOOK,
+                    default=bool(opts.get(OPT_ENABLE_WEBHOOK, True)),
+                ): bool,
                 vol.Optional(
                     OPT_EXTERNAL_URL,
                     default=opts.get(OPT_EXTERNAL_URL, ""),

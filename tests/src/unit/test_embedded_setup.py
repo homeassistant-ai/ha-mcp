@@ -123,6 +123,23 @@ class TestBringUp:
         cleared = {c.args[2] for c in esetup.ir.async_delete_issue.call_args_list}
         assert cleared == {esetup.ISSUE_PACKAGE_FAILED, esetup.ISSUE_START_FAILED}
 
+    async def test_local_only_skips_webhook_registration(self, fake_manager, caplog):
+        # Owner request: enable_webhook=False must never register the webhook
+        # (Nabu Casa path dead) while the server still starts; the log carries
+        # the local-only note.
+        import logging
+
+        hass = _make_hass()
+        entry = _make_entry(options={esetup.OPT_ENABLE_WEBHOOK: False})
+
+        with caplog.at_level(logging.INFO):
+            await esetup.async_bring_up_server(hass, entry)
+
+        fake_manager.async_start.assert_awaited_once()
+        esetup.async_register_webhook.assert_not_awaited()
+        esetup._surface_connect_urls.assert_called_once()
+        assert "local-only" in caplog.text
+
     async def test_passes_auth_mode_port_and_secret_to_webhook(self, fake_manager):
         hass = _make_hass()
         entry = _make_entry(
@@ -272,19 +289,30 @@ class TestSurfaceConnectUrls:
             self.notif.call_args.kwargs.get("message") or self.notif.call_args.args[1]
         )
 
-    def test_includes_cloud_and_local_urls(self):
+    def test_notification_carries_no_secrets_urls_go_to_log(self, caplog):
+        # Review finding (Patch76): persistent notifications are visible to
+        # every authenticated user, so the message must carry NO connect URL
+        # or secret path - those go to the admin-only log; the notification
+        # points at the admin-only surfaces.
+        import logging
+
         _install_network_cloud(
             cloud_url="https://abc.ui.nabu.casa", local_url="http://192.168.1.5:8123"
         )
         hass = _make_hass()
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
-        esetup._surface_connect_urls(hass, entry, "none")
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none")
         self.notif.assert_called_once()
         message = self._message()
-        assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in message
-        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in message
+        assert "mcp_id" not in message
+        assert "/p " not in message
+        assert "[HA-MCP settings panel](/ha-mcp)" in message
+        assert "Configure" in message
+        assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in caplog.text
+        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in caplog.text
 
-    def test_external_url_option_leads_the_list(self):
+    def test_external_url_option_leads_the_list(self, caplog):
         # Owner request (webhook-proxy app parity): a configured external URL
         # is shown FIRST, ahead of Nabu Casa and the local address.
         _install_network_cloud(
@@ -295,61 +323,94 @@ class TestSurfaceConnectUrls:
             data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"},
             options={esetup.OPT_EXTERNAL_URL: "https://ha.example.com/"},
         )
-        esetup._surface_connect_urls(hass, entry, "none")
-        message = self._message()
-        first = next(line for line in message.splitlines() if "/api/webhook/" in line)
-        # Trailing slash normalized away; custom domain leads.
+        import logging
+
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none")
+        first = next(
+            line for line in caplog.text.splitlines() if "/api/webhook/" in line
+        )
         assert "https://ha.example.com/api/webhook/mcp_id" in first
-        assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in message
+        assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in caplog.text
         # The rename commit's discoverability contract: the running
         # notification links the sidebar settings panel and carries the
         # HA-MCP Server title (the only path from "it is running" to the UI).
-        assert "[HA-MCP settings panel](/ha-mcp)" in message
+        assert "[HA-MCP settings panel](/ha-mcp)" in self._message()
         assert self.notif.call_args.kwargs.get("title") == "HA-MCP Server"
 
-    def test_falls_back_to_relative_url_when_none_available(self):
+    def test_falls_back_to_relative_url_when_none_available(self, caplog):
+        import logging
+
         _install_network_cloud(cloud_url=None, local_url=None)
         hass = _make_hass()
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
-        esetup._surface_connect_urls(hass, entry, "ha_auth")
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "ha_auth")
         self.notif.assert_called_once()
-        assert "/api/webhook/mcp_id" in self._message()
+        assert "/api/webhook/mcp_id" in caplog.text
+        assert "mcp_id" not in self._message()
 
-    def test_lan_bind_surfaces_direct_access_line(self):
-        # bind_host=0.0.0.0 is the user-visible signal that the server is
-        # exposed beyond loopback — the notification must say so, with the
-        # direct URL (review finding: branch previously uncovered).
+    def test_lan_bind_logs_direct_access_with_configured_port(self, caplog):
+        # Explicit 0.0.0.0 + custom port: the direct URL (with that port)
+        # appears in the admin-only log.
+        import logging
+
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
         entry = _make_entry(
             data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
             options={esetup.OPT_BIND_HOST: "0.0.0.0", esetup.OPT_SERVER_PORT: 9999},
         )
-        esetup._surface_connect_urls(hass, entry, "none")
-        message = self._message()
-        assert "Direct LAN access" in message
-        assert ":9999/priv" in message
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none")
+        assert "(direct access)" in caplog.text
+        assert ":9999/priv" in caplog.text
 
-    def test_default_bind_includes_direct_access_line(self):
+    def test_default_bind_logs_direct_access_line(self, caplog):
         # LAN default (add-on parity): no explicit bind option -> the direct
-        # URL is part of the standard connect notification.
+        # URL is part of the admin-only LOG output (never the notification).
+        import logging
+
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
-        esetup._surface_connect_urls(hass, entry, "none")
-        assert "Direct LAN access" in self._message()
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none")
+        assert "(direct access)" in caplog.text
+        assert ":9584/priv" in caplog.text
+        assert "/priv" not in self._message()
 
-    def test_loopback_bind_omits_direct_access_line(self):
+    def test_loopback_bind_omits_direct_access_line(self, caplog):
+        import logging
+
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
         entry = _make_entry(
             data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
             options={esetup.OPT_BIND_HOST: "127.0.0.1"},
         )
-        esetup._surface_connect_urls(hass, entry, "none")
-        assert "Direct LAN access" not in self._message()
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none")
+        assert "(direct access)" not in caplog.text
 
-    def test_cloud_import_error_falls_back_to_local_url(self, monkeypatch):
+    def test_local_only_surface_has_no_webhook_urls(self, caplog):
+        import logging
+
+        _install_network_cloud(
+            cloud_url="https://abc.ui.nabu.casa", local_url="http://192.168.1.5:8123"
+        )
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
+            options={esetup.OPT_EXTERNAL_URL: "https://ha.example.com"},
+        )
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none", webhook_enabled=False)
+        assert "/api/webhook/" not in caplog.text
+        assert "(direct access)" in caplog.text  # default LAN bind
+        assert "disabled" in self._message()
+
+    def test_cloud_import_error_falls_back_to_local_url(self, monkeypatch, caplog):
         # Review gap: plain HA Core has no cloud integration at all - the
         # ImportError branch must degrade to the local URL, not raise.
         import builtins
@@ -365,6 +426,8 @@ class TestSurfaceConnectUrls:
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
-        esetup._surface_connect_urls(hass, entry, "none")
-        message = self._message()
-        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in message
+        import logging
+
+        with caplog.at_level(logging.INFO):
+            esetup._surface_connect_urls(hass, entry, "none")
+        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in caplog.text

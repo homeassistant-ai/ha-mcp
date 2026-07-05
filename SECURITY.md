@@ -116,6 +116,12 @@ It offers two authentication postures, selected in the entry options:
   below — no bespoke authorization server or self-issued token is involved, and
   revoking the user's Home Assistant token/session revokes access.
 
+The connect notification deliberately carries no secrets: Home Assistant
+shows persistent notifications to every authenticated user, so the webhook
+URL (the credential in the default posture) is surfaced only on
+administrator-only surfaces - the entry's Configure screen, the sidebar
+panel, and the log. A local-only option removes the webhook entirely.
+
 The server reaches Home Assistant with a dedicated admin token the component
 provisions and stores in the config entry. The token is handed to the server
 in-memory (never through the Home Assistant process environment); removing the

@@ -89,8 +89,13 @@ def _build_base_url(request: web.Request) -> str:
     """Build the public base URL from the request (host-derived).
 
     ha_auth is always host-derived so the SAME install works via the Nabu Casa
-    cloud URL AND any other external URL. Honors ``X-Forwarded-Proto/Host`` set
-    by HA's trusted-proxy layer, falling back to the request scheme/host.
+    cloud URL AND any other external URL. Reads ``X-Forwarded-Proto/Host`` as
+    sent: HA's forwarded middleware only validates proxy headers when
+    ``X-Forwarded-For`` is present, so these can reach us raw. A peer can
+    thereby only shape the discovery/WWW-Authenticate URLs in its OWN
+    response (no cross-user vector), which is within SECURITY.md's
+    local-network trust model; treat stricter proxy validation as optional
+    hardening.
     """
     host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "")
     scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
@@ -539,9 +544,12 @@ async def async_register_webhook(
             cfg["resource_server"] = provider
     except Exception:
         # Never leave a live endpoint (or a leaked session) behind a failed
-        # auth-setup path.
-        async_unregister(hass, webhook_id)
-        await session.close()
+        # auth-setup path. suppress: the ORIGINAL error must be what
+        # propagates (review finding) - a raising cleanup would mask it.
+        with suppress(Exception):
+            async_unregister(hass, webhook_id)
+        with suppress(Exception):
+            await session.close()
         raise
 
     hass.data.setdefault(DOMAIN, {})[DATA_WEBHOOK] = cfg

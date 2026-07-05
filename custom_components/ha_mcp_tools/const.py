@@ -225,6 +225,11 @@ OPT_EXTERNAL_URL = "external_url"
 OPT_WEBHOOK_ID_OVERRIDE = "webhook_id_override"
 OPT_SECRET_PATH_OVERRIDE = "secret_path_override"
 OPT_REGENERATE_SECRETS = "regenerate_secrets"
+# Local-only mode (owner request): when False, the HA webhook is never
+# registered, so nothing - including Nabu Casa remote UI - can reach the
+# server through Home Assistant; only the direct server port (+ the
+# admin-only sidebar panel, which proxies over loopback) remains.
+OPT_ENABLE_WEBHOOK = "enable_webhook"
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"

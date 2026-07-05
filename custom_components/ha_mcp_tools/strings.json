@@ -54,7 +54,8 @@
                     "external_url": "External URL (optional)",
                     "webhook_id_override": "Custom webhook secret (optional)",
                     "secret_path_override": "Custom direct-access path (optional)",
-                    "regenerate_secrets": "Regenerate connect secrets now"
+                    "regenerate_secrets": "Regenerate connect secrets now",
+                    "enable_webhook": "Remote access via webhook"
                 },
                 "data_description": {
                     "channel": "Stable is the pinned, tested release. Development installs the newest build and refreshes it on every reload or restart. A developer package override below takes precedence over this.",
@@ -66,7 +67,8 @@
                     "external_url": "Shown as the primary connect URL - use this when Home Assistant sits behind your own domain or reverse proxy. Enter the full base address including the scheme. Leave empty to use Nabu Casa / the local address automatically.",
                     "webhook_id_override": "Replaces the random webhook secret in the connect URL (/api/webhook/...). The URL is the credential - use a long, hard-to-guess value. Leave empty to keep the current one.",
                     "secret_path_override": "Replaces the random path used for direct access on the server port. Same rule: the path is the credential. Leave empty to keep the current one.",
-                    "regenerate_secrets": "One-time action: mints a fresh random webhook secret and direct-access path, invalidating the old connect URLs immediately. Also clears the two override fields above."
+                    "regenerate_secrets": "One-time action: mints a fresh random webhook secret and direct-access path, invalidating the old connect URLs immediately. Also clears the two override fields above.",
+                    "enable_webhook": "Turn off for local-only mode: the Home Assistant webhook is not registered at all, so nothing - including Nabu Casa - can reach the server through Home Assistant. The direct server port and the sidebar panel keep working."
                 }
             }
         }

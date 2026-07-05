@@ -122,6 +122,7 @@ Configure there just reports that.)
 | **Webhook authentication** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. See [Security](#security). |
 | **ha-mcp package (advanced)** | the pinned stable release (for example `ha-mcp==7.9.0`; the pin follows every release automatically) | The pip requirement installed at runtime. Leave it unless you are testing a pre-release — it accepts any pip requirement string, including a GitHub tarball URL. An explicit value overrides the release channel, and changing it forces a reinstall on the next reload. |
 | **Home Assistant URL for the server (advanced)** | `http://127.0.0.1:8123` | How the in-process server reaches Home Assistant. The loopback default works for almost everyone; only change it for unusual SSL-only setups. |
+| **Remote access via webhook** | on | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
 | **External URL (optional)** | empty | Shown as the primary connect URL - for your own domain / reverse proxy (e.g. `https://ha.example.com`). Empty = Nabu Casa / local automatically. |
 | **Custom webhook secret (optional)** | empty | Replaces the random webhook secret in `/api/webhook/<secret>`. The URL is the credential - use a long, hard-to-guess value. |
 | **Custom direct-access path (optional)** | empty | Replaces the random `/private_...` path on the server port. Same rule: the path is the credential. |
@@ -145,6 +146,13 @@ reload. `ha-mcp` and `ha-mcp-dev` share the same import package, so the previous
 channel's package is uninstalled first — only one is ever installed at a time.
 The **ha-mcp package (advanced)** field overrides the channel entirely: set it to
 pin a specific version or install from a URL for pre-release testing.
+
+### Local-only mode
+
+Turn **Remote access via webhook** off to keep the server unreachable through
+Home Assistant entirely - no webhook means no Nabu Casa path and no
+`/api/webhook/...` endpoint. You keep direct access on the server port (with
+the secret path) and the admin-only sidebar panel.
 
 ### Rotating your connect URL
 

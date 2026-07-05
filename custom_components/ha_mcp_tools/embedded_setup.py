@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from homeassistant.components import persistent_notification
@@ -32,6 +33,7 @@ from .const import (
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
     OPT_BIND_HOST,
+    OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_SERVER_PORT,
     OPT_WEBHOOK_AUTH,
@@ -68,14 +70,21 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
 
         auth_mode = str(entry.options.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE))
         secret_path = str(entry.data[DATA_SECRET_PATH])
-        await async_register_webhook(
-            hass,
-            entry,
-            port=manager.port,
-            secret_path=secret_path,
-            auth_mode=auth_mode,
-        )
-        _surface_connect_urls(hass, entry, auth_mode)
+        webhook_enabled = bool(entry.options.get(OPT_ENABLE_WEBHOOK, True))
+        if webhook_enabled:
+            await async_register_webhook(
+                hass,
+                entry,
+                port=manager.port,
+                secret_path=secret_path,
+                auth_mode=auth_mode,
+            )
+        else:
+            _LOGGER.info(
+                "Webhook access disabled by option - the server is local-only "
+                "(direct port + sidebar panel)"
+            )
+        _surface_connect_urls(hass, entry, auth_mode, webhook_enabled=webhook_enabled)
     except asyncio.CancelledError:
         # Unloaded mid-bring-up: undo whatever partial state exists, then let the
         # cancellation propagate so the task ends cancelled.
@@ -83,11 +92,16 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         raise
     except EmbeddedServerError as err:
         _LOGGER.error("HA-MCP in-process server failed to start: %s", err)
-        await async_teardown_server(hass)
+        # suppress: filing the repair issue must be UNCONDITIONAL (review
+        # finding) - a raising teardown would otherwise leave the entry
+        # looking healthy with the failure visible only in the log.
+        with suppress(Exception):
+            await async_teardown_server(hass)
         _create_issue(hass, err.kind, str(err))
     except Exception as err:
         _LOGGER.exception("HA-MCP in-process server: bring-up failed")
-        await async_teardown_server(hass)
+        with suppress(Exception):
+            await async_teardown_server(hass)
         _create_issue(hass, "start", str(err))
 
 
@@ -113,7 +127,11 @@ async def async_revoke_credentials_on_remove(
 
 
 def _surface_connect_urls(
-    hass: HomeAssistant, entry: ConfigEntry, auth_mode: str
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    auth_mode: str,
+    *,
+    webhook_enabled: bool = True,
 ) -> None:
     """Log the connect URLs and (re)create a persistent notification with them."""
     from homeassistant.helpers.network import NoURLAvailableError, get_url
@@ -121,6 +139,10 @@ def _surface_connect_urls(
     webhook_id = entry.data[DATA_WEBHOOK_ID]
     urls: list[str] = []
     external = str(entry.options.get(OPT_EXTERNAL_URL) or "").rstrip("/")
+    if not webhook_enabled:
+        # Local-only mode: no webhook exists, so no webhook URLs to surface.
+        external = ""
+        webhook_id = None
     if external:
         # Owner-requested parity with the webhook-proxy app: a configured
         # external URL leads the list (any reverse proxy, not just Nabu Casa).
@@ -134,48 +156,64 @@ def _surface_connect_urls(
         )
 
         try:
-            cloud_base = async_remote_ui_url(hass)
-            urls.append(f"{cloud_base}/api/webhook/{webhook_id}")
+            if webhook_id:
+                cloud_base = async_remote_ui_url(hass)
+                urls.append(f"{cloud_base}/api/webhook/{webhook_id}")
         except CloudNotAvailable:
             pass  # Cloud not logged in / remote UI off - no remote URL to show.
     except ImportError:
         pass  # Cloud integration not installed (e.g. HA Core) - local URL only.
 
     try:
-        local_base = get_url(hass, allow_external=False, prefer_external=False)
-        urls.append(f"{local_base}/api/webhook/{webhook_id}")
+        if webhook_id:
+            local_base = get_url(hass, allow_external=False, prefer_external=False)
+            urls.append(f"{local_base}/api/webhook/{webhook_id}")
     except NoURLAvailableError:
         pass  # No internal/local URL configured - fall through to the hint form.
 
-    if not urls:
+    if not urls and webhook_id:
         urls.append(f"/api/webhook/{webhook_id}  (prefix with your Home Assistant URL)")
 
     port = int(entry.options.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT))
     bind_host = str(entry.options.get(OPT_BIND_HOST, DEFAULT_BIND_HOST))
     auth_note = (
-        "The webhook URL is the shared secret (no bearer required)."
+        "Webhook access is disabled (local-only mode)."
+        if not webhook_enabled
+        else "The webhook URL is the shared secret (no bearer required)."
         if auth_mode == WEBHOOK_AUTH_NONE
         else "Clients authenticate with your Home Assistant account (ha_auth)."
     )
 
+    if bind_host == BIND_HOST_ALL:
+        # Direct-access URL goes to the LOG only (admin-gated), never the
+        # notification - see the security note below.
+        urls.append(
+            f"http://<home-assistant-ip>:{port}{entry.data[DATA_SECRET_PATH]}"
+            " (direct access)"
+        )
     url_lines = "\n".join(f"- {url}" for url in urls)
     _LOGGER.info(
         "HA-MCP in-process server is running. Connect URL(s):\n%s\n%s",
         url_lines,
         auth_note,
     )
+    # SECURITY (review finding): persistent notifications are visible to EVERY
+    # authenticated Home Assistant user - core's persistent_notification/get
+    # and /subscribe carry no admin gate. In the default posture the connect
+    # URL IS an admin-equivalent credential, so the notification deliberately
+    # carries NO secrets: it points at the admin-only surfaces (the sidebar
+    # panel and the entry's Configure screen). The URLs above still go to the
+    # log at INFO, which only admin-gated surfaces expose - the same posture
+    # as the add-on printing its URL to the admin-only add-on log.
     message = (
         "The HA-MCP Server is now running inside Home Assistant.\n\n"
         "Manage it from the [HA-MCP settings panel](/ha-mcp) in the sidebar.\n\n"
-        "Connect your MCP client to:\n"
-        f"{url_lines}\n\n"
+        "The connect URL is shown on the entry's Configure screen "
+        "(Settings - Devices & Services - HA-MCP Custom Component - "
+        "HA-MCP Server - Configure) and in the Home Assistant log - both "
+        "administrator-only, because the URL is the credential.\n\n"
         f"{auth_note}\n"
     )
-    if bind_host == BIND_HOST_ALL:
-        message += (
-            f"\nDirect LAN access is also available at "
-            f"http://<home-assistant-ip>:{port}{entry.data[DATA_SECRET_PATH]}\n"
-        )
     persistent_notification.async_create(
         hass,
         message,
