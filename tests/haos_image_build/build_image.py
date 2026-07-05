@@ -1677,7 +1677,7 @@ def _stage_embedded_server_integration(staging: Path) -> None:
                 "pref_disable_polling": False,
                 "source": "import",
                 "subentries": [],
-                "title": "In-process MCP server",
+                "title": "HA-MCP Server",
                 "unique_id": HA_MCP_SERVER_UNIQUE_ID,
                 "version": 1,
             }

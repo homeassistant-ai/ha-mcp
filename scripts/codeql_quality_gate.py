@@ -46,6 +46,11 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "single-pass dead-store analysis misses the next-call read at the top "
         "of install(), so the assignment looks dead.",
     ),
+    # NOTE: CodeQL emits the same generic message for every instance of
+    # py/ineffectual-statement, so the two entries below are PATH-WIDE for
+    # that rule (a future genuinely-dead statement in these files would be
+    # suppressed too). Accepted: both files are small and the rationale
+    # names the exact suppressed statements - re-audit if either file grows.
     (
         "py/ineffectual-statement",
         "custom_components/ha_mcp_tools/embedded_entry.py",
@@ -58,7 +63,7 @@ ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
         "py/ineffectual-statement",
         "custom_components/ha_mcp_tools/embedded_server.py",
         "This statement has no effect",
-        "False positive on bare 'await server_task' / 'await stop_task' inside "
+        "False positive on bare 'await serve_task' / 'await stop_task' inside "
         "contextlib.suppress: the await drives the cancelled task to "
         "completion, which is the required shutdown-sequencing effect.",
     ),

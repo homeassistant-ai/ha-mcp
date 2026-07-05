@@ -54,7 +54,7 @@ Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access to
 
 2. Install **"Home Assistant MCP Server"** from the App Store and click **Start**. *(Home Assistant 2026.2 renamed "Add-ons" to "Apps"; on older versions this is the Add-on Store.)*
 3. Open the **Logs** tab to find your unique MCP URL
-5. Connect your AI client to that URL — **no token or credential setup needed**
+4. Connect your AI client to that URL — **no token or credential setup needed**
 
 [Full add-on documentation →](homeassistant-addon/DOCS.md)
 
@@ -281,7 +281,7 @@ These tools also require feature flags: `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (fi
 
 To add manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**.
 
-After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **Home Assistant MCP Server Custom Component**.
+After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP Custom Component**.
 
 On **Home Assistant OS / Supervised**, the integration offers to add the add-on repository and install and start the **Home Assistant MCP Server** add-on for you — no need to add the add-on repository by hand. On **Container / Core** installs (no Supervisor) there is no add-on; run the server via Docker or pip and the integration just sets up the file/YAML services.
 
@@ -293,8 +293,8 @@ Copy `custom_components/ha_mcp_tools/` from this repository into your HA `config
 
 The **HA-MCP Custom Component** offers a second config-entry type, **HA-MCP Server**, that runs the **full ha-mcp server in-process**, inside Home Assistant, and exposes it remotely through a Home Assistant webhook. This is a full install method in its own right — useful for **Home Assistant Container / Core** users who can't run add-ons, and available on Home Assistant OS too (it coexists with the add-on on a different default port, `9584` vs `9583`).
 
-- **Install:** install **HA-MCP Custom Component** from HACS (the same repository you use for ha-mcp), or copy `custom_components/ha_mcp_tools` into your `config/custom_components/` directory and restart Home Assistant. Then **Add Integration → HA-MCP Custom Component → HA-MCP Server** and submit — creating the entry starts the server.
-- **Connect URL:** appears in the **HA-MCP Server** notification and on the entry's Configure screen. It's a Home Assistant webhook — `https://<nabu-casa-domain>/api/webhook/<id>` remotely (through Nabu Casa or any reverse proxy) or `http://<home-assistant-host>:8123/api/webhook/<id>` locally. Setting the bind address to `0.0.0.0` also exposes the server directly on its port.
+- **Install:** install **HA-MCP Custom Component** from HACS, or copy `custom_components/ha_mcp_tools` into your `config/custom_components/` directory and restart Home Assistant. Then **Add Integration → HA-MCP Custom Component → HA-MCP Server** and submit — creating the entry starts the server.
+- **Connect URL:** appears in the **HA-MCP Server** notification and on the entry's Configure screen. It's a Home Assistant webhook — `https://<nabu-casa-domain>/api/webhook/<id>` remotely (through Nabu Casa or any reverse proxy) or `http://<home-assistant-host>:8123/api/webhook/<id>` locally. The server is also reachable directly on its own port by default (set **Network access** to `127.0.0.1` to turn direct access off).
 - **Settings panel:** while the server runs, an admin-only **HA-MCP** panel in the Home Assistant sidebar opens its web settings UI (enable/disable/pin tools, feature flags, backups, themes) through Home Assistant itself — no loopback URL needed, the same idea as the add-on's "Open Web UI" button.
 - **Authentication:** by default the secret webhook URL is the credential; optionally require Home Assistant account sign-in (`ha_auth`) for clients that support it.
 - **Release channel:** the entry options let you pick `stable` (the pinned release) or `dev` (the latest development build, refreshed on every reload/restart).

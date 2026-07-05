@@ -111,6 +111,18 @@ class TestBringUp:
         assert isinstance(hass.data[DOMAIN][DATA_MANAGER], fake_manager)
         esetup.ir.async_create_issue.assert_not_called()
 
+    async def test_success_clears_stale_repair_issues(self, fake_manager):
+        # Review gap: a successful bring-up must clear BOTH repair-issue ids
+        # left by a previous failed attempt, or a fixed install keeps showing
+        # a stale repair forever.
+        hass = _make_hass()
+        entry = _make_entry()
+
+        await esetup.async_bring_up_server(hass, entry)
+
+        cleared = {c.args[2] for c in esetup.ir.async_delete_issue.call_args_list}
+        assert cleared == {esetup.ISSUE_PACKAGE_FAILED, esetup.ISSUE_START_FAILED}
+
     async def test_passes_auth_mode_port_and_secret_to_webhook(self, fake_manager):
         hass = _make_hass()
         entry = _make_entry(
@@ -318,3 +330,23 @@ class TestSurfaceConnectUrls:
         )
         esetup._surface_connect_urls(hass, entry, "none")
         assert "Direct LAN access" not in self._message()
+
+    def test_cloud_import_error_falls_back_to_local_url(self, monkeypatch):
+        # Review gap: plain HA Core has no cloud integration at all - the
+        # ImportError branch must degrade to the local URL, not raise.
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _no_cloud(name, *a, **k):
+            if name.startswith("homeassistant.components.cloud"):
+                raise ImportError(name)
+            return real_import(name, *a, **k)
+
+        monkeypatch.setattr(builtins, "__import__", _no_cloud)
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"})
+        esetup._surface_connect_urls(hass, entry, "none")
+        message = self._message()
+        assert "http://192.168.1.5:8123/api/webhook/mcp_id" in message

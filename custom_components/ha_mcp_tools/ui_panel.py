@@ -156,7 +156,14 @@ async def _session_user_is_admin(hass: HomeAssistant, token: str | None) -> bool
     if session is None:
         return False
     user = await hass.auth.async_get_user(session["user_id"])
-    if user is None or not getattr(user, "is_admin", False):
+    if (
+        user is None
+        or getattr(user, "system_generated", False)
+        or not getattr(user, "is_active", False)
+        or not getattr(user, "is_admin", False)
+    ):
+        # Same acceptance bar as the ha_auth webhook gate (review finding:
+        # the two admin gates must not drift): active, human, administrator.
         store.pop(token, None)
         return False
     return True
@@ -445,8 +452,10 @@ class _suppress_all:
 # Vanilla custom element (no Lit / HA-frontend imports) so it never couples to a
 # specific frontend build. Home Assistant sets ``hass`` on the element; the
 # element mints a session with the logged-in user's token, then embeds the
-# proxied settings UI. Kept in sync with the Python surface via the JS-parse
-# harness (tests/src/unit/_js_harness.py registers this renderer).
+# proxied settings UI. Deliberately NOT registered in _js_harness._PY_RENDERERS
+# (importing this module needs Home Assistant installed, which would break the
+# harness for every surface); coverage = the node --check syntax test plus the
+# Python-side session/proxy tests in test_ui_panel.py.
 
 _PANEL_JS = f"""
 const SESSION_URL = {_SESSION_URL!r};

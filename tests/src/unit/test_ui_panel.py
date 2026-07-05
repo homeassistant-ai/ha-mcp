@@ -24,10 +24,18 @@ from custom_components.ha_mcp_tools.const import DATA_WEBHOOK, DOMAIN  # noqa: E
 _TARGET = "http://127.0.0.1:9584/private_abc"
 
 
-def _make_user(*, user_id: str = "u1", is_admin: bool = True) -> MagicMock:
+def _make_user(
+    *,
+    user_id: str = "u1",
+    is_admin: bool = True,
+    is_active: bool = True,
+    system_generated: bool = False,
+) -> MagicMock:
     user = MagicMock(name="user")
     user.id = user_id
     user.is_admin = is_admin
+    user.is_active = is_active
+    user.system_generated = system_generated
     return user
 
 
@@ -170,6 +178,28 @@ class TestSessionValidation:
         hass = _make_hass(user=None)
         token = ui_panel._mint_session(hass, "u1")
         assert await ui_panel._session_user_is_admin(hass, token) is False
+
+    async def test_deleted_user_session_entry_is_dropped(self):
+        # Review gap: rejection must also evict the session entry (like the
+        # demoted-admin sibling) so a later re-add of the user id cannot ride
+        # the stale token.
+        hass = _make_hass(user=None)
+        token = ui_panel._mint_session(hass, "u1")
+        await ui_panel._session_user_is_admin(hass, token)
+        assert token not in ui_panel._sessions(hass)
+
+    async def test_inactive_user_fails_and_is_dropped(self):
+        # Same acceptance bar as the ha_auth webhook gate (review finding).
+        hass = _make_hass(user=_make_user(is_admin=True, is_active=False))
+        token = ui_panel._mint_session(hass, "u1")
+        assert await ui_panel._session_user_is_admin(hass, token) is False
+        assert token not in ui_panel._sessions(hass)
+
+    async def test_system_generated_user_fails_and_is_dropped(self):
+        hass = _make_hass(user=_make_user(is_admin=True, system_generated=True))
+        token = ui_panel._mint_session(hass, "u1")
+        assert await ui_panel._session_user_is_admin(hass, token) is False
+        assert token not in ui_panel._sessions(hass)
 
 
 # ---------------------------------------------------------------------------

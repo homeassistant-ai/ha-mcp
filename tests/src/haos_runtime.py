@@ -741,11 +741,12 @@ def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
     once per session before ``boot_haos_qemu``, like the recorder / HACS-token
     qcow2 refreshers.
 
-    Best-effort by design: the baked entry is disabled and only the one
-    embedded-server test consumes this delivery, so a wheel-build or guestfish
-    failure degrades to a warning (that one test then fails on bring-up while the
-    rest of the HAOS suite is unaffected) rather than raising and taking down the
-    whole session. A hard raise would be a much worse blast radius than the
+    Best-effort by design: on the external HAOS lane the baked entry stays
+    disabled and only the one embedded-server test consumes this delivery, so a
+    wheel-build or guestfish failure degrades to a warning there. On the
+    haos_embedded lane the WHOLE suite runs through this wheel - the session
+    fixture surfaces a failed staging hard at bring-up (via the recorded
+    status) instead of limping through hundreds of doomed tests. A hard raise would be a much worse blast radius than the
     single test it protects. The outcome is also recorded via
     ``_write_embedded_staging_status`` so the test can surface it (this module's
     session-fixture logs are not captured in the pytest output).

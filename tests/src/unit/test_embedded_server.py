@@ -843,6 +843,85 @@ class TestReadinessProbe:
         with pytest.raises(es.EmbeddedServerError, match="exited during startup"):
             await mgr._async_wait_until_ready()
 
+    async def test_wait_ready_returns_when_probe_succeeds(self, tmp_path, monkeypatch):
+        # The SUCCESS path (review gap): live thread + successful port probe
+        # returns normally - no raise, no repair issue.
+        mgr, hass, _entry = _manager(tmp_path)
+        hass.loop.time = MagicMock(return_value=0.0)
+        mgr._thread = SimpleNamespace(is_alive=lambda: True)
+
+        async def _probe():
+            return True
+
+        monkeypatch.setattr(mgr, "_async_probe_port", _probe)
+        await mgr._async_wait_until_ready()  # must not raise
+        assert mgr._thread_exc is None
+
+    def test_serve_surfaces_self_exited_server(self, tmp_path, monkeypatch):
+        # The race branch that mirrors the live EADDRINUSE bug (review gap):
+        # when uvicorn's serve() exits on its own (bind failure) while the
+        # stop event was never set, the failure must propagate to
+        # _thread_exc, not be swallowed by the wait/cancel choreography.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+        from contextlib import asynccontextmanager
+
+        settings = SimpleNamespace(
+            homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
+        )
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_mod.__path__ = []
+        cfg = ModuleType("ha_mcp.config")
+        cfg.reset_global_settings = lambda: None
+        cfg.set_embedded_connection = lambda u, t: None
+        cfg.OAUTH_MODE_URL = "__sentinel_url__"
+        cfg.OAUTH_MODE_TOKEN = "__sentinel_token__"
+        cfg.get_global_settings = lambda: settings
+
+        @asynccontextmanager
+        async def _lifespan():
+            yield
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                return object()
+
+            _lifespan_manager = staticmethod(_lifespan)
+
+        server_mod = ModuleType("ha_mcp.server")
+        server_mod.HomeAssistantSmartMCPServer = lambda: SimpleNamespace(mcp=_FakeMcp())
+        ui_mod = ModuleType("ha_mcp.settings_ui")
+        ui_mod.register_settings_routes = lambda *a, **k: None
+
+        class _FakeUvServer:
+            def __init__(self, config):
+                self.should_exit = False
+
+            async def serve(self):
+                raise OSError(98, "address already in use")
+
+        uvicorn_mod = ModuleType("uvicorn")
+        uvicorn_mod.Config = lambda *a, **k: SimpleNamespace()
+        uvicorn_mod.Server = _FakeUvServer
+
+        for name, mod in (
+            ("ha_mcp", ha_mcp_mod),
+            ("ha_mcp.config", cfg),
+            ("ha_mcp.server", server_mod),
+            ("ha_mcp.settings_ui", ui_mod),
+            ("uvicorn", uvicorn_mod),
+        ):
+            monkeypatch.setitem(sys.modules, name, mod)
+        ha_mcp_mod.config = cfg
+        ha_mcp_mod.server = server_mod
+        ha_mcp_mod.settings_ui = ui_mod
+
+        mgr._thread_main("tok")
+
+        assert isinstance(mgr._thread_exc, OSError)
+        assert "address already in use" in str(mgr._thread_exc)
+
     async def test_wait_ready_timeout_stops_thread_and_raises(
         self, tmp_path, monkeypatch
     ):

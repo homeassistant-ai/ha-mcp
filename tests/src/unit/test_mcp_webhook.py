@@ -649,6 +649,21 @@ class TestRegisterWebhook:
             hass.data[DOMAIN][DATA_WEBHOOK]["resource_server"], mw.ResourceServer
         )
 
+    async def test_unknown_auth_mode_fails_closed(self, monkeypatch):
+        # Review gap: a corrupted/hand-edited options value must refuse
+        # bring-up (repair issue), never fall through to the unauthenticated
+        # forward path.
+        hass = _register_hass()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+        with pytest.raises(ValueError, match="Unknown webhook auth mode"):
+            await mw.async_register_webhook(
+                hass,
+                _entry(),
+                port=9584,
+                secret_path="/private_x",
+                auth_mode="bogus",
+            )
+
     async def test_registration_failure_closes_session_and_unregisters(
         self, monkeypatch
     ):

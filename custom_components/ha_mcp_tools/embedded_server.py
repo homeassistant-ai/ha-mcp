@@ -500,9 +500,23 @@ class EmbeddedServerManager:
             self._thread_exc = err
             _LOGGER.exception("HA-MCP in-process server thread crashed")
         finally:
-            with suppress(Exception):
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                loop.run_until_complete(loop.shutdown_default_executor())
+            # Teardown is best-effort but never SILENT (review finding): a
+            # raise here must not mask the primary outcome, yet a recurring
+            # cleanup failure (leaking executor threads across reloads) has
+            # to be visible in the logs. Each call gets its own guard so one
+            # failure cannot skip the other.
+            for _label, _coro_factory in (
+                ("asyncgen", loop.shutdown_asyncgens),
+                ("executor", loop.shutdown_default_executor),
+            ):
+                try:
+                    loop.run_until_complete(_coro_factory())
+                except Exception:
+                    _LOGGER.warning(
+                        "Worker-loop %s shutdown failed during teardown",
+                        _label,
+                        exc_info=True,
+                    )
             loop.close()
 
     async def _serve(self, access_token: str) -> None:
@@ -530,7 +544,7 @@ class EmbeddedServerManager:
         if _reset is not None:
             _reset()
         else:
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "ha_mcp.config exposes no settings-reset seam; a reloaded "
                 "entry may serve stale override values until HA restarts"
             )

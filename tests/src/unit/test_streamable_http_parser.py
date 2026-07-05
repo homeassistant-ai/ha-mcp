@@ -121,6 +121,14 @@ class TestMultiLineDataFraming:
         body = 'data: {"jsonrpc":"2.0","id":1,"result":{}}'
         assert parse_mcp_response(SSE, body) is not None
 
+    def test_plain_json_invalid_returns_none(self):
+        # Review gap: the non-SSE branch's own JSONDecodeError guard.
+        assert parse_mcp_response("application/json", b"{not json") is None
+
+    def test_plain_json_non_dict_returns_none(self):
+        # A top-level array is valid JSON but not a JSON-RPC response object.
+        assert parse_mcp_response("application/json", b"[1, 2]") is None
+
     def test_garbage_returns_none(self):
         assert parse_mcp_response(SSE, "event: message\ndata: {truncated") is None
         assert parse_mcp_response(SSE, ": keepalive only\n\n") is None

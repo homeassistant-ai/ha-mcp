@@ -347,6 +347,25 @@ class TestServerOptionsFlow:
         )
         assert channel.default() == const.CHANNEL_STABLE
 
+    def test_form_prefills_every_field_from_saved_options(self):
+        # Review gap: the form must show the user's SAVED values, not the
+        # defaults, for every field (a regression here silently reverts a
+        # user's config on the next save).
+        saved = {
+            const.OPT_CHANNEL: const.CHANNEL_DEV,
+            const.OPT_SERVER_PORT: 12345,
+            const.OPT_BIND_HOST: const.BIND_HOST_LOOPBACK,
+            const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
+            const.OPT_PIP_SPEC: "ha-mcp==0.0.1",
+            const.OPT_SERVER_URL: "https://ha.example:8123",
+        }
+        flow = _make_options_flow(
+            data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=saved
+        )
+        form = asyncio.run(flow.async_step_init(None))
+        defaults = {m.schema: m.default() for m in form["data_schema"].schema}
+        assert defaults == saved
+
     def test_init_submit_round_trips_input_into_entry(self):
         flow = _make_options_flow()
         user_input = {

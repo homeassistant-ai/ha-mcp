@@ -333,8 +333,10 @@ jobs:
     # docs/website-only PR doesn't wedge the merge waiting on these lanes.
     if: needs.changes.outputs.run == 'true'
     runs-on: ${{ matrix.os }}
-    # 20 (was 15): headroom for the embedded smoke test's cold bring-up
-    # (runtime pip install of the server tree inside its dedicated container).
+    # 20 (was 15): headroom for the in-process-server e2e test that runs on
+    # THIS lane (workflows/embedded/test_embedded_server.py) - its first
+    # bring-up pip-installs the wheel's dependency tree inside the test's HA
+    # container. Not about the separate e2e-validation-embedded job.
     timeout-minutes: 20
     strategy:
       fail-fast: false

@@ -57,7 +57,7 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
    the **HA MCP Tools** services entry, use the same **Add Integration** flow;
    the two entries appear together under the one integration tile.)
 3. **Copy your connect URL.** As soon as the server starts, a notification titled
-   **HA-MCP in-process server** appears under **Settings → Notifications** with
+   **HA-MCP Server** appears under **Settings → Notifications** with
    the connect URL(s). The same URL is shown on the entry's **Configure** screen
    and written to the Home Assistant log.
 4. **Connect your MCP client** to that URL.
@@ -120,7 +120,7 @@ Configure there just reports that.)
 | **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the add-on's `9583` so both can run at once. |
 | **Network access** | `0.0.0.0` | The default matches the add-on: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
 | **Webhook authentication** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. See [Security](#security). |
-| **ha-mcp package (advanced)** | `ha-mcp==7.9.0` | The pip requirement installed at runtime. Leave it unless you are testing a pre-release — it accepts any pip requirement string, including a GitHub tarball URL. An explicit value overrides the release channel, and changing it forces a reinstall on the next reload. |
+| **ha-mcp package (advanced)** | the pinned stable release (for example `ha-mcp==7.9.0`; the pin follows every release automatically) | The pip requirement installed at runtime. Leave it unless you are testing a pre-release — it accepts any pip requirement string, including a GitHub tarball URL. An explicit value overrides the release channel, and changing it forces a reinstall on the next reload. |
 | **Home Assistant URL for the server (advanced)** | `http://127.0.0.1:8123` | How the in-process server reaches Home Assistant. The loopback default works for almost everyone; only change it for unusual SSL-only setups. |
 
 ### Release channels

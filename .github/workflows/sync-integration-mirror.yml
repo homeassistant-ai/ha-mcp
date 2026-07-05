@@ -4,6 +4,9 @@ name: Sync Integration Mirror
 # in lockstep: master pushes sync the dev channel (mirror main), releases
 # cut a matching mirror release (stable channel). The mirror carries no
 # hand-made changes.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [master]

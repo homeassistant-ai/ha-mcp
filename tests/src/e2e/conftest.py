@@ -198,8 +198,9 @@ def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
 def pytest_collection_modifyitems(config, items):
     """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
-    Four mutually-orthogonal backend markers (#1349 item 7 introduces the
-    inaddon split):
+    Backend markers (#1349 item 7 introduced the inaddon split; #1527 added
+    the embedded lanes, where ``external_only`` also skips because the
+    server-under-test lives out-of-process inside the HA container):
 
     - ``haos_only``: only runs when the HAOS backend is selected
       (``HAOS_TEST_IMAGE_PATH`` set). Auto-applied to anything under
@@ -2366,7 +2367,7 @@ async def mcp_client(
     ``mcp_server`` fixture (current behavior).
     On HAOS-inaddon: ``StreamableHttpTransport`` pointing at the dev
     addon's MCP endpoint (running inside the booted HAOS).
-    On embedded (#1527): ``StreamableHttpTransport`` pointing at the in-process
+    On embedded (#1527): ``StreamableHttpTransport`` pointing at the
     in-process MCP server entry's ingress webhook (running inside the testcontainer).
     On haos_embedded (#1527): the same, but the in-process MCP server runs
     inside the HAOS core container (webhook on the booted VM). In all HTTP cases

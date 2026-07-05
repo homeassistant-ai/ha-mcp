@@ -207,8 +207,8 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         """Confirm and create the single in-process server entry.
 
         Creating the entry starts the in-process server with the defaults (port
-        9584, loopback-only, secret-URL auth); everything is tunable afterward in
-        the integration options.
+        9584, LAN-reachable like the add-on, secret-URL auth); everything is
+        tunable afterward in the integration options.
         """
         await self.async_set_unique_id(_SERVER_UNIQUE_ID)
         self._abort_if_unique_id_configured()

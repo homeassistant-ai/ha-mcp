@@ -16,7 +16,7 @@ is skipped when Docker is unavailable or the HAOS backend is selected.
 
 Strategy notes:
 - The pip spec is a ``file://`` URL to a wheel built from the local checkout by
-  ``pip wheel --no-deps`` and copied into the bind-mounted ``/config``; its
+  ``uv build --wheel`` and copied into the bind-mounted ``/config``; its
   DEPENDENCIES (fastmcp etc.) still resolve from PyPI under HA's constraints file
   — which is exactly the cryptography/py-version compatibility this proves.
 - First bring-up runtime-installs that dependency tree, so readiness is polled
