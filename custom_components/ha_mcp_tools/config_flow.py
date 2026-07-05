@@ -18,7 +18,6 @@ configurable options flow (the tools entry aborts with ``no_options``).
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 import voluptuous as vol
@@ -66,8 +65,6 @@ from .const import (
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_NONE,
 )
-
-_LOGGER = logging.getLogger(__name__)
 
 # Titles shown for each entry in the integration tile's entry list.
 _TOOLS_ENTRY_TITLE = "HA MCP Tools"
