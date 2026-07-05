@@ -31,6 +31,11 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.hassio import is_hassio
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .addon import AddonBootstrapError, async_install_and_start_addon
 from .const import (
@@ -252,7 +257,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 vol.Required(
                     OPT_CHANNEL,
                     default=opts.get(OPT_CHANNEL, DEFAULT_CHANNEL),
-                ): vol.In([CHANNEL_STABLE, CHANNEL_DEV]),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[CHANNEL_STABLE, CHANNEL_DEV],
+                        translation_key="server_channel",
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Required(
                     OPT_SERVER_PORT,
                     default=opts.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT),
@@ -260,11 +271,23 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 vol.Required(
                     OPT_BIND_HOST,
                     default=opts.get(OPT_BIND_HOST, DEFAULT_BIND_HOST),
-                ): vol.In([DEFAULT_BIND_HOST, BIND_HOST_ALL]),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[DEFAULT_BIND_HOST, BIND_HOST_ALL],
+                        translation_key="server_bind_host",
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Required(
                     OPT_WEBHOOK_AUTH,
                     default=opts.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE),
-                ): vol.In([WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA]),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA],
+                        translation_key="server_webhook_auth",
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Optional(
                     OPT_PIP_SPEC,
                     # ``or DEFAULT_PIP_SPEC`` so a stored-empty spec (the normalized

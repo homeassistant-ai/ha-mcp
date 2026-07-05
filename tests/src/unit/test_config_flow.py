@@ -56,6 +56,35 @@ sys.modules["homeassistant.core"] = _core
 
 sys.modules["homeassistant.helpers.hassio"] = MagicMock()
 
+
+# Inert selector stand-ins: the options flow builds SelectSelector dropdowns,
+# but these tests hand user_input straight to the handler, so the selector
+# never validates - it only needs to construct (and expose .config for the
+# schema-shape assertions below).
+class _SelectSelectorConfig:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class _SelectSelector:
+    def __init__(self, config=None):
+        self.config = config
+
+    def __call__(self, value):
+        return value
+
+
+class _SelectSelectorMode:
+    DROPDOWN = "dropdown"
+    LIST = "list"
+
+
+_sel = MagicMock()
+_sel.SelectSelector = _SelectSelector
+_sel.SelectSelectorConfig = _SelectSelectorConfig
+_sel.SelectSelectorMode = _SelectSelectorMode
+sys.modules["homeassistant.helpers.selector"] = _sel
+
 for _mod in [
     "homeassistant",
     "homeassistant.components",

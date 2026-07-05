@@ -247,6 +247,31 @@ def install() -> None:
         "homeassistant.components.panel_custom",
         async_register_panel=_async_register_panel,
     )
+
+    # Selector stubs for the options-flow dropdowns. Inert pass-through:
+    # unit tests hand user_input straight to the flow handler, so the
+    # selector never validates; it only needs to construct.
+    class _SelectSelectorConfig:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class _SelectSelector:
+        def __init__(self, config: Any = None) -> None:
+            self.config = config
+
+        def __call__(self, value: Any) -> Any:
+            return value
+
+    class _SelectSelectorMode:
+        DROPDOWN = "dropdown"
+        LIST = "list"
+
+    setmod(
+        "homeassistant.helpers.selector",
+        SelectSelector=_SelectSelector,
+        SelectSelectorConfig=_SelectSelectorConfig,
+        SelectSelectorMode=_SelectSelectorMode,
+    )
     setmod(
         "homeassistant.helpers.issue_registry",
         async_create_issue=MagicMock(name="async_create_issue"),
