@@ -32,6 +32,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers.hassio import is_hassio
 from homeassistant.helpers.selector import (
+    SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
@@ -272,9 +273,20 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_BIND_HOST,
                     default=opts.get(OPT_BIND_HOST, DEFAULT_BIND_HOST),
                 ): SelectSelector(
+                    # Inline labels: hassfest forbids dots in translation
+                    # keys, so the IP-valued options cannot use strings.json
+                    # selector translations.
                     SelectSelectorConfig(
-                        options=[DEFAULT_BIND_HOST, BIND_HOST_ALL],
-                        translation_key="server_bind_host",
+                        options=[
+                            SelectOptionDict(
+                                value=DEFAULT_BIND_HOST,
+                                label="This machine only (recommended)",
+                            ),
+                            SelectOptionDict(
+                                value=BIND_HOST_ALL,
+                                label="Expose on your local network",
+                            ),
+                        ],
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),

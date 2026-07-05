@@ -80,12 +80,6 @@
                 "dev": "Development (latest build)"
             }
         },
-        "server_bind_host": {
-            "options": {
-                "127.0.0.1": "This machine only (recommended)",
-                "0.0.0.0": "Expose on your local network"
-            }
-        },
         "server_webhook_auth": {
             "options": {
                 "none": "Secret webhook URL (default)",
