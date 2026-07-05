@@ -217,3 +217,36 @@ def test_search_seam_allow_and_exclude_both_active(tmp_path, monkeypatch):
         )
     )
     assert {r["entity_id"] for r in res["results"]} == {"light.foo_keep"}
+
+
+class _AreaTzClient:
+    """Client for the area dispatch: add_timezone_metadata reads get_config."""
+
+    async def get_config(self):
+        return {"time_zone": "UTC"}
+
+
+class _FakeSmartTools:
+    """Stands in for the SmartSearchTools the area dispatch delegates to."""
+
+    def __init__(self, area_result):
+        self._area_result = area_result
+
+    async def get_entities_by_area(
+        self, area_filter, group_by_domain=True, include_hidden=False
+    ):
+        return self._area_result
+
+
+def test_area_search_forwards_visibility_warnings_to_response():
+    """The three area builders rebuild a fresh response dict and drop
+    area_result['warnings']; the dispatch must forward them so a
+    visibility/registry degradation on ha_search(area_filter=...) is not silently
+    invisible (the non-area path already surfaces the same warnings)."""
+    warning = "Entity visibility filter degraded on the area path"
+    area_result = {"success": True, "areas": {}, "warnings": [warning]}
+    tools = tools_search.SearchTools(
+        _AreaTzClient(), smart_tools=_FakeSmartTools(area_result)
+    )
+    res = asyncio.run(tools.ha_search(area_filter="kitchen"))
+    assert warning in res.get("warnings", [])

@@ -1387,9 +1387,18 @@ class SearchTools:
                 # carry area_result's warnings; forward them here in one place so a
                 # visibility/registry degradation on the area path is not silently
                 # dropped (mirrors the non-area path's merge_visibility_warnings).
-                return merge_visibility_warnings(
-                    area_search, area_result.get("warnings", [])
+                # The builders wrap their payload via add_timezone_metadata into
+                # {"data": {...}, "metadata": {...}}, and the ha_search orchestrator
+                # unwraps ["data"] before merging metadata — so the warnings must
+                # live inside ["data"], not at the wrapper's top level, or the
+                # unwrap drops them.
+                warn_target = (
+                    area_search["data"]
+                    if isinstance(area_search, dict) and "data" in area_search
+                    else area_search
                 )
+                merge_visibility_warnings(warn_target, area_result.get("warnings", []))
+                return area_search
 
             if domain_filter and (not query or not query.strip()):
                 return await self._search_domain_only(
