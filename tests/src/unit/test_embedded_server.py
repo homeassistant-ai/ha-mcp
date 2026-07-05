@@ -862,6 +862,23 @@ class TestReadinessProbe:
         # when uvicorn's serve() exits on its own (bind failure) while the
         # stop event was never set, the failure must propagate to
         # _thread_exc, not be swallowed by the wait/cancel choreography.
+        #
+        # _thread_main stages HA_MCP_CONFIG_DIR/HA_MCP_EMBEDDED into
+        # os.environ; this class has no _isolate_env fixture and
+        # monkeypatch.delenv on an ABSENT key snapshots nothing (verified), so
+        # restore explicitly or the flag leaks into unrelated suites on this
+        # worker (live-found: flipped is_running_in_addon() for test_errors).
+        _saved = {
+            k: os.environ.get(k) for k in ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        }
+
+        def _restore_env():
+            for k, v in _saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
         mgr, _hass, _entry = _manager(
             tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
         )
@@ -917,7 +934,10 @@ class TestReadinessProbe:
         ha_mcp_mod.server = server_mod
         ha_mcp_mod.settings_ui = ui_mod
 
-        mgr._thread_main("tok")
+        try:
+            mgr._thread_main("tok")
+        finally:
+            _restore_env()
 
         assert isinstance(mgr._thread_exc, OSError)
         assert "address already in use" in str(mgr._thread_exc)
