@@ -1359,7 +1359,7 @@ class SearchTools:
                     include_hidden=include_hidden_bool,
                 )
                 if query and query.strip():
-                    return await self._search_area_with_query(
+                    area_search = await self._search_area_with_query(
                         query,
                         area_filter,
                         area_result,
@@ -1371,16 +1371,24 @@ class SearchTools:
                         per_domain_limit_int,
                         parsed_result_fields,
                     )
-                return await self._search_area_only(
-                    area_result,
-                    area_filter,
-                    domain_filter,
-                    state_filter,
-                    limit,
-                    offset,
-                    group_by_domain_bool,
-                    per_domain_limit_int,
-                    parsed_result_fields,
+                else:
+                    area_search = await self._search_area_only(
+                        area_result,
+                        area_filter,
+                        domain_filter,
+                        state_filter,
+                        limit,
+                        offset,
+                        group_by_domain_bool,
+                        per_domain_limit_int,
+                        parsed_result_fields,
+                    )
+                # The three area builders rebuild a fresh response dict and do not
+                # carry area_result's warnings; forward them here in one place so a
+                # visibility/registry degradation on the area path is not silently
+                # dropped (mirrors the non-area path's merge_visibility_warnings).
+                return merge_visibility_warnings(
+                    area_search, area_result.get("warnings", [])
                 )
 
             if domain_filter and (not query or not query.strip()):
