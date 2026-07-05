@@ -375,8 +375,14 @@ it passes every active one.
   per-entity exposure override wins; otherwise, if the instance exposes new
   entities, the entity's domain and device-class defaults decide). Because HA
   offers no single "effective exposure" API, the decision is reconstructed
-  client-side from two extra websocket reads per search; if that read fails the
-  dimension is skipped with a `warnings` note rather than hiding everything.
+  client-side from two extra websocket reads per search — the explicit
+  per-entity setting (including an un-expose) is read from each entity's registry
+  entry options, and the "expose new entities" flag drives the default branch; if
+  that read fails the dimension is skipped with a `warnings` note rather than
+  hiding everything. One residual limit: an entity that lives only in the state
+  machine (a YAML/template entity with no entity-registry entry) has no stored
+  exposure setting to read, so an explicit un-expose of such an entity cannot be
+  reconstructed and it falls to its domain/device-class default.
 
 `version` drives optimistic-concurrency for the settings UI (it bumps
 on each save so two tabs can't clobber each other); when hand-editing the file,
