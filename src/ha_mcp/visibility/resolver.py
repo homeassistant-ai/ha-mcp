@@ -140,8 +140,9 @@ def hidden_entity_ids(
     ``hidden`` is empty when disabled or the registry payload is unusable
     (fail-open — never hide on bad input), except the denylist which needs no
     registry data and is honored regardless. ``warnings`` carries operator-facing
-    notes (degraded registry, dropped unknown categories, missing Assist data)
-    for the caller to surface at the response level.
+    notes (degraded registry, dropped unknown categories, an empty-registry
+    allowlist degradation, missing Assist data) for the caller to surface at the
+    response level.
 
     ``states_result`` (the live states list the seam already holds) is used for
     two things when provided: it widens the allowlist and Assist dimensions to
@@ -150,12 +151,15 @@ def hidden_entity_ids(
     not the registry) for the Assist default-exposure check. Without it, both
     dimensions degrade to registry-only.
 
-    This is a pure function: ``load_hidden_set`` fetches ``assist_overrides``
-    (each registry entry's explicit ``conversation`` ``should_expose`` — True or
-    False — read from the entry ``options`` via ``config/entity_registry/get_entries``)
-    and ``expose_new`` over websocket and passes them in. Note the ha-mcp
-    visibility precedence (a conjunction of hide dimensions) is separate from HA's
-    own async_should_expose precedence, which only the Assist dimension mirrors.
+    This is a pure function. For the Assist dimension, a registry entry's explicit
+    ``conversation`` ``should_expose`` (True *or* False) is read directly from the
+    entry ``options`` in this payload (``config/entity_registry/list`` already
+    carries ``options``). ``assist_overrides`` supplies the True-only exposures
+    ``load_hidden_set`` reads from ``homeassistant/expose_entity/list`` — the only
+    exposure source for states-only entities with no registry entry — and
+    ``expose_new`` is HA's "expose new entities" flag. Note the ha-mcp visibility
+    precedence (a conjunction of hide dimensions) is separate from HA's own
+    async_should_expose precedence, which only the Assist dimension mirrors.
     """
     if not config.enabled:
         return set(), []
@@ -267,11 +271,23 @@ def hidden_entity_ids(
     if allow_active or config.respect_assist_exposure:
         candidate_ids = set(registry_by_id)
         candidate_ids |= set(state_device_class)
+        assist_active = config.respect_assist_exposure and assist_overrides is not None
         if config.respect_assist_exposure and assist_overrides is None:
             # The seam could not supply Assist data; skip that dimension rather
             # than hide everything, and tell the operator.
             warnings.append(_ASSIST_UNAVAILABLE_WARNING)
-        overrides = assist_overrides or {}
+        # Effective explicit-override map for the Assist dimension. Start with the
+        # True-only exposures from expose_entity/list (the only source for
+        # states-only entities), then layer each registry entry's explicit
+        # should_expose (True *or* False) read from the payload options — it is
+        # authoritative and wins over the list's True-only view.
+        overrides: dict[str, bool] = {}
+        if assist_active:
+            overrides.update(assist_overrides or {})
+            for eid, entry in registry_by_id.items():
+                explicit = _registry_assist_override(entry)
+                if explicit is not None:
+                    overrides[eid] = explicit
         for eid in candidate_ids:
             if eid in hidden:
                 continue
@@ -288,7 +304,7 @@ def hidden_entity_ids(
             ):
                 hidden.add(eid)
                 continue
-            if config.respect_assist_exposure and assist_overrides is not None:
+            if assist_active:
                 # Effective device_class: a registry override wins, else the live
                 # entity's (from state attributes) - matching get_device_class.
                 device_class = (
@@ -302,81 +318,78 @@ def hidden_entity_ids(
     return hidden, warnings
 
 
-def _registry_entity_ids(registry_result: object) -> list[str]:
-    """Extract entity_ids from a raw ``config/entity_registry/list`` payload."""
-    if not isinstance(registry_result, dict):
-        return []
-    entries = registry_result.get("result", [])
-    if not isinstance(entries, list):
-        return []
-    return [
-        entry["entity_id"]
-        for entry in entries
-        if isinstance(entry, dict) and entry.get("entity_id")
-    ]
+def _registry_assist_override(entry: dict[str, Any]) -> bool | None:
+    """Return a registry entry's explicit conversation ``should_expose``, else None.
+
+    Read from the ``options`` the ``config/entity_registry/list`` payload already
+    carries (HA's ``as_partial_dict`` includes ``options``), so no extra
+    per-entity websocket read is needed to see an explicit expose *or* un-expose.
+    """
+    options = entry.get("options")
+    conv = options.get("conversation") if isinstance(options, dict) else None
+    if isinstance(conv, dict) and "should_expose" in conv:
+        return bool(conv["should_expose"])
+    return None
 
 
 async def _fetch_assist_exposure(
     client: Any,
-    entity_ids: list[str],
 ) -> tuple[dict[str, bool] | None, bool]:
     """Fetch the ``conversation`` Assist exposure inputs over websocket.
 
-    Returns ``(overrides, expose_new)`` where ``overrides`` maps entity_id to its
-    explicit conversation ``should_expose`` (True *or* False). The explicit
-    setting is read from the entity-registry entry ``options`` via
-    ``config/entity_registry/get_entries`` (the extended representation), NOT from
-    ``homeassistant/expose_entity/list``: HA-core's list command only ever returns
-    exposed (True) entities and omits an explicitly un-exposed entity entirely, so
-    it cannot express a per-entity False — a client reconstructing from it would
-    let an explicit un-expose fall through to the default-exposure branch and stay
-    visible. ``get_entries`` also surfaces the computed defaults HA persists into
-    ``options`` on first evaluation. Fails soft: on any error returns
+    Two reads, in parallel: ``homeassistant/expose_entity/list`` (the set of
+    entities explicitly exposed to an assistant) and
+    ``homeassistant/expose_new_entities/get`` (the "expose new entities" flag that
+    drives the default-exposure branch).
+
+    Returns ``(overrides, expose_new)`` where ``overrides`` maps each
+    conversation-exposed entity_id to ``True``. HA-core's list command only ever
+    returns exposed (True) entities and omits an explicitly un-exposed one, so this
+    contributes True-only overrides — the only exposure source for states-only
+    entities that have no registry entry. A registry entity's explicit setting
+    (True *or* False) is read separately from its ``options`` in the registry list
+    payload the resolver already holds, so it does not depend on this fetch; an
+    explicit un-expose of a states-only entity cannot be expressed by the list
+    command and stays fail-open (it falls to its domain/device-class default).
+
+    Fails soft: on any error, or if either read is unsuccessful, returns
     ``(None, False)`` so only the Assist dimension degrades (the resolver warns and
     applies the other dimensions) rather than the whole filter failing.
     """
     try:
-        new_msg = {
-            "type": "homeassistant/expose_new_entities/get",
-            "assistant": "conversation",
-        }
-        # get_entries with an empty entity_ids list has nothing to read (and some
-        # HA versions reject it); still fetch expose_new so the default-exposure
-        # branch works for a registry-less / states-only universe.
-        if entity_ids:
-            entries_res, new_res = await asyncio.gather(
-                client.send_websocket_message(
-                    {
-                        "type": "config/entity_registry/get_entries",
-                        "entity_ids": entity_ids,
-                    }
-                ),
-                client.send_websocket_message(new_msg),
-            )
-        else:
-            entries_res = {"success": True, "result": {}}
-            new_res = await client.send_websocket_message(new_msg)
-        if not (isinstance(entries_res, dict) and entries_res.get("success")):
+        exposed_res, new_res = await asyncio.gather(
+            client.send_websocket_message({"type": "homeassistant/expose_entity/list"}),
+            client.send_websocket_message(
+                {
+                    "type": "homeassistant/expose_new_entities/get",
+                    "assistant": "conversation",
+                }
+            ),
+        )
+        if not (isinstance(exposed_res, dict) and exposed_res.get("success")):
             return None, False
-        overrides: dict[str, bool] = {}
-        entries = entries_res.get("result", {})
-        if isinstance(entries, dict):
-            for eid, entry in entries.items():
-                if not isinstance(entry, dict):
-                    continue
-                options = entry.get("options")
-                conv = (
-                    options.get("conversation") if isinstance(options, dict) else None
-                )
-                if isinstance(conv, dict) and "should_expose" in conv:
-                    overrides[eid] = bool(conv["should_expose"])
         if not (isinstance(new_res, dict) and new_res.get("success")):
             # Without the expose_new flag the default-exposure branch can't be
             # computed; degrade the whole dimension (skip + warn) rather than
             # assume a value - assuming False would wrongly hide default-domain
             # entities whenever the instance actually exposes new entities.
             return None, False
-        expose_new = bool(new_res.get("result", {}).get("expose_new", False))
+        overrides: dict[str, bool] = {}
+        result = exposed_res.get("result", {})
+        exposed = result.get("exposed_entities") if isinstance(result, dict) else None
+        if isinstance(exposed, dict):
+            for eid, assistants in exposed.items():
+                if (
+                    isinstance(assistants, dict)
+                    and assistants.get("conversation") is True
+                ):
+                    overrides[eid] = True
+        new_result = new_res.get("result", {})
+        expose_new = (
+            bool(new_result.get("expose_new", False))
+            if isinstance(new_result, dict)
+            else False
+        )
         return overrides, expose_new
     except Exception:
         logger.warning("assist exposure fetch failed; dimension skipped", exc_info=True)
@@ -404,9 +417,7 @@ async def load_hidden_set(
         assist_overrides: dict[str, bool] | None = None
         expose_new = False
         if config.enabled and config.respect_assist_exposure and client is not None:
-            assist_overrides, expose_new = await _fetch_assist_exposure(
-                client, _registry_entity_ids(registry_result)
-            )
+            assist_overrides, expose_new = await _fetch_assist_exposure(client)
         return hidden_entity_ids(
             registry_result, config, states_result, assist_overrides, expose_new
         )

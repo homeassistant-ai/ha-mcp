@@ -92,6 +92,34 @@ def test_overview_visibility_warning_does_not_mark_partial(tmp_path, monkeypatch
     assert res.get("partial") is not True
 
 
+class _ServicesFailOverviewClient(_OverviewClient):
+    """get_system_overview client whose services fetch fails (partial data)."""
+
+    async def get_services(self):
+        raise RuntimeError("services boom")
+
+
+def test_overview_services_failure_marks_partial_with_coexisting_visibility_warning(
+    tmp_path, monkeypatch
+):
+    # The other half of the partial/warnings split: a genuine services failure sets
+    # `partial: true` and surfaces "Services unavailable", and a coexisting pure
+    # visibility warning (an unknown category) rides alongside in the same
+    # `warnings` list without being conflated — the two channels (partial =
+    # genuinely incomplete data, visibility = annotation on complete data) coexist.
+    save_visibility_config(
+        tmp_path, VisibilityConfig(enabled=True, exclude_categories=["typo"])
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    mixin = SystemOverviewMixin()
+    mixin.client = _ServicesFailOverviewClient(_STATES, _ENTITY_REGISTRY)
+    res = asyncio.run(mixin.get_system_overview(detail_level="full"))
+    assert res.get("partial") is True
+    warnings = res.get("warnings", [])
+    assert any("Services unavailable" in w for w in warnings)
+    assert any("unknown exclude_categories" in w for w in warnings)
+
+
 class _StatesCancelOverviewClient(_OverviewClient):
     """get_system_overview client whose mandatory states fetch is cancelled."""
 

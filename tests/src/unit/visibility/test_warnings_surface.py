@@ -1,9 +1,12 @@
 """The visibility "warnings last mile".
 
 Covers ``merge_visibility_warnings`` directly and asserts a degradation warning
-actually reaches each collection-read tool's *response* (not just the resolver
-return) — the coverage gap that let the area path silently drop them. A corrupt
-config is the cheapest trigger: ``load_hidden_set`` fails open with a warning.
+actually reaches the tool *response* (not just the resolver return) on two of the
+collection-read seams — exact-match search and system overview. The area path's
+forwarding is covered separately by
+``test_search_filter.py::test_area_search_forwards_visibility_warnings_to_response``
+(the seam whose silent drop first surfaced the gap). A corrupt config is the
+cheapest trigger: ``load_hidden_set`` fails open with a warning.
 """
 
 import asyncio

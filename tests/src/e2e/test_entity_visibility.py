@@ -408,12 +408,13 @@ async def test_visibility_respect_assist_honors_explicit_unexpose(
     mcp_client, ha_container_with_fresh_config, tmp_path, monkeypatch
 ):
     """respect_assist_exposure reads the explicit per-entity ``should_expose`` from
-    the registry entry options (get_entries), so an explicitly un-exposed entity
-    is hidden — the regression for the round-2 Assist finding, where exposure was
-    read from expose_entity/list (True-only) and an explicit un-expose was
-    invisible. The explicit expose->unexpose transition keeps the assertion
-    independent of domain defaults (input_boolean is not default-exposed, so the
-    visible baseline can only come from the explicit True override)."""
+    the registry entry ``options`` (carried by ``config/entity_registry/list``), so
+    an explicitly un-exposed entity is hidden — the regression for the round-2
+    Assist finding, where exposure was read from expose_entity/list (True-only) and
+    an explicit un-expose was invisible. The explicit expose->unexpose transition
+    keeps the assertion independent of domain defaults (input_boolean is not
+    default-exposed, so the visible baseline can only come from the explicit True
+    override)."""
     probe_id = "input_boolean.zzvis_assist_probe_e2e"
     probe_query = "zzvis_assist_probe_e2e"
 
@@ -452,7 +453,8 @@ async def test_visibility_respect_assist_honors_explicit_unexpose(
         )
 
         # Explicitly un-expose: options.conversation.should_expose=False. The
-        # round-2 bug could not read this False; the fix reads it via get_entries.
+        # round-2 bug could not read this False; the fix reads it from the registry
+        # entry options in the entity_registry/list payload.
         unexpose = await mcp_client.call_tool(
             "ha_set_entity",
             {"entity_id": probe_id, "expose_to": {"conversation": False}},
