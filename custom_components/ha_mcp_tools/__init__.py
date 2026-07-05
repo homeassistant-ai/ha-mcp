@@ -43,10 +43,13 @@ from .const import (
     ALLOWED_WRITE_DIRS,
     ALLOWED_YAML_CONFIG_FILES,
     ALLOWED_YAML_KEYS,
+    CONF_ENTRY_TYPE,
     DASHBOARD_URL_PATH_PATTERN,
     DENY_PATH_SEGMENTS,
     DENY_READ_BASENAMES,
     DOMAIN,
+    ENTRY_TYPE_SERVER,
+    ENTRY_TYPE_TOOLS,
     PACKAGES_ONLY_YAML_KEYS,
     RESERVED_DASHBOARD_URL_PATHS,
     YAML_KEY_DEFAULT_POST_ACTION,
@@ -1761,7 +1764,43 @@ def _migrate_legacy_backup_dir(config_dir: Path) -> tuple[int, int]:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up HA MCP Tools from a config entry."""
+    """Set up a config entry, dispatching on its entry type.
+
+    The integration serves two entry types under one domain: the ``tools``
+    services entry (the original component) and the in-process ``server`` entry
+    (issue #1527). A missing ``entry_type`` means ``tools`` so pre-existing
+    entries keep working across the component update with no migration.
+    """
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SERVER:
+        from .embedded_entry import async_setup_server_entry
+
+        return await async_setup_server_entry(hass, entry)
+    return await _async_setup_tools_entry(hass, entry)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry, dispatching on its entry type."""
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SERVER:
+        from .embedded_entry import async_unload_server_entry
+
+        return await async_unload_server_entry(hass, entry)
+    return await _async_unload_tools_entry(hass, entry)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle config-entry removal, dispatching on its entry type.
+
+    The server entry revokes the credentials it provisioned; the tools entry has
+    nothing to clean up beyond what unload already did.
+    """
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SERVER:
+        from .embedded_entry import async_remove_server_entry
+
+        await async_remove_server_entry(hass, entry)
+
+
+async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up the HA MCP Tools services from a config entry."""
     config_dir = Path(hass.config.config_dir)
 
     # Bootstrap the caller-auth token. Generated on first setup, persisted
@@ -2436,8 +2475,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
+async def _async_unload_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload the HA MCP Tools services config entry."""
     # Remove all services
     hass.services.async_remove(DOMAIN, SERVICE_EDIT_YAML_CONFIG)
     hass.services.async_remove(DOMAIN, SERVICE_LIST_FILES)

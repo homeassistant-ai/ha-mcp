@@ -7,7 +7,10 @@ name = "ha-mcp"
 version = "7.9.0"
 description = "Home Assistant MCP Server - Complete control of Home Assistant through MCP"
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+# Upper bound widened to <3.15 so the package installs on Home Assistant's
+# interpreter when run in-process by the ha_mcp_tools component (HA
+# core-2026.7 ships Python 3.14). src/ stays 3.13-compatible.
+requires-python = ">=3.13,<3.15"
 license = {text = "MIT"}
 authors = [
     {name = "Julien", email = "github@qc-h.net"}
@@ -19,6 +22,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Home Automation",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
@@ -30,7 +34,13 @@ dependencies = [
     "python-dotenv==1.2.2",
     "truststore==0.10.4",
     "websockets==16.0",
-    "cryptography==49.0.0",
+    # Range (not a hard pin) so the resolver can satisfy Home Assistant's own
+    # cryptography constraint when ha-mcp is installed into the HA venv for
+    # in-process embedding (HA 2026.6 pins cryptography==48.0.0, 2026.7 pins
+    # 48.0.1 — the floor must admit every supported core's pin; live-found on
+    # the embedded e2e lane against the HA 2026.6.4 image).
+    # cryptography is a transitive dependency only — never imported in src/.
+    "cryptography>=48.0.0,<50",
     "pydantic-monty==0.0.18",
     "tzdata>=2024.1",
     "packaging>=24.0",
@@ -193,6 +203,9 @@ dev = [
     "pytest-cov>=5.0.0",
     "pytest-timeout>=2.3.0",
     "pytest-rerunfailures>=15.0",
+    # Real voluptuous for the config-flow tests (the component's
+    # config_flow imports it; HA provides it at runtime, tests need it here).
+    "voluptuous>=0.15.2",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
     "lefthook>=1.10.0",
@@ -207,6 +220,11 @@ dev = [
 version_toml = ["pyproject.toml:project.version"]
 version_variables = [
     "src/ha_mcp/__init__.py:__version__",
+    # Keeps the in-process server's stable-channel pin in lockstep with the
+    # released server/add-on version - a hand-edited pin would drift the
+    # moment a release ships (owner: the server entry must always match the
+    # add-on version to avoid confusion).
+    "custom_components/ha_mcp_tools/const.py:PINNED_HA_MCP_VERSION",
 ]
 build_command = """
 pip install uv && uv lock

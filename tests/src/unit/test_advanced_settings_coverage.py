@@ -196,6 +196,7 @@ def test_validate_registries_rejects_beta_field_not_in_feature_flags(
 # before (or independently of) the UI that would otherwise edit it.
 ENV_ONLY: dict[str, str] = {
     "SUPERVISOR_TOKEN": "Injected by Supervisor; identifies add-on mode (secret/bootstrap)",
+    "HA_MCP_EMBEDDED": "Set by the ha_mcp_tools in-process server entry before first import; identifies in-process mode (bootstrap)",
     "SUPERVISOR_BASE_URL": "Supervisor API base; bootstrap before any settings exist",
     "HAMCP_ENV_FILE": "Selects which .env file to load — read before Settings is built",
     "HA_MCP_CONFIG_DIR": "Resolves the data dir that *holds* the override files (path)",

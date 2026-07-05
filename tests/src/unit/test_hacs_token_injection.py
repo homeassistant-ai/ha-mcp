@@ -82,3 +82,39 @@ def test_qcow2_injector_is_noop_without_token(monkeypatch, tmp_path):
 
     monkeypatch.setattr(haos_runtime.subprocess, "run", _fail)
     haos_runtime.inject_hacs_token_in_qcow2(tmp_path / "image.qcow2")
+
+
+# ---------------------------------------------------------------------------
+# _set_embedded_server_pip_spec (#1527) - same pure-transform contract as
+# inject_hacs_token above: entry_id-keyed (domain is shared with the tools
+# entry), in-place, boolean found/not-found.
+# ---------------------------------------------------------------------------
+
+
+def _entries_doc(entries):
+    return {"data": {"entries": entries}}
+
+
+def test_pip_spec_patches_only_the_server_entry():
+    doc = _entries_doc(
+        [
+            {"entry_id": "other", "domain": "ha_mcp_tools", "options": {}},
+            {"entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID, "options": {}},
+        ]
+    )
+    assert haos_runtime._set_embedded_server_pip_spec(doc, "file:///w.whl") is True
+    entries = doc["data"]["entries"]
+    assert entries[1]["options"]["pip_spec"] == "file:///w.whl"
+    assert "pip_spec" not in entries[0]["options"]
+
+
+def test_pip_spec_creates_options_when_absent():
+    doc = _entries_doc([{"entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID}])
+    assert haos_runtime._set_embedded_server_pip_spec(doc, "ha-mcp==9.9.9") is True
+    assert doc["data"]["entries"][0]["options"]["pip_spec"] == "ha-mcp==9.9.9"
+
+
+def test_pip_spec_returns_false_and_leaves_doc_untouched_when_missing():
+    doc = _entries_doc([{"entry_id": "other", "options": {"pip_spec": "keep"}}])
+    assert haos_runtime._set_embedded_server_pip_spec(doc, "x") is False
+    assert doc["data"]["entries"][0]["options"]["pip_spec"] == "keep"

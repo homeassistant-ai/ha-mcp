@@ -199,6 +199,7 @@ async def _await_full_debug_proof(slug: str) -> None:
 
 
 @pytest.mark.inaddon_only
+@pytest.mark.addon_disruptive
 async def test_web_ui_debug_log_level_reaches_addon_log(
     mcp_client: Any,
     ha_container_with_fresh_config: dict[str, Any],

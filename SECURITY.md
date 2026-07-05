@@ -92,6 +92,52 @@ token (LLAT). This is **by design**:
 The consent form explains this revocation path. Reports about token opacity
 (the LLAT being visible inside the token) will be closed as by-design.
 
+### In-process server (`ha_mcp_tools` in-process server entry)
+
+The `ha_mcp_tools` component's **in-process MCP server** config entry can run the
+ha-mcp server in-process inside Home Assistant and expose it through a Home
+Assistant webhook (see [docs/in-process-server.md](docs/in-process-server.md)).
+It offers two authentication postures, selected in the entry options:
+
+- **Secret webhook URL (default).** The webhook id is a high-entropy random
+  string and *is* the credential — the same secret-URL trust model as standard
+  mode above, except the URL is designed to be reached remotely through Home
+  Assistant's own remote access (Nabu Casa or a TLS-terminating reverse proxy).
+  Any party that has the full webhook URL is a trusted principal; keep the URL
+  secret.
+- **Home Assistant account (`ha_auth`).** Home Assistant Core is the OAuth
+  authorization server: the entry serves the discovery documents and
+  validates inbound Bearer tokens against Home Assistant's own auth, so access
+  is gated by a Home Assistant login — and restricted to **administrator**
+  users. The server acts with its own provisioned admin token (the caller's
+  bearer is never forwarded), so accepting any valid login would grant every
+  household member admin-equivalent control; non-admin, inactive, and
+  system-generated users are rejected. This is distinct from the beta OAuth mode
+  below — no bespoke authorization server or self-issued token is involved, and
+  revoking the user's Home Assistant token/session revokes access.
+
+The connect notification deliberately carries no secrets: Home Assistant
+shows persistent notifications to every authenticated user, so the webhook
+URL (the credential in the default posture) is surfaced only on
+administrator-only surfaces - the entry's Configure screen, the sidebar
+panel, and the log. A local-only option removes the webhook entirely.
+
+The server reaches Home Assistant with a dedicated admin token the component
+provisions and stores in the config entry. The token is handed to the server
+in-memory (never through the Home Assistant process environment); removing the
+entry revokes it, and disabling the config entry stops the server. As with
+standard mode, that token's Home Assistant permissions define what the server can
+do.
+
+The component also adds an admin-only **settings panel** to the Home Assistant
+sidebar that reverse-proxies the server's web settings UI over Home Assistant's
+own HTTP. Because a browser cannot attach a Bearer token to a panel view, access
+is gated by a short-lived, HttpOnly session cookie that an authenticated
+**administrator** obtains through Home Assistant, and every proxied request
+re-validates that the session still maps to an active admin. The loopback secret
+path is never exposed to the browser and no token or secret is placed in a URL;
+the proxy returns 503 whenever the server is not running.
+
 ## Scope
 
 **In scope** — please report these:
