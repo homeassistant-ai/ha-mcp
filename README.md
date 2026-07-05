@@ -283,7 +283,7 @@ To add manually: open **HACS** > **Integrations** > three-dot menu > **Custom re
 
 After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP Custom Component**.
 
-On **Home Assistant OS / Supervised**, the integration offers to add the add-on repository and install and start the **Home Assistant MCP Server** add-on for you — no need to add the add-on repository by hand. On **Container / Core** installs (no Supervisor) there is no add-on; run the server via Docker or pip and the integration just sets up the file/YAML services.
+Want a server too? Add the **HA-MCP Server** entry (see the in-process server section below) — it runs the full server inside Home Assistant on every install type. The add-on remains available from the add-on store for Home Assistant OS / Supervised users who prefer it.
 
 ### Install manually
 

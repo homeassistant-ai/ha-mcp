@@ -6,8 +6,7 @@ propagation, content-type coercion, error mapping), the two auth postures
 views, and the register/unregister lifecycle.
 
 Home Assistant and aiohttp are stubbed via ``_embedded_stubs`` (imported first so
-the fakes are installed before ``mcp_webhook`` binds them), mirroring
-``test_addon_bootstrap.py``'s sys.modules approach.
+the fakes are installed before ``mcp_webhook`` binds them).
 """
 
 from __future__ import annotations
