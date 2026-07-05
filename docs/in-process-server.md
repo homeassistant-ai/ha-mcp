@@ -2,8 +2,8 @@
 
 The **HA-MCP Custom Component** (`ha_mcp_tools`) can run the **full ha-mcp server
 in-process**, inside the Home Assistant application, and expose it remotely
-through a Home Assistant webhook. This is a fourth way to run ha-mcp, alongside
-the add-on, Docker, and the local stdio setup.
+through a Home Assistant webhook. This is one of the ways to run ha-mcp — and the
+recommended one.
 
 The in-process server is one of **two config-entry types** the component offers.
 The other is the **HA MCP Tools** services entry (the privileged file / YAML
@@ -18,9 +18,8 @@ entry](#relationship-to-the-tools-services-entry) below.
   separate Docker container or over stdio, you run it inside Home Assistant
   itself.
 - **Home Assistant OS / Supervised users** who would rather not run a separate
-  add-on. It works on HAOS too — the add-on is still the recommended path there,
-  but the in-process server is a supported alternative, and the two can run side
-  by side (they default to different ports).
+  add-on. It works on HAOS too — the add-on remains a supported alternative, but
+  you only need one of them; the two are fully independent.
 
 Because it reaches the internet through a Home Assistant webhook, the connect URL
 works through **Nabu Casa remote UI** (or any reverse proxy pointing at Home
@@ -100,13 +99,12 @@ your Home Assistant login, and every request re-checks that the account is
 still an active administrator. No token or secret ever appears in a URL,
 and the secret path stays on the loopback side of the proxy.
 
-## Coexisting with the add-on
+## Independent from the add-on
 
-The in-process server defaults to port **9584**, while the Home Assistant MCP
-Server add-on uses **9583**. You can run both at once — for example, keep the
-add-on for local clients and use the in-process server's webhook URL for remote
-access — without a port conflict, as long as you leave the default port (or pick
-another free one).
+The in-process server and the Home Assistant MCP Server add-on are completely
+independent: neither requires the other, and there is nothing to configure
+between them. The in-process server defaults to port **9584** while the add-on
+uses **9583**, so an existing add-on install does not conflict.
 
 ## Options
 
@@ -117,7 +115,7 @@ Configure there just reports that.)
 | Option | Default | What it does |
 |--------|---------|--------------|
 | **Release channel** | `stable` | `stable` installs the pinned, tested release; `dev` installs the latest development build, refreshed on every reload or restart. See [Release channels](#release-channels). |
-| **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the add-on's `9583` so both can run at once. |
+| **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the add-on's `9583` so an existing add-on install does not conflict. |
 | **Network access** | `0.0.0.0` | The default matches the add-on: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
 | **Webhook authentication** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. See [Security](#security). |
 | **ha-mcp package (advanced)** | the pinned stable release (for example `ha-mcp==7.9.0`; the pin follows every release automatically) | The pip requirement installed at runtime. Leave it unless you are testing a pre-release — it accepts any pip requirement string, including a GitHub tarball URL. An explicit value overrides the release channel, and changing it forces a reinstall on the next reload. |
