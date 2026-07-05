@@ -167,3 +167,53 @@ def test_targeted_get_state_ignores_visibility_filter(tmp_path, monkeypatch):
 
     # Targeted path never consults the filter — the entity is still returned.
     assert res["data"]["entity_id"] == denied
+
+
+def test_search_seam_allow_and_exclude_both_active(tmp_path, monkeypatch):
+    """Seam-level composition: allow_areas + exclude_categories active together
+    through the real _exact_match_search path. The diagnostic-in-allowed-area
+    entity must be hidden (exclude wins over the allow), the plain allowed entity
+    survives, and the non-allowed entity is hidden by the restriction."""
+    states = [
+        {"entity_id": "sensor.foo_diag", "state": "1", "attributes": {}},
+        {"entity_id": "light.foo_keep", "state": "on", "attributes": {}},
+        {"entity_id": "light.foo_other", "state": "on", "attributes": {}},
+    ]
+    registry = {
+        "success": True,
+        "result": [
+            {
+                "entity_id": "sensor.foo_diag",
+                "entity_category": "diagnostic",
+                "area_id": "kitchen",
+            },
+            {
+                "entity_id": "light.foo_keep",
+                "entity_category": None,
+                "area_id": "kitchen",
+            },
+            {
+                "entity_id": "light.foo_other",
+                "entity_category": None,
+                "area_id": "bedroom",
+            },
+        ],
+    }
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=["diagnostic"],
+            allow_areas=["kitchen"],
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    res = asyncio.run(
+        tools_search._exact_match_search(
+            _FakeClient(states, registry),
+            query="foo",
+            domain_filter=None,
+            limit=10,
+        )
+    )
+    assert {r["entity_id"] for r in res["results"]} == {"light.foo_keep"}

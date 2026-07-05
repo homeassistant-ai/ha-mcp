@@ -270,6 +270,31 @@ def test_allowlist_deny_still_wins():
     assert _hidden(reg, cfg) == {"light.kitchen"}
 
 
+def test_allow_and_exclude_compose_exclude_wins_over_allow():
+    # Central invariant: hide dimensions compose. An allow dimension and an
+    # exclude dimension are active simultaneously, so an entity that an allowlist
+    # matches but an exclude also matches must stay hidden (exclude wins) - a
+    # refactor that let restrict mode skip the exclude loop would leak it.
+    reg = _reg(
+        # diagnostic AND in the allowed area -> exclude must still hide it.
+        {
+            "entity_id": "sensor.diag_allowed",
+            "entity_category": "diagnostic",
+            "area_id": "kitchen",
+        },
+        # allowed area, not excluded -> the one entity that stays visible.
+        {"entity_id": "light.kitchen", "area_id": "kitchen"},
+        # not allowed, not excluded -> hidden by the allowlist restriction.
+        {"entity_id": "light.bedroom", "area_id": "bedroom"},
+    )
+    cfg = VisibilityConfig(
+        enabled=True,
+        exclude_categories=["diagnostic"],
+        allow_areas=["kitchen"],
+    )
+    assert _hidden(reg, cfg) == {"sensor.diag_allowed", "light.bedroom"}
+
+
 # --- Assist-exposure dimension (respect_assist_exposure) ---
 
 
