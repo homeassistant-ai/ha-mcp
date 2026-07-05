@@ -451,7 +451,14 @@ class TestAccessibilityMarkup:
     later edit can't silently drop the accessibility affordances.
     """
 
-    _PANELS = ("tools", "server", "backups", "tool-security-policies", "accessibility")
+    _PANELS = (
+        "tools",
+        "server",
+        "backups",
+        "tool-security-policies",
+        "entity-visibility",
+        "accessibility",
+    )
 
     def test_skip_link_and_main_landmark(self) -> None:
         import re

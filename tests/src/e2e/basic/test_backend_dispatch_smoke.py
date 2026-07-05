@@ -88,7 +88,7 @@ _SKIP_CEILING_PER_LANE = {
     # marker-gated skips, plus a 5-9 growth buffer.
     "container": 71,  # was 68; +3 in-process MCP server HAOS tests (haos_only/test_embedded_server_haos.py, skip on the container lane)
     "haos": 37,  # was 35; +2 in-process MCP server tests (workflows/embedded, @container_only, run on the container lane only). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
-    "haos_inaddon": 59,  # was 58; +1 net from the in-process MCP server tests (workflows/embedded, @container_only; observed lane count). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
+    "haos_inaddon": 65,  # was 59 (in-process MCP server); +6 entity-visibility @external_only e2e (test_entity_visibility.py) that skip on this lane (CI-observed count)
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -102,7 +102,7 @@ _SKIP_CEILING_PER_LANE = {
     # 1) + not_on_embedded 2 = 99. Initially set to 115 as a buffer for
     # parametrize item-inflation; round 6 (run 28709196071) observed the exact
     # item count and the entry below is pinned to it.
-    "embedded": 119,  # observed exact count (round 6, run 28709196071): haos/inaddon-lane skips + the external_only in-process-server class (alternative coverage on the container lane) + the 2 self-referential smoke tests
+    "embedded": 125,  # was 119; +6 entity-visibility @external_only e2e (test_entity_visibility.py) skip on this backend (alternative coverage on the external lane; CI-observed count)
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -120,7 +120,7 @@ _SKIP_CEILING_PER_LANE = {
     # lanes show (haos def 30 → ~35 observed; haos_inaddon def 50 → ~58) gives
     # ~84; initially set to 90 with a small buffer, and round 8 observed
     # exactly 90 — the entry below is pinned to the observed count.
-    "haos_embedded": 90,  # observed exact count (round 8): haos-lane skips + external_only + inaddon_only + the 3 lane-aware smoke tests
+    "haos_embedded": 94,  # was 90; +4 entity-visibility @external_only e2e (test_entity_visibility.py) skip on this backend (alternative coverage on the external lane; CI-observed count)
 }
 
 

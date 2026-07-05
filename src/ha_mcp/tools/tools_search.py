@@ -17,6 +17,7 @@ from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.fuzzy_search import apply_hidden_penalty
+from ..visibility.resolver import load_hidden_set
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -28,6 +29,7 @@ from .util_helpers import (
     add_timezone_metadata,
     build_pagination_metadata,
     filter_active_repairs,
+    merge_visibility_warnings,
     parse_string_list_param,
     project_fields,
     project_records,
@@ -705,11 +707,13 @@ async def _exact_match_search(
     registry_task = client.send_websocket_message(
         {"type": "config/entity_registry/list"}
     )
+    device_task = client.send_websocket_message({"type": "config/device_registry/list"})
     gather_results = await asyncio.gather(
-        entities_task, registry_task, return_exceptions=True
+        entities_task, registry_task, device_task, return_exceptions=True
     )
     state_result: Any = gather_results[0]
     registry_result: Any = gather_results[1]
+    device_result: Any = gather_results[2]
     if isinstance(state_result, BaseException):
         raise state_result
     # CancelledError comes through gather as a captured exception even
@@ -717,14 +721,28 @@ async def _exact_match_search(
     # waits forever.
     if isinstance(registry_result, asyncio.CancelledError):
         raise registry_result
+    if isinstance(device_result, asyncio.CancelledError):
+        raise device_result
     all_entities = state_result
     hidden_ids = _build_hidden_ids(registry_result)
+    # Opt-in visibility filter: a hard exclude (unlike the hidden_by score
+    # penalty). Fails open — load_hidden_set returns an empty set on any
+    # config/load error, so a bad config never blanks results. Do NOT wrap in
+    # try/except here, or the failure mode inverts to fail-closed (hide all).
+    # states + client let the allowlist reach states-only entities and the
+    # opt-in Assist-exposure dimension fetch its data; the device registry lets
+    # the area/label dimensions match a device-bound entity by its device.
+    visibility_hidden, visibility_warnings = await load_hidden_set(
+        registry_result, state_result, client, device_result
+    )
 
     query_lower = query.lower().strip()
 
     results = []
     for entity in all_entities:
         entity_id = entity.get("entity_id", "")
+        if entity_id in visibility_hidden:
+            continue
         is_hidden = entity_id in hidden_ids
         if is_hidden and not include_hidden:
             continue
@@ -763,13 +781,16 @@ async def _exact_match_search(
     # hits at 100, hidden ones at 80 etc).
     results.sort(key=lambda x: (-x["score"], x["entity_id"]))
     paginated = results[offset : offset + limit]
-    return {
-        "success": True,
-        "query": query,
-        **_build_pagination_metadata(len(results), offset, limit, paginated),
-        "results": paginated,
-        "search_type": "exact_match",
-    }
+    return merge_visibility_warnings(
+        {
+            "success": True,
+            "query": query,
+            **_build_pagination_metadata(len(results), offset, limit, paginated),
+            "results": paginated,
+            "search_type": "exact_match",
+        },
+        visibility_warnings,
+    )
 
 
 class SearchTools:
@@ -1343,7 +1364,7 @@ class SearchTools:
                     include_hidden=include_hidden_bool,
                 )
                 if query and query.strip():
-                    return await self._search_area_with_query(
+                    area_search = await self._search_area_with_query(
                         query,
                         area_filter,
                         area_result,
@@ -1355,17 +1376,34 @@ class SearchTools:
                         per_domain_limit_int,
                         parsed_result_fields,
                     )
-                return await self._search_area_only(
-                    area_result,
-                    area_filter,
-                    domain_filter,
-                    state_filter,
-                    limit,
-                    offset,
-                    group_by_domain_bool,
-                    per_domain_limit_int,
-                    parsed_result_fields,
+                else:
+                    area_search = await self._search_area_only(
+                        area_result,
+                        area_filter,
+                        domain_filter,
+                        state_filter,
+                        limit,
+                        offset,
+                        group_by_domain_bool,
+                        per_domain_limit_int,
+                        parsed_result_fields,
+                    )
+                # The three area builders rebuild a fresh response dict and do not
+                # carry area_result's warnings; forward them here in one place so a
+                # visibility/registry degradation on the area path is not silently
+                # dropped (mirrors the non-area path's merge_visibility_warnings).
+                # The builders wrap their payload via add_timezone_metadata into
+                # {"data": {...}, "metadata": {...}}, and the ha_search orchestrator
+                # unwraps ["data"] before merging metadata — so the warnings must
+                # live inside ["data"], not at the wrapper's top level, or the
+                # unwrap drops them.
+                warn_target = (
+                    area_search["data"]
+                    if isinstance(area_search, dict) and "data" in area_search
+                    else area_search
                 )
+                merge_visibility_warnings(warn_target, area_result.get("warnings", []))
+                return area_search
 
             if domain_filter and (not query or not query.strip()):
                 return await self._search_domain_only(
@@ -1705,27 +1743,44 @@ class SearchTools:
         registry_task = self._client.send_websocket_message(
             {"type": "config/entity_registry/list"}
         )
+        device_task = self._client.send_websocket_message(
+            {"type": "config/device_registry/list"}
+        )
         gather_results = await asyncio.gather(
-            states_task, registry_task, return_exceptions=True
+            states_task, registry_task, device_task, return_exceptions=True
         )
         states_result: Any = gather_results[0]
         registry_result: Any = gather_results[1]
+        device_result: Any = gather_results[2]
         if isinstance(states_result, BaseException):
             raise states_result
         # CancelledError must propagate; gather captures it like any other
         # exception when return_exceptions=True.
         if isinstance(registry_result, asyncio.CancelledError):
             raise registry_result
+        if isinstance(device_result, asyncio.CancelledError):
+            raise device_result
 
         hidden_ids = _build_hidden_ids(registry_result)
+        # Opt-in visibility filter: hard exclude, fails open (empty set on any
+        # error). Do NOT wrap in try/except or the failure mode inverts. states +
+        # client widen the allowlist to states-only entities and drive the opt-in
+        # Assist-exposure fetch; the device registry lets the area/label
+        # dimensions match a device-bound entity by its device.
+        visibility_hidden, visibility_warnings = await load_hidden_set(
+            registry_result, states_result, self._client, device_result
+        )
 
         # Filter by domain. Hidden entities are kept by default (with score
         # penalty applied below); ``include_hidden=False`` filters them out.
+        # The visibility exclude is applied before pagination so the counts
+        # computed below stay coherent with the returned set.
         filtered_entities = [
             e
             for e in states_result
-            if e.get("entity_id", "").startswith(f"{domain_filter}.")
-            and (include_hidden_bool or e.get("entity_id") not in hidden_ids)
+            if (eid := e.get("entity_id", "")).startswith(f"{domain_filter}.")
+            and eid not in visibility_hidden
+            and (include_hidden_bool or eid not in hidden_ids)
         ]
 
         # Score: 100 baseline for domain membership (exact, not fuzzy);
@@ -1772,7 +1827,10 @@ class SearchTools:
                 domain_filter, results, per_domain_limit_int, parsed_result_fields
             )
 
-        return await add_timezone_metadata(self._client, domain_list_data)
+        return await add_timezone_metadata(
+            self._client,
+            merge_visibility_warnings(domain_list_data, visibility_warnings),
+        )
 
     async def _search_regular(
         self,
