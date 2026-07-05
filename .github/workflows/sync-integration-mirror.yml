@@ -63,7 +63,7 @@ jobs:
         # The mirror's own release-on-tag workflow turns this tag into a
         # GitHub release (the monorepo GITHUB_TOKEN has no cross-repo API
         # access; the deploy key can only push).
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' && github.event.release.prerelease == false
         env:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
         run: |
