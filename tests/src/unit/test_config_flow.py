@@ -368,7 +368,8 @@ class TestServerOptionsFlow:
         form = asyncio.run(flow.async_step_init(None))
         defaults = {m.schema: m.default() for m in form["data_schema"].schema}
         # regenerate_secrets is a one-shot action, never pre-filled True.
-        assert defaults.pop(const.OPT_REGENERATE_SECRETS) is False
+        regenerate_default = defaults.pop(const.OPT_REGENERATE_SECRETS)
+        assert regenerate_default is False
         assert defaults == saved
 
     def test_init_submit_round_trips_input_into_entry(self):
