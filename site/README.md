@@ -18,11 +18,20 @@ Inside of your Astro project, you'll see the following folders and files:
 │   ├── assets
 │   │   └── astro.svg
 │   ├── components
-│   │   └── Welcome.astro
+│   │   ├── Nav.astro
+│   │   └── PlatformIcon.astro
 │   ├── layouts
 │   │   └── Layout.astro
 │   └── pages
-│       └── index.astro
+│       ├── contribute.astro
+│       ├── faq.astro
+│       ├── guide-addon.astro
+│       ├── guide-linux.astro
+│       ├── guide-macos.astro
+│       ├── guide-windows.astro
+│       ├── index.astro
+│       ├── setup.astro
+│       └── tools.astro
 └── package.json
 ```
 
