@@ -3,8 +3,8 @@
 One config flow serves two entry types under the shared domain, chosen from a
 menu on the first step:
 
-* ``tools`` — the privileged file / YAML services (the original component),
-  including the Supervisor add-on bootstrap offer. Single-instance, keyed on
+* ``tools`` — the privileged file / YAML services (the original component).
+  A single confirm step creates the entry. Single-instance, keyed on
   ``DOMAIN``.
 * ``server`` — the in-process ha-mcp FastMCP server (issue #1527). A single
   confirm step creates the entry (entry-exists = the server runs);

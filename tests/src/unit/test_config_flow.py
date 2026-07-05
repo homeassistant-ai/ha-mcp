@@ -3,8 +3,7 @@
 One config flow serves two entry types under the shared domain:
 
 * the ``user`` step is a menu (``tools`` / ``server``);
-* ``tools`` drives the Supervisor-detection / add-on bootstrap state machine and
-  creates the services entry (``entry_type="tools"``);
+* ``tools`` is a plain confirm-and-create step that creates the services entry;
 * ``server`` is a single confirm step that creates the in-process server entry
   (``entry_type="server"``);
 * ``async_get_options_flow`` dispatches on ``entry_type`` — the server entry gets
@@ -13,8 +12,7 @@ One config flow serves two entry types under the shared domain:
 
 The HA framework methods (async_show_menu / async_show_form / async_create_entry
 / ...) are stubbed on the flow instance so each routing decision is asserted
-directly. The real Supervisor calls live in addon.py and are covered by
-test_addon_bootstrap.py; a live end-to-end check runs on the HAOS tier.
+directly.
 """
 
 from __future__ import annotations
@@ -53,8 +51,6 @@ sys.modules["homeassistant.config_entries"] = _ce
 _core = MagicMock()
 _core.callback = lambda func: func  # identity so async_get_options_flow builds
 sys.modules["homeassistant.core"] = _core
-
-sys.modules["homeassistant.helpers.hassio"] = MagicMock()
 
 
 # Inert selector stand-ins: the options flow builds SelectSelector dropdowns,
@@ -122,15 +118,6 @@ def _make_flow() -> cf.HaMcpToolsConfigFlow:
     flow.async_show_form = MagicMock(side_effect=lambda **kw: {"type": "form", **kw})
     flow.async_create_entry = MagicMock(
         side_effect=lambda **kw: {"type": "entry", **kw}
-    )
-    flow.async_show_progress = MagicMock(
-        side_effect=lambda **kw: {"type": "progress", **kw}
-    )
-    flow.async_show_progress_done = MagicMock(
-        side_effect=lambda **kw: {"type": "progress_done", **kw}
-    )
-    flow.hass = SimpleNamespace(
-        async_create_task=lambda coro: asyncio.ensure_future(coro)
     )
     return flow
 

@@ -268,7 +268,7 @@ async def test_local_calendar_lifecycle(mcp_client: Any, ha_client: Any) -> None
 
 
 async def test_ha_mcp_tools_config_flow_loads_on_supervisor(ha_client: Any) -> None:
-    """The ha_mcp_tools bootstrap config flow imports and runs on real HA OS.
+    """The ha_mcp_tools config flow imports and runs on real HA OS.
 
     Starting the flow forces ``custom_components/ha_mcp_tools/config_flow.py``
     (and its imports) to load and execute inside a real Supervised Home
@@ -278,8 +278,8 @@ async def test_ha_mcp_tools_config_flow_loads_on_supervisor(ha_client: Any) -> N
 
     The integration is single-instance, so where it is already configured the
     flow aborts with ``already_configured``; if it is not yet configured it
-    reaches the Supervisor-aware add-on step (proving ``is_hassio`` routing
-    works on a real Supervisor). Either outcome proves the flow loaded. The flow
+    shows the plain confirm form. Either outcome proves the flow loaded and
+    its imports resolved inside a real Supervisor process. The flow
     is left un-submitted, so no add-on is installed and no duplicate entry is
     created.
     """
