@@ -3653,6 +3653,7 @@ async function visibilitySaveConfig() {
     allow_entity_ids: _visibilityParseList(document.getElementById('visibility-allow-entities').value, '\n'),
     respect_assist_exposure: document.getElementById('visibility-respect-assist').checked,
   };
+  setStatusAlert(statusEl, false);
   statusEl.textContent = 'Saving...';
   let resp;
   try {
@@ -3662,22 +3663,31 @@ async function visibilitySaveConfig() {
       body: JSON.stringify(config),
     });
   } catch (e) {
+    setStatusAlert(statusEl, true);
     statusEl.textContent = 'Save failed: ' + e.message;
     return;
   }
   if (resp.status === 409) {
-    statusEl.textContent = 'Config was changed elsewhere; reloaded the latest. Re-apply and save again.';
-    await visibilityLoadConfig();
+    // Do NOT reload the config here: that would overwrite the user's unsaved
+    // edits (there would be nothing left to "re-apply"). Keep the edits in the
+    // form, surface the conflict, and let the user reload deliberately — mirrors
+    // the policy tab's optimistic-lock message.
+    setStatusAlert(statusEl, true);
+    statusEl.textContent =
+      'Config was changed in another tab or session. Reload the page to see the '
+      + 'latest, then re-apply your changes.';
     return;
   }
   if (!resp.ok) {
     let detail = 'HTTP ' + resp.status;
     try { const b = await resp.json(); if (b && b.error) detail = b.error; } catch (_e) { /* fallback */ }
+    setStatusAlert(statusEl, true);
     statusEl.textContent = 'Save failed: ' + detail;
     return;
   }
   const body = await resp.json();
   visibilityVersion = body.version ?? (visibilityVersion + 1);
+  setStatusAlert(statusEl, false);
   statusEl.textContent = 'Saved.';
 }
 
