@@ -92,7 +92,11 @@ class DeepSearchMixin(SceneSearchMixin):
                 ctx,
                 progress=phase_done,
                 total=total_phases,
-                message=f"fetched {len(all_entities)} entity states",
+                # Config-reference search scans the full state machine by design
+                # (the config body is unfiltered), so this count is the scanned
+                # universe, not the visible one - phrase it so an operator with
+                # the visibility filter on doesn't read it as "the filter is off".
+                message=f"scanned {len(all_entities)} entity states for config references",
             )
 
             # Pre-resolve unique_ids from cached entity states to avoid redundant API calls

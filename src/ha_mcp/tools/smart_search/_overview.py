@@ -79,10 +79,12 @@ class SystemOverviewMixin(_SearchBase):
 
             # Opt-in visibility filter: drop out-of-scope entities from the whole
             # overview universe before any domain stats/samples are computed, so
-            # every count stays coherent. results[3] is the raw entity registry.
+            # every count stays coherent. results[3] is the raw entity registry,
+            # results[4] the device registry (so the area/label dimensions match a
+            # device-bound entity by its device's area/labels).
             # Fails open (empty set on any error); do NOT wrap in try/except.
             visibility_hidden, visibility_warnings = await load_hidden_set(
-                results[3], results[0], self.client
+                results[3], results[0], self.client, results[4]
             )
             if visibility_hidden:
                 entities = [

@@ -707,11 +707,13 @@ async def _exact_match_search(
     registry_task = client.send_websocket_message(
         {"type": "config/entity_registry/list"}
     )
+    device_task = client.send_websocket_message({"type": "config/device_registry/list"})
     gather_results = await asyncio.gather(
-        entities_task, registry_task, return_exceptions=True
+        entities_task, registry_task, device_task, return_exceptions=True
     )
     state_result: Any = gather_results[0]
     registry_result: Any = gather_results[1]
+    device_result: Any = gather_results[2]
     if isinstance(state_result, BaseException):
         raise state_result
     # CancelledError comes through gather as a captured exception even
@@ -719,6 +721,8 @@ async def _exact_match_search(
     # waits forever.
     if isinstance(registry_result, asyncio.CancelledError):
         raise registry_result
+    if isinstance(device_result, asyncio.CancelledError):
+        raise device_result
     all_entities = state_result
     hidden_ids = _build_hidden_ids(registry_result)
     # Opt-in visibility filter: a hard exclude (unlike the hidden_by score
@@ -726,9 +730,10 @@ async def _exact_match_search(
     # config/load error, so a bad config never blanks results. Do NOT wrap in
     # try/except here, or the failure mode inverts to fail-closed (hide all).
     # states + client let the allowlist reach states-only entities and the
-    # opt-in Assist-exposure dimension fetch its data.
+    # opt-in Assist-exposure dimension fetch its data; the device registry lets
+    # the area/label dimensions match a device-bound entity by its device.
     visibility_hidden, visibility_warnings = await load_hidden_set(
-        registry_result, state_result, client
+        registry_result, state_result, client, device_result
     )
 
     query_lower = query.lower().strip()
@@ -1738,25 +1743,32 @@ class SearchTools:
         registry_task = self._client.send_websocket_message(
             {"type": "config/entity_registry/list"}
         )
+        device_task = self._client.send_websocket_message(
+            {"type": "config/device_registry/list"}
+        )
         gather_results = await asyncio.gather(
-            states_task, registry_task, return_exceptions=True
+            states_task, registry_task, device_task, return_exceptions=True
         )
         states_result: Any = gather_results[0]
         registry_result: Any = gather_results[1]
+        device_result: Any = gather_results[2]
         if isinstance(states_result, BaseException):
             raise states_result
         # CancelledError must propagate; gather captures it like any other
         # exception when return_exceptions=True.
         if isinstance(registry_result, asyncio.CancelledError):
             raise registry_result
+        if isinstance(device_result, asyncio.CancelledError):
+            raise device_result
 
         hidden_ids = _build_hidden_ids(registry_result)
         # Opt-in visibility filter: hard exclude, fails open (empty set on any
         # error). Do NOT wrap in try/except or the failure mode inverts. states +
         # client widen the allowlist to states-only entities and drive the opt-in
-        # Assist-exposure fetch.
+        # Assist-exposure fetch; the device registry lets the area/label
+        # dimensions match a device-bound entity by its device.
         visibility_hidden, visibility_warnings = await load_hidden_set(
-            registry_result, states_result, self._client
+            registry_result, states_result, self._client, device_result
         )
 
         # Filter by domain. Hidden entities are kept by default (with score

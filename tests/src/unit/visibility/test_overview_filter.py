@@ -55,6 +55,50 @@ def _run_overview(tmp_path, monkeypatch, config: VisibilityConfig):
     return asyncio.run(mixin.get_system_overview(detail_level="full"))
 
 
+class _DeviceRegistryOverviewClient(_OverviewClient):
+    """Overview client that also serves a device registry (round-4 wiring proof)."""
+
+    def __init__(self, states, entity_registry, device_registry):
+        super().__init__(states, entity_registry)
+        self._device_registry = device_registry
+
+    async def send_websocket_message(self, msg):
+        if msg["type"] == "config/device_registry/list":
+            return self._device_registry
+        return await super().send_websocket_message(msg)
+
+
+def test_overview_excludes_device_inherited_area(tmp_path, monkeypatch):
+    # Seam proof that the device registry reaches the resolver through the overview
+    # gather (results[4]): a device-bound entity (registry area_id None + device_id)
+    # is dropped by exclude_areas via its device's area. Guards the call-site
+    # wiring, not just the pure resolver.
+    states = [
+        {"entity_id": "light.spot", "state": "on", "attributes": {}},
+        {"entity_id": "light.keep", "state": "on", "attributes": {}},
+    ]
+    entity_registry = {
+        "success": True,
+        "result": [
+            {"entity_id": "light.spot", "area_id": None, "device_id": "d1"},
+            {"entity_id": "light.keep", "area_id": None, "device_id": None},
+        ],
+    }
+    device_registry = {"success": True, "result": [{"id": "d1", "area_id": "garage"}]}
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(enabled=True, exclude_categories=[], exclude_areas=["garage"]),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    mixin = SystemOverviewMixin()
+    mixin.client = _DeviceRegistryOverviewClient(
+        states, entity_registry, device_registry
+    )
+    res = asyncio.run(mixin.get_system_overview(detail_level="full"))
+    # light.spot dropped via its device's area; light.keep (no device) remains.
+    assert res["system_summary"]["total_entities"] == 1
+
+
 def test_overview_enabled_drops_diagnostic_and_counts_stay_coherent(
     tmp_path, monkeypatch
 ):

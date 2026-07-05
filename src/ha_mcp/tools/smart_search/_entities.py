@@ -194,6 +194,7 @@ class EntitySearchMixin(_SearchBase):
         results = await asyncio.gather(
             self.client.get_states(),
             self.client.send_websocket_message({"type": "config/entity_registry/list"}),
+            self.client.send_websocket_message({"type": "config/device_registry/list"}),
             return_exceptions=True,
         )
         # States-fetch failure is fatal — auth/connection errors must propagate
@@ -201,18 +202,22 @@ class EntitySearchMixin(_SearchBase):
         # with success=True.
         if isinstance(results[0], BaseException):
             raise results[0]
-        # CancelledError on the registry task must propagate too; gather captures
+        # CancelledError on the registry tasks must propagate too; gather captures
         # it like any other exception when return_exceptions=True.
         if isinstance(results[1], asyncio.CancelledError):
             raise results[1]
+        if isinstance(results[2], asyncio.CancelledError):
+            raise results[2]
         entities = results[0]
 
         # Opt-in visibility filter. results[1] is the unprojected registry, so
         # entity_category/hidden_by/area_id/labels are present (the slim map
-        # below drops them). Fails open; do NOT wrap in try/except or the
-        # failure mode inverts.
+        # below drops them); results[2] is the device registry, which lets the
+        # area/label dimensions match a device-bound entity by its device's
+        # area/labels. Fails open; do NOT wrap in try/except or the failure mode
+        # inverts.
         visibility_hidden, visibility_warnings = await load_hidden_set(
-            results[1], results[0], self.client
+            results[1], results[0], self.client, results[2]
         )
         registry_slim = self._build_registry_slim(results[1])
         survivor_ids, survivor_states = self._filter_hidden_entities(
@@ -321,10 +326,12 @@ class EntitySearchMixin(_SearchBase):
                 if isinstance(reg_result, asyncio.CancelledError):
                     raise reg_result
             # Opt-in visibility filter. results[2] is the unprojected entity
-            # registry, so entity_category/hidden_by/area_id/labels are present.
+            # registry, so entity_category/hidden_by/area_id/labels are present;
+            # results[3] is the device registry, so the area/label dimensions
+            # match a device-bound entity by its device's area/labels.
             # Fails open (empty set on any error / non-dict payload).
             visibility_hidden, visibility_warnings = await load_hidden_set(
-                results[2], results[0], self.client
+                results[2], results[0], self.client, results[3]
             )
             area_registry = self._parse_area_registry(results[1])
             entity_reg_map = self._parse_entity_reg_map(results[2])

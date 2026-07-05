@@ -93,6 +93,58 @@ def _normalize_labels(raw: object) -> list[str]:
     return []
 
 
+def _parse_device_registry(
+    device_registry_result: object,
+) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Parse ``config/device_registry/list`` into device_id -> area_id / labels.
+
+    Tolerates a missing/degraded payload (returns empty maps) so the area/label
+    dimensions simply fall back to entity-level matching instead of failing.
+    """
+    device_area: dict[str, str] = {}
+    device_labels: dict[str, list[str]] = {}
+    if not isinstance(device_registry_result, dict):
+        return device_area, device_labels
+    devices = device_registry_result.get("result", [])
+    if not isinstance(devices, list):
+        return device_area, device_labels
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        device_id = device.get("id")
+        if not device_id:
+            continue
+        area_id = device.get("area_id")
+        if area_id:
+            device_area[device_id] = area_id
+        labels = _normalize_labels(device.get("labels"))
+        if labels:
+            device_labels[device_id] = labels
+    return device_area, device_labels
+
+
+def _effective_area(entry: dict[str, Any], device_area: dict[str, str]) -> str | None:
+    """Entity ``area_id`` falling back to its device's area (HA's inheritance)."""
+    area_id = entry.get("area_id")
+    if isinstance(area_id, str) and area_id:
+        return area_id
+    device_id = entry.get("device_id")
+    if isinstance(device_id, str) and device_id:
+        return device_area.get(device_id)
+    return None
+
+
+def _effective_labels(
+    entry: dict[str, Any], device_labels: dict[str, list[str]]
+) -> list[str]:
+    """Entity labels plus its device's labels (device labels apply to entities)."""
+    result = _normalize_labels(entry.get("labels"))
+    device_id = entry.get("device_id")
+    if isinstance(device_id, str) and device_id in device_labels:
+        result = result + device_labels[device_id]
+    return result
+
+
 def _is_assist_exposed(
     eid: str,
     entry: dict[str, Any] | None,
@@ -134,6 +186,7 @@ def hidden_entity_ids(
     states_result: object | None = None,
     assist_overrides: dict[str, bool] | None = None,
     expose_new: bool = False,
+    device_registry_result: object | None = None,
 ) -> tuple[set[str], list[str]]:
     """Return ``(hidden_entity_ids, warnings)``.
 
@@ -150,6 +203,15 @@ def hidden_entity_ids(
     it supplies the effective ``device_class`` (HA reads it from the live entity,
     not the registry) for the Assist default-exposure check. Without it, both
     dimensions degrade to registry-only.
+
+    ``device_registry_result`` (``config/device_registry/list``) supplies the
+    device area/labels an entity inherits: HA resolves an entity's effective area
+    as its own ``area_id`` falling back to its device's, and a device's labels
+    apply to its entities. The area/label exclude and allow dimensions match on
+    that effective area/labels, so a device-bound entity (registry ``area_id``
+    None + a ``device_id``) is filtered by its device's area/labels. Without the
+    payload those dimensions fall back to entity-level matching only, which misses
+    device-bound entities (most real ones).
 
     This is a pure function. For the Assist dimension, a registry entry's explicit
     ``conversation`` ``should_expose`` (True *or* False) is read directly from the
@@ -216,6 +278,12 @@ def hidden_entity_ids(
                 dc = attrs.get("device_class") if isinstance(attrs, dict) else None
                 state_device_class[state["entity_id"]] = dc
 
+    # Device-inherited area/labels: HA resolves an entity's effective area as its
+    # own area_id else its device's, and device labels apply to its entities. A
+    # missing/degraded device payload leaves both maps empty, so the area/label
+    # dimensions fall back to entity-level matching.
+    device_area, device_labels = _parse_device_registry(device_registry_result)
+
     areas = set(config.exclude_areas)
     labels = set(config.exclude_labels)
     allow_areas = set(config.allow_areas)
@@ -258,10 +326,10 @@ def hidden_entity_ids(
         if config.exclude_hidden and entry.get("hidden_by") is not None:
             hidden.add(eid)
             continue
-        if areas and entry.get("area_id") in areas:
+        if areas and _effective_area(entry, device_area) in areas:
             hidden.add(eid)
             continue
-        if labels and labels.intersection(_normalize_labels(entry.get("labels"))):
+        if labels and labels.intersection(_effective_labels(entry, device_labels)):
             hidden.add(eid)
 
     # Allowlist + Assist are conjunctive filters that must also reach states-only
@@ -294,11 +362,14 @@ def hidden_entity_ids(
             entry = registry_by_id.get(eid)
             if allow_active and not (
                 eid in allow_entity_ids
-                or (entry is not None and entry.get("area_id") in allow_areas)
+                or (
+                    entry is not None
+                    and _effective_area(entry, device_area) in allow_areas
+                )
                 or (
                     entry is not None
                     and allow_labels.intersection(
-                        _normalize_labels(entry.get("labels"))
+                        _effective_labels(entry, device_labels)
                     )
                 )
             ):
@@ -400,6 +471,7 @@ async def load_hidden_set(
     registry_result: object,
     states_result: object | None = None,
     client: Any | None = None,
+    device_registry_result: object | None = None,
 ) -> tuple[set[str], list[str]]:
     """Load the visibility config off-loop and resolve ``(hidden, warnings)``.
 
@@ -407,7 +479,9 @@ async def load_hidden_set(
     empty hidden set so a config problem never blanks the instance from the
     agent; a genuine load failure is surfaced as a warning. ``states_result`` is
     passed through to widen the allowlist/Assist dimensions to states-only
-    entities and supply device_class. When the config enables
+    entities and supply device_class; ``device_registry_result``
+    (``config/device_registry/list``) lets the area/label dimensions match the
+    area/labels an entity inherits from its device. When the config enables
     ``respect_assist_exposure`` and a ``client`` is given, the two Assist
     exposure websocket reads are fetched here (once per call, in parallel) and
     fed to the pure resolver; the fetch fails soft (only that dimension drops).
@@ -419,7 +493,12 @@ async def load_hidden_set(
         if config.enabled and config.respect_assist_exposure and client is not None:
             assist_overrides, expose_new = await _fetch_assist_exposure(client)
         return hidden_entity_ids(
-            registry_result, config, states_result, assist_overrides, expose_new
+            registry_result,
+            config,
+            states_result,
+            assist_overrides,
+            expose_new,
+            device_registry_result,
         )
     except Exception:
         logger.warning(

@@ -13,6 +13,17 @@ def _hidden(registry_result, config):
     return hidden_entity_ids(registry_result, config)[0]
 
 
+def _dev(*devices):
+    return {"success": True, "result": list(devices)}
+
+
+def _hidden_dev(registry_result, config, device_registry_result):
+    """Hidden set with a device registry payload threaded in (area/label inheritance)."""
+    return hidden_entity_ids(
+        registry_result, config, None, None, False, device_registry_result
+    )[0]
+
+
 def test_enabled_bad_payload_warns_and_fails_open(caplog):
     with caplog.at_level(logging.WARNING):
         assert _hidden({"success": False}, VisibilityConfig(enabled=True)) == set()
@@ -71,6 +82,97 @@ def test_denylist_and_area_and_label_union():
         exclude_labels=["noise"],
     )
     assert _hidden(reg, cfg) == {"sensor.x", "sensor.y", "sensor.z"}
+
+
+# --- device-inherited area/labels (round-4 finding: most real entities are
+# device-bound, registry area_id None + a device_id, inheriting the device's
+# area; device labels apply to their entities) --------------------------------
+
+
+def test_exclude_area_hides_device_inherited_entity():
+    # Entity carries no entity-level area_id; its area comes from its device.
+    # exclude_areas must hide it via the device's area (the round-4 under-hide).
+    reg = _reg({"entity_id": "light.spot", "area_id": None, "device_id": "d1"})
+    dev = _dev({"id": "d1", "area_id": "garage"})
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["garage"]
+    )
+    assert _hidden_dev(reg, cfg, dev) == {"light.spot"}
+
+
+def test_allow_area_keeps_device_inherited_entity():
+    # The dangerous direction: allow_areas must NOT hide a device-bound entity in
+    # the allowed area (the round-4 over-hide that collapsed the overview). A
+    # device-bound entity in another area is still hidden.
+    reg = _reg(
+        {"entity_id": "light.spot", "area_id": None, "device_id": "d1"},
+        {"entity_id": "light.other", "area_id": None, "device_id": "d2"},
+    )
+    dev = _dev({"id": "d1", "area_id": "garage"}, {"id": "d2", "area_id": "attic"})
+    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_areas=["garage"])
+    assert _hidden_dev(reg, cfg, dev) == {"light.other"}
+
+
+def test_exclude_label_hides_device_inherited_entity():
+    reg = _reg({"entity_id": "light.spot", "device_id": "d1"})
+    dev = _dev({"id": "d1", "labels": ["noise"]})
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_labels=["noise"]
+    )
+    assert _hidden_dev(reg, cfg, dev) == {"light.spot"}
+
+
+def test_allow_label_keeps_device_inherited_entity():
+    reg = _reg(
+        {"entity_id": "light.spot", "device_id": "d1"},
+        {"entity_id": "light.other", "device_id": "d2"},
+    )
+    dev = _dev({"id": "d1", "labels": ["voice"]}, {"id": "d2", "labels": ["misc"]})
+    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_labels=["voice"])
+    assert _hidden_dev(reg, cfg, dev) == {"light.other"}
+
+
+def test_entity_area_overrides_device_area():
+    # HA precedence: an entity's own area_id wins over its device's. Excluding the
+    # device's area must NOT hide it; excluding the entity's own area must.
+    reg = _reg({"entity_id": "light.spot", "area_id": "kitchen", "device_id": "d1"})
+    dev = _dev({"id": "d1", "area_id": "garage"})
+    hide_device_area = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["garage"]
+    )
+    assert _hidden_dev(reg, hide_device_area, dev) == set()
+    hide_entity_area = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["kitchen"]
+    )
+    assert _hidden_dev(reg, hide_entity_area, dev) == {"light.spot"}
+
+
+def test_labels_are_entity_and_device_union():
+    # A device-bound entity is hidden by EITHER its own label or its device's.
+    reg = _reg({"entity_id": "light.spot", "labels": ["own"], "device_id": "d1"})
+    dev = _dev({"id": "d1", "labels": ["dev"]})
+    by_own = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_labels=["own"]
+    )
+    by_device = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_labels=["dev"]
+    )
+    assert _hidden_dev(reg, by_own, dev) == {"light.spot"}
+    assert _hidden_dev(reg, by_device, dev) == {"light.spot"}
+
+
+def test_no_device_payload_falls_back_to_entity_area_only():
+    # Without the device registry the area/label dimensions match entity-level
+    # only (fail-open): a device-bound entity is not matched, an entity-level one
+    # still is. This is the pre-round-4 behavior, now the graceful degradation.
+    reg = _reg(
+        {"entity_id": "light.device_bound", "area_id": None, "device_id": "d1"},
+        {"entity_id": "light.entity_area", "area_id": "garage"},
+    )
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["garage"]
+    )
+    assert _hidden(reg, cfg) == {"light.entity_area"}
 
 
 def test_deny_hides_entity_absent_from_registry():
