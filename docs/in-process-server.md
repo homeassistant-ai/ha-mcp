@@ -77,15 +77,16 @@ The server is reached through a Home Assistant webhook whose id is your secret
 - **Local network:**
   `http://<home-assistant-host>:8123/api/webhook/<webhook-id>`
 
-If you set **Bind address** to `0.0.0.0` (see [Options](#options)), the server is
-also reachable directly on its own port, bypassing the webhook, at the secret
-path (which looks like `/private_<random>`):
+The server is also reachable directly on its own port (default - same model
+as the add-on), bypassing the webhook, at the secret path (which looks like
+`/private_<random>`):
 
 - **Direct LAN access:** `http://<home-assistant-ip>:9584/private_<random>`
 
-The remote and local webhook URLs are listed in the notification and on the
-Configure screen; the direct URL is listed too whenever the bind address is
-`0.0.0.0`.
+Set **Network access** to `127.0.0.1` to turn direct access off and keep only
+the webhook and panel paths. The remote and local webhook URLs are listed in
+the notification and on the Configure screen; the direct URL is listed
+whenever direct access is on.
 
 ## Settings panel ("HA-MCP" in the sidebar)
 
@@ -117,7 +118,7 @@ Configure there just reports that.)
 |--------|---------|--------------|
 | **Release channel** | `stable` | `stable` installs the pinned, tested release; `dev` installs the latest development build, refreshed on every reload or restart. See [Release channels](#release-channels). |
 | **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the add-on's `9583` so both can run at once. |
-| **Bind address** | `127.0.0.1` | `127.0.0.1` keeps the server loopback-only (remote access is via the webhook). `0.0.0.0` additionally allows direct access from your LAN at the secret path. |
+| **Network access** | `0.0.0.0` | The default matches the add-on: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
 | **Webhook authentication** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. See [Security](#security). |
 | **ha-mcp package (advanced)** | `ha-mcp==7.9.0` | The pip requirement installed at runtime. Leave it unless you are testing a pre-release — it accepts any pip requirement string, including a GitHub tarball URL. An explicit value overrides the release channel, and changing it forces a reinstall on the next reload. |
 | **Home Assistant URL for the server (advanced)** | `http://127.0.0.1:8123` | How the in-process server reaches Home Assistant. The loopback default works for almost everyone; only change it for unusual SSL-only setups. |

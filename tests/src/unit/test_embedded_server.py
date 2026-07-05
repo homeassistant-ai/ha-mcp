@@ -118,7 +118,9 @@ class TestConstruction:
     def test_defaults(self, tmp_path):
         mgr, _hass, _entry = _manager(tmp_path)
         assert mgr.port == 9584
-        assert mgr._bind_host == "127.0.0.1"
+        # LAN-reachable by default (owner decision: add-on parity - the
+        # secret path is the credential, same as the add-on's port).
+        assert mgr._bind_host == "0.0.0.0"
         assert mgr._server_url == "http://127.0.0.1:8123"
         assert mgr._pip_spec == "ha-mcp==7.9.0"
         assert mgr.is_running is False

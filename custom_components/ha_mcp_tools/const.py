@@ -248,8 +248,12 @@ WEBHOOK_AUTH_HA = "ha_auth"  # HA-native bearer (HA core is the OAuth AS)
 # Default bind host + port. 9584 (not the add-on's 9583) so this in-process
 # server and an add-on install can coexist on the same box.
 DEFAULT_SERVER_PORT = 9584
-DEFAULT_BIND_HOST = "127.0.0.1"
+# LAN-reachable by default - parity with the add-on, whose port has always
+# been directly reachable with the secret path as the credential. Loopback
+# is the optional hardening choice, not the default (owner decision).
+DEFAULT_BIND_HOST = "0.0.0.0"
 BIND_HOST_ALL = "0.0.0.0"
+BIND_HOST_LOOPBACK = "127.0.0.1"
 
 # Loopback base URL the server uses to reach HA core (REST + WS).
 DEFAULT_LOOPBACK_URL = "http://127.0.0.1:8123"

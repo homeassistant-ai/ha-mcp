@@ -300,9 +300,21 @@ class TestSurfaceConnectUrls:
         assert "Direct LAN access" in message
         assert ":9999/priv" in message
 
-    def test_loopback_bind_omits_direct_access_line(self):
+    def test_default_bind_includes_direct_access_line(self):
+        # LAN default (add-on parity): no explicit bind option -> the direct
+        # URL is part of the standard connect notification.
         _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
         hass = _make_hass()
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
+        esetup._surface_connect_urls(hass, entry, "none")
+        assert "Direct LAN access" in self._message()
+
+    def test_loopback_bind_omits_direct_access_line(self):
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"},
+            options={esetup.OPT_BIND_HOST: "127.0.0.1"},
+        )
         esetup._surface_connect_urls(hass, entry, "none")
         assert "Direct LAN access" not in self._message()

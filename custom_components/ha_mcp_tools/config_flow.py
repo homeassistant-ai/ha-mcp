@@ -41,6 +41,7 @@ from homeassistant.helpers.selector import (
 from .addon import AddonBootstrapError, async_install_and_start_addon
 from .const import (
     BIND_HOST_ALL,
+    BIND_HOST_LOOPBACK,
     CHANNEL_DEV,
     CHANNEL_STABLE,
     CONF_ENTRY_TYPE,
@@ -279,12 +280,12 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     SelectSelectorConfig(
                         options=[
                             SelectOptionDict(
-                                value=DEFAULT_BIND_HOST,
-                                label="This machine only (recommended)",
+                                value=BIND_HOST_ALL,
+                                label="Local network (default)",
                             ),
                             SelectOptionDict(
-                                value=BIND_HOST_ALL,
-                                label="Expose on your local network",
+                                value=BIND_HOST_LOOPBACK,
+                                label="This machine only (loopback)",
                             ),
                         ],
                         mode=SelectSelectorMode.DROPDOWN,

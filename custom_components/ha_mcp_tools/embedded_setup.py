@@ -22,6 +22,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
 from .const import (
+    BIND_HOST_ALL,
     DATA_MANAGER,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
@@ -164,7 +165,7 @@ def _surface_connect_urls(
         f"{url_lines}\n\n"
         f"{auth_note}\n"
     )
-    if bind_host != DEFAULT_BIND_HOST:
+    if bind_host == BIND_HOST_ALL:
         message += (
             f"\nDirect LAN access is also available at "
             f"http://<home-assistant-ip>:{port}{entry.data[DATA_SECRET_PATH]}\n"
