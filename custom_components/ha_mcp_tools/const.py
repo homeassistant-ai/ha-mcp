@@ -187,6 +187,9 @@ RESERVED_DASHBOARD_URL_PATHS = frozenset(
 # pyproject.toml's project.version. The options flow's advanced "pip requirement"
 # field overrides this with any pip spec (e.g. a GitHub tarball URL) for
 # pre-release testing.
+# Managed by semantic-release (pyproject version_variables): bumped to the
+# released server version on every release so the stable channel always
+# installs the same ha-mcp version the add-on ships.
 PINNED_HA_MCP_VERSION = "7.9.0"
 
 # PyPI distribution names. Stable ships as ``ha-mcp`` (pinned above); the dev
