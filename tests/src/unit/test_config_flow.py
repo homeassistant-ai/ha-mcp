@@ -111,7 +111,6 @@ sys.modules.pop("custom_components.ha_mcp_tools.config_flow", None)
 
 from custom_components.ha_mcp_tools import config_flow as cf  # noqa: E402
 from custom_components.ha_mcp_tools import const  # noqa: E402
-from custom_components.ha_mcp_tools.addon import AddonBootstrapError  # noqa: E402
 
 
 def _make_flow(*, is_hassio: bool = False) -> cf.HaMcpToolsConfigFlow:
@@ -147,19 +146,6 @@ def _make_options_flow(*, options=None, data=None) -> cf.HaMcpServerOptionsFlow:
     return flow
 
 
-async def _drive_install(flow, addon_input):
-    """Accept the add-on step, then pump the progress step to completion."""
-    result = await flow.async_step_addon(addon_input)
-    guard = 0
-    while result.get("type") == "progress":
-        guard += 1
-        assert guard < 5, "install step did not converge"
-        if flow._install_task is not None:
-            await asyncio.gather(flow._install_task, return_exceptions=True)
-        result = await flow.async_step_install_addon()
-    return result
-
-
 class TestMenuStep:
     def test_user_step_shows_entry_type_menu(self):
         flow = _make_flow()
@@ -184,70 +170,22 @@ class TestToolsBranch:
         assert entry["title"] == cf._TOOLS_ENTRY_TITLE
         assert entry["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS}
 
-    def test_supervisor_routes_to_addon_step(self):
+    def test_supervisor_uses_same_plain_form(self):
+        # The add-on bootstrap was removed (the in-process server entry is
+        # the one-click server path): Supervisor installs get the identical
+        # plain confirm-and-create flow as Container/Core.
         flow = _make_flow(is_hassio=True)
-        form = asyncio.run(flow.async_step_tools(None))
-        assert form["type"] == "form"
-        assert form["step_id"] == "addon"
+        result = asyncio.run(flow.async_step_tools(None))
+        assert result["type"] == "form"
+        assert result["step_id"] == "tools"
+        result = asyncio.run(flow.async_step_tools({}))
+        assert result["type"] == "entry"
 
     def test_tools_uses_domain_unique_id(self):
         flow = _make_flow(is_hassio=False)
         asyncio.run(flow.async_step_tools(None))
         flow.async_set_unique_id.assert_awaited_once_with(const.DOMAIN)
         flow._abort_if_unique_id_configured.assert_called_once()
-
-
-class TestAddonStep:
-    def test_decline_creates_tools_entry_without_installing(self):
-        flow = _make_flow(is_hassio=True)
-        cf.async_install_and_start_addon = AsyncMock()
-        result = asyncio.run(flow.async_step_addon({cf._CONF_INSTALL_ADDON: False}))
-        assert result["type"] == "entry"
-        assert result["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS}
-        cf.async_install_and_start_addon.assert_not_called()
-
-    def test_accept_installs_then_succeeds(self):
-        flow = _make_flow(is_hassio=True)
-        cf.async_install_and_start_addon = AsyncMock(return_value=None)
-        result = asyncio.run(_drive_install(flow, {cf._CONF_INSTALL_ADDON: True}))
-        assert result["type"] == "progress_done"
-        assert result["next_step_id"] == "addon_success"
-
-    def test_accept_failure_routes_to_install_failed(self):
-        flow = _make_flow(is_hassio=True)
-        cf.async_install_and_start_addon = AsyncMock(
-            side_effect=AddonBootstrapError("boom")
-        )
-        result = asyncio.run(_drive_install(flow, {cf._CONF_INSTALL_ADDON: True}))
-        assert result["type"] == "progress_done"
-        assert result["next_step_id"] == "install_failed"
-        assert flow._install_error == "boom"
-
-
-class TestToolsTerminalSteps:
-    def test_addon_success_creates_tools_entry(self):
-        flow = _make_flow(is_hassio=True)
-        result = asyncio.run(flow.async_step_addon_success())
-        assert result["type"] == "entry"
-        assert result["title"] == cf._TOOLS_ENTRY_TITLE
-        assert result["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS}
-
-    def test_install_failed_surfaces_error_then_creates_entry(self):
-        flow = _make_flow(is_hassio=True)
-        flow._install_error = "boom"
-        form = asyncio.run(flow.async_step_install_failed(None))
-        assert form["type"] == "form"
-        assert form["step_id"] == "install_failed"
-        assert form["description_placeholders"]["error"] == "boom"
-
-        entry = asyncio.run(flow.async_step_install_failed({}))
-        assert entry["type"] == "entry"
-        assert entry["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS}
-
-    def test_install_failed_defaults_error_placeholder(self):
-        flow = _make_flow(is_hassio=True)
-        form = asyncio.run(flow.async_step_install_failed(None))
-        assert form["description_placeholders"]["error"] == "unknown error"
 
 
 class TestServerBranch:
@@ -272,29 +210,6 @@ class TestServerBranch:
         flow._abort_if_unique_id_configured.assert_called_once()
         # Distinct from the tools entry's unique id so both can coexist.
         assert cf._SERVER_UNIQUE_ID != const.DOMAIN
-
-
-class TestAsyncRemove:
-    def test_cancels_inflight_task(self):
-        flow = cf.HaMcpToolsConfigFlow()
-        task = MagicMock()
-        task.done.return_value = False
-        flow._install_task = task
-        flow.async_remove()
-        task.cancel.assert_called_once()
-
-    def test_no_cancel_when_task_done(self):
-        flow = cf.HaMcpToolsConfigFlow()
-        task = MagicMock()
-        task.done.return_value = True
-        flow._install_task = task
-        flow.async_remove()
-        task.cancel.assert_not_called()
-
-    def test_no_error_when_no_task(self):
-        flow = cf.HaMcpToolsConfigFlow()
-        flow._install_task = None
-        flow.async_remove()  # must not raise
 
 
 class TestOptionsFlowDispatch:

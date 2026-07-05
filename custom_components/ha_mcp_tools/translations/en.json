@@ -13,24 +13,10 @@
                 "title": "HA MCP Tools",
                 "description": "This entry provides the advanced file and YAML configuration services used by ha-mcp. No Home Assistant Supervisor was detected, so the Home Assistant MCP Server add-on can't be installed automatically here — run ha-mcp via Docker or pip instead. Select **Submit** to enable the services."
             },
-            "addon": {
-                "title": "Install the Home Assistant MCP Server add-on",
-                "description": "Home Assistant Supervisor was detected. This integration can add the add-on repository and install and start the **Home Assistant MCP Server** add-on for you — no need to add a repository URL by hand. Leave the box checked to install it now, or uncheck to set up only the integration services.",
-                "data": {
-                    "install_addon": "Install the Home Assistant MCP Server add-on"
-                }
-            },
-            "install_failed": {
-                "title": "Add-on installation failed",
-                "description": "The add-on could not be installed automatically:\n\n{error}\n\nThe add-on repository may already have been added for you, so you only need to install the **Home Assistant MCP Server** add-on from the Add-on Store. The integration's services will still be set up — select **Submit** to finish."
-            },
             "server": {
                 "title": "HA-MCP Server",
                 "description": "This runs the full ha-mcp server inside Home Assistant and exposes it remotely through a Home Assistant webhook (reachable via Nabu Casa or any reverse proxy). Select **Submit** to start it; you can change the port, binding, and authentication afterward in the integration options."
             }
-        },
-        "progress": {
-            "install_addon": "Adding the add-on repository, installing the Home Assistant MCP Server add-on, and starting it. This can take a few minutes."
         },
         "abort": {
             "already_configured": "This entry is already set up."
