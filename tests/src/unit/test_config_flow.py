@@ -113,7 +113,7 @@ from custom_components.ha_mcp_tools import config_flow as cf  # noqa: E402
 from custom_components.ha_mcp_tools import const  # noqa: E402
 
 
-def _make_flow(*, is_hassio: bool = False) -> cf.HaMcpToolsConfigFlow:
+def _make_flow() -> cf.HaMcpToolsConfigFlow:
     """Build a flow with the HA framework methods stubbed to return markers."""
     flow = cf.HaMcpToolsConfigFlow()
     flow.async_set_unique_id = AsyncMock(return_value=None)
@@ -132,7 +132,6 @@ def _make_flow(*, is_hassio: bool = False) -> cf.HaMcpToolsConfigFlow:
     flow.hass = SimpleNamespace(
         async_create_task=lambda coro: asyncio.ensure_future(coro)
     )
-    cf.is_hassio = lambda hass: is_hassio
     return flow
 
 
@@ -160,7 +159,7 @@ class TestMenuStep:
 
 class TestToolsBranch:
     def test_non_supervisor_shows_form_then_creates_entry(self):
-        flow = _make_flow(is_hassio=False)
+        flow = _make_flow()
         form = asyncio.run(flow.async_step_tools(None))
         assert form["type"] == "form"
         assert form["step_id"] == "tools"
@@ -170,19 +169,8 @@ class TestToolsBranch:
         assert entry["title"] == cf._TOOLS_ENTRY_TITLE
         assert entry["data"] == {const.CONF_ENTRY_TYPE: const.ENTRY_TYPE_TOOLS}
 
-    def test_supervisor_uses_same_plain_form(self):
-        # The add-on bootstrap was removed (the in-process server entry is
-        # the one-click server path): Supervisor installs get the identical
-        # plain confirm-and-create flow as Container/Core.
-        flow = _make_flow(is_hassio=True)
-        result = asyncio.run(flow.async_step_tools(None))
-        assert result["type"] == "form"
-        assert result["step_id"] == "tools"
-        result = asyncio.run(flow.async_step_tools({}))
-        assert result["type"] == "entry"
-
     def test_tools_uses_domain_unique_id(self):
-        flow = _make_flow(is_hassio=False)
+        flow = _make_flow()
         asyncio.run(flow.async_step_tools(None))
         flow.async_set_unique_id.assert_awaited_once_with(const.DOMAIN)
         flow._abort_if_unique_id_configured.assert_called_once()

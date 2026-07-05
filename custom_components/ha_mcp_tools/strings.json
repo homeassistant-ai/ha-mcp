@@ -11,7 +11,7 @@
             },
             "tools": {
                 "title": "HA MCP Tools",
-                "description": "This entry provides the advanced file and YAML configuration services used by ha-mcp. No Home Assistant Supervisor was detected, so the Home Assistant MCP Server add-on can't be installed automatically here — run ha-mcp via Docker or pip instead. Select **Submit** to enable the services."
+                "description": "Sets up the file and YAML configuration services used by ha-mcp. To also run the MCP server inside Home Assistant, add the HA-MCP Server entry afterwards from the same Add Integration menu."
             },
             "server": {
                 "title": "HA-MCP Server",
