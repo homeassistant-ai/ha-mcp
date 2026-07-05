@@ -28,6 +28,9 @@ from .const import (
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
     DOMAIN,
+    OPT_REGENERATE_SECRETS,
+    OPT_SECRET_PATH_OVERRIDE,
+    OPT_WEBHOOK_ID_OVERRIDE,
 )
 
 # NOTE: embedded_setup (and its embedded_server / mcp_webhook chain) is imported
@@ -127,10 +130,45 @@ def _ensure_secrets(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Generate + persist the stable webhook id and secret path on first setup.
 
     Both live in ``entry.data`` and stay stable across restarts so the connect
-    URL never changes.
+    URL never changes. Three owner-requested management paths, applied in
+    priority order on every (re)load:
+
+    1. ``regenerate_secrets`` option: mint fresh random values for BOTH and
+       clear any overrides plus the flag itself (one-shot rotation - the old
+       URL dies on this reload).
+    2. Override options: a non-empty ``webhook_id_override`` /
+       ``secret_path_override`` replaces the stored value (normalized: the
+       secret path gets a leading ``/``).
+    3. First setup: mint random values for whatever is still missing.
     """
     data = dict(entry.data)
+    options = dict(entry.options)
     changed = False
+
+    if options.get(OPT_REGENERATE_SECRETS):
+        data[DATA_WEBHOOK_ID] = f"mcp_{secrets.token_hex(16)}"
+        data[DATA_SECRET_PATH] = f"/private_{secrets.token_urlsafe(16)}"
+        # One-shot: clear the flag AND the overrides so the fresh random
+        # values stick (leaving an override set would re-apply it below on
+        # the next reload, silently undoing the rotation).
+        options[OPT_REGENERATE_SECRETS] = False
+        options[OPT_WEBHOOK_ID_OVERRIDE] = ""
+        options[OPT_SECRET_PATH_OVERRIDE] = ""
+        hass.config_entries.async_update_entry(entry, data=data, options=options)
+        return
+
+    webhook_override = str(options.get(OPT_WEBHOOK_ID_OVERRIDE) or "").strip()
+    if webhook_override and data.get(DATA_WEBHOOK_ID) != webhook_override:
+        data[DATA_WEBHOOK_ID] = webhook_override
+        changed = True
+    path_override = str(options.get(OPT_SECRET_PATH_OVERRIDE) or "").strip()
+    if path_override:
+        if not path_override.startswith("/"):
+            path_override = f"/{path_override}"
+        if data.get(DATA_SECRET_PATH) != path_override:
+            data[DATA_SECRET_PATH] = path_override
+            changed = True
+
     if not data.get(DATA_WEBHOOK_ID):
         data[DATA_WEBHOOK_ID] = f"mcp_{secrets.token_hex(16)}"
         changed = True

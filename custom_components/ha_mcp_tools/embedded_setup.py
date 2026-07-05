@@ -32,6 +32,7 @@ from .const import (
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
     OPT_BIND_HOST,
+    OPT_EXTERNAL_URL,
     OPT_SERVER_PORT,
     OPT_WEBHOOK_AUTH,
     WEBHOOK_AUTH_NONE,
@@ -119,6 +120,11 @@ def _surface_connect_urls(
 
     webhook_id = entry.data[DATA_WEBHOOK_ID]
     urls: list[str] = []
+    external = str(entry.options.get(OPT_EXTERNAL_URL) or "").rstrip("/")
+    if external:
+        # Owner-requested parity with the webhook-proxy app: a configured
+        # external URL leads the list (any reverse proxy, not just Nabu Casa).
+        urls.append(f"{external}/api/webhook/{webhook_id}")
 
     # Nabu Casa remote URL (only when the cloud integration is set up + logged in).
     try:

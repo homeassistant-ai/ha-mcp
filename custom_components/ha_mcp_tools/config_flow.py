@@ -57,10 +57,14 @@ from .const import (
     ENTRY_TYPE_TOOLS,
     OPT_BIND_HOST,
     OPT_CHANNEL,
+    OPT_EXTERNAL_URL,
     OPT_PIP_SPEC,
+    OPT_REGENERATE_SECRETS,
+    OPT_SECRET_PATH_OVERRIDE,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
     OPT_WEBHOOK_AUTH,
+    OPT_WEBHOOK_ID_OVERRIDE,
     WEBHOOK_AUTH_HA,
     WEBHOOK_AUTH_NONE,
 )
@@ -311,6 +315,22 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     OPT_SERVER_URL,
                     default=opts.get(OPT_SERVER_URL, DEFAULT_LOOPBACK_URL),
                 ): str,
+                vol.Optional(
+                    OPT_EXTERNAL_URL,
+                    default=opts.get(OPT_EXTERNAL_URL, ""),
+                ): str,
+                vol.Optional(
+                    OPT_WEBHOOK_ID_OVERRIDE,
+                    default=opts.get(OPT_WEBHOOK_ID_OVERRIDE, ""),
+                ): str,
+                vol.Optional(
+                    OPT_SECRET_PATH_OVERRIDE,
+                    default=opts.get(OPT_SECRET_PATH_OVERRIDE, ""),
+                ): str,
+                vol.Optional(
+                    OPT_REGENERATE_SECRETS,
+                    default=False,
+                ): bool,
             }
         )
         return self.async_show_form(
@@ -333,6 +353,13 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         cleaned = dict(user_input)
         if cleaned.get(OPT_PIP_SPEC, "").strip() in ("", DEFAULT_PIP_SPEC):
             cleaned[OPT_PIP_SPEC] = ""
+        for key in (
+            OPT_EXTERNAL_URL,
+            OPT_WEBHOOK_ID_OVERRIDE,
+            OPT_SECRET_PATH_OVERRIDE,
+        ):
+            cleaned[key] = str(cleaned.get(key, "") or "").strip()
+        cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")
         return cleaned
 
     def _connect_url_hint(self) -> str:
@@ -345,7 +372,11 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 "server starts."
             )
         port = self.config_entry.options.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT)
-        hint = f"Remote connect URL: <your-home-assistant-url>/api/webhook/{webhook_id}"
+        external = str(self.config_entry.options.get(OPT_EXTERNAL_URL) or "").rstrip(
+            "/"
+        )
+        base = external or "<your-home-assistant-url>"
+        hint = f"Remote connect URL: {base}/api/webhook/{webhook_id}"
         if secret_path:
             hint += (
                 f"\nLocal/LAN (when bind host is 0.0.0.0): "

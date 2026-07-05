@@ -218,6 +218,13 @@ OPT_BIND_HOST = "bind_host"
 OPT_WEBHOOK_AUTH = "webhook_auth"
 OPT_PIP_SPEC = "pip_spec"
 OPT_SERVER_URL = "server_url"
+# Connect-URL surface + secret management (owner request, parity with the
+# webhook-proxy app's external-URL option and the add-on's secret-path
+# override). All optional; empty string = automatic/keep-current.
+OPT_EXTERNAL_URL = "external_url"
+OPT_WEBHOOK_ID_OVERRIDE = "webhook_id_override"
+OPT_SECRET_PATH_OVERRIDE = "secret_path_override"
+OPT_REGENERATE_SECRETS = "regenerate_secrets"
 
 # entry.data keys (persisted ids + secrets; entry.data is fine for secrets).
 DATA_WEBHOOK_ID = "webhook_id"

@@ -283,6 +283,24 @@ class TestSurfaceConnectUrls:
         message = self._message()
         assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in message
         assert "http://192.168.1.5:8123/api/webhook/mcp_id" in message
+
+    def test_external_url_option_leads_the_list(self):
+        # Owner request (webhook-proxy app parity): a configured external URL
+        # is shown FIRST, ahead of Nabu Casa and the local address.
+        _install_network_cloud(
+            cloud_url="https://abc.ui.nabu.casa", local_url="http://192.168.1.5:8123"
+        )
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/p"},
+            options={esetup.OPT_EXTERNAL_URL: "https://ha.example.com/"},
+        )
+        esetup._surface_connect_urls(hass, entry, "none")
+        message = self._message()
+        first = next(line for line in message.splitlines() if "/api/webhook/" in line)
+        # Trailing slash normalized away; custom domain leads.
+        assert "https://ha.example.com/api/webhook/mcp_id" in first
+        assert "https://abc.ui.nabu.casa/api/webhook/mcp_id" in message
         # The rename commit's discoverability contract: the running
         # notification links the sidebar settings panel and carries the
         # HA-MCP Server title (the only path from "it is running" to the UI).

@@ -358,12 +358,17 @@ class TestServerOptionsFlow:
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
             const.OPT_PIP_SPEC: "ha-mcp==0.0.1",
             const.OPT_SERVER_URL: "https://ha.example:8123",
+            const.OPT_EXTERNAL_URL: "https://ha.example.com",
+            const.OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook",
+            const.OPT_SECRET_PATH_OVERRIDE: "/custom_path",
         }
         flow = _make_options_flow(
             data={const.DATA_WEBHOOK_ID: "mcp_abc"}, options=saved
         )
         form = asyncio.run(flow.async_step_init(None))
         defaults = {m.schema: m.default() for m in form["data_schema"].schema}
+        # regenerate_secrets is a one-shot action, never pre-filled True.
+        assert defaults.pop(const.OPT_REGENERATE_SECRETS) is False
         assert defaults == saved
 
     def test_init_submit_round_trips_input_into_entry(self):
@@ -380,7 +385,14 @@ class TestServerOptionsFlow:
         assert result["type"] == "entry"
         assert result["title"] == ""
         # A genuine override is stored verbatim; the channel rides along.
-        assert result["data"] == user_input
+        # _normalize adds the (empty) URL/secret management fields when the
+        # submission omits them.
+        assert result["data"] == {
+            **user_input,
+            const.OPT_EXTERNAL_URL: "",
+            const.OPT_WEBHOOK_ID_OVERRIDE: "",
+            const.OPT_SECRET_PATH_OVERRIDE: "",
+        }
 
     def test_default_pip_spec_normalized_to_empty(self):
         # Saving with the pinned default in the pip-spec field must not persist it

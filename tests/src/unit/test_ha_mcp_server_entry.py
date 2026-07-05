@@ -44,9 +44,11 @@ def _make_hass() -> MagicMock:
     hass = MagicMock(name="hass")
     hass.data = {}
 
-    def _update_entry(entry, *, data=None, **_kw):
+    def _update_entry(entry, *, data=None, options=None, **_kw):
         if data is not None:
             entry.data = data
+        if options is not None:
+            entry.options = options
 
     hass.config_entries.async_update_entry = MagicMock(side_effect=_update_entry)
     hass.config_entries.async_reload = AsyncMock()
@@ -93,6 +95,60 @@ class TestEnsureSecrets:
         pkg._ensure_secrets(hass, entry)
         hass.config_entries.async_update_entry.assert_not_called()
         assert entry.data[DATA_WEBHOOK_ID] == "mcp_existing"
+
+    def test_webhook_override_replaces_stored_id(self):
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_old", DATA_SECRET_PATH: "/private_keep"},
+            options={pkg.OPT_WEBHOOK_ID_OVERRIDE: "my_custom_hook"},
+        )
+        pkg._ensure_secrets(hass, entry)
+        assert entry.data[DATA_WEBHOOK_ID] == "my_custom_hook"
+        assert entry.data[DATA_SECRET_PATH] == "/private_keep"
+
+    def test_secret_path_override_gets_leading_slash(self):
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_keep", DATA_SECRET_PATH: "/private_old"},
+            options={pkg.OPT_SECRET_PATH_OVERRIDE: "custom_path"},
+        )
+        pkg._ensure_secrets(hass, entry)
+        assert entry.data[DATA_SECRET_PATH] == "/custom_path"
+
+    def test_regenerate_mints_fresh_and_clears_flag_and_overrides(self):
+        # One-shot rotation: fresh random values for BOTH secrets, the flag
+        # cleared, and the overrides cleared (a surviving override would
+        # silently undo the rotation on the next reload).
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_old", DATA_SECRET_PATH: "/private_old"},
+            options={
+                pkg.OPT_REGENERATE_SECRETS: True,
+                pkg.OPT_WEBHOOK_ID_OVERRIDE: "stale_override",
+                pkg.OPT_SECRET_PATH_OVERRIDE: "/stale_path",
+            },
+        )
+        pkg._ensure_secrets(hass, entry)
+        assert entry.data[DATA_WEBHOOK_ID].startswith("mcp_")
+        assert entry.data[DATA_WEBHOOK_ID] != "mcp_old"
+        assert entry.data[DATA_SECRET_PATH].startswith("/private_")
+        assert entry.data[DATA_SECRET_PATH] != "/private_old"
+        assert entry.options[pkg.OPT_REGENERATE_SECRETS] is False
+        assert entry.options[pkg.OPT_WEBHOOK_ID_OVERRIDE] == ""
+        assert entry.options[pkg.OPT_SECRET_PATH_OVERRIDE] == ""
+
+    def test_regenerate_wins_over_overrides(self):
+        # Priority: regenerate ignores the override values entirely.
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_old", DATA_SECRET_PATH: "/private_old"},
+            options={
+                pkg.OPT_REGENERATE_SECRETS: True,
+                pkg.OPT_WEBHOOK_ID_OVERRIDE: "must_not_apply",
+            },
+        )
+        pkg._ensure_secrets(hass, entry)
+        assert entry.data[DATA_WEBHOOK_ID] != "must_not_apply"
 
 
 class TestSetupEntry:

@@ -251,10 +251,20 @@ jobs:
         # each booting its own QEMU (per-worker port offset + qcow2 overlay
         # — see _haos_worker_setup in tests/src/e2e/conftest.py). Same
         # rationale as the external HAOS workflow (#1350).
+        # Two phases (live-found isolation flaw): addon_disruptive tests
+        # self-restart the dev addon, killing any OTHER worker's in-flight
+        # MCP call (ClosedResourceError server-side; 300s client hang). The
+        # parallel run excludes them; a single-worker phase runs them after,
+        # when nothing else can be in flight.
         run: |
           cd tests
           uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
+            -n2 --dist loadscope -v --tb=short --maxfail=0 \
+            -m "not addon_disruptive" ${{ github.event.inputs.pytest_args }}
+          uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
+            -n0 -v --tb=short --maxfail=0 \
+            -m addon_disruptive ${{ github.event.inputs.pytest_args }} \
+            || { rc=$?; [ "$rc" -eq 5 ] && echo "no disruptive tests in selection"; [ "$rc" -eq 5 ]; }
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
