@@ -295,6 +295,39 @@ def test_allow_and_exclude_compose_exclude_wins_over_allow():
     assert _hidden(reg, cfg) == {"sensor.diag_allowed", "light.bedroom"}
 
 
+def test_empty_registry_with_area_allowlist_degrades_open_not_blank():
+    # Fail-open guard: registry success but empty + an area/label allowlist would
+    # otherwise hide every states-only candidate (the fail-closed blank the design
+    # forbids). The registry-derived allow dimensions degrade to open and warn.
+    reg = {"success": True, "result": []}
+    states = [
+        {"entity_id": "light.a", "attributes": {}},
+        {"entity_id": "sensor.b", "attributes": {}},
+    ]
+    cfg = VisibilityConfig(enabled=True, exclude_categories=[], allow_areas=["kitchen"])
+    hidden, warnings = hidden_entity_ids(reg, cfg, states)
+    assert hidden == set()  # not blanked
+    assert any("registry returned no entries" in w for w in warnings)
+
+
+def test_empty_registry_allowlist_still_honors_allow_entity_ids():
+    # allow_entity_ids is registry-independent, so it keeps restricting even when
+    # the area dimension degraded: only the explicitly allowed id survives.
+    reg = {"success": True, "result": []}
+    states = [
+        {"entity_id": "light.a", "attributes": {}},
+        {"entity_id": "sensor.b", "attributes": {}},
+    ]
+    cfg = VisibilityConfig(
+        enabled=True,
+        exclude_categories=[],
+        allow_areas=["kitchen"],
+        allow_entity_ids=["light.a"],
+    )
+    hidden, _ = hidden_entity_ids(reg, cfg, states)
+    assert hidden == {"sensor.b"}
+
+
 # --- Assist-exposure dimension (respect_assist_exposure) ---
 
 

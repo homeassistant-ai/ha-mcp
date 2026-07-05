@@ -368,7 +368,11 @@ it passes every active one.
   `allow_labels` is non-empty, the filter inverts to *restrict* mode: only
   entities matching an allowlist stay visible and everything else – including
   entities added later – is hidden. Leave all three empty to keep the allowlist
-  off. `deny_entity_ids` still wins over an allow match.
+  off. `deny_entity_ids` still wins over an allow match — and so does any
+  `exclude_*` match: an entity an allowlist would admit but an
+  `exclude_categories` / `exclude_areas` / `exclude_labels` also hides stays
+  hidden (every dimension can only hide, so any one hide is enough — the allow
+  dimensions cannot un-hide what another dimension excluded).
 - **Respect Assist exposure.** With `respect_assist_exposure: true` the filter
   hides entities not effectively exposed to Home Assistant's Assist
   (`conversation`) assistant, mirroring `async_should_expose` (an explicit

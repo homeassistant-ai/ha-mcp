@@ -78,6 +78,20 @@ def test_overview_disabled_keeps_all(tmp_path, monkeypatch):
     assert {"light", "sensor"} <= set(res["domain_stats"])
 
 
+def test_overview_visibility_warning_does_not_mark_partial(tmp_path, monkeypatch):
+    # A pure visibility warning on otherwise-complete data (an unknown exclude
+    # category) surfaces in `warnings` but must NOT set `partial` — partial is for
+    # genuinely incomplete data (e.g. a failed services fetch). Aligns overview
+    # with ha_search, which reports the same warnings without a partial flag.
+    res = _run_overview(
+        tmp_path,
+        monkeypatch,
+        VisibilityConfig(enabled=True, exclude_categories=["typo"]),
+    )
+    assert any("unknown exclude_categories" in w for w in res.get("warnings", []))
+    assert res.get("partial") is not True
+
+
 class _StatesCancelOverviewClient(_OverviewClient):
     """get_system_overview client whose mandatory states fetch is cancelled."""
 

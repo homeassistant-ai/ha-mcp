@@ -71,6 +71,12 @@ _ASSIST_UNAVAILABLE_WARNING = (
     "Assist exposure data was unavailable; that dimension is skipped for this "
     "request (other dimensions still apply)."
 )
+_ALLOWLIST_REGISTRY_EMPTY_WARNING = (
+    "Entity visibility filter is enabled with an area/label allowlist but the "
+    "entity registry returned no entries; those allow dimensions are skipped for "
+    "this request (an allow_entity_ids list, if set, still applies) so the filter "
+    "does not blank every entity."
+)
 
 
 def _normalize_labels(raw: object) -> list[str]:
@@ -215,6 +221,18 @@ def hidden_entity_ids(
     # active it inverts the default: an entity is hidden unless it matches one of
     # the allow dimensions. Empty allow_* => inactive => nothing hidden by allow.
     allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
+
+    # Fail-open guard: an area/label allowlist needs registry data to match. If
+    # the registry came back empty (success but no usable entries) those
+    # dimensions can match nothing, so restrict mode would hide every candidate -
+    # the fail-closed blank the design forbids. Drop the registry-derived allow
+    # dimensions and warn; a registry-independent allow_entity_ids list still
+    # applies. Only fires when there are states-only candidates to protect.
+    if (allow_areas or allow_labels) and not registry_by_id and state_device_class:
+        warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
+        allow_areas = set()
+        allow_labels = set()
+        allow_active = bool(allow_entity_ids)
 
     # Seed with the explicit denylist: deny is a literal entity_id match and must
     # hide an entity even when it has no entity-registry entry (legacy YAML /

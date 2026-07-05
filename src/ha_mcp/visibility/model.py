@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class VisibilityConfig(BaseModel):
     """Per-install visibility filter config. Default is disabled (no-op)."""
+
+    # Unknown keys are dropped rather than rejected: forward-compatibility with a
+    # newer add-on / hand-edited file that carries a not-yet-known field must not
+    # fail the whole config load (which would fail-open-disable the filter). The
+    # trade-off is that a typo'd key (e.g. "exclude_area") is silently ignored;
+    # exclude_categories values are separately validated with a surfaced warning,
+    # and this is the pydantic default made explicit so the choice is documented.
+    model_config = ConfigDict(extra="ignore")
 
     version: int = 1
     enabled: bool = False

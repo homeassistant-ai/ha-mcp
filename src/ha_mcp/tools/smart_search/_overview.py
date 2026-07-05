@@ -89,10 +89,13 @@ class SystemOverviewMixin(_SearchBase):
                     e for e in entities if e.get("entity_id") not in visibility_hidden
                 ]
 
-            # Services failure affects total count + catalog; log at warning.
-            # Seed with any visibility-filter warnings (degraded registry, dropped
-            # unknown categories) so they surface at the overview response level.
-            partial_warnings: list[str] = list(visibility_warnings)
+            # Services failure means the total count + catalog are genuinely
+            # incomplete, so it sets `partial`. Visibility warnings are kept
+            # separate: they annotate an otherwise-complete result (a config typo
+            # or a skipped Assist dimension), so they must surface in `warnings`
+            # without flipping `partial` — aligning with ha_search, which reports
+            # the same visibility warnings and never marks itself partial for them.
+            partial_warnings: list[str] = []
             if isinstance(results[1], Exception):
                 logger.warning(f"Could not fetch services: {results[1]}")
                 partial_warnings.append(f"Services unavailable: {results[1]}")
@@ -167,6 +170,7 @@ class SystemOverviewMixin(_SearchBase):
                 detail_level=detail_level,
                 pagination_metadata=pagination_metadata,
                 partial_warnings=partial_warnings,
+                visibility_warnings=visibility_warnings,
                 device_types=device_types,
                 service_stats=service_stats,
             )
@@ -503,6 +507,7 @@ class SystemOverviewMixin(_SearchBase):
         detail_level: str,
         pagination_metadata: dict[str, Any] | None,
         partial_warnings: list[str],
+        visibility_warnings: list[str],
         device_types: dict[str, int],
         service_stats: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
@@ -522,9 +527,14 @@ class SystemOverviewMixin(_SearchBase):
         if pagination_metadata:
             base_response["pagination"] = pagination_metadata
 
+        # Only genuinely incomplete data (e.g. a failed services fetch) marks the
+        # response partial; visibility warnings annotate a complete result. Both
+        # surface in `warnings`.
         if partial_warnings:
             base_response["partial"] = True
-            base_response["warnings"] = partial_warnings
+        all_warnings = partial_warnings + visibility_warnings
+        if all_warnings:
+            base_response["warnings"] = all_warnings
 
         # Full: add device types and service catalog
         if detail_level == "full":
