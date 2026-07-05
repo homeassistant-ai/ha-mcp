@@ -699,20 +699,23 @@ class TestMigrateLegacyBackupDir:
         assert legacy.exists()
 
     def test_async_setup_entry_wires_migration_and_notification(self):
-        """Source-level guard: async_setup_entry must call the migration helper
+        """Source-level guard: the tools setup must call the migration helper
         and create a persistent notification referencing the GHSA. Brittle on
         purpose — this is a security regression guard, not a behavioral test.
+
+        The tools setup body lives in ``_async_setup_tools_entry`` (the public
+        ``async_setup_entry`` now dispatches on entry type to it).
         """
         import inspect
 
-        from custom_components.ha_mcp_tools import async_setup_entry
+        from custom_components.ha_mcp_tools import _async_setup_tools_entry
 
-        src = inspect.getsource(async_setup_entry)
+        src = inspect.getsource(_async_setup_tools_entry)
         assert "_migrate_legacy_backup_dir" in src, (
-            "async_setup_entry must invoke the legacy-backup migration"
+            "tools setup must invoke the legacy-backup migration"
         )
         assert "persistent_notification.async_create" in src, (
-            "async_setup_entry must surface migration via persistent_notification"
+            "tools setup must surface migration via persistent_notification"
         )
         assert "GHSA-g39v-cvjh-8fpf" in src, (
             "persistent notification must reference the security advisory"
@@ -847,12 +850,14 @@ class TestLegacyBackupServiceWiring:
     def test_services_registered_and_unregistered(self):
         import inspect
 
+        # The tools setup/unload bodies live in the ``_async_*_tools_entry``
+        # helpers; the public entry points now dispatch on entry type to them.
         from custom_components.ha_mcp_tools import (
-            async_setup_entry,
-            async_unload_entry,
+            _async_setup_tools_entry,
+            _async_unload_tools_entry,
         )
 
-        setup_src = inspect.getsource(async_setup_entry)
+        setup_src = inspect.getsource(_async_setup_tools_entry)
         assert "SERVICE_LIST_LEGACY_BACKUPS" in setup_src
         assert "SERVICE_READ_LEGACY_BACKUP" in setup_src
         # Both handlers must token-gate before any FS access.
@@ -860,7 +865,7 @@ class TestLegacyBackupServiceWiring:
         assert "handle_read_legacy_backup" in setup_src
         assert setup_src.count("_caller_token_ok") >= 2
 
-        unload_src = inspect.getsource(async_unload_entry)
+        unload_src = inspect.getsource(_async_unload_tools_entry)
         assert "SERVICE_LIST_LEGACY_BACKUPS" in unload_src
         assert "SERVICE_READ_LEGACY_BACKUP" in unload_src
 

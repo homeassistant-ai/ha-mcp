@@ -30,11 +30,18 @@ _AMBIGUOUS = "legacy:packages_foo_bar.yaml.20200101_000000.bak"
 
 
 def _require_seeded_backend(container_info: dict) -> None:
-    """Skip unless the legacy ``.bak`` were staged (testcontainer backend only)."""
-    if container_info.get("backend") != "container":
+    """Skip unless the legacy ``.bak`` were staged into the container config_path.
+
+    ``_seed_legacy_yaml_backups`` runs on the shared testcontainer setup path,
+    which both the ``container`` and ``embedded`` (#1527) backends use — the HAOS
+    backends boot a pre-baked qcow2 that has no such seed. On embedded the shared
+    ``mcp_client`` reaches the in-process server, which reads the seeded ``.bak``
+    through the same ha_mcp_tools component installed in the container.
+    """
+    if container_info.get("backend") not in ("container", "embedded"):
         pytest.skip(
             "legacy-backup e2e relies on the pre-boot seed in the container "
-            "config_path (testcontainer backend only)"
+            "config_path (testcontainer / embedded backends only)"
         )
 
 

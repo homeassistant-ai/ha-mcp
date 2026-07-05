@@ -179,6 +179,7 @@ jobs:
         git diff --staged --quiet || git commit -m "chore(addon): sync changelog for Home Assistant add-on [skip ci]"
         git push
 
+
     - name: Update stable git tag
       if: steps.semantic.outputs.released == 'true'
       run: |

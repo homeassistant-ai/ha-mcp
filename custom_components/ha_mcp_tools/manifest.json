@@ -1,13 +1,13 @@
 {
     "domain": "ha_mcp_tools",
-    "name": "Home Assistant MCP Server Custom Component",
-    "after_dependencies": ["hassio"],
+    "name": "HA-MCP Custom Component",
+    "after_dependencies": ["hassio", "http", "cloud", "frontend"],
     "codeowners": ["@homeassistant-ai"],
     "config_flow": true,
-    "dependencies": [],
+    "dependencies": ["webhook"],
     "documentation": "https://github.com/homeassistant-ai/ha-mcp",
     "iot_class": "local_push",
     "issue_tracker": "https://github.com/homeassistant-ai/ha-mcp/issues",
     "requirements": ["ruamel.yaml>=0.18.0"],
-    "version": "0.11.0"
+    "version": "0.12.0"
 }

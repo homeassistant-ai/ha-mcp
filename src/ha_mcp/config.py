@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from ha_mcp._version import get_version
+from ha_mcp._version import get_version, is_running_in_addon
 
 logger = logging.getLogger(__name__)
 
@@ -913,7 +913,12 @@ def get_feature_flag_origin(env_name: str) -> str:
     )
     is_master = field_name == "enable_beta_features"
     is_beta_sub = field_name in BETA_FEATURE_FIELDS
-    in_addon = bool(os.environ.get("SUPERVISOR_TOKEN"))
+    # is_running_in_addon() (not a raw SUPERVISOR_TOKEN read) so the in-process
+    # embedded server — which carries SUPERVISOR_TOKEN on HAOS but is not an
+    # add-on — is treated as a standalone deployment: its settings-UI edits
+    # persist to override files under HA_MCP_CONFIG_DIR instead of being routed
+    # to a Supervisor add-on that does not exist.
+    in_addon = is_running_in_addon()
 
     if in_addon:
         if is_master or is_beta_sub:
@@ -1034,7 +1039,11 @@ def _apply_feature_flag_overrides(settings: "Settings") -> None:
        env var still needs to flip the master before the flag takes
        effect.
     """
-    in_addon = bool(os.environ.get("SUPERVISOR_TOKEN"))
+    # is_running_in_addon() (not a raw SUPERVISOR_TOKEN read) so the in-process
+    # embedded server — which carries SUPERVISOR_TOKEN on HAOS but is not an
+    # add-on — applies its settings-UI feature-flag saves like a standalone
+    # deployment instead of short-circuiting here as if start.py owned the env.
+    in_addon = is_running_in_addon()
     overrides = _read_feature_flag_override_file()
 
     known = {fname: (ename, ftype) for fname, ename, ftype in FEATURE_FLAG_FIELDS}
@@ -1268,6 +1277,48 @@ def _apply_advanced_overrides(settings: "Settings") -> None:
 # Global settings instance
 _settings: Settings | None = None
 
+# In-process (embedded) HA connection, set only when ha-mcp runs inside Home
+# Assistant core via the ha_mcp_tools custom component's in-process server entry.
+# The component hands the loopback URL + a provisioned admin token to ha-mcp
+# THROUGH THIS DICT — never
+# via os.environ — so the admin token can't be read from the shared HA process
+# environment. Applied onto the Settings singleton in ``get_global_settings``.
+_EMBEDDED_CONNECTION: dict[str, str] = {}
+
+
+def set_embedded_connection(url: str, token: str) -> None:
+    """Register the in-process HA connection for embedded mode.
+
+    Embedded-mode only: called by the ha_mcp_tools custom component's in-process
+    server entry inside its server worker thread, before the server is
+    constructed, so the loopback URL
+    and admin token reach ``Settings`` in memory instead of through ``os.environ``.
+    The values survive ``_reset_global_settings()``: the settings-UI reset+rebuild
+    path re-applies them on the next ``get_global_settings()`` call.
+
+    Also applies to an ALREADY-BUILT singleton: importing ``ha_mcp`` runs the
+    package's eager import chain, and ``tools/smart_search/_config.py`` builds
+    the settings singleton at import time (its documented read-once budgets).
+    Registration therefore cannot assume it runs before the first build — the
+    integration imports this function from the very package whose import
+    creates the singleton.
+    """
+    _EMBEDDED_CONNECTION["url"] = url
+    _EMBEDDED_CONNECTION["token"] = token
+    if _settings is not None:
+        _apply_embedded_connection(_settings)
+
+
+def _reset_embedded_connection() -> None:
+    """Drop the registered embedded connection (test seam).
+
+    Sibling to :func:`_reset_global_settings`; lets suites that exercise the
+    in-process token channel isolate state between tests. Not used in production —
+    the connection is registered once per worker thread and is meant to persist.
+    """
+    _EMBEDDED_CONNECTION.clear()
+
+
 # Names of beta sub-flags the master gate has already logged a
 # force-False line for in this process. Used to dedup the gate's
 # INFO log so we don't spam addon logs on every Settings rebuild
@@ -1332,7 +1383,11 @@ def get_backup_setting_origin(env_name: str) -> str:
     - ``"default"``: no env var and no override file entry; the
       pydantic field default applies. Web UI edits create the file.
     """
-    if os.environ.get("SUPERVISOR_TOKEN"):
+    # is_running_in_addon() rather than a raw SUPERVISOR_TOKEN read so the
+    # embedded in-process server (SUPERVISOR_TOKEN present on HAOS, but not an
+    # add-on) is labeled a standalone deployment and its backup settings persist
+    # to the override file instead of a non-existent Supervisor add-on.
+    if is_running_in_addon():
         return "addon"
     if os.environ.get(env_name) is not None:
         return "env"
@@ -1424,7 +1479,10 @@ def _apply_backup_overrides(settings: "Settings") -> None:
     corrupt override file can't push values out of range; out-of-range
     or untypable entries are silently skipped.
     """
-    if os.environ.get("SUPERVISOR_TOKEN"):
+    # is_running_in_addon() (embedded-aware) so the in-process server applies
+    # its backup override file like a standalone deployment; see the matching
+    # rationale in _apply_feature_flag_overrides / get_backup_setting_origin.
+    if is_running_in_addon():
         return
     overrides = _read_backup_override_file()
     if not overrides:
@@ -1522,6 +1580,22 @@ def _apply_backup_overrides(settings: "Settings") -> None:
             continue
 
 
+def _apply_embedded_connection(settings: "Settings") -> None:
+    """Apply the in-process embedded HA connection (url/token) if registered.
+
+    No-op outside embedded mode. Plain ``setattr`` (``validate_assignment`` is off
+    on ``Settings``, mirroring ``_apply_backup_overrides``), so the loopback URL
+    and admin token are set in memory without ever passing through ``os.environ``.
+    Applied last so it wins over any env/override-file connection values.
+    """
+    url = _EMBEDDED_CONNECTION.get("url")
+    token = _EMBEDDED_CONNECTION.get("token")
+    if url:
+        settings.homeassistant_url = url.rstrip("/")
+    if token:
+        settings.homeassistant_token = token
+
+
 def get_global_settings() -> Settings:
     """Get global settings instance (singleton pattern).
 
@@ -1531,6 +1605,10 @@ def get_global_settings() -> Settings:
 
     - Feature flags persisted to ``<data_dir>/feature_flags.json``
     - Auto-backup settings persisted to ``<data_dir>/backup_settings.json``
+
+    In embedded mode, the in-process HA connection registered via
+    ``set_embedded_connection`` is applied last (so a settings-UI reset+rebuild
+    re-picks it up).
     """
     global _settings
     if _settings is None:
@@ -1538,7 +1616,20 @@ def get_global_settings() -> Settings:
         _apply_feature_flag_overrides(_settings)
         _apply_backup_overrides(_settings)
         _apply_advanced_overrides(_settings)
+        _apply_embedded_connection(_settings)
     return _settings
+
+
+def reset_global_settings() -> None:
+    """Public seam to drop the cached settings singleton.
+
+    The in-process (embedded) server calls this at every start: a config-entry
+    reload reuses the same Python process, so without an explicit reset the
+    singleton built on the FIRST start would keep serving stale feature-flag /
+    override values forever (the add-on gets fresh settings for free from its
+    process restart).
+    """
+    _reset_global_settings()
 
 
 def _reset_global_settings() -> None:

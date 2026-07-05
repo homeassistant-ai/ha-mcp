@@ -86,6 +86,27 @@ HAOS_IMAGE_ENV = "HAOS_TEST_IMAGE_PATH"
 # and a cross-package import here would pull qemu/websockets build deps
 # into the test runtime path.
 HA_MCP_TEST_SECRET_PATH = "/mcp_e2e_test_path"
+
+# HA-MCP Server config-entry constants (#1527). The in-process server is
+# a SECOND config entry of the ha_mcp_tools component (``entry_type="server"``);
+# the bake seeds it DISABLED into the qcow2's .storage/core.config_entries
+# (build_image._stage_embedded_server_integration); stage_embedded_server_wheel_in_qcow2
+# below delivers a checkout-built wheel and rewrites the entry's pip_spec to point
+# at it, and the HAOS embedded-server E2E
+# (tests/src/e2e/haos_only/test_embedded_server_haos.py) enables the entry then
+# drives the webhook. These MUST stay in sync with the copies in
+# tests/haos_image_build/build_image.py (kept manually, like
+# HA_MCP_TEST_SECRET_PATH — a cross-package import would pull the qemu build
+# deps into the test runtime path).
+HA_MCP_SERVER_DOMAIN = "ha_mcp_tools"
+# unique_id of the single-instance server entry (config_flow's _SERVER_UNIQUE_ID),
+# distinct from the tools entry's unique_id so both coexist under one domain.
+HA_MCP_SERVER_UNIQUE_ID = "ha_mcp_tools-server"
+HA_MCP_SERVER_ENTRY_ID = "e2e_test_ha_mcp_server_entry"
+HA_MCP_SERVER_WEBHOOK_ID = "mcp_e2e_ha_mcp_server_haos"
+HA_MCP_SERVER_SECRET_PATH = "/private_e2e_ha_mcp_server_haos"
+HA_MCP_SERVER_PORT = 9584
+
 # Slug Supervisor assigns to a local addon staged under
 # /supervisor/addons/local/<dir>/. Derived from config.yaml's slug ``ha_mcp_dev``
 # with the ``local_`` prefix that Supervisor applies to local-store
@@ -237,6 +258,25 @@ def is_haos_inaddon_mode() -> bool:
     that the external-runner tier can't reach.
     """
     return os.environ.get("HAOS_TEST_MODE", "external") == "inaddon"
+
+
+def is_haos_embedded_mode() -> bool:
+    """True iff this run targets the embedded-server HAOS tier (#1527).
+
+    The embedded mode points ``mcp_client`` at the baked in-process
+    in-process MCP server's ingress webhook inside the booted HAOS
+    (``/api/webhook/<HA_MCP_SERVER_WEBHOOK_ID>``) instead of an external
+    in-process FastMCP server (external mode) or the dev add-on's HTTP MCP
+    endpoint (inaddon mode). The session fixture enables the baked-disabled
+    entry ONCE at setup and waits for the server to come up; the whole E2E
+    suite then runs through it, exercising the standalone in-process routing
+    (``is_running_in_addon()`` False despite ``SUPERVISOR_TOKEN`` in the core
+    env) end to end on real HAOS.
+
+    Mutually exclusive with ``is_haos_inaddon_mode`` — ``HAOS_TEST_MODE`` is a
+    single value (``external`` default / ``inaddon`` / ``embedded``).
+    """
+    return os.environ.get("HAOS_TEST_MODE", "external") == "embedded"
 
 
 def is_haos_backend_selected() -> bool:
@@ -597,6 +637,380 @@ def inject_hacs_token_in_qcow2(image_path: Path) -> None:
             )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _build_embedded_server_wheel(dest_dir: Path) -> Path:
+    """Build a ha-mcp wheel from the checkout into ``dest_dir`` using ``uv build``.
+
+    Builds only the project (no deps) — the fastmcp tree still resolves from PyPI
+    inside HAOS under HA's constraints file when the entry is enabled, which is
+    exactly the real-HAOS ``install_package`` behavior the E2E proves.
+
+    Uses ``uv build``, NOT ``sys.executable -m pip wheel``: the E2E lanes run
+    under ``uv run pytest`` in a uv-created venv that ships no ``pip``, so a
+    ``python -m pip wheel`` call exits non-zero (verified on CI run 28705609217 —
+    it is also why the container-lane embedded test silently skips). ``uv`` is
+    always on PATH (setup-uv) and provisions the setuptools build backend from
+    its cache (already warmed by the lane's ``uv sync``). Returns the wheel path.
+    """
+    import shutil as _shutil
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    uv_bin = _shutil.which("uv") or "uv"
+    subprocess.run(
+        [uv_bin, "build", "--wheel", "--out-dir", str(dest_dir), str(repo_root)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    wheels = list(dest_dir.glob("ha_mcp-*.whl"))
+    if not wheels:
+        raise RuntimeError(f"no ha_mcp wheel built in {dest_dir}")
+    return wheels[0]
+
+
+def _set_embedded_server_pip_spec(
+    config_entries_doc: dict[str, Any], pip_spec: str
+) -> bool:
+    """Point the baked server entry's ``options.pip_spec`` at ``pip_spec``.
+
+    Mutates ``config_entries_doc`` (a parsed ``.storage/core.config_entries``)
+    in place. Matches by entry_id, not domain: the domain (ha_mcp_tools) is
+    shared with the tools services entry, so only the entry_id uniquely
+    identifies the in-process server entry. Returns True if it was found and
+    patched, False if the document has none (doc left untouched).
+    """
+    for entry in config_entries_doc.get("data", {}).get("entries", []):
+        if entry.get("entry_id") == HA_MCP_SERVER_ENTRY_ID:
+            entry.setdefault("options", {})["pip_spec"] = pip_spec
+            return True
+    return False
+
+
+def _embedded_staging_status_path() -> Path:
+    """Per-xdist-worker path where the wheel-staging outcome is recorded.
+
+    Keyed by ``PYTEST_XDIST_WORKER`` because the staging (in the session fixture)
+    and the embedded-server test run on the SAME worker under ``--dist loadscope``;
+    keying avoids one worker's status clobbering another's. ``master`` when not
+    under xdist.
+    """
+    import tempfile
+
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    return Path(tempfile.gettempdir()) / f"ha_mcp_embedded_staging_{worker}.json"
+
+
+def _write_embedded_staging_status(ok: bool, detail: str) -> None:
+    """Record the wheel-staging outcome for the embedded-server test to read.
+
+    This module's logs run during SESSION-fixture setup, which is not captured in
+    the pytest step's output (verified on CI run 28705609217: none of the
+    pre-boot refreshers' log lines appear, and the triggering test passes so its
+    captured setup output is never shown). So a warning here is invisible. The
+    embedded-server test reads this status and folds it into its own (captured)
+    failure message, making a delivery failure diagnosable either way.
+    """
+    try:
+        _embedded_staging_status_path().write_text(
+            json.dumps({"ok": ok, "detail": detail}), encoding="utf-8"
+        )
+    except OSError as exc:
+        LOG.warning("Could not record embedded staging status: %r", exc)
+
+
+def read_embedded_staging_status() -> dict[str, Any] | None:
+    """Return this worker's in-process server wheel-staging outcome, or None if unset."""
+    try:
+        return json.loads(_embedded_staging_status_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def stage_embedded_server_wheel_in_qcow2(image_path: Path) -> None:
+    """Deliver the checkout's ha-mcp wheel into the qcow2 for the embedded E2E.
+
+    Builds a ``--no-deps`` ha-mcp wheel from the working tree, copies it into the
+    qcow2's ``/config`` (``/supervisor/homeassistant``), and rewrites the baked
+    in-process server config entry's ``options.pip_spec`` to a ``file://`` URL
+    pointing at it — so when the HAOS embedded-server test enables the entry, the
+    in-process server installs from the PR's own source (checkout fidelity for
+    the ``src/ha_mcp`` embedded-mode routing under test) rather than PyPI. Runs
+    once per session before ``boot_haos_qemu``, like the recorder / HACS-token
+    qcow2 refreshers.
+
+    Best-effort by design: on the external HAOS lane the baked entry stays
+    disabled and only the one embedded-server test consumes this delivery, so a
+    wheel-build or guestfish failure degrades to a warning there. On the
+    haos_embedded lane the WHOLE suite runs through this wheel - the session
+    fixture surfaces a failed staging hard at bring-up (via the recorded
+    status) instead of limping through hundreds of doomed tests. A hard raise would be a much worse blast radius than the
+    single test it protects. The outcome is also recorded via
+    ``_write_embedded_staging_status`` so the test can surface it (this module's
+    session-fixture logs are not captured in the pytest output).
+    """
+    import tempfile
+
+    workdir = Path(tempfile.mkdtemp(prefix="haos-embedded-wheel-"))
+    try:
+        try:
+            wheel = _build_embedded_server_wheel(workdir)
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            RuntimeError,
+        ) as err:
+            stderr = (getattr(err, "stderr", "") or "").strip()
+            detail = f"wheel build failed: {type(err).__name__}" + (
+                f": {stderr[-300:]}" if stderr else ""
+            )
+            LOG.warning(
+                "Could not build the ha-mcp wheel for the embedded HAOS test "
+                "(%s) — the in-process server entry keeps its placeholder pip_spec; "
+                "the embedded-server test will fail on bring-up, rest of the "
+                "suite is unaffected",
+                detail,
+            )
+            _write_embedded_staging_status(False, detail)
+            return
+
+        storage_path = "/supervisor/homeassistant/.storage/core.config_entries"
+        try:
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--ro",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    "copy-out",
+                    storage_path,
+                    str(workdir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            local = workdir / "core.config_entries"
+            doc = json.loads(local.read_text(encoding="utf-8"))
+            pip_spec = f"ha-mcp @ file:///config/{wheel.name}"
+            if not _set_embedded_server_pip_spec(doc, pip_spec):
+                detail = (
+                    "no in-process server config entry in the image — the bake may "
+                    "not have seeded it (check build_image.bake_test_state)"
+                )
+                LOG.warning("%s; the embedded-server test will fail", detail)
+                _write_embedded_staging_status(False, detail)
+                return
+            local.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--rw",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    "copy-in",
+                    str(wheel),
+                    "/supervisor/homeassistant/",
+                    ":",
+                    "copy-in",
+                    str(local),
+                    "/supervisor/homeassistant/.storage/",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            detail = f"delivered {wheel.name}, pip_spec={pip_spec}"
+            LOG.info("%s in %s", detail, image_path)
+            _write_embedded_staging_status(True, detail)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            stderr = (getattr(exc, "stderr", "") or "").strip()
+            detail = f"guestfish delivery failed: {type(exc).__name__}" + (
+                f": {stderr[-300:]}" if stderr else ""
+            )
+            LOG.warning(
+                "Embedded-server wheel delivery failed for %s (%s) — the "
+                "embedded-server test will fail on bring-up; rest of the suite "
+                "unaffected",
+                image_path,
+                detail,
+            )
+            _write_embedded_staging_status(False, detail)
+    finally:
+        import shutil as _shutil
+
+        _shutil.rmtree(workdir, ignore_errors=True)
+
+
+# HA config dir inside the qcow2 (``/config`` on HAOS) and the in-process
+# server's data subdir under it. Mirrors the integration's
+# ``const.SERVER_CONFIG_SUBDIR`` (".ha_mcp"): the integration hands
+# ha_mcp ``HA_MCP_CONFIG_DIR=<config>/.ha_mcp`` and ha_mcp.config reads
+# its ``feature_flags.json`` override from there. Hardcoded here for the same
+# reason the storage paths above are (no cross-package import into the build/test
+# runtime); kept in step with the container backend's ``_EMBEDDED_SERVER_CONFIG_SUBDIR``.
+_HAOS_CONFIG_DIR = "/supervisor/homeassistant"
+_HAOS_EMBEDDED_SERVER_DATA_DIR = f"{_HAOS_CONFIG_DIR}/.ha_mcp"
+
+
+def stage_embedded_server_feature_flags_in_qcow2(
+    image_path: Path, feature_flags: dict[str, bool]
+) -> None:
+    """Write the in-process server's feature-flag override into the qcow2 (#1527).
+
+    Only the ``haos_embedded`` lane calls this. On that lane the WHOLE E2E suite
+    runs through the in-process MCP server, so it needs the same feature flags
+    the container ``embedded`` backend injects (yaml-config editing, filesystem
+    tools, custom-component integration, …). The container backend delivers those
+    as pytest-process env vars for its in-process server; the HAOS embedded server
+    runs inside the core container and can't read that env, so the equivalent
+    values go to ``<config>/.ha_mcp/feature_flags.json`` — the override
+    layer ``ha_mcp.config`` reads in a standalone deployment. The server is
+    standalone here (``is_running_in_addon()`` is False in embedded mode despite
+    ``SUPERVISOR_TOKEN`` in the core env), so the file is honored rather than
+    short-circuited by Supervisor.
+
+    Delivered pre-boot via guestfish (mkdir-p the data dir + copy-in the file),
+    the same offline-qcow2 mechanism as ``stage_embedded_server_wheel_in_qcow2``
+    and the recorder / HACS-token refreshers — deterministic (present before HA
+    boots and before the entry is enabled) with no post-boot service-availability
+    or ordering dependency, which is why it's preferred over calling the baked
+    ``ha_mcp_tools`` write_file service after boot. The integration's
+    ``_prepare_config_dir`` does ``os.makedirs(..., exist_ok=True)``, so a
+    pre-created dir + file is picked up rather than clobbered (proven on the
+    container embedded lane, which pre-seeds the identical file).
+
+    Unlike the best-effort wheel staging, a failure here RAISES: the whole
+    haos_embedded suite depends on these flags, so failing session setup loudly
+    with a clear message beats letting dozens of feature-gated tests fail
+    confusingly downstream.
+    """
+    import shutil as _shutil
+    import tempfile
+
+    workdir = Path(tempfile.mkdtemp(prefix="haos-embedded-flags-"))
+    try:
+        local = workdir / "feature_flags.json"
+        local.write_text(json.dumps(feature_flags, indent=2), encoding="utf-8")
+        try:
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--rw",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    "mkdir-p",
+                    _HAOS_EMBEDDED_SERVER_DATA_DIR,
+                    ":",
+                    "copy-in",
+                    str(local),
+                    _HAOS_EMBEDDED_SERVER_DATA_DIR,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            stderr = (getattr(exc, "stderr", "") or "").strip()
+            raise RuntimeError(
+                f"Failed to stage the embedded-server feature_flags.json into "
+                f"{image_path} ({type(exc).__name__}"
+                + (f": {stderr[-300:]}" if stderr else "")
+                + "). The haos_embedded suite needs these flags; aborting session "
+                "setup rather than running the whole suite with default flags."
+            ) from exc
+        LOG.info(
+            "Staged embedded-server feature_flags.json (%d flags) into %s in %s",
+            len(feature_flags),
+            _HAOS_EMBEDDED_SERVER_DATA_DIR,
+            image_path,
+        )
+    finally:
+        _shutil.rmtree(workdir, ignore_errors=True)
+
+
+def enable_config_entry(
+    base_url: str, token: str, entry_id: str, *, timeout: float = 60.0
+) -> None:
+    """Enable a disabled config entry via the HA ``config_entries/disable`` WS command.
+
+    Sending ``config_entries/disable`` with ``disabled_by=null`` is exactly how
+    the HA frontend re-enables an entry: it clears the disabled flag and sets the
+    entry up (calling ``async_setup_entry``). Used by the HAOS embedded-server
+    E2E to turn on the baked-disabled in-process server entry so only that test's
+    session pays the server bring-up cost. Raises on a WS-level failure (e.g. an
+    unknown entry id) so the test surfaces a clear cause instead of a downstream
+    webhook timeout.
+    """
+    import websockets.sync.client
+
+    ws_url = (
+        base_url.replace("http://", "ws://").replace("https://", "wss://")
+        + "/api/websocket"
+    )
+    with websockets.sync.client.connect(ws_url, max_size=None, open_timeout=30) as ws:
+        first = json.loads(ws.recv())
+        if first.get("type") != "auth_required":
+            raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
+        ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_resp = json.loads(ws.recv())
+        if auth_resp.get("type") != "auth_ok":
+            raise RuntimeError(f"WS auth rejected: {auth_resp}")
+
+        msg_id = 1
+        ws.send(
+            json.dumps(
+                {
+                    "id": msg_id,
+                    "type": "config_entries/disable",
+                    "entry_id": entry_id,
+                    "disabled_by": None,
+                }
+            )
+        )
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
+            except TimeoutError:
+                continue
+            if not isinstance(raw, str):
+                raw = raw.decode()
+            resp = json.loads(raw)
+            if resp.get("id") != msg_id:
+                continue
+            if not resp.get("success", False):
+                raise RuntimeError(
+                    f"config_entries/disable for {entry_id!r} failed: "
+                    f"{resp.get('error') or resp!r}"
+                )
+            return
+        raise TimeoutError(
+            f"config_entries/disable for {entry_id!r} got no response within {timeout}s"
+        )
 
 
 def _resolve_local_store_dir(image_path: Path) -> str:

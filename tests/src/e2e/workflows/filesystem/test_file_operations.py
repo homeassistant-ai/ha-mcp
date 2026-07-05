@@ -74,27 +74,31 @@ async def mcp_client_with_filesystem(
 ):
     """Yield an MCP client with the filesystem feature flag enabled.
 
-    In inaddon mode ``mcp_server`` is None (the addon is the server) and
-    the session-scope ``mcp_client`` already speaks HTTP to the addon —
-    which was started with HAMCP_ENABLE_FILESYSTEM_TOOLS=true via the
-    Supervisor options dict at install time. Yield that client directly
-    instead of building a new in-memory one.
+    When ``mcp_server`` is None the server runs out-of-process — the inaddon HAOS
+    addon (started with HAMCP_ENABLE_FILESYSTEM_TOOLS=true via the Supervisor
+    options dict) or the embedded backend's in-process MCP server (with the flag
+    set in its feature_flags.json override). In both, the session-scope
+    ``mcp_client`` already speaks HTTP to that server, so yield it directly instead
+    of building a new in-memory one around ``mcp_server.mcp`` (which would be None).
     """
-    if ha_container_with_fresh_config.get("backend") == "haos_inaddon":
-        # Fail fast at fixture setup if the addon's install-time options
-        # ever drift and the filesystem tools aren't registered — without
-        # this, every per-test ``_check_filesystem_tools_available`` would
-        # ``pytest.skip`` and the run would look passing-but-empty.
+    if mcp_server is None:
+        # Fail fast at fixture setup if the out-of-process server's filesystem
+        # tools aren't registered — without this, every per-test
+        # ``_check_filesystem_tools_available`` would ``pytest.skip`` and the run
+        # would look passing-but-empty.
         tools = await mcp_client.list_tools()
         tool_names = {t.name for t in tools}
         required = {"ha_list_files", "ha_read_file", "ha_write_file", "ha_delete_file"}
         missing = required - tool_names
+        backend = ha_container_with_fresh_config.get("backend")
         assert not missing, (
-            f"Inaddon addon is missing filesystem tools {missing}; the addon's "
-            f"install-time options (build_image.install_ha_mcp_dev_addon) must "
-            f"include enable_filesystem_tools=true."
+            f"Out-of-process server ({backend}) is missing filesystem tools "
+            f"{missing}. The inaddon addon needs enable_filesystem_tools=true in "
+            f"its install-time options (build_image.install_ha_mcp_dev_addon); the "
+            f"embedded backend needs it in feature_flags.json "
+            f"(conftest._EMBEDDED_FEATURE_FLAGS)."
         )
-        logger.debug("FastMCP client (inaddon, HTTP) reused for filesystem tests")
+        logger.debug("FastMCP client (%s, HTTP) reused for filesystem tests", backend)
         # Session-scope mcp_client owns __aexit__; the per-test fixture
         # deliberately doesn't wrap in `async with`.
         yield mcp_client
@@ -1055,8 +1059,6 @@ def _auto_backup_disabled():
     their mandatory writes refuse. Restoring + re-resetting in ``finally``
     keeps the toggle scoped to this test.
     """
-    import os
-
     from ha_mcp.config import _reset_global_settings
 
     prev = os.environ.get("ENABLE_AUTO_BACKUP")

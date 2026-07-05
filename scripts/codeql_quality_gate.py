@@ -39,6 +39,36 @@ PATHS_IGNORE: tuple[str, ...] = ("tests/initial_test_state/",)
 ALLOWLIST: tuple[tuple[str, str, str, str], ...] = (
     (
         "py/unused-global-variable",
+        "tests/src/unit/_embedded_stubs.py",
+        "_INSTALLED",
+        "Cross-invocation use: install() sets the module-level flag under a "
+        "'global' declaration so a second call returns early. CodeQL's "
+        "single-pass dead-store analysis misses the next-call read at the top "
+        "of install(), so the assignment looks dead.",
+    ),
+    # NOTE: CodeQL emits the same generic message for every instance of
+    # py/ineffectual-statement, so the two entries below are PATH-WIDE for
+    # that rule (a future genuinely-dead statement in these files would be
+    # suppressed too). Accepted: both files are small and the rationale
+    # names the exact suppressed statements - re-audit if either file grows.
+    (
+        "py/ineffectual-statement",
+        "custom_components/ha_mcp_tools/embedded_entry.py",
+        "This statement has no effect",
+        "False positive on a bare 'await task' inside contextlib.suppress: "
+        "awaiting a cancelled task IS the effect (it waits for the task to "
+        "finish unwinding before teardown continues).",
+    ),
+    (
+        "py/ineffectual-statement",
+        "custom_components/ha_mcp_tools/embedded_server.py",
+        "This statement has no effect",
+        "False positive on bare 'await serve_task' / 'await stop_task' inside "
+        "contextlib.suppress: the await drives the cancelled task to "
+        "completion, which is the required shutdown-sequencing effect.",
+    ),
+    (
+        "py/unused-global-variable",
         "src/ha_mcp/__main__.py",
         "_shutdown_in_progress",
         "Cross-invocation use: set True on the first signal, read on the next to "

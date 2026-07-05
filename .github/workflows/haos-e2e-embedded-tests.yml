@@ -1,23 +1,20 @@
-name: HAOS E2E Tests (inaddon)
+name: HAOS E2E Tests (embedded)
 
-# Parallel to haos-e2e-tests.yml — exercises the SAME test suite against
-# the SAME cached qcow2, but routes ``mcp_client`` to the ha-mcp dev
-# addon's HTTP endpoint INSIDE the booted HAOS instead of using an
-# in-process FastMCP server. This is the deployment path real users hit
-# when they install the addon + cloudflared on a real HAOS install.
+# Parallel to haos-e2e-tests.yml / haos-e2e-inaddon-tests.yml — exercises the
+# SAME full E2E suite against the SAME cached qcow2, but routes ``mcp_client`` to
+# the baked in-process MCP server's ingress webhook INSIDE the
+# booted HAOS (``/api/webhook/<HA_MCP_SERVER_WEBHOOK_ID>``) instead of an
+# in-process FastMCP server (external) or the dev add-on's HTTP endpoint (inaddon).
+# This is the in-HA deployment path: the server runs standalone inside the HA
+# core container (``is_running_in_addon()`` False despite ``SUPERVISOR_TOKEN`` in
+# the env) and is proven end to end against a real Supervised Home Assistant (#1527).
 #
-# The HAOS_TEST_MODE=inaddon env flips conftest.py's HAOS dispatch:
-# refresh_dev_addon_source_in_qcow2 overwrites the addon source (apps/local
-# on Supervisor 2026.06.0+, else legacy addons/local) with PR source + bumps
-# config.yaml ``version:`` → Supervisor detects an update on next boot →
-# trigger_dev_addon_update calls supervisor/api addons/{slug}/update via WS →
-# Docker rebuilds with layer cache → addon restarts with PR source →
-# mcp_client connects via HTTP transport.
-#
-# v1 scope: run ONLY tests/src/e2e/haos_only/ (the canary suite) so the
-# initial green CI gives us a fast feedback loop. Once the full inaddon
-# plumbing is verified, expand to the full src/e2e/ tree (gated by
-# external_only / inaddon_only markers).
+# HAOS_TEST_MODE=embedded flips conftest.py's HAOS dispatch into the embedded
+# branch: the pre-boot qcow2 staging already delivers a checkout-built wheel +
+# rewrites the disabled entry's pip_spec (shared by all HAOS lanes) and here also
+# writes the feature-flag override the whole suite needs; the session fixture then
+# enables the entry ONCE and waits for the in-process server's webhook to answer
+# before yielding, and mcp_client connects to that webhook over HTTP.
 
 on:
   # No workflow-level `paths:` filter on purpose. This check is a REQUIRED
@@ -37,7 +34,7 @@ on:
         required: false
         default: ''
       pytest_paths:
-        description: 'Test paths to run (default: full src/e2e/ — markers handle external_only / inaddon_only skips)'
+        description: 'Test paths to run (default: full src/e2e/ — markers handle external_only / haos_only skips)'
         type: string
         required: false
         default: 'src/e2e/'
@@ -61,7 +58,7 @@ jobs:
   # level (via `if:` below) so a skipped run reports Success to the required
   # check; a workflow-level `paths:` skip would instead report nothing and
   # wedge the merge. Add-on + bake-input dirs are baked into the qcow2, so
-  # their docs DO affect the suite and always count as code.
+  # their non-doc files DO affect the suite and always count as code.
   changes:
     name: Detect relevant changes
     runs-on: ubuntu-latest
@@ -114,31 +111,39 @@ jobs:
           echo "run=$run"
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
-  haos-e2e-inaddon:
-    name: HAOS E2E Tests (inaddon)
+  haos-e2e-embedded:
+    name: HAOS E2E Tests (embedded)
     needs: changes
     # A skipped job reports Success to the required status check (unlike a
     # workflow-level path-skip, which never reports). See the `changes` job.
     if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    # 60 (vs the external/inaddon lanes' 45): the embedded lane pays a per-worker
+    # session-setup cost the others don't — enabling the entry kicks off a runtime
+    # pip install of the whole fastmcp tree INSIDE the resource-constrained QEMU
+    # guest (~minutes) before the webhook answers, and both xdist workers pay it in
+    # parallel at the front of the run. The extra headroom covers that bring-up.
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v7
         with:
+          # Required for tests/src/e2e/tools/test_skills_resources.py — the
+          # skills bundle lives at src/ha_mcp/resources/skills-vendor.
           submodules: true
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
       - name: Compute image cache key
         id: key
-        # Shared with haos-e2e-tests.yml: both lanes consume the same
-        # qcow2. The bake (build_image.py::build) unconditionally calls
-        # stage_dev_addon_source + install_ha_mcp_dev_addon, so the baked
-        # image is already addon-baked and works for both tiers. Inaddon's
-        # refresh_dev_addon_source_in_qcow2 overwrites the addon source at
-        # test time, so PR-level addon changes don't need to invalidate the
-        # cache here.
+        # Shared with haos-e2e-tests.yml + haos-e2e-inaddon-tests.yml: all three
+        # lanes consume the same byte-identical qcow2. The bake seeds the
+        # in-process MCP server config entry (of ha_mcp_tools) into the image
+        # (build_image._stage_embedded_server_integration), and the per-worker
+        # wheel/feature-flag staging happens IN-VM at test time on each worker's
+        # overlay — never on the cached base — so this lane needs no distinct key.
+        # ``custom_components/ha_mcp_tools`` is already one of the hashed
+        # paths, so a change to the integration invalidates the shared image.
         run: |
           hash=$(git ls-tree -r HEAD \
             tests/haos_image_build \
@@ -156,9 +161,6 @@ jobs:
           key: ${{ steps.key.outputs.cache-key }}
 
       - name: Report image-acquisition path
-        # Surfaces whether this run restored the (master-primed) Actions
-        # cache or falls through to a local build, so the cache-prime's
-        # effect is observable in the run summary.
         run: |
           echo "::notice title=HAOS image cache::cache-hit=${{ steps.restore-cache.outputs.cache-hit }} key=${{ steps.key.outputs.cache-key }}"
 
@@ -177,12 +179,12 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Free disk space for the local build
-        # On a cache miss (or a forced rebuild) the qcow2 is built locally;
-        # its download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot +
-        # addon-install peaks at the edge of the runner's ~14 GB SSD, so
-        # prune the ~30 GB of preinstalled tooling the bake does not use.
-        # Keep /opt/hostedtoolcache: Python from there is on PATH for
-        # build_image.py. See haos-e2e-tests.yml for the full rationale.
+        # On a cache miss (or a forced rebuild) the qcow2 is built locally; its
+        # download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot + addon-install
+        # peaks at the edge of the runner's ~14 GB SSD, so prune the ~30 GB of
+        # preinstalled tooling the bake does not use. Keep /opt/hostedtoolcache:
+        # Python from there is on PATH for build_image.py. See haos-e2e-tests.yml
+        # for the full rationale.
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
@@ -203,25 +205,17 @@ jobs:
             --output /tmp/haos-test-image.qcow2
 
       # No cache-save step here on purpose. The external lane
-      # (haos-e2e-tests.yml) computes the same cache key (#1407) and
-      # always tries to save the same qcow2; both lanes start in
-      # parallel on the same PR push, so whichever lost the save race
-      # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
-      # the actions/cache service then refused with
-      # "another job may be creating this cache." Letting only the
-      # external lane save eliminates the wasted work without
-      # changing what gets cached — both lanes still restore from the
-      # shared key on the next run.
-      #
-      # The shared-key bet is safe because both lanes consume the SAME
-      # byte-identical qcow2: the cache key hashes the bake-input paths
-      # only, so a cache miss builds one qcow2 that the saving lane writes
-      # to the shared key for both to restore, and PR-level addon/source
-      # overrides happen *in-VM at test time* (see
-      # ``refresh_dev_addon_source_in_qcow2`` /
-      # ``refresh_recorder_in_qcow2`` in conftest.py) on each
-      # worker's per-worker overlay — never on the base qcow2 that
-      # gets cached.
+      # (haos-e2e-tests.yml) computes the same cache key (#1407) and is the SOLE
+      # saver of the shared qcow2; this lane and the inaddon lane both restore
+      # from that shared key. All three lanes start in parallel on the same PR
+      # push, so having only one saver avoids the "another job may be creating
+      # this cache" race + the wasted tar+zstd write of a 12 GB image. The
+      # shared-key bet is safe because all three consume the SAME byte-identical
+      # base: the key hashes bake-input paths only, and every PR-level source /
+      # feature-flag override happens in-VM at test time on each worker's overlay
+      # (see stage_embedded_server_wheel_in_qcow2 /
+      # stage_embedded_server_feature_flags_in_qcow2 / refresh_recorder_in_qcow2
+      # in conftest.py) — never on the cached base.
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -237,59 +231,41 @@ jobs:
       - name: Confirm image present
         run: ls -lh /tmp/haos-test-image.qcow2
 
-      - name: Run inaddon E2E suite
-        # HAOS_TEST_MODE=inaddon flips conftest.py's HAOS dispatch into
-        # the inaddon branch: addon source is overwritten with PR source
-        # before boot, Supervisor update is triggered, mcp_client uses
-        # HTTP transport to the addon's MCP endpoint.
+      - name: Run full E2E suite against the HAOS embedded server
+        # HAOS_TEST_MODE=embedded flips conftest.py's HAOS dispatch into the
+        # embedded branch: pre-boot it stages the feature-flag override next to
+        # the wheel staging, then the session fixture enables the baked-disabled
+        # in-process server entry once, waits for the in-process server's webhook, and
+        # mcp_client drives that webhook for the whole suite. external_only tests
+        # (out-of-process server unreachable by test-process env/monkeypatch) and
+        # the 3 self-referential haos_only embedded smoke tests skip automatically.
         #
-        # v1: targets src/e2e/haos_only/ only (canary tier). Widen via
-        # workflow_dispatch pytest_paths input once the inaddon plumbing
-        # is stable. external_only-marked tests skip automatically.
-        #
-        # -n2 --dist loadscope: pytest-xdist parallelizes across 2 workers,
-        # each booting its own QEMU (per-worker port offset + qcow2 overlay
-        # — see _haos_worker_setup in tests/src/e2e/conftest.py). Same
-        # rationale as the external HAOS workflow (#1350).
-        # Two phases (live-found isolation flaw): addon_disruptive tests
-        # self-restart the dev addon, killing any OTHER worker's in-flight
-        # MCP call (ClosedResourceError server-side; 300s client hang). The
-        # parallel run excludes them; a single-worker phase runs them after,
-        # when nothing else can be in flight.
+        # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
+        # other HAOS lanes (#1350); --maxfail=0 overrides pytest.ini's --maxfail=3
+        # so triage sees the full failure surface.
         run: |
           cd tests
           uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 \
-            -m "not addon_disruptive" ${{ github.event.inputs.pytest_args }}
-          uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
-            -n0 -v --tb=short --maxfail=0 \
-            -m addon_disruptive ${{ github.event.inputs.pytest_args }} \
-            || { rc=$?; [ "$rc" -eq 5 ] && echo "no disruptive tests in selection"; [ "$rc" -eq 5 ]; }
+            -n2 --dist loadscope -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
-          HAOS_TEST_MODE: inaddon
-          # Feeds conftest's HACS token injection (qcow2 pre-boot edit)
-          # so HACS repo adds don't hit the unauthenticated shared-IP
-          # GitHub rate limit — the recurring HACS-install flake.
+          HAOS_TEST_MODE: embedded
+          # Feeds conftest's HACS token injection (qcow2 pre-boot edit) so HACS
+          # repo adds don't hit the unauthenticated shared-IP GitHub rate limit —
+          # the recurring HACS-install flake.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract HAOS + addon diagnostics from booted qcow2 (always)
+      - name: Extract HA diagnostics from booted qcow2 (always)
         if: always()
         run: |
           sudo chmod +r /boot/vmlinuz-* || true
-          mkdir -p /tmp/haos-inaddon-diagnostics
-          # In pytest-xdist (parallel) mode each worker boots its OWN
-          # backing-file overlay (haos-test-image-<worker>.qcow2); the base
-          # /tmp/haos-test-image.qcow2 is never booted, so the per-PR source
-          # refresh and the HA Core runtime state live on the OVERLAYS, not
-          # the base. The overlays persist after the session (the worker
-          # fixture registers no teardown unlink), and guestfish reads them
-          # through their absolute backing path. Probe every overlay; fall
-          # back to the base image only for a single-worker (master) run that
-          # mutates it directly. #1594 secondary defect: the old step probed
-          # only the un-refreshed base, so the addon-dir / config.yaml checks
-          # could never observe the refresh result they claimed to verify.
+          mkdir -p /tmp/haos-embedded-diagnostics
+          # Under pytest-xdist (-n2) each worker boots its OWN backing-file overlay
+          # (haos-test-image-<worker>.qcow2); the base /tmp/haos-test-image.qcow2 is
+          # never booted, so the enabled in-process server entry + the in-process
+          # server's runtime state live on the OVERLAYS, not the base. Probe every
+          # overlay; fall back to the base only for a single-worker (master) run.
           shopt -s nullglob
           targets=(/tmp/haos-test-image-gw*.qcow2)
           if [ ${#targets[@]} -eq 0 ]; then
@@ -297,15 +273,19 @@ jobs:
           fi
           for img in "${targets[@]}"; do
             label=$(basename "$img" .qcow2)
-            outdir=/tmp/haos-inaddon-diagnostics/$label
+            outdir=/tmp/haos-embedded-diagnostics/$label
             mkdir -p "$outdir"
             echo "=== extracting diagnostics from $img ==="
-            # /supervisor/homeassistant/.storage state + log files (HA Core).
+            # Full config-dir listing (captures whatever HA writes, incl. the
+            # in-process server's .ha_mcp data dir + any repair issue).
             guestfish --ro -a "$img" run \
               : mount /dev/sda8 / \
               : ll /supervisor/homeassistant \
               > "$outdir/config-dir-listing.txt" 2>&1 \
               || echo "directory listing failed for $img"
+            # .storage carries core.config_entries — the in-process server entry's
+            # state (loaded / setup_error / not_loaded) is the first thing to
+            # check when the webhook never came up.
             guestfish --ro -a "$img" run \
               : mount /dev/sda8 / \
               : tar-out /supervisor/homeassistant/.storage "$outdir/storage.tar" \
@@ -314,47 +294,27 @@ jobs:
               : mount /dev/sda8 / \
               : glob copy-out '/supervisor/homeassistant/*.log*' "$outdir/" \
               || echo "log glob copy failed for $img"
-            # Addon-specific: capture the dev addon's source dir AND its
-            # config.yaml version after refresh, so we can verify the PR source
-            # actually landed on the booted overlay. Supervisor 2026.06.0
-            # (home-assistant/supervisor#6865) renamed the on-disk local store
-            # (addons/local -> apps/local, migrated on boot), so probe BOTH roots;
-            # the live one lands, the other no-ops under the || echo guard.
-            for store in apps addons; do
-              guestfish --ro -a "$img" run \
-                : mount /dev/sda8 / \
-                : ll "/supervisor/$store/local/ha_mcp_dev" \
-                >> "$outdir/addon-dir-listing.txt" 2>&1 \
-                || echo "addon dir listing failed for $img ($store/local)"
-              guestfish --ro -a "$img" run \
-                : mount /dev/sda8 / \
-                : copy-out "/supervisor/$store/local/ha_mcp_dev/config.yaml" "$outdir/" \
-                || echo "addon config.yaml copy-out failed for $img ($store/local)"
-            done
             echo "--- [$label] config dir listing ---"
             cat "$outdir/config-dir-listing.txt" || true
-            echo "--- [$label] addon dir listing ---"
-            cat "$outdir/addon-dir-listing.txt" || true
-            echo "--- [$label] addon config.yaml ---"
-            cat "$outdir/config.yaml" || true
           done
-          ls -laR /tmp/haos-inaddon-diagnostics/ || true
+          ls -laR /tmp/haos-embedded-diagnostics/ || true
           # The HACS token injection (conftest pre-boot edit) puts GITHUB_TOKEN
           # into core.config_entries inside the extracted storage.tar files.
           # Redact them (fail-closed: an unredactable tar is deleted) so no
           # credential persists into the downloadable artifact.
-          python3 scripts/redact_diagnostics_secrets.py /tmp/haos-inaddon-diagnostics
+          python3 scripts/redact_diagnostics_secrets.py /tmp/haos-embedded-diagnostics
 
-      - name: Upload HAOS inaddon diagnostics
+      - name: Upload HAOS embedded diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: haos-inaddon-diagnostics
+          name: haos-embedded-diagnostics
           path: |
-            /tmp/haos-inaddon-diagnostics/
-            # conftest's finally-block dumps HA Core + Supervisor logs into
-            # /tmp/haos-diagnostics; surface those too so we can see why
-            # ``addons/{slug}/update`` failed with "unknown error".
+            /tmp/haos-embedded-diagnostics/
+            # conftest's HAOS finally-block dumps HA Core + Supervisor runtime
+            # logs into /tmp/haos-diagnostics; surface those too — HA on HAOS logs
+            # to stdout (no file), so ha-core-runtime.log is the only place the
+            # in-process server's install/start errors appear.
             /tmp/haos-diagnostics/
             /tmp/haos-e2e-serial.log
           if-no-files-found: warn

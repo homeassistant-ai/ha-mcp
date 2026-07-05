@@ -1,0 +1,80 @@
+name: Sync Integration Mirror
+
+# Keeps homeassistant-ai/ha-mcp-integration (the HACS distribution mirror)
+# in lockstep: master pushes sync the dev channel (mirror main), releases
+# cut a matching mirror release (stable channel). The mirror carries no
+# hand-made changes.
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "custom_components/ha_mcp_tools/**"
+      - "hacs.json"
+      - "LICENSE"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up mirror push key
+        env:
+          DEPLOY_KEY: ${{ secrets.INTEGRATION_MIRROR_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf -- "%s" "$DEPLOY_KEY" > ~/.ssh/mirror_key
+          chmod 600 ~/.ssh/mirror_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Clone mirror
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
+        run: |
+          git clone --depth 1 git@github.com:homeassistant-ai/ha-mcp-integration.git /tmp/mirror
+
+      - name: Stage snapshot
+        run: |
+          rm -rf /tmp/mirror/custom_components
+          mkdir -p /tmp/mirror/custom_components
+          cp -r custom_components/ha_mcp_tools /tmp/mirror/custom_components/
+          rm -rf /tmp/mirror/custom_components/ha_mcp_tools/__pycache__
+          cp hacs.json LICENSE /tmp/mirror/
+
+      - name: Commit and push
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
+        run: |
+          cd /tmp/mirror
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "mirror already current"
+          else
+            git commit -m "Component snapshot from ${GITHUB_REPOSITORY}@${GITHUB_SHA} (${GITHUB_REF_NAME})"
+            git push origin main
+          fi
+
+      - name: Tag mirror for stable release
+        # The mirror's own release-on-tag workflow turns this tag into a
+        # GitHub release (the monorepo GITHUB_TOKEN has no cross-repo API
+        # access; the deploy key can only push).
+        if: github.event_name == 'release' && github.event.release.prerelease == false
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
+        run: |
+          VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
+          cd /tmp/mirror
+          if git ls-remote --tags origin "refs/tags/v${VER}" | grep -q .; then
+            echo "mirror tag v${VER} exists"
+            exit 0
+          fi
+          git tag "v${VER}"
+          git push origin "v${VER}"

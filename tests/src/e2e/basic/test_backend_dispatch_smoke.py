@@ -8,6 +8,12 @@ reads to choose a backend:
 | e2e-tests.yml (testcontainer) | unset                | unset          | ``container``    |
 | haos-e2e-tests.yml (external) | set                  | unset          | ``haos``         |
 | haos-e2e-inaddon-tests.yml    | set                  | ``inaddon``    | ``haos_inaddon`` |
+| haos-e2e-embedded-tests.yml   | set                  | ``embedded``   | ``haos_embedded``|
+
+The testcontainer ``embedded`` backend (#1527) is a fourth variant selected by a
+separate axis, ``E2E_BACKEND=embedded`` (not ``HAOS_TEST_MODE``): same container
+HA, but the server-under-test is the in-process MCP server entry inside
+the container.
 
 Three layers of guard, each catching a different silent-failure mode:
 
@@ -33,7 +39,7 @@ Three layers of guard, each catching a different silent-failure mode:
    tests transition pass→skip silently because a marker was applied
    too broadly. The conftest documents a prior incident of this kind
    (PR #1375 audit, 14 ``supervisor_mock`` tests silently skipping on
-   every testcontainer run — see ``tests/src/e2e/conftest.py:158-166``).
+   every testcontainer run — see the PR #1375 audit comment in ``tests/src/e2e/conftest.py``).
 
 This file is placed under ``basic/`` (NOT ``haos_only/``) on purpose: the
 auto-applied ``haos_only`` marker would skip these whenever
@@ -80,9 +86,41 @@ _SKIP_CEILING_PER_LANE = {
     # Baselines are the observed skip counts as of 2026-05-22 (container=46,
     # haos=14, haos_inaddon=39 from the prose above), plus this PR's new
     # marker-gated skips, plus a 5-9 growth buffer.
-    "container": 68,  # was 67; +1 addon debug-log-level test (@inaddon_only, skip here)
-    "haos": 35,  # was 34; +1 addon debug-log-level test (@inaddon_only, skip here)
-    "haos_inaddon": 58,  # was 55; +3 self-update notice tests (TestSelfUpdateNoticeSurfacedInTools, @external_only)
+    "container": 71,  # was 68; +3 in-process MCP server HAOS tests (haos_only/test_embedded_server_haos.py, skip on the container lane)
+    "haos": 37,  # was 35; +2 in-process MCP server tests (workflows/embedded, @container_only, run on the container lane only). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
+    "haos_inaddon": 59,  # was 58; +1 net from the in-process MCP server tests (workflows/embedded, @container_only; observed lane count). The haos_only embedded HAOS tests RUN on this lane, so they add no skips here.
+    # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
+    # lane's marker-skips PLUS two embedded-specific additions:
+    #   - haos_only + inaddon_only tests skip on embedded just like on container
+    #     (embedded is neither HAOS nor inaddon), and
+    #   - external_only tests skip here (their server is out-of-process, unreachable
+    #     by test-process env/monkeypatch — same reason as inaddon), plus the
+    #     workflows/embedded smoke test (not_on_embedded).
+    # Static def-level derivation (Docker-less, so parametrize item-inflation isn't
+    # visible locally): haos_only 51 + inaddon_only-outside-haos 11 + external_only
+    # 35 (auto_backup 18, supervisor_mock 15, self_update_notice 1, file_operations
+    # 1) + not_on_embedded 2 = 99. Initially set to 115 as a buffer for
+    # parametrize item-inflation; round 6 (run 28709196071) observed the exact
+    # item count and the entry below is pinned to it.
+    "embedded": 119,  # observed exact count (round 6, run 28709196071): haos/inaddon-lane skips + the external_only in-process-server class (alternative coverage on the container lane) + the 2 self-referential smoke tests
+    # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
+    # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
+    # PLUS two haos_embedded-specific additions:
+    #   - external_only tests skip here (their server is out-of-process inside the
+    #     HAOS core container, unreachable by test-process env/monkeypatch — same
+    #     reason as inaddon/container-embedded; alternative coverage on the external
+    #     HAOS lane, where the in-process FastMCP server IS in the test process), and
+    #   - the 3 haos_only embedded smoke tests skip (not_on_haos_embedded) because
+    #     the session backend already enables the entry + drives the server.
+    # Static def-level derivation (Docker/HAOS-less locally, so parametrize
+    # item-inflation isn't visible): container_only 11 + inaddon_only 19 +
+    # external_only 39 + smoke 3 = 72 (no overlaps: no external_only test is also
+    # container_only/inaddon_only, and the 2 not_on_embedded tests are already
+    # container_only). Applying the ~1.16x parametrize inflation the other HAOS
+    # lanes show (haos def 30 → ~35 observed; haos_inaddon def 50 → ~58) gives
+    # ~84; initially set to 90 with a small buffer, and round 8 observed
+    # exactly 90 — the entry below is pinned to the observed count.
+    "haos_embedded": 90,  # observed exact count (round 8): haos-lane skips + external_only + inaddon_only + the 3 lane-aware smoke tests
 }
 
 
@@ -119,6 +157,25 @@ def test_backend_dispatch_matches_workflow_env(
         assert ha_container_with_fresh_config["container"] is None
         assert ha_container_with_fresh_config["port"] is None
         assert ha_container_with_fresh_config["config_path"] is None
+    elif image_path and mode == "embedded":
+        # haos_embedded (#1527): a HAOS backend whose server-under-test is the
+        # baked in-process MCP server, driven over its ingress webhook on the
+        # booted VM. Container keys are None (HAOS path); addon_mcp_url is None
+        # (not the addon path); embedded_webhook_url is the connect URL.
+        assert backend == "haos_embedded", (
+            f"Workflow set HAOS_TEST_IMAGE_PATH + HAOS_TEST_MODE=embedded "
+            f"but dispatch picked backend={backend!r}. "
+            f"The in-process MCP server is NOT the server-under-test for this run."
+        )
+        assert ha_container_with_fresh_config["container"] is None
+        assert ha_container_with_fresh_config["port"] is None
+        assert ha_container_with_fresh_config["config_path"] is None
+        assert ha_container_with_fresh_config.get("addon_mcp_url") is None
+        webhook_url = ha_container_with_fresh_config.get("embedded_webhook_url")
+        assert webhook_url and webhook_url.startswith("http"), (
+            f"haos_embedded backend reported but embedded_webhook_url is "
+            f"{webhook_url!r}; the mcp_client fixture would route nowhere."
+        )
     elif image_path:
         assert backend == "haos", (
             f"Workflow set HAOS_TEST_IMAGE_PATH but dispatch picked "
@@ -130,6 +187,27 @@ def test_backend_dispatch_matches_workflow_env(
         assert ha_container_with_fresh_config["port"] is None
         assert ha_container_with_fresh_config["config_path"] is None
         assert ha_container_with_fresh_config["addon_mcp_url"] is None
+    elif os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded":
+        # Embedded backend (#1527): a testcontainer variant (no HAOS env) whose
+        # server-under-test is the in-process MCP server entry inside the
+        # same container. It reuses the whole testcontainer path, so container /
+        # port / config_path are populated exactly like the container backend, but
+        # it exposes the ingress webhook URL that mcp_client connects to.
+        assert backend == "embedded", (
+            f"E2E_BACKEND=embedded set but dispatch picked backend={backend!r}. "
+            f"The in-process MCP server entry is NOT the server-under-test "
+            f"for this run."
+        )
+        assert ha_container_with_fresh_config["container"] is not None
+        assert ha_container_with_fresh_config["port"] is not None
+        assert ha_container_with_fresh_config["config_path"] is not None
+        webhook_url = ha_container_with_fresh_config.get("embedded_webhook_url")
+        assert webhook_url and webhook_url.startswith("http"), (
+            f"embedded backend reported but embedded_webhook_url is "
+            f"{webhook_url!r}; the mcp_client fixture would route nowhere."
+        )
+        # The embedded backend is not the addon path — no addon_mcp_url.
+        assert ha_container_with_fresh_config.get("addon_mcp_url") is None
     else:
         assert backend == "container", (
             f"No HAOS env vars set, expected testcontainer backend, "
@@ -138,9 +216,9 @@ def test_backend_dispatch_matches_workflow_env(
         assert ha_container_with_fresh_config["container"] is not None
         assert ha_container_with_fresh_config["port"] is not None
         assert ha_container_with_fresh_config["config_path"] is not None
-        # The container branch (conftest.py:1698-1706) does NOT include
-        # an addon_mcp_url key at all, unlike the HAOS branches. Use
-        # .get() so the assertion holds against either absence or None.
+        # The container branch does NOT include an addon_mcp_url key at all,
+        # unlike the HAOS branches. Use .get() so the assertion holds against
+        # either absence or None.
         assert ha_container_with_fresh_config.get("addon_mcp_url") is None
 
 
@@ -170,7 +248,12 @@ async def test_supervisor_addon_tool_behavior_matches_backend(
     backend = ha_container_with_fresh_config["backend"]
     result = await safe_call_tool(mcp_client, "ha_get_addon", {})
 
-    if backend in ("haos", "haos_inaddon"):
+    # All HAOS backends run against a real Supervisor, so ha_get_addon succeeds —
+    # including haos_embedded, whose in-process server reaches Supervisor through
+    # HA Core's supervisor/api WS proxy (it runs standalone with HA_MCP_EMBEDDED,
+    # so it does not use SUPERVISOR_TOKEN directly, but the proxy path still works
+    # because HA Core itself is supervised).
+    if backend in ("haos", "haos_inaddon", "haos_embedded"):
         assert result.get("success") is True, (
             f"ha_get_addon failed on {backend} backend; Supervisor must "
             f"be running. Result: {result!r}"
@@ -222,7 +305,7 @@ def test_session_skipped_count_below_ceiling(
     ``pytest_collection_modifyitems`` hook.
 
     The conftest itself documents a real prior incident of this kind
-    (``tests/src/e2e/conftest.py:158-166`` — PR #1375 audit, 14
+    (the PR #1375 audit comment in ``tests/src/e2e/conftest.py`` — 14
     ``supervisor_mock`` tests silently skipping on every testcontainer
     run because an ``external_only`` skip was scoped wrong). A
     skip-count ceiling per lane catches that whole class of bug.
@@ -250,7 +333,7 @@ def test_session_skipped_count_below_ceiling(
         f"{skipped} tests have skip markers on the {backend} lane, "
         f"which exceeds the ceiling of {ceiling}. A marker may be "
         f"applied too broadly in pytest_collection_modifyitems — "
-        f"check tests/src/e2e/conftest.py:115-168 for recent changes. "
+        f"check pytest_collection_modifyitems in tests/src/e2e/conftest.py for recent changes. "
         f"If the increase is intentional (legitimate new marker-gated "
         f"tests), bump _SKIP_CEILING_PER_LANE[{backend!r}] in this file."
     )
