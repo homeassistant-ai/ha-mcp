@@ -38,11 +38,11 @@ The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It install
 
 **Add it to Home Assistant via HACS (the preferred install):**
 
-[![Add HA-MCP to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
+[![Add HA-MCP to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration)
 
 **Quick start:**
 
-1. Install the **HA-MCP Custom Component** from HACS — click the badge above, or in HACS open **Integrations → ⋮ → Custom repositories**, add `https://github.com/homeassistant-ai/ha-mcp` (category: **Integration**), then **Download**.
+1. Install the **HA-MCP Custom Component** from HACS — click the badge above, or in HACS open **Integrations → ⋮ → Custom repositories**, add `https://github.com/homeassistant-ai/ha-mcp-integration` (category: **Integration**), then **Download**.
 2. **Restart Home Assistant.**
 3. Go to **Settings → Devices & Services → Add Integration**, search for **HA-MCP Custom Component**, choose **HA-MCP Server**, and click **Submit**. Creating the entry starts the server.
 4. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**) — it is also printed in the Home Assistant log. A notification confirms the server started and points you there.
@@ -291,9 +291,9 @@ These tools also require feature flags: `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (fi
 
 Install the **HA MCP Tools** services entry from the same **HA-MCP Custom Component**:
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration)
 
-To add manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
+To add manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp-integration` (category: Integration) > **Download**. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
 
 After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP Custom Component**, and add the **HA MCP Tools** services entry.
 

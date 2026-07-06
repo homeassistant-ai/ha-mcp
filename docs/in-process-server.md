@@ -44,8 +44,9 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 
 ## Setup
 
-1. **Install the component.** Install **HA-MCP Custom Component** from HACS (the
-   same repository you use for ha-mcp — no second repository to add), or, without
+1. **Install the component.** Install **HA-MCP Custom Component** from HACS
+   (repository `homeassistant-ai/ha-mcp-integration`, the component's HACS
+   distribution mirror), or, without
    HACS, copy the `custom_components/ha_mcp_tools` directory from this repository
    into your Home Assistant `config/custom_components/` directory (so you end up
    with `config/custom_components/ha_mcp_tools/`). Restart Home Assistant.

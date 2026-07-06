@@ -44,8 +44,12 @@ def is_custom_component_integration_enabled() -> bool:
     return bool(get_global_settings().enable_custom_component_integration)
 
 
-# Constants for ha_mcp_tools custom component
-MCP_TOOLS_REPO = "homeassistant-ai/ha-mcp"
+# Constants for ha_mcp_tools custom component.
+# The component is distributed through a dedicated HACS mirror repository (the
+# one submitted to the HACS default store); the main repository stays matched
+# so installs that predate the mirror are still recognized.
+MCP_TOOLS_REPO = "homeassistant-ai/ha-mcp-integration"
+MCP_TOOLS_LEGACY_REPO = "homeassistant-ai/ha-mcp"
 MCP_TOOLS_DOMAIN = "ha_mcp_tools"
 
 
@@ -57,10 +61,15 @@ class McpComponentTools:
 
     @staticmethod
     def _find_existing_repo(repos: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """Find the ha_mcp_tools repository in the HACS repository list."""
-        for repo in repos:
-            if repo.get("full_name", "").lower() == MCP_TOOLS_REPO.lower():
-                return repo
+        """Find the ha_mcp_tools repository in the HACS repository list.
+
+        Prefers the canonical mirror repository, falling back to the legacy
+        main-repo entry left by installs that predate the mirror.
+        """
+        for name in (MCP_TOOLS_REPO, MCP_TOOLS_LEGACY_REPO):
+            for repo in repos:
+                if repo.get("full_name", "").lower() == name.lower():
+                    return repo
         return None
 
     @staticmethod
@@ -77,7 +86,8 @@ class McpComponentTools:
             # for callers that never touch the installer flow.
             from .tools_hacs import wait_for_repo_registration
 
-            repo = await wait_for_repo_registration(ws_client, MCP_TOOLS_REPO)
+            wait_name = (existing_repo or {}).get("full_name") or MCP_TOOLS_REPO
+            repo = await wait_for_repo_registration(ws_client, wait_name)
             if repo is not None:
                 repo_id = str(repo.get("id"))
 
