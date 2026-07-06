@@ -2875,6 +2875,7 @@ function activateTab(target, opts) {
   );
   if (target === 'backups') { loadBackupConfig(); loadBackups(); }
   if (target === 'tool-security-policies') { policyLoadConfig(); policyLoadPending(); }
+  if (target === 'entity-visibility') { visibilityLoadConfig(); }
   if (target === 'tools') {
     // Refresh gated-toggle + read-only state in case the user changed
     // them from another tab while it was active.
@@ -3581,4 +3582,116 @@ loadFsCustomPaths();
       refreshSwatches();
     });
   }
+})();
+
+// --- Entity visibility filter tab (#1728) ---
+let visibilityVersion = 1;
+
+function _visibilityShowLoadError(msg) {
+  const el = document.getElementById('visibility-load-error');
+  if (!el) return;
+  el.style.display = msg ? '' : 'none';
+  el.textContent = msg || '';
+}
+
+function _visibilityParseList(value, sep) {
+  return value.split(sep).map(s => s.trim()).filter(Boolean);
+}
+
+async function visibilityLoadConfig() {
+  _visibilityShowLoadError('');
+  let resp;
+  try {
+    resp = await fetch('./api/visibility/config');
+  } catch (e) {
+    _visibilityShowLoadError('Could not reach the server: ' + e.message);
+    return;
+  }
+  if (!resp.ok) {
+    let detail = 'HTTP ' + resp.status;
+    try {
+      const body = await resp.json();
+      if (body && body.error) detail = body.error;
+      if (body && body.visibility_file_corrupt) {
+        detail += ' (entity_visibility.json appears corrupt; edit or delete it on the App (add-on) /data volume)';
+      }
+    } catch (_e) { /* keep the HTTP-status fallback */ }
+    _visibilityShowLoadError('Failed to load visibility config: ' + detail);
+    return;
+  }
+  const c = await resp.json();
+  visibilityVersion = c.version ?? 1;
+  const cats = c.exclude_categories || [];
+  document.getElementById('visibility-enabled').checked = !!c.enabled;
+  document.getElementById('visibility-cat-diagnostic').checked = cats.includes('diagnostic');
+  document.getElementById('visibility-cat-config').checked = cats.includes('config');
+  document.getElementById('visibility-exclude-hidden').checked = !!c.exclude_hidden;
+  document.getElementById('visibility-areas').value = (c.exclude_areas || []).join(', ');
+  document.getElementById('visibility-labels').value = (c.exclude_labels || []).join(', ');
+  document.getElementById('visibility-deny').value = (c.deny_entity_ids || []).join('\n');
+  document.getElementById('visibility-allow-areas').value = (c.allow_areas || []).join(', ');
+  document.getElementById('visibility-allow-labels').value = (c.allow_labels || []).join(', ');
+  document.getElementById('visibility-allow-entities').value = (c.allow_entity_ids || []).join('\n');
+  document.getElementById('visibility-respect-assist').checked = !!c.respect_assist_exposure;
+}
+
+async function visibilitySaveConfig() {
+  const statusEl = document.getElementById('visibility-save-status');
+  const cats = [];
+  if (document.getElementById('visibility-cat-diagnostic').checked) cats.push('diagnostic');
+  if (document.getElementById('visibility-cat-config').checked) cats.push('config');
+  const config = {
+    version: visibilityVersion,
+    enabled: document.getElementById('visibility-enabled').checked,
+    exclude_categories: cats,
+    exclude_hidden: document.getElementById('visibility-exclude-hidden').checked,
+    deny_entity_ids: _visibilityParseList(document.getElementById('visibility-deny').value, '\n'),
+    exclude_areas: _visibilityParseList(document.getElementById('visibility-areas').value, ','),
+    exclude_labels: _visibilityParseList(document.getElementById('visibility-labels').value, ','),
+    allow_areas: _visibilityParseList(document.getElementById('visibility-allow-areas').value, ','),
+    allow_labels: _visibilityParseList(document.getElementById('visibility-allow-labels').value, ','),
+    allow_entity_ids: _visibilityParseList(document.getElementById('visibility-allow-entities').value, '\n'),
+    respect_assist_exposure: document.getElementById('visibility-respect-assist').checked,
+  };
+  setStatusAlert(statusEl, false);
+  statusEl.textContent = 'Saving...';
+  let resp;
+  try {
+    resp = await fetch('./api/visibility/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+  } catch (e) {
+    setStatusAlert(statusEl, true);
+    statusEl.textContent = 'Save failed: ' + e.message;
+    return;
+  }
+  if (resp.status === 409) {
+    // Do NOT reload the config here: that would overwrite the user's unsaved
+    // edits (there would be nothing left to "re-apply"). Keep the edits in the
+    // form, surface the conflict, and let the user reload deliberately — mirrors
+    // the policy tab's optimistic-lock message.
+    setStatusAlert(statusEl, true);
+    statusEl.textContent =
+      'Config was changed in another tab or session. Reload the page to see the '
+      + 'latest, then re-apply your changes.';
+    return;
+  }
+  if (!resp.ok) {
+    let detail = 'HTTP ' + resp.status;
+    try { const b = await resp.json(); if (b && b.error) detail = b.error; } catch (_e) { /* fallback */ }
+    setStatusAlert(statusEl, true);
+    statusEl.textContent = 'Save failed: ' + detail;
+    return;
+  }
+  const body = await resp.json();
+  visibilityVersion = body.version ?? (visibilityVersion + 1);
+  setStatusAlert(statusEl, false);
+  statusEl.textContent = 'Saved.';
+}
+
+(function wireVisibilitySave() {
+  const btn = document.getElementById('visibility-save-btn');
+  if (btn) btn.addEventListener('click', visibilitySaveConfig);
 })();

@@ -311,6 +311,93 @@ The version should match the [latest release](https://github.com/homeassistant-a
 | `weak` | Rarely suggests backups |
 | `auto` | Same as normal (future: auto-detection) |
 
+### Entity visibility filter (opt-in)
+
+By default the agent sees every entity. If auto-generated diagnostic or helper
+entities clutter search and overview results, you can hide a chosen set of them
+from the *collection* read tools (`ha_search`, `ha_get_overview`). This is
+**noise reduction, not access control** – a hidden entity is still returned by a
+direct `ha_get_state` / `ha_get_entity` on its `entity_id`, and still appears in
+automation, dashboard, and template content, so do not rely on it as a security
+boundary.
+
+**Reads only – it does not gate control tools.** The filter scopes what the
+*collection read* tools return. It does **not** stop an agent from calling a
+service on a hidden `entity_id`: gating writes is a separate concern handled by
+the Tool Security Policies engine (which matches on a call's arguments), not by
+visibility. Visibility is deliberately read-scoping only, precisely because it
+is noise reduction and cannot be a security boundary (content-bearing reads such
+as automation and template bodies would leak hidden entities anyway).
+
+The easiest way to configure it is the **Entity Visibility** tab in the ha-mcp
+settings UI (enable toggle, category checkboxes, area/label fields, per-entity
+denylist). It reads and writes the same file described below, so either surface
+works.
+
+The filter is off until `entity_visibility.json` exists in the ha-mcp data
+directory (the same directory as `tool_policy.json`; `/data` in the add-on) with
+`"enabled": true`:
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "exclude_categories": ["diagnostic", "config"],
+  "exclude_hidden": false,
+  "deny_entity_ids": [],
+  "exclude_areas": [],
+  "exclude_labels": [],
+  "allow_entity_ids": [],
+  "allow_areas": [],
+  "allow_labels": [],
+  "respect_assist_exposure": false
+}
+```
+
+The filter is a conjunction of independent dimensions: an entity is shown only if
+it passes every active one.
+
+- **Excludes / denylist.** An entity is hidden when its `entity_category` is in
+  `exclude_categories`, its `entity_id` is in `deny_entity_ids`, or its area/label
+  is in `exclude_areas` / `exclude_labels`. `exclude_categories` accepts only Home
+  Assistant's two entity categories (`diagnostic`, `config`); an unknown value is
+  ignored and surfaced as a `warnings` entry on the next read rather than silently
+  doing nothing. Set `exclude_hidden: true` to also fold in entities already
+  marked hidden in Home Assistant.
+- **Allowlist.** The moment any of `allow_entity_ids` / `allow_areas` /
+  `allow_labels` is non-empty, the filter inverts to *restrict* mode: only
+  entities matching an allowlist stay visible and everything else – including
+  entities added later – is hidden. Leave all three empty to keep the allowlist
+  off. `deny_entity_ids` still wins over an allow match — and so does any
+  `exclude_*` match: an entity an allowlist would admit but an
+  `exclude_categories` / `exclude_areas` / `exclude_labels` also hides stays
+  hidden (every dimension can only hide, so any one hide is enough — the allow
+  dimensions cannot un-hide what another dimension excluded).
+- **Respect Assist exposure.** With `respect_assist_exposure: true` the filter
+  hides entities not effectively exposed to Home Assistant's Assist
+  (`conversation`) assistant, mirroring `async_should_expose` (an explicit
+  per-entity exposure override wins; otherwise, if the instance exposes new
+  entities, the entity's domain and device-class defaults decide). Because HA
+  offers no single "effective exposure" API, the decision is reconstructed
+  client-side from two extra websocket reads per search — the set of entities
+  explicitly exposed to the assistant (`expose_entity/list`, which reports only
+  the *exposed* ones) and the "expose new entities" flag that drives the default
+  branch; if either read fails the dimension is skipped with a `warnings` note
+  rather than hiding everything. A registry entity's explicit override — exposed
+  *or* un-exposed — is read directly from the entity-registry `options` the
+  registry list already carries, so an explicit un-expose is honored. One residual
+  limit: for an entity that lives only in the state machine (a YAML/template entity
+  with no entity-registry entry), HA surfaces it through `expose_entity/list` only
+  when it is *exposed*; an explicit un-expose cannot be observed there, so such an
+  entity falls to its domain/device-class default and stays visible (fail-open).
+
+`version` drives optimistic-concurrency for the settings UI (it bumps
+on each save so two tabs can't clobber each other); when hand-editing the file,
+leave it as-is. The config is read live per request, so edits apply on the next
+call; a missing or invalid file leaves the filter off (and, when enabled but the
+registry read degrades, results are unfiltered with a `warnings` note rather than
+silently wrong).
+
 ---
 
 ## Feedback & Help

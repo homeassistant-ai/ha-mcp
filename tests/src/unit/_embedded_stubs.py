@@ -4,9 +4,9 @@ Home Assistant and ``aiohttp`` are not installed in the unit-test environment,
 so the component modules under test — ``embedded_server``, ``mcp_webhook``, and
 ``embedded_setup`` — cannot import their top-level ``homeassistant.*`` / aiohttp
 dependencies. This module installs lightweight fakes for exactly that surface,
-extending the ``sys.modules``-stub approach already used by
-``test_addon_bootstrap.py`` to the auth / requirements / http / webhook /
-issue-registry / aiohttp modules the embedded server and webhook ingress need.
+installing ``sys.modules`` fakes for the auth / requirements / http /
+webhook / issue-registry / aiohttp modules the embedded server and webhook
+ingress need.
 
 Import this module **before** importing any ``custom_components.ha_mcp_tools.*``
 embedded module (``embedded_server`` / ``mcp_webhook`` / ``embedded_setup`` /

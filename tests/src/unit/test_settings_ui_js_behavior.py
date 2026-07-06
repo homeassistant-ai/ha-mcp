@@ -4180,3 +4180,140 @@ class TestAriaLabelledbyOnRenderedInputs:
             _probe(result, "backup")
             == "label-backup-enable_auto_backup|backup-field-label"
         )
+
+
+# ---------------------------------------------------------------------------
+# Entity Visibility tab (#1728): load error announcement, save status role,
+# and the 409 optimistic-lock flow that must keep the user's unsaved edits.
+# ---------------------------------------------------------------------------
+
+# The visibility inputs the load/save handlers read + write, injected into
+# MIN_DOM so the handlers find their fields without standing up the full panel.
+_VISIBILITY_DOM = MIN_DOM.replace(
+    "\n</body>",
+    """
+  <div id="visibility-load-error" role="alert" aria-live="assertive" style="display:none"></div>
+  <span id="visibility-save-status" class="status" role="status" aria-live="polite"></span>
+  <input id="visibility-enabled" type="checkbox" />
+  <input id="visibility-cat-diagnostic" type="checkbox" />
+  <input id="visibility-cat-config" type="checkbox" />
+  <input id="visibility-exclude-hidden" type="checkbox" />
+  <input id="visibility-areas" type="text" />
+  <input id="visibility-labels" type="text" />
+  <input id="visibility-allow-areas" type="text" />
+  <input id="visibility-allow-labels" type="text" />
+  <textarea id="visibility-deny"></textarea>
+  <textarea id="visibility-allow-entities"></textarea>
+  <input id="visibility-respect-assist" type="checkbox" />
+  <button id="visibility-save-btn"></button>
+</body>""",
+)
+
+
+class TestVisibilitySettingsTab:
+    """The Entity Visibility tab's load/save/409 behaviour."""
+
+    def test_load_failure_populates_the_alert_region(
+        self, settings_script: str
+    ) -> None:
+        """A failed config GET must announce in the load-error region (an
+        assertive alert), not fail silently."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/visibility/config": {"status": 500, "json": {"error": "boom"}},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_VISIBILITY_DOM,
+            fetch_map=fetches,
+            invoke="await window.visibilityLoadConfig();",
+        )
+        _assert_clean_init(result)
+        assert 'id="visibility-load-error"' in result.dom
+        assert "Failed to load visibility config" in result.dom
+        # The error region is an assertive alert so a screen reader announces it.
+        assert 'role="alert"' in result.dom
+
+    def test_save_success_reports_saved_as_polite_status(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/visibility/config": {"status": 200, "json": {"version": 5}},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_VISIBILITY_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await window.visibilitySaveConfig();
+              const st = document.getElementById('visibility-save-status');
+              document.body.dataset.role = st.getAttribute('role') || '';
+              document.body.dataset.text = st.textContent || '';
+            """,
+        )
+        _assert_clean_init(result)
+        puts = [
+            f
+            for f in result.fetches
+            if "/api/visibility/config" in f["url"] and f["method"] == "PUT"
+        ]
+        assert len(puts) == 1
+        assert 'data-text="Saved."' in result.dom
+        assert 'data-role="status"' in result.dom  # success stays polite, not alert
+
+    def test_save_failure_announces_via_alert_role(self, settings_script: str) -> None:
+        """A failed save must flip the status span to an alert so it is
+        announced — the prior code left it a polite status."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/visibility/config": {"status": 500, "json": {"error": "kaboom"}},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_VISIBILITY_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await window.visibilitySaveConfig();
+              const st = document.getElementById('visibility-save-status');
+              document.body.dataset.role = st.getAttribute('role') || '';
+              document.body.dataset.text = st.textContent || '';
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-role="alert"' in result.dom
+        assert "kaboom" in result.dom
+
+    def test_save_409_keeps_edits_and_does_not_reload(
+        self, settings_script: str
+    ) -> None:
+        """A 409 must NOT auto-reload the config (which would overwrite the
+        user's unsaved edits). It surfaces the conflict as an alert and leaves
+        the form untouched so the user can reload deliberately."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/visibility/config": {"status": 409, "json": {"error": "conflict"}},
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_VISIBILITY_DOM,
+            fetch_map=fetches,
+            invoke="""
+              document.getElementById('visibility-areas').value = 'garage';
+              await window.visibilitySaveConfig();
+              const areas = document.getElementById('visibility-areas');
+              const st = document.getElementById('visibility-save-status');
+              document.body.dataset.areas = areas.value;
+              document.body.dataset.role = st.getAttribute('role') || '';
+              document.body.dataset.text = st.textContent || '';
+            """,
+        )
+        _assert_clean_init(result)
+        vis_calls = [f for f in result.fetches if "/api/visibility/config" in f["url"]]
+        # Exactly one call: the PUT. No follow-up GET reload — that is the bug
+        # (it clobbered the edits the message told the user to "re-apply").
+        assert len(vis_calls) == 1, vis_calls
+        assert vis_calls[0]["method"] == "PUT"
+        assert 'data-areas="garage"' in result.dom  # edit preserved
+        assert 'data-role="alert"' in result.dom
+        assert "another tab or session" in result.dom

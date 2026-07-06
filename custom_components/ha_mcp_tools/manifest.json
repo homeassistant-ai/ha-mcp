@@ -1,13 +1,23 @@
 {
     "domain": "ha_mcp_tools",
     "name": "HA-MCP Custom Component",
-    "after_dependencies": ["hassio", "http", "cloud", "frontend"],
-    "codeowners": ["@homeassistant-ai"],
+    "after_dependencies": [
+        "http",
+        "cloud",
+        "frontend"
+    ],
+    "codeowners": [
+        "@homeassistant-ai"
+    ],
     "config_flow": true,
-    "dependencies": ["webhook"],
+    "dependencies": [
+        "webhook"
+    ],
     "documentation": "https://github.com/homeassistant-ai/ha-mcp",
     "iot_class": "local_push",
     "issue_tracker": "https://github.com/homeassistant-ai/ha-mcp/issues",
-    "requirements": ["ruamel.yaml>=0.18.0"],
-    "version": "0.12.0"
+    "requirements": [
+        "ruamel.yaml>=0.18.0"
+    ],
+    "version": "0.13.0"
 }

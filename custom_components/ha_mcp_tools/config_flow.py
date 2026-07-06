@@ -3,8 +3,8 @@
 One config flow serves two entry types under the shared domain, chosen from a
 menu on the first step:
 
-* ``tools`` — the privileged file / YAML services (the original component),
-  including the Supervisor add-on bootstrap offer. Single-instance, keyed on
+* ``tools`` — the privileged file / YAML services (the original component).
+  A single confirm step creates the entry. Single-instance, keyed on
   ``DOMAIN``.
 * ``server`` — the in-process ha-mcp FastMCP server (issue #1527). A single
   confirm step creates the entry (entry-exists = the server runs);
@@ -18,8 +18,6 @@ configurable options flow (the tools entry aborts with ``no_options``).
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from typing import Any
 
 import voluptuous as vol
@@ -30,7 +28,6 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
-from homeassistant.helpers.hassio import is_hassio
 from homeassistant.helpers.selector import (
     SelectOptionDict,
     SelectSelector,
@@ -38,7 +35,6 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .addon import AddonBootstrapError, async_install_and_start_addon
 from .const import (
     BIND_HOST_ALL,
     BIND_HOST_LOOPBACK,
@@ -70,12 +66,9 @@ from .const import (
     WEBHOOK_AUTH_NONE,
 )
 
-_LOGGER = logging.getLogger(__name__)
-
 # Titles shown for each entry in the integration tile's entry list.
 _TOOLS_ENTRY_TITLE = "HA MCP Tools"
 _SERVER_ENTRY_TITLE = "HA-MCP Server"
-_CONF_INSTALL_ADDON = "install_addon"
 
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
@@ -86,11 +79,6 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     """Handle the config flow for the HA-MCP custom component (both entry types)."""
 
     VERSION = 1
-
-    def __init__(self) -> None:
-        """Initialize the config flow (add-on bootstrap task state)."""
-        self._install_task: asyncio.Task[None] | None = None
-        self._install_error: str | None = None
 
     @staticmethod
     @callback
@@ -121,81 +109,18 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     ) -> ConfigFlowResult:
         """Set up the services (tools) entry — single-instance, keyed on DOMAIN.
 
-        On Supervisor installs (HA OS / Supervised), offer to install the Home
-        Assistant MCP Server add-on too. On Container / Core installs there is no
-        add-on, so fall back to the plain confirm-and-create behaviour (the
-        server runs via Docker or pip there).
+        Plain confirm-and-create on every install type. (The add-on bootstrap
+        this step used to offer on Supervisor installs was removed: the
+        in-process server entry is the one-click way to get a server, and a
+        second install path only caused confusion. The add-on remains fully
+        supported - installed from the add-on store as always.)
         """
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
 
-        if is_hassio(self.hass):
-            return await self.async_step_addon()
-
         if user_input is not None:
             return self._create_tools_entry()
         return self.async_show_form(step_id="tools")
-
-    async def async_step_addon(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Offer to install the Home Assistant MCP Server add-on."""
-        if user_input is None:
-            return self.async_show_form(
-                step_id="addon",
-                data_schema=vol.Schema(
-                    {vol.Required(_CONF_INSTALL_ADDON, default=True): bool}
-                ),
-            )
-        if not user_input[_CONF_INSTALL_ADDON]:
-            return self._create_tools_entry()
-        return await self.async_step_install_addon()
-
-    async def async_step_install_addon(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Install and start the add-on, showing a progress spinner."""
-        if self._install_task is None:
-            self._install_task = self.hass.async_create_task(
-                async_install_and_start_addon(self.hass)
-            )
-        install_task = self._install_task
-
-        if not install_task.done():
-            return self.async_show_progress(
-                step_id="install_addon",
-                progress_action="install_addon",
-                progress_task=install_task,
-            )
-
-        try:
-            await install_task
-        except AddonBootstrapError as err:
-            _LOGGER.error("ha-mcp add-on bootstrap failed: %s", err)
-            self._install_error = str(err)
-            return self.async_show_progress_done(next_step_id="install_failed")
-        finally:
-            self._install_task = None
-
-        return self.async_show_progress_done(next_step_id="addon_success")
-
-    async def async_step_addon_success(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Finish setup after the add-on was installed and started."""
-        return self._create_tools_entry()
-
-    async def async_step_install_failed(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Add-on bootstrap failed; still set up the integration's services."""
-        if user_input is not None:
-            return self._create_tools_entry()
-        return self.async_show_form(
-            step_id="install_failed",
-            data_schema=vol.Schema({}),
-            description_placeholders={"error": self._install_error or "unknown error"},
-        )
 
     def _create_tools_entry(self) -> ConfigFlowResult:
         """Create the services (tools) config entry."""
@@ -225,17 +150,6 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
                 options={},
             )
         return self.async_show_form(step_id="server")
-
-    @callback
-    def async_remove(self) -> None:
-        """Cancel an in-flight add-on install if the flow is abandoned."""
-        if self._install_task is not None and not self._install_task.done():
-            _LOGGER.info(
-                "Config flow abandoned during add-on install; cancelling. The "
-                "add-on repository may already be added and the add-on may be "
-                "partially installed — check the Add-on Store."
-            )
-            self._install_task.cancel()
 
 
 class _NoOptionsFlow(OptionsFlow):
