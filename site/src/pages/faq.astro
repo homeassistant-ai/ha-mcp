@@ -58,7 +58,7 @@ const withBase = (path: string) => {
 
         <div class="faq-item" id="app-vs-stdio">
           <h3 class="text-lg font-medium text-white mb-2">Do I need the Home Assistant App?</h3>
-          <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA app is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). The app is only needed if you want to run ha-mcp inside your Home Assistant OS environment.</p>
+          <p class="text-slate-300"><strong class="text-green-400">No.</strong> The HA app is just one installation method. Most users run ha-mcp directly on their computer using <code class="bg-slate-800 px-1 rounded">uvx</code> (recommended for Claude Desktop). To run ha-mcp inside Home Assistant itself, you can install it as the app (Home Assistant OS / Supervised) or via the <a href="#custom-component" class="text-blue-400 hover:underline">HA-MCP custom component</a>'s in-process server, which works on every installation type.</p>
           <p class="text-slate-400 text-sm mt-2">If you <em>do</em> run the app, you don't also need <code class="bg-slate-800 px-1 rounded">uvx</code> — that would be a second, separate instance. HTTP-native clients (Codex, Cursor, Windsurf, Claude Code) connect straight to the app's URL, no proxy needed. One caveat: as of early 2026, Codex's HTTP MCP support has a <a href="https://github.com/openai/codex/issues/11284" class="text-blue-400 hover:underline">known initialization bug</a> where it loads no tools; if you hit that, run ha-mcp locally over stdio with <code class="bg-slate-800 px-1 rounded">uvx</code> instead.</p>
           <p class="text-slate-400 text-sm mt-2"><strong class="text-amber-300">Don't run both for the same client.</strong> If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running <code class="bg-slate-800 px-1 rounded">uvx ha-mcp@latest</code> with <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> / <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_TOKEN</code> is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses <code class="bg-slate-800 px-1 rounded">uvx mcp-proxy</code> with the app's URL and <strong>no</strong> token.</p>
         </div>
@@ -111,6 +111,7 @@ const withBase = (path: string) => {
           <p class="text-slate-300">ha-mcp ships a web settings page where you can enable, disable, and pin individual MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests. How you reach it depends on how ha-mcp is running:</p>
           <ul class="list-disc pl-6 text-slate-300 mt-3 space-y-2">
             <li><strong>Claude Desktop / Claude Code / any stdio install (<code class="bg-slate-800 px-1 rounded">uvx ha-mcp</code>):</strong> a localhost settings server spawns automatically alongside the MCP process. The easiest way to find the URL is to <strong>ask the AI</strong> something like <em>"how do I open the ha-mcp settings page?"</em> — the URL is included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response. You can also read it directly from <code class="bg-slate-800 px-1 rounded">~/.ha-mcp/ui.url</code> (Windows: <code class="bg-slate-800 px-1 rounded">%USERPROFILE%\.ha-mcp\ui.url</code>). The URL is bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> only and gated by a random secret path generated when the settings server starts.</li>
+            <li><strong>HA Custom Component (in-process server):</strong> open the admin-only <strong>HA-MCP</strong> panel in the Home Assistant sidebar &mdash; it serves the settings page through Home Assistant itself, no URL or secret needed.</li>
             <li><strong>HA App:</strong> easiest is the <strong>"Open Web UI"</strong> button on the app page (served over Home Assistant ingress — no secret needed). For direct or remote access outside the HA UI, the page lives behind the app's secret path: <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code>. Find <code class="bg-slate-800 px-1 rounded">&lt;secret-path&gt;</code> in the app's <strong>Configuration</strong> tab ("Secret path override") or in <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>. The bare <code class="bg-slate-800 px-1 rounded">:9583/settings</code> without the secret path is rejected for non-ingress callers.</li>
             <li><strong><code class="bg-slate-800 px-1 rounded">ha-mcp-web</code> / Docker (HTTP):</strong> append <code class="bg-slate-800 px-1 rounded">/settings</code> to your MCP secret-path URL. The default <code class="bg-slate-800 px-1 rounded">MCP_SECRET_PATH</code> is <code class="bg-slate-800 px-1 rounded">/mcp</code>, so the page is at <code class="bg-slate-800 px-1 rounded">http://&lt;host&gt;:8086/mcp/settings</code>; if you set a custom secret path, use that instead (e.g. <code class="bg-slate-800 px-1 rounded">http://&lt;host&gt;:8086/private_xxx/settings</code>).</li>
             <li><strong>Remote (Cloudflare Tunnel / reverse proxy):</strong> same as Docker/HTTP — the page sits under your secret path wherever the MCP endpoint is reachable, e.g. <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/&lt;secret-path&gt;/settings</code>.</li>
@@ -303,6 +304,7 @@ source ~/.zshrc
 
         <div class="faq-item" id="webhook-proxy">
           <h3 class="text-lg font-medium text-white mb-2">Can't connect remotely? Try the Webhook Proxy app</h3>
+          <p class="text-slate-300 mb-3">Using the <a href="#custom-component" class="text-blue-400 hover:underline">HA-MCP custom component</a>'s in-process server? Remote access is built in — its webhook connect URL already works through Nabu Casa or any reverse proxy pointed at Home Assistant, so you don't need the Webhook Proxy app. The rest of this answer applies to the app (add-on), Docker, and pip installs.</p>
           <p class="text-slate-300 mb-3">If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the <strong>Webhook Proxy app</strong> may be a simpler alternative.</p>
           <p class="text-slate-300 mb-3">Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have <strong>Nabu Casa</strong> or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.</p>
           <ol class="text-slate-300 space-y-2 list-decimal list-inside mb-3">
@@ -451,7 +453,8 @@ source ~/.zshrc
 
     <!-- Custom Component -->
     <section class="mb-12" id="custom-component">
-      <h2 class="text-2xl font-semibold text-white mb-6">Custom Component (ha_mcp_tools)</h2>
+      <h2 class="text-2xl font-semibold text-white mb-4">Custom Component (ha_mcp_tools)</h2>
+      <p class="text-slate-300 mb-6">The <strong class="text-white">HA-MCP Custom Component</strong> (<code class="bg-slate-800 px-1 rounded">ha_mcp_tools</code>) has two config-entry types under one integration: the <strong class="text-white">HA MCP Tools</strong> services entry adds the privileged file and YAML-configuration services described below, and the <strong class="text-white">HA-MCP Server</strong> entry runs the full ha-mcp server in-process inside Home Assistant &mdash; now the recommended way to install ha-mcp, working on every Home Assistant installation type (HAOS, Supervised, Container, Core). See the <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/in-process-server.md" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">in-process server guide</a> for the full walkthrough.</p>
 
       <div class="space-y-6">
         <div class="faq-item">
@@ -472,12 +475,12 @@ source ~/.zshrc
           <h3 class="text-lg font-medium text-white mb-2">How do I install it?</h3>
           <p class="text-slate-300 mb-3"><strong class="text-white">Using HACS (recommended):</strong></p>
           <p class="text-slate-300 mb-3">
-            <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration" class="inline-block" target="_blank" rel="noopener noreferrer">
+            <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration" class="inline-block" target="_blank" rel="noopener noreferrer">
               <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open your Home Assistant instance and open a repository inside the Home Assistant Community Store." />
             </a>
           </p>
-          <p class="text-slate-300 mb-3">To add manually: open <strong class="text-white">HACS</strong> &gt; <strong class="text-white">Integrations</strong> &gt; three-dot menu &gt; <strong class="text-white">Custom repositories</strong> &gt; add <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp</code> (category: Integration) &gt; <strong class="text-white">Download</strong>.</p>
-          <p class="text-slate-300 mb-3">After installing, restart Home Assistant. Then open <strong class="text-white">Settings</strong> &gt; <strong class="text-white">Devices &amp; Services</strong> &gt; <strong class="text-white">Add Integration</strong> and search for <strong class="text-white">HA MCP Tools</strong>.</p>
+          <p class="text-slate-300 mb-3">To add manually: open <strong class="text-white">HACS</strong> &gt; <strong class="text-white">Integrations</strong> &gt; three-dot menu &gt; <strong class="text-white">Custom repositories</strong> &gt; add <code class="bg-slate-800 px-1 rounded">https://github.com/homeassistant-ai/ha-mcp-integration</code> (category: Integration) &gt; <strong class="text-white">Download</strong>.</p>
+          <p class="text-slate-300 mb-3">After installing, restart Home Assistant. Then open <strong class="text-white">Settings</strong> &gt; <strong class="text-white">Devices &amp; Services</strong> &gt; <strong class="text-white">Add Integration</strong> and search for <strong class="text-white">HA-MCP Custom Component</strong>, then pick the entry type: <strong class="text-white">HA-MCP Server</strong> (the in-process server &mdash; the recommended install) or <strong class="text-white">HA MCP Tools</strong> (the file/YAML services described above).</p>
           <p class="text-slate-300"><strong class="text-white">Manual install:</strong> Copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> from the <a href="https://github.com/homeassistant-ai/ha-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">repository</a> into your HA config's <code class="bg-slate-800 px-1 rounded">custom_components/</code> directory. Restart Home Assistant, then add the integration as described above.</p>
         </div>
 
@@ -508,6 +511,12 @@ source ~/.zshrc
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="text-lg font-medium text-white mb-2">Do I still need the add-on or the webhook proxy if I use the custom component?</h3>
+          <p class="text-slate-300"><strong class="text-green-400">No.</strong> The custom component's <strong class="text-white">HA-MCP Server</strong> entry runs the whole ha-mcp server inside Home Assistant and is completely independent of the Home Assistant App add-on. For remote access it registers its own built-in Home Assistant webhook, so you do not need the separate Webhook Proxy app either.</p>
+          <p class="text-slate-400 text-sm mt-2">The add-on remains a fully supported alternative on Home Assistant OS and Supervised &mdash; pick whichever install you prefer; you never need to run both.</p>
         </div>
       </div>
     </section>

@@ -240,32 +240,17 @@ const platformsData: { id: string; name: string; icon: IconName; order: number }
   {"id": "docker", "name": "Docker", "icon": "docker", "order": 4},
 ];
 
-const connectionsData: { id: string; name: string; transport: string; description: string; icon: IconName; order: number }[] = [
-  {"id": "local", "name": "Local Machine", "transport": "stdio", "description": "Run ha-mcp on your own computer over stdio (e.g. Claude Desktop) — advanced, not the Home Assistant app", "icon": "computer", "order": 1},
-  {"id": "network", "name": "Local Network", "transport": "http", "description": "Run ha-mcp as an HTTP server accessible on your LAN", "icon": "network", "order": 2},
-  {"id": "remote", "name": "Remote (Internet)", "transport": "https", "description": "Access ha-mcp from anywhere via secure HTTPS", "icon": "globe", "order": 3},
-];
-
-const deploymentData: { id: string; name: string; description: string; icon: IconName; forConnections: string[]; order: number }[] = [
-  {"id": "uvx", "name": "uvx (Python)", "description": "Run ha-mcp directly via Python package manager", "icon": "python", "forConnections": ["local", "network"], "order": 1},
-  {"id": "docker", "name": "Docker", "description": "Run ha-mcp in a container", "icon": "docker", "forConnections": ["local", "network", "remote"], "order": 2},
-  {"id": "ha-addon", "name": "Home Assistant App (add-on)", "description": "Run ha-mcp inside Home Assistant OS", "icon": "home-assistant", "forConnections": ["network", "remote"], "order": 3},
-  {"id": "cloudflared", "name": "Cloudflare Tunnel", "description": "Expose ha-mcp to the internet securely", "icon": "cloudflare", "forConnections": ["remote"], "order": 4},
-  {
-    "id": "webhook-proxy",
-    "name": "Webhook Proxy App",
-    "description": "Remote access via existing reverse proxy (Nabu Casa, Cloudflare, etc.)",
-    "icon": "webhook",
-    "forConnections": ["remote"],
-    "order": 5,
-  },
+// Scope: how far the connection reaches. Local covers "same machine or home
+// network"; remote is over-the-internet HTTPS. (Replaces the old three-way
+// local/network/remote connection model.)
+const scopeData: { id: string; name: string; description: string; icon: IconName; order: number }[] = [
+  {"id": "local", "name": "Local", "description": "Same machine or home network", "icon": "computer", "order": 1},
+  {"id": "remote", "name": "Remote (internet)", "description": "Reach your server from anywhere over secure HTTPS", "icon": "globe", "order": 2},
 ];
 
 // Client transport capabilities for filtering
 // stdio-only: clients that need mcp-proxy for HTTP connections
 const stdioOnlyClients = ['claude-desktop', 'jetbrains', 'zed'];
-// http-only: clients that don't support stdio at all
-const httpOnlyClients = ['chatgpt', 'claude-ai'];
 // remote-only: clients that require HTTPS (can't use local HTTP)
 const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 ---
@@ -281,102 +266,94 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
       <h1 class="text-3xl font-bold text-white mb-2">Home Assistant MCP Setup Wizard</h1>
       <p class="text-slate-400 mb-6">Configure the Home Assistant MCP Server for your AI assistant</p>
 
-      <!-- HA OS App quick option -->
-      <div class="flex flex-wrap items-center justify-center gap-3 mb-8">
-        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener noreferrer" class="inline-flex" title="Add the ha-mcp app repository to your Home Assistant (HA OS)">
-          <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add ha-mcp app repository to your Home Assistant" height="36" />
+      <!-- Quick Setup: HA Custom Component (recommended, works on every HA install type) -->
+      <div class="max-w-2xl mx-auto text-left mb-8 rounded-2xl border-2 border-green-700/50 bg-gradient-to-br from-green-900/20 to-slate-800/50 p-6">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div class="flex items-center gap-2">
+            <span class="inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            <h2 class="text-lg font-semibold text-white">Quick Setup — HA Custom Component</h2>
+          </div>
+          <span class="px-3 py-1 text-xs rounded-full bg-green-900/40 text-green-300 font-medium">Recommended</span>
+        </div>
+        <p class="text-slate-400 text-sm mb-4">Runs the full ha-mcp server inside Home Assistant. Works on every Home Assistant installation type — Home Assistant OS, Supervised, Container, and Core.</p>
+        <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration" target="_blank" rel="noopener noreferrer" class="inline-flex mb-4" title="Open the HA-MCP Custom Component in HACS">
+          <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open the HA-MCP Custom Component in HACS" height="36" />
         </a>
+        <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+          <li>Install <strong>HA-MCP Custom Component</strong> from HACS, then restart Home Assistant.</li>
+          <li>Go to <strong>Settings → Devices &amp; Services → Add Integration</strong>, search <strong>HA-MCP Custom Component</strong>, and choose <strong>HA-MCP Server</strong>.</li>
+          <li>Submit — creating the entry starts the server.</li>
+          <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there; the URL is also printed in the Home Assistant log).</li>
+          <li>Paste it into your AI client — pick the client below for its exact config.</li>
+        </ol>
+        <p class="text-slate-500 text-sm mt-4">Need client-specific config, or a different install method (add-on, Docker, uvx, or local stdio)? Use the setup wizard below.</p>
       </div>
 
-      <!-- Get Started Quick Options -->
-      <div class="mb-8">
-        <h2 class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-green-900/30 text-green-400 text-sm mb-4">
-          <span class="inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-          Get Started - Easy Setup
-        </h2>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl mx-auto items-start">
-          <details id="easy-macos" class="qs-details group">
-            <summary class="quick-start-card">
-              <div class="flex items-center gap-4">
-                <PlatformIcon icon="apple" size={40} class="text-[var(--text-secondary)]" />
-                <div class="text-left">
-                  <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">macOS</h3>
-                  <p class="text-slate-400">Local or the Home Assistant App</p>
-                </div>
-              </div>
-              <span class="quick-start-badge">Quick start</span>
-            </summary>
-            <div class="qs-branch">
-              <a href={withBase('/guide-addon')} class="qs-option qs-option-rec">
-                <span class="inline-block mb-1 px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
-                <span class="block font-semibold text-white">Home Assistant App (add-on)</span>
-                <span class="block text-sm text-slate-400">Local or remote &middot; no access token</span>
-              </a>
-              <a href={withBase('/guide-macos')} class="qs-option">
-                <span class="block font-semibold text-white">Local install (stdio)</span>
-                <span class="block text-sm text-slate-400">Local machine only &middot; needs a long-lived token</span>
-              </a>
-            </div>
-          </details>
-          <details id="easy-linux" class="qs-details group">
-            <summary class="quick-start-card">
-              <div class="flex items-center gap-4">
-                <PlatformIcon icon="linux" size={40} class="text-[var(--text-secondary)]" />
-                <div class="text-left">
-                  <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">Linux</h3>
-                  <p class="text-slate-400">Local or the Home Assistant App</p>
-                </div>
-              </div>
-              <span class="quick-start-badge">Quick start</span>
-            </summary>
-            <div class="qs-branch">
-              <a href={withBase('/guide-addon')} class="qs-option qs-option-rec">
-                <span class="inline-block mb-1 px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
-                <span class="block font-semibold text-white">Home Assistant App (add-on)</span>
-                <span class="block text-sm text-slate-400">Local or remote &middot; no access token</span>
-              </a>
-              <a href={withBase('/guide-linux')} class="qs-option">
-                <span class="block font-semibold text-white">Local install (stdio)</span>
-                <span class="block text-sm text-slate-400">Claude Desktop or Claude Code &middot; needs a long-lived token</span>
-              </a>
-            </div>
-          </details>
-          <details id="easy-windows" class="qs-details group">
-            <summary class="quick-start-card">
-              <div class="flex items-center gap-4">
-                <PlatformIcon icon="windows" size={40} class="text-[var(--text-secondary)]" />
-                <div class="text-left">
-                  <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">Windows</h3>
-                  <p class="text-slate-400">Local or the Home Assistant App</p>
-                </div>
-              </div>
-              <span class="quick-start-badge">Quick start</span>
-            </summary>
-            <div class="qs-branch">
-              <a href={withBase('/guide-addon')} class="qs-option qs-option-rec">
-                <span class="inline-block mb-1 px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
-                <span class="block font-semibold text-white">Home Assistant App (add-on)</span>
-                <span class="block text-sm text-slate-400">Local or remote &middot; no access token</span>
-              </a>
-              <a href={withBase('/guide-windows')} class="qs-option">
-                <span class="block font-semibold text-white">Local install (stdio)</span>
-                <span class="block text-sm text-slate-400">Local machine only &middot; needs a long-lived token</span>
-              </a>
-            </div>
-          </details>
-        </div>
-        <p class="text-slate-500 text-sm mt-6">Or choose from all options below</p>
-      </div>
     </header>
 
     <!-- Wizard Sections (Vertical Accumulation) -->
     <div class="space-y-6">
 
-      <!-- Section 1: Client Selection -->
-      <section class="wizard-section" id="section-client">
+      <!-- Section 1: Server Method -->
+      <section class="wizard-section" id="section-method">
         <h2 class="section-header">
           <span class="section-number">1</span>
+          How is your MCP server running?
+        </h2>
+        <!-- Recommended: HA Custom Component (works on every HA install type) -->
+        <button data-server-method="ha-component" class="option-card-large w-full">
+          <div class="flex items-center gap-2 mb-2 flex-wrap">
+            <PlatformIcon icon="home-assistant" size={22} class="text-[var(--text-secondary)]" />
+            <span class="px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
+            <span class="complexity-badge" data-complexity="quick">Quick</span>
+          </div>
+          <h3 class="font-semibold text-white">HA Custom Component</h3>
+          <p class="text-sm text-slate-400">Runs inside Home Assistant — every install type</p>
+        </button>
+
+        <h3 class="text-sm font-semibold text-slate-500 uppercase tracking-wider mt-6 mb-3">Alternative methods</h3>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <button data-server-method="ha-addon" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="quick">Quick</span>
+            </div>
+            <h3 class="font-semibold text-white">HA App (add-on)</h3>
+            <p class="text-sm text-slate-400">Home Assistant OS / Supervised only</p>
+          </button>
+          <button data-server-method="docker" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <PlatformIcon icon="docker" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="complex">Complex</span>
+            </div>
+            <h3 class="font-semibold text-white">Docker</h3>
+            <p class="text-sm text-slate-400">Container</p>
+          </button>
+          <button data-server-method="uvx" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <PlatformIcon icon="python" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="complex">Complex</span>
+            </div>
+            <h3 class="font-semibold text-white">uvx (Python)</h3>
+            <p class="text-sm text-slate-400">Run the HTTP server via Python</p>
+          </button>
+          <button data-server-method="stdio-local" class="option-card-large">
+            <div class="flex items-center gap-2 mb-2">
+              <PlatformIcon icon="computer" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="advanced">Not recommended</span>
+            </div>
+            <h3 class="font-semibold text-white">Local stdio</h3>
+            <p class="text-sm text-slate-400">Legacy — known transport issues; fine for the demo server</p>
+          </button>
+        </div>
+      </section>
+
+      <!-- Section 2: Client Selection -->
+      <section class="wizard-section hidden" id="section-client">
+        <h2 class="section-header">
+          <span class="section-number">2</span>
           Select Your AI Client
+          <span class="selected-badge" id="selected-method"></span>
         </h2>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3" id="client-grid">
           {clientsData.map((client) => (
@@ -409,35 +386,27 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         </div>
       </section>
 
-      <!-- Section 2: Connection Type -->
-      <section class="wizard-section hidden" id="section-connection">
+      <!-- Section 3: Scope (local vs remote) -->
+      <section class="wizard-section hidden" id="section-scope">
         <h2 class="section-header">
-          <span class="section-number">2</span>
-          Select Connection Type
+          <span class="section-number">3</span>
+          Local or remote access?
           <span class="selected-badge" id="selected-client"></span>
         </h2>
-        <div class="grid md:grid-cols-3 gap-4" id="connection-grid">
-          {connectionsData.map((conn) => (
+        <div class="grid md:grid-cols-2 gap-4" id="scope-grid">
+          {scopeData.map((scope) => (
             <button
-              data-connection={conn.id}
-              data-transport={conn.transport}
-              class="option-card-large connection-option"
+              data-scope={scope.id}
+              class="option-card-large scope-option"
             >
               <div class="flex items-center gap-2 mb-2">
-                <PlatformIcon icon={conn.icon} size={22} class="text-[var(--text-secondary)]" />
-                <span class="complexity-badge" data-complexity={conn.id === 'local' ? 'quick' : conn.id === 'network' ? 'complex' : 'advanced'}>
-                  {conn.id === 'local' && 'Quick'}
-                  {conn.id === 'network' && 'Complex'}
-                  {conn.id === 'remote' && 'Advanced'}
+                <PlatformIcon icon={scope.icon} size={22} class="text-[var(--text-secondary)]" />
+                <span class="complexity-badge" data-complexity={scope.id === 'local' ? 'quick' : 'advanced'}>
+                  {scope.id === 'local' ? 'Quick' : 'Advanced'}
                 </span>
               </div>
-              <h3 class="font-semibold text-white mb-1">{conn.name}</h3>
-              <p class="text-sm text-slate-400">{conn.description}</p>
-              <div class="mt-3">
-                <span class="px-2 py-1 text-xs rounded bg-slate-700 text-slate-300">
-                  {conn.transport === 'stdio' ? 'stdio' : 'HTTP/HTTPS'}
-                </span>
-              </div>
+              <h3 class="font-semibold text-white mb-1">{scope.name}</h3>
+              <p class="text-sm text-slate-400">{scope.description}</p>
             </button>
           ))}
         </div>
@@ -517,7 +486,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
               <span>Local Network (LAN)</span>
             </div>
           </div>
-          <p class="text-slate-400 text-sm mt-4 text-center">ha-mcp runs as a persistent HTTP server on your network. Multiple clients can connect.</p>
+          <p class="text-slate-400 text-sm mt-4 text-center">The ha-mcp server runs in or beside Home Assistant and listens on your local network. Multiple clients can connect.</p>
           <p class="text-amber-400/70 text-xs mt-2 text-center">* Should not be exposed externally (No HTTPS). Use Remote for internet access.</p>
         </div>
 
@@ -564,14 +533,14 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         </div>
       </section>
 
-      <!-- Section 3: Platform Selection (for local/stdio only) -->
+      <!-- Section 4: Platform (only when OS-specific commands are needed) -->
       <section class="wizard-section hidden" id="section-platform">
         <h2 class="section-header">
-          <span class="section-number">3</span>
+          <span class="section-number" id="platform-step-num">4</span>
           Select Your Platform
-          <span class="selected-badge" id="selected-connection"></span>
+          <span class="selected-badge" id="selected-platform-prev"></span>
         </h2>
-        <p class="text-slate-400 text-sm mb-4">Choose how to run ha-mcp on your machine</p>
+        <p class="text-slate-400 text-sm mb-4" id="platform-help">Choose how to run ha-mcp on your machine.</p>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="platform-grid">
           {platformsData.map((platform) => (
             <button
@@ -587,96 +556,42 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         </div>
       </section>
 
-      <!-- Section 3: Server Setup (for network/remote - combined platform + deployment) -->
-      <section class="wizard-section hidden" id="section-server-setup">
+      <!-- Section 5: Remote Path (only when scope = remote) -->
+      <section class="wizard-section hidden" id="section-remote-path">
         <h2 class="section-header">
-          <span class="section-number">3</span>
-          Server Setup
-          <span class="selected-badge" id="selected-connection-server"></span>
-        </h2>
-        <p class="text-slate-400 text-sm mb-4">Choose how to run the ha-mcp HTTP server</p>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="server-setup-grid">
-          <!-- uvx options with platform -->
-          <button data-server-setup="macos-uvx" class="option-card-large">
-            <div class="flex items-center gap-2 mb-2">
-              <PlatformIcon icon="apple" size={22} class="text-[var(--text-secondary)]" />
-              <span class="complexity-badge" data-complexity="quick">Quick</span>
-            </div>
-            <h3 class="font-semibold text-white">macOS</h3>
-            <p class="text-sm text-slate-400">uvx</p>
-          </button>
-          <button data-server-setup="linux-uvx" class="option-card-large">
-            <div class="flex items-center gap-2 mb-2">
-              <PlatformIcon icon="linux" size={22} class="text-[var(--text-secondary)]" />
-              <span class="complexity-badge" data-complexity="quick">Quick</span>
-            </div>
-            <h3 class="font-semibold text-white">Linux</h3>
-            <p class="text-sm text-slate-400">uvx</p>
-          </button>
-          <button data-server-setup="windows-uvx" class="option-card-large">
-            <div class="flex items-center gap-2 mb-2">
-              <PlatformIcon icon="windows" size={22} class="text-[var(--text-secondary)]" />
-              <span class="complexity-badge" data-complexity="quick">Quick</span>
-            </div>
-            <h3 class="font-semibold text-white">Windows</h3>
-            <p class="text-sm text-slate-400">uvx</p>
-          </button>
-          <!-- HA App -->
-          <button data-server-setup="ha-addon" class="option-card-large">
-            <div class="flex items-center gap-2 mb-2">
-              <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
-              <span class="complexity-badge" data-complexity="quick">Quick</span>
-            </div>
-            <h3 class="font-semibold text-white">HA OS</h3>
-            <p class="text-sm text-slate-400">App (add-on)</p>
-          </button>
-          <!-- Docker -->
-          <button data-server-setup="docker" class="option-card-large">
-            <div class="flex items-center gap-2 mb-2">
-              <PlatformIcon icon="docker" size={22} class="text-[var(--text-secondary)]" />
-              <span class="complexity-badge" data-complexity="complex">Complex</span>
-            </div>
-            <h3 class="font-semibold text-white">Docker</h3>
-            <p class="text-sm text-slate-400">Container</p>
-          </button>
-          <!-- HA Custom Component -->
-          <button data-server-setup="ha-component" class="option-card-large opacity-50" disabled>
-            <div class="flex items-center gap-2 mb-2">
-              <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
-              <span class="complexity-badge" data-complexity="quick">Quick</span>
-            </div>
-            <h3 class="font-semibold text-white">HA Component</h3>
-            <p class="text-sm text-slate-400">Coming Soon</p>
-          </button>
-        </div>
-      </section>
-
-      <!-- Section 4: Reverse Proxy (for remote only) -->
-      <section class="wizard-section hidden" id="section-proxy">
-        <h2 class="section-header">
-          <span class="section-number">4</span>
-          HTTPS Reverse Proxy
-          <span class="selected-badge" id="selected-server-setup"></span>
+          <span class="section-number" id="remotepath-step-num">5</span>
+          How will clients reach it remotely?
+          <span class="selected-badge" id="selected-remotepath-prev"></span>
         </h2>
         <p class="text-slate-400 text-sm mb-4">Expose your MCP server securely to the internet</p>
-        <div class="grid md:grid-cols-3 gap-4" id="proxy-grid">
-          <button data-proxy="cloudflared" class="option-card-large">
+        <div class="grid md:grid-cols-3 gap-4" id="remote-path-grid">
+          <!-- HA Custom Component only -->
+          <button data-remote-path="builtin-webhook" class="option-card-large hidden">
             <div class="flex items-center gap-2 mb-2">
-              <PlatformIcon icon="cloud" size={22} class="text-[var(--text-secondary)]" />
+              <PlatformIcon icon="webhook" size={22} class="text-[var(--text-secondary)]" />
               <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
-            <h3 class="font-semibold text-white">Cloudflare Tunnel</h3>
-            <p class="text-sm text-slate-400">Free, no port forwarding needed</p>
+            <h3 class="font-semibold text-white">Built-in webhook</h3>
+            <p class="text-sm text-slate-400">Nabu Casa or an existing reverse proxy — no extra setup</p>
           </button>
-          <button data-proxy="webhook-proxy" class="option-card-large">
+          <!-- HA App (add-on) only -->
+          <button data-remote-path="webhook-proxy" class="option-card-large hidden">
             <div class="flex items-center gap-2 mb-2">
               <PlatformIcon icon="home" size={22} class="text-[var(--text-secondary)]" />
               <span class="complexity-badge" data-complexity="quick">Quick</span>
             </div>
             <h3 class="font-semibold text-white">Nabu Casa / Webhook Proxy</h3>
-            <p class="text-sm text-slate-400">Uses existing HA reverse proxy</p>
+            <p class="text-sm text-slate-400">Uses your existing HA reverse proxy</p>
           </button>
-          <button data-proxy="custom" class="option-card-large">
+          <button data-remote-path="cloudflared" class="option-card-large hidden">
+            <div class="flex items-center gap-2 mb-2">
+              <PlatformIcon icon="cloud" size={22} class="text-[var(--text-secondary)]" />
+              <span class="complexity-badge" data-complexity="advanced">Advanced</span>
+            </div>
+            <h3 class="font-semibold text-white">Cloudflare Tunnel</h3>
+            <p class="text-sm text-slate-400">Free, no port forwarding needed</p>
+          </button>
+          <button data-remote-path="custom" class="option-card-large hidden">
             <div class="flex items-center gap-2 mb-2">
               <PlatformIcon icon="wrench" size={22} class="text-[var(--text-secondary)]" />
               <span class="complexity-badge" data-complexity="advanced">Advanced</span>
@@ -738,6 +653,86 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
       <!-- Scroll spacer to allow last sections to scroll to top -->
       <div class="scroll-spacer" aria-hidden="true"></div>
     </div>
+
+    <!-- Demo server (local stdio) — relocated OS quick-install cards; ids preserved for external anchors -->
+    <section class="mt-12" aria-labelledby="demo-server-heading">
+      <h2 id="demo-server-heading" class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 text-slate-300 text-sm mb-4">
+        <span class="inline-flex rounded-full h-2 w-2 bg-slate-500"></span>
+        Demo server (local stdio)
+      </h2>
+      <p class="text-slate-500 text-sm mb-4">Prefer to run ha-mcp locally over stdio, or just try the public demo Home Assistant? These per-OS walkthroughs cover it. stdio has known transport issues; not recommended for a permanent setup.</p>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl items-start">
+        <details id="easy-macos" class="qs-details group">
+          <summary class="quick-start-card">
+            <div class="flex items-center gap-4">
+              <PlatformIcon icon="apple" size={40} class="text-[var(--text-secondary)]" />
+              <div class="text-left">
+                <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">macOS</h3>
+                <p class="text-slate-400">Local or the Home Assistant App</p>
+              </div>
+            </div>
+            <span class="quick-start-badge">Demo server</span>
+          </summary>
+          <div class="qs-branch">
+            <a href={withBase('/guide-addon')} class="qs-option qs-option-rec">
+              <span class="inline-block mb-1 px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
+              <span class="block font-semibold text-white">Home Assistant App (add-on)</span>
+              <span class="block text-sm text-slate-400">Local or remote &middot; no access token</span>
+            </a>
+            <a href={withBase('/guide-macos')} class="qs-option">
+              <span class="block font-semibold text-white">Local install (stdio)</span>
+              <span class="block text-sm text-slate-400">Local machine only &middot; needs a long-lived token</span>
+            </a>
+          </div>
+        </details>
+        <details id="easy-linux" class="qs-details group">
+          <summary class="quick-start-card">
+            <div class="flex items-center gap-4">
+              <PlatformIcon icon="linux" size={40} class="text-[var(--text-secondary)]" />
+              <div class="text-left">
+                <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">Linux</h3>
+                <p class="text-slate-400">Local or the Home Assistant App</p>
+              </div>
+            </div>
+            <span class="quick-start-badge">Demo server</span>
+          </summary>
+          <div class="qs-branch">
+            <a href={withBase('/guide-addon')} class="qs-option qs-option-rec">
+              <span class="inline-block mb-1 px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
+              <span class="block font-semibold text-white">Home Assistant App (add-on)</span>
+              <span class="block text-sm text-slate-400">Local or remote &middot; no access token</span>
+            </a>
+            <a href={withBase('/guide-linux')} class="qs-option">
+              <span class="block font-semibold text-white">Local install (stdio)</span>
+              <span class="block text-sm text-slate-400">Claude Desktop or Claude Code &middot; needs a long-lived token</span>
+            </a>
+          </div>
+        </details>
+        <details id="easy-windows" class="qs-details group">
+          <summary class="quick-start-card">
+            <div class="flex items-center gap-4">
+              <PlatformIcon icon="windows" size={40} class="text-[var(--text-secondary)]" />
+              <div class="text-left">
+                <h3 class="text-lg font-semibold text-white group-hover:text-blue-400">Windows</h3>
+                <p class="text-slate-400">Local or the Home Assistant App</p>
+              </div>
+            </div>
+            <span class="quick-start-badge">Demo server</span>
+          </summary>
+          <div class="qs-branch">
+            <a href={withBase('/guide-addon')} class="qs-option qs-option-rec">
+              <span class="inline-block mb-1 px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 font-medium">Recommended</span>
+              <span class="block font-semibold text-white">Home Assistant App (add-on)</span>
+              <span class="block text-sm text-slate-400">Local or remote &middot; no access token</span>
+            </a>
+            <a href={withBase('/guide-windows')} class="qs-option">
+              <span class="block font-semibold text-white">Local install (stdio)</span>
+              <span class="block text-sm text-slate-400">Local machine only &middot; needs a long-lived token</span>
+            </a>
+          </div>
+        </details>
+      </div>
+    </section>
 
     <!-- Footer -->
     <footer class="mt-12 text-center text-slate-500 text-sm">
@@ -971,33 +966,61 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
   }
 </style>
 
-<script define:vars={{ clientsData, platformsData, connectionsData, deploymentData, stdioOnlyClients, httpOnlyClients, remoteOnlyClients }}>
+<script define:vars={{ clientsData, platformsData, stdioOnlyClients, remoteOnlyClients, base }}>
+  // `base` is the site base path (import.meta.env.BASE_URL, e.g. /ha-mcp),
+  // injected via define:vars so links built inside instruction templates keep
+  // working when the site is built with a different --base.
+
   // State
   let state = {
+    method: null,      // ha-component | ha-addon | docker | uvx | stdio-local
     client: null,
-    connection: null,
-    platform: null,       // For local (stdio) only
-    serverSetup: null,    // For network/remote (combined platform + deployment)
-    proxy: null,
+    scope: null,       // local | remote (forced 'local' for stdio-local)
+    platform: null,    // macos | linux | windows | docker (only when OS commands are needed)
+    remotePath: null,  // builtin-webhook | webhook-proxy | cloudflared | custom (scope=remote)
   };
 
-  // Server setup options mapping
-  const serverSetupOptions = {
-    'macos-uvx': { platform: 'macos', deployment: 'uvx', label: 'macOS (uvx)' },
-    'linux-uvx': { platform: 'linux', deployment: 'uvx', label: 'Linux (uvx)' },
-    'windows-uvx': { platform: 'windows', deployment: 'uvx', label: 'Windows (uvx)' },
-    'ha-addon': { platform: null, deployment: 'ha-addon', label: 'HA OS App (add-on)' },
-    'docker': { platform: null, deployment: 'docker', label: 'Docker' },
+  // Display labels
+  const methodLabels = {
+    'ha-component': 'HA Custom Component',
+    'ha-addon': 'HA App (add-on)',
+    'docker': 'Docker',
+    'uvx': 'uvx (Python)',
+    'stdio-local': 'Local stdio',
   };
+  const scopeLabels = { 'local': 'Local', 'remote': 'Remote (internet)' };
+  const remotePathLabels = {
+    'builtin-webhook': 'Built-in webhook',
+    'webhook-proxy': 'Webhook Proxy',
+    'cloudflared': 'Cloudflare Tunnel',
+    'custom': 'Custom Proxy',
+  };
+
+  // Which remote-path cards apply to each server method
+  function remotePathsForMethod(method) {
+    if (method === 'ha-component') return ['builtin-webhook', 'cloudflared', 'custom'];
+    if (method === 'ha-addon') return ['webhook-proxy', 'cloudflared', 'custom'];
+    return ['cloudflared', 'custom']; // docker, uvx
+  }
+
+  // The platform step only appears when OS-specific commands are needed:
+  // stdio-local (always), the uvx server host OS, or an HTTP method whose
+  // client is stdio-only (uv install on the client machine for mcp-proxy).
+  function needsPlatform() {
+    if (state.method === 'stdio-local') return true;
+    if (state.method === 'uvx') return true;
+    if (state.method && state.method !== 'stdio-local' && isStdioOnly(state.client?.id)) return true;
+    return false;
+  }
+
+  function setNum(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(val);
+  }
 
   // Helper to check if client is stdio-only (needs mcp-proxy for HTTP)
   function isStdioOnly(clientId) {
     return stdioOnlyClients.includes(clientId);
-  }
-
-  // Helper to check if client is HTTP-only
-  function isHttpOnly(clientId) {
-    return httpOnlyClients.includes(clientId);
   }
 
   // Helper to check if client requires remote (HTTPS)
@@ -1017,147 +1040,186 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 
   // Show/hide sections based on state
   function updateSections(scrollTo = null) {
-    const isLocal = state.connection?.id === 'local';
-    const isNetwork = state.connection?.id === 'network';
-    const isRemote = state.connection?.id === 'remote';
+    const method = state.method;
+    const isStdio = method === 'stdio-local';
+    const hasMethod = !!method;
+    const hasClient = !!state.client;
+    const scope = isStdio ? 'local' : state.scope;
+    const isLocalScope = scope === 'local';
+    const isRemoteScope = scope === 'remote';
+
+    const scopeShown = hasClient && !isStdio;
+    const archShown = hasClient && !!scope;
+    const platformShown = hasClient && !!scope && needsPlatform();
+    const remotePathShown = hasClient && !!scope && isRemoteScope && !isStdio;
 
     const sections = {
-      connection: !!state.client,
-      architecture: !!state.connection,
-      platform: !!state.connection && isLocal,
-      serverSetup: !!state.connection && !isLocal,
-      proxy: !!state.serverSetup && isRemote,
+      client: hasMethod,
+      scope: scopeShown,
+      architecture: archShown,
+      platform: platformShown,
+      remotePath: remotePathShown,
       config: shouldShowConfig(),
     };
 
-    document.getElementById('section-connection').classList.toggle('hidden', !sections.connection);
+    document.getElementById('section-client').classList.toggle('hidden', !sections.client);
+    document.getElementById('section-scope').classList.toggle('hidden', !sections.scope);
     document.getElementById('section-architecture').classList.toggle('hidden', !sections.architecture);
     document.getElementById('section-platform').classList.toggle('hidden', !sections.platform);
-    document.getElementById('section-server-setup').classList.toggle('hidden', !sections.serverSetup);
-    document.getElementById('section-proxy').classList.toggle('hidden', !sections.proxy);
+    document.getElementById('section-remote-path').classList.toggle('hidden', !sections.remotePath);
     document.getElementById('section-config').classList.toggle('hidden', !sections.config);
 
-    // Show/hide appropriate architecture diagram
-    document.getElementById('arch-local').classList.toggle('hidden', !isLocal);
-    document.getElementById('arch-network').classList.toggle('hidden', !isNetwork);
-    document.getElementById('arch-remote').classList.toggle('hidden', !isRemote);
+    // Show/hide the matching architecture diagram
+    document.getElementById('arch-local').classList.toggle('hidden', !isStdio);
+    document.getElementById('arch-network').classList.toggle('hidden', !(!isStdio && isLocalScope));
+    document.getElementById('arch-remote').classList.toggle('hidden', !(!isStdio && isRemoteScope));
 
-    // Update step numbers
-    let stepNum = 4;
-    if (isLocal) {
-      stepNum = 4;
-    } else if (isNetwork) {
-      stepNum = 4;
-    } else if (isRemote) {
-      stepNum = 5;
-    }
-    document.getElementById('config-step-num').textContent = stepNum;
+    // The Docker platform card only applies to the local stdio run
+    const dockerPlatformCard = document.querySelector('[data-platform="docker"]');
+    if (dockerPlatformCard) dockerPlatformCard.classList.toggle('hidden', method !== 'stdio-local');
 
-    // Update selected badges
-    if (state.client) {
-      document.getElementById('selected-client').textContent = state.client.name;
-    }
-    if (state.connection) {
-      document.getElementById('selected-connection').textContent = state.connection.name;
-      document.getElementById('selected-connection-server').textContent = state.connection.name;
-    }
-    if (state.platform) {
-      const platformBadge = document.getElementById('selected-platform');
-      if (platformBadge) platformBadge.textContent = state.platform.name;
-    }
-    if (state.serverSetup) {
-      const setup = serverSetupOptions[state.serverSetup];
-      document.getElementById('selected-server-setup').textContent = setup?.label || state.serverSetup;
-    }
-    if (state.proxy || (state.serverSetup && !isRemote)) {
-      const finalText = state.proxy ?
-        (state.proxy === 'cloudflared' ? 'Cloudflare Tunnel' : state.proxy === 'webhook-proxy' ? 'Webhook Proxy' : 'Custom Proxy') :
-        serverSetupOptions[state.serverSetup]?.label;
-      document.getElementById('selected-final').textContent = finalText || '';
+    // With the component's built-in webhook, remote access is the easy path —
+    // the Advanced badge on the Remote scope card only fits the tunnel/proxy methods.
+    const remoteScopeBadge = document.querySelector('[data-scope="remote"] .complexity-badge');
+    if (remoteScopeBadge) {
+      const quickRemote = method === 'ha-component';
+      remoteScopeBadge.dataset.complexity = quickRemote ? 'quick' : 'advanced';
+      remoteScopeBadge.textContent = quickRemote ? 'Quick' : 'Advanced';
     }
 
-    // Scroll to the requested section
-    if (scrollTo) {
-      scrollToSection(scrollTo);
+    // Context-specific platform help text
+    const platformHelp = document.getElementById('platform-help');
+    if (platformHelp) {
+      if (isStdio) platformHelp.textContent = 'Choose how to run ha-mcp on your machine.';
+      else if (method === 'uvx') platformHelp.textContent = 'Choose the operating system of the machine that will run the ha-mcp server.';
+      else platformHelp.textContent = 'Choose the operating system of your client machine (for the mcp-proxy bridge).';
     }
+
+    // Show only the remote-path cards that apply to the chosen method
+    if (remotePathShown) {
+      const allowed = remotePathsForMethod(method);
+      document.querySelectorAll('[data-remote-path]').forEach(card => {
+        card.classList.toggle('hidden', !allowed.includes(card.dataset.remotePath));
+      });
+    }
+
+    // Step numbers: method=1, client=2, scope=3 are static in the markup;
+    // platform / remote-path / config are numbered dynamically by what shows.
+    let n = scopeShown ? 3 : 2;
+    if (platformShown) { n += 1; setNum('platform-step-num', n); }
+    if (remotePathShown) { n += 1; setNum('remotepath-step-num', n); }
+    if (sections.config) { n += 1; setNum('config-step-num', n); }
+
+    // Breadcrumb badges (each shows the prior choice; clicking re-opens that step)
+    const methodBadge = document.getElementById('selected-method');
+    if (methodBadge) methodBadge.textContent = hasMethod ? (methodLabels[method] || method) : '';
+    const clientBadge = document.getElementById('selected-client');
+    if (clientBadge) clientBadge.textContent = hasClient ? state.client.name : '';
+    const platCrumb = document.getElementById('selected-platform-prev');
+    if (platCrumb) platCrumb.textContent = isStdio ? (hasClient ? state.client.name : '') : (state.scope ? scopeLabels[state.scope] : '');
+    const rpCrumb = document.getElementById('selected-remotepath-prev');
+    if (rpCrumb) rpCrumb.textContent = (platformShown && state.platform) ? state.platform.name : (state.scope ? scopeLabels[state.scope] : '');
+    const finalCrumb = document.getElementById('selected-final');
+    if (finalCrumb) {
+      let ft = '';
+      if (state.remotePath) ft = remotePathLabels[state.remotePath];
+      else if (platformShown && state.platform) ft = state.platform.name;
+      else if (state.scope) ft = scopeLabels[state.scope];
+      finalCrumb.textContent = ft;
+    }
+
+    if (scrollTo) scrollToSection(scrollTo);
   }
 
   function shouldShowConfig() {
-    if (!state.client || !state.connection) return false;
-    const isLocal = state.connection.id === 'local';
-    if (isLocal) return !!state.platform;
-    if (!state.serverSetup) return false;
-    if (state.connection.id === 'network') return true;
-    if (state.connection.id === 'remote' && state.proxy) return true;
-    return false;
+    if (!state.method || !state.client) return false;
+    const isStdio = state.method === 'stdio-local';
+    const scope = isStdio ? 'local' : state.scope;
+    if (!scope) return false;
+    if (needsPlatform() && !state.platform) return false;
+    if (scope === 'remote' && !state.remotePath) return false;
+    return true;
   }
 
-  // Client selection
-  document.querySelectorAll('[data-client]').forEach(card => {
+  // Method selection (step 1)
+  document.querySelectorAll('[data-server-method]').forEach(card => {
     card.addEventListener('click', () => {
-      state.client = clientsData.find(c => c.id === card.dataset.client);
-      // Reset downstream selections
-      state.connection = null;
+      if (card.disabled) return;
+      state.method = card.dataset.serverMethod;
+      // Reset downstream selections (stdio-local has no scope step — force local)
+      state.client = null;
+      state.scope = state.method === 'stdio-local' ? 'local' : null;
       state.platform = null;
-      state.serverSetup = null;
-      state.proxy = null;
+      state.remotePath = null;
 
-      // Update UI
-      document.querySelectorAll('[data-client]').forEach(c => c.classList.remove('selected'));
+      document.querySelectorAll('[data-server-method]').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
+      document.querySelectorAll('[data-scope], [data-platform], [data-remote-path]').forEach(c => c.classList.remove('selected'));
 
-      // Update connection options based on client capabilities
-      const transports = JSON.parse(card.dataset.transports);
-      document.querySelectorAll('[data-connection]').forEach(conn => {
-        conn.classList.remove('selected');
-        const connTransport = conn.dataset.transport;
-        const isRemote = conn.dataset.connection === 'remote';
-        const isNetwork = conn.dataset.connection === 'network';
-        const isLocal = conn.dataset.connection === 'local';
-
-        let supported = true;
+      // Filter clients by method: a local stdio server can't serve a client
+      // that has no stdio transport (ChatGPT, Claude.ai, Open WebUI).
+      document.querySelectorAll('[data-client]').forEach(cl => {
+        cl.classList.remove('selected');
+        const c = clientsData.find(x => x.id === cl.dataset.client);
+        let disabled = false;
         let reason = '';
-
-        // Check transport support (new schema uses 'sse' and 'streamable-http' instead of 'http')
-        const hasHttpSupport = transports.includes('sse') || transports.includes('streamable-http');
-        if (isLocal && !transports.includes('stdio')) {
-          supported = false;
-          reason = `${state.client.name} doesn't support stdio`;
-        } else if ((isNetwork || isRemote) && !hasHttpSupport) {
-          // stdio-only clients can use HTTP via mcp-proxy
-          if (!transports.includes('stdio')) {
-            supported = false;
-            reason = `${state.client.name} doesn't support HTTP`;
-          }
+        if (state.method === 'stdio-local' && c && !c.transports.includes('stdio')) {
+          disabled = true;
+          reason = `${c.name} doesn't support stdio — pick an HTTP server method instead`;
         }
-
-        // Remote-only clients can't use local or network
-        if (isRemoteOnly(state.client.id) && !isRemote) {
-          supported = false;
-          reason = `${state.client.name} requires HTTPS`;
-        }
-
-        conn.disabled = !supported;
-        conn.title = reason;
+        cl.disabled = disabled;
+        cl.title = reason;
       });
 
-      updateSections('section-connection');
+      updateSections('section-client');
     });
   });
 
-  // Connection hover preview - shows the Architecture Overview section
-  document.querySelectorAll('.connection-option').forEach(card => {
+  // Client selection (step 2)
+  document.querySelectorAll('[data-client]').forEach(card => {
+    card.addEventListener('click', () => {
+      if (card.disabled) return;
+      state.client = clientsData.find(c => c.id === card.dataset.client);
+      const isStdio = state.method === 'stdio-local';
+      // Reset downstream selections (stdio-local has no scope step — force local)
+      state.scope = isStdio ? 'local' : null;
+      state.platform = null;
+      state.remotePath = null;
+
+      document.querySelectorAll('[data-client]').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      document.querySelectorAll('[data-scope], [data-platform], [data-remote-path]').forEach(c => c.classList.remove('selected'));
+
+      // Filter scope: remote-only clients (ChatGPT, Claude.ai) can't use local
+      document.querySelectorAll('[data-scope]').forEach(sc => {
+        const scopeId = sc.dataset.scope;
+        let disabled = false;
+        let reason = '';
+        if (scopeId === 'local' && isRemoteOnly(state.client.id)) {
+          disabled = true;
+          reason = `${state.client.name} requires HTTPS (remote)`;
+        }
+        sc.disabled = disabled;
+        sc.title = reason;
+      });
+
+      updateSections(isStdio ? 'section-platform' : 'section-scope');
+    });
+  });
+
+  // Scope hover preview - shows the Architecture Overview section
+  document.querySelectorAll('.scope-option').forEach(card => {
     card.addEventListener('mouseenter', () => {
-      const connType = card.dataset.connection;
+      const scopeType = card.dataset.scope;
       const archSection = document.getElementById('section-architecture');
       // Only show on hover if not already selected (i.e., section is hidden)
       if (archSection.classList.contains('hidden')) {
         archSection.classList.remove('hidden');
         archSection.classList.add('hover-preview');
       }
-      document.getElementById('arch-local').classList.toggle('hidden', connType !== 'local');
-      document.getElementById('arch-network').classList.toggle('hidden', connType !== 'network');
-      document.getElementById('arch-remote').classList.toggle('hidden', connType !== 'remote');
+      document.getElementById('arch-local').classList.add('hidden');
+      document.getElementById('arch-network').classList.toggle('hidden', scopeType !== 'local');
+      document.getElementById('arch-remote').classList.toggle('hidden', scopeType !== 'remote');
     });
     card.addEventListener('mouseleave', () => {
       const archSection = document.getElementById('section-architecture');
@@ -1169,67 +1231,52 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     });
   });
 
-  // Connection selection
-  document.querySelectorAll('[data-connection]').forEach(card => {
+  // Scope selection (step 3)
+  document.querySelectorAll('[data-scope]').forEach(card => {
     card.addEventListener('click', () => {
       if (card.disabled) return;
-      state.connection = connectionsData.find(c => c.id === card.dataset.connection);
+      state.scope = card.dataset.scope;
       state.platform = null;
-      state.serverSetup = null;
-      state.proxy = null;
+      state.remotePath = null;
 
-      document.querySelectorAll('[data-connection]').forEach(c => c.classList.remove('selected'));
+      document.querySelectorAll('[data-scope]').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
+      document.querySelectorAll('[data-platform], [data-remote-path]').forEach(c => c.classList.remove('selected'));
 
-      // Clear selections in both platform and server-setup grids
-      document.querySelectorAll('[data-platform], [data-server-setup]').forEach(c => c.classList.remove('selected'));
-
-      // Scroll to the appropriate section
-      const nextSection = state.connection.id === 'local' ? 'section-platform' : 'section-server-setup';
-      updateSections(nextSection);
+      let next;
+      if (needsPlatform()) next = 'section-platform';
+      else if (state.scope === 'remote') next = 'section-remote-path';
+      else next = 'section-config';
+      updateSections(next);
+      if (next === 'section-config') generateConfig();
     });
   });
 
-  // Platform selection (for local/stdio only)
+  // Platform selection (step 4, when shown)
   document.querySelectorAll('[data-platform]').forEach(card => {
     card.addEventListener('click', () => {
+      if (card.disabled) return;
       state.platform = platformsData.find(p => p.id === card.dataset.platform);
-      state.proxy = null;
+      state.remotePath = null;
 
       document.querySelectorAll('[data-platform]').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
+      document.querySelectorAll('[data-remote-path]').forEach(c => c.classList.remove('selected'));
 
-      // For local, go straight to config
-      updateSections('section-config');
-      generateConfig();
+      const scope = state.method === 'stdio-local' ? 'local' : state.scope;
+      const next = scope === 'remote' ? 'section-remote-path' : 'section-config';
+      updateSections(next);
+      if (next === 'section-config') generateConfig();
     });
   });
 
-  // Server setup selection (for network/remote - combined platform + deployment)
-  document.querySelectorAll('[data-server-setup]').forEach(card => {
-    card.addEventListener('click', () => {
-      state.serverSetup = card.dataset.serverSetup;
-      state.proxy = null;
-
-      document.querySelectorAll('[data-server-setup]').forEach(c => c.classList.remove('selected'));
-      card.classList.add('selected');
-
-      // Scroll to proxy (for remote) or config (for network)
-      const nextSection = state.connection?.id === 'remote' ? 'section-proxy' : 'section-config';
-      updateSections(nextSection);
-      if (state.connection?.id === 'network') {
-        generateConfig();
-      }
-    });
-  });
-
-  // Proxy selection
-  document.querySelectorAll('[data-proxy]').forEach(card => {
+  // Remote-path selection (step 5, when scope = remote)
+  document.querySelectorAll('[data-remote-path]').forEach(card => {
     card.addEventListener('click', () => {
       if (card.disabled) return;
-      state.proxy = card.dataset.proxy;
+      state.remotePath = card.dataset.remotePath;
 
-      document.querySelectorAll('[data-proxy]').forEach(c => c.classList.remove('selected'));
+      document.querySelectorAll('[data-remote-path]').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
 
       updateSections('section-config');
@@ -1237,51 +1284,46 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     });
   });
 
-  // Click on selected badges to go back
+  // Breadcrumb badges: keep the badge's own choice, reset the step it heads
+  document.getElementById('selected-method')?.addEventListener('click', () => {
+    state.client = null;
+    state.scope = state.method === 'stdio-local' ? 'local' : null;
+    state.platform = null;
+    state.remotePath = null;
+    document.querySelectorAll('[data-client], [data-scope], [data-platform], [data-remote-path]').forEach(c => c.classList.remove('selected'));
+    updateSections('section-client');
+  });
+
   document.getElementById('selected-client')?.addEventListener('click', () => {
-    state.connection = null;
+    const isStdio = state.method === 'stdio-local';
+    state.scope = isStdio ? 'local' : null;
     state.platform = null;
-    state.serverSetup = null;
-    state.proxy = null;
-    document.querySelectorAll('[data-connection], [data-platform], [data-server-setup], [data-proxy]').forEach(c => c.classList.remove('selected'));
-    updateSections('section-connection');
+    state.remotePath = null;
+    document.querySelectorAll('[data-scope], [data-platform], [data-remote-path]').forEach(c => c.classList.remove('selected'));
+    updateSections(isStdio ? 'section-platform' : 'section-scope');
   });
 
-  document.getElementById('selected-connection')?.addEventListener('click', () => {
+  document.getElementById('selected-platform-prev')?.addEventListener('click', () => {
     state.platform = null;
-    state.serverSetup = null;
-    state.proxy = null;
-    document.querySelectorAll('[data-platform], [data-server-setup], [data-proxy]').forEach(c => c.classList.remove('selected'));
-    const nextSection = state.connection?.id === 'local' ? 'section-platform' : 'section-server-setup';
-    updateSections(nextSection);
+    state.remotePath = null;
+    document.querySelectorAll('[data-platform], [data-remote-path]').forEach(c => c.classList.remove('selected'));
+    updateSections('section-platform');
   });
 
-  document.getElementById('selected-connection-server')?.addEventListener('click', () => {
-    state.serverSetup = null;
-    state.proxy = null;
-    document.querySelectorAll('[data-server-setup], [data-proxy]').forEach(c => c.classList.remove('selected'));
-    updateSections('section-server-setup');
-  });
-
-  document.getElementById('selected-platform')?.addEventListener('click', () => {
-    // For local only - just regenerate config
-    updateSections('section-config');
-    generateConfig();
-  });
-
-  document.getElementById('selected-server-setup')?.addEventListener('click', () => {
-    state.proxy = null;
-    document.querySelectorAll('[data-proxy]').forEach(c => c.classList.remove('selected'));
-    updateSections('section-proxy');
+  document.getElementById('selected-remotepath-prev')?.addEventListener('click', () => {
+    state.remotePath = null;
+    document.querySelectorAll('[data-remote-path]').forEach(c => c.classList.remove('selected'));
+    updateSections('section-remote-path');
   });
 
   // Start over
   document.getElementById('start-over').addEventListener('click', () => {
-    state = { client: null, connection: null, platform: null, serverSetup: null, proxy: null };
-    document.querySelectorAll('[data-client], [data-connection], [data-platform], [data-server-setup], [data-proxy]').forEach(c => {
+    state = { method: null, client: null, scope: null, platform: null, remotePath: null };
+    document.querySelectorAll('[data-server-method], [data-client], [data-scope], [data-platform], [data-remote-path]').forEach(c => {
       c.classList.remove('selected');
     });
-    updateSections('section-client');
+    document.querySelectorAll('[data-client], [data-scope]').forEach(c => { c.disabled = false; c.title = ''; });
+    updateSections('section-method');
   });
 
   // Generate configuration
@@ -1292,23 +1334,35 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     const hintsEl = document.getElementById('replace-hints');
     const notesEl = document.getElementById('config-notes');
 
-    const isLocal = state.connection?.id === 'local';
-    const isNetwork = state.connection?.id === 'network';
-    const isRemote = state.connection?.id === 'remote';
-    const needsMcpProxy = isStdioOnly(state.client?.id) && !isLocal;
+    const method = state.method;
+    const isStdio = method === 'stdio-local';
+    const isComponent = method === 'ha-component';
+    const isAddon = method === 'ha-addon';
 
-    // Derive platform and deployment from serverSetup for network/remote
-    const setupInfo = state.serverSetup ? serverSetupOptions[state.serverSetup] : null;
-    const derivedPlatform = isLocal ? state.platform?.id : setupInfo?.platform;
-    const derivedDeployment = isLocal ? null : setupInfo?.deployment;
+    // Semantic aliases kept from the old three-way connection model so the
+    // large per-client/proxy templates below need no churn:
+    //   isLocal   = the stdio/local run (old "local")
+    //   isNetwork = HTTP server on the LAN (old "network")
+    //   isRemote  = over-the-internet HTTPS (old "remote")
+    const scope = isStdio ? 'local' : state.scope;
+    const isLocal = isStdio;
+    const isNetwork = !isStdio && scope === 'local';
+    const isRemote = !isStdio && scope === 'remote';
+    const needsMcpProxy = isStdioOnly(state.client?.id) && !isStdio;
+
+    const derivedDeployment = isStdio ? null : method; // ha-component | ha-addon | docker | uvx
+    const derivedPlatform = state.platform?.id || null;
+    // Port the tunnel/proxy instructions target: component 9584, add-on 9583,
+    // docker/uvx HTTP server 8086.
+    const serverPort = isComponent ? '9584' : isAddon ? '9583' : '8086';
 
     // Build summary badges
     const badges = [];
+    if (state.method) badges.push(`<span class="px-3 py-1 rounded-full bg-orange-900/50 text-orange-300">${methodLabels[state.method] || state.method}</span>`);
     if (state.client) badges.push(`<span class="px-3 py-1 rounded-full bg-blue-900/50 text-blue-300">${state.client.name}</span>`);
-    if (state.connection) badges.push(`<span class="px-3 py-1 rounded-full bg-green-900/50 text-green-300">${state.connection.name}</span>`);
-    if (state.platform && isLocal) badges.push(`<span class="px-3 py-1 rounded-full bg-purple-900/50 text-purple-300">${state.platform.name}</span>`);
-    if (setupInfo && !isLocal) badges.push(`<span class="px-3 py-1 rounded-full bg-orange-900/50 text-orange-300">${setupInfo.label}</span>`);
-    if (state.proxy) badges.push(`<span class="px-3 py-1 rounded-full bg-cyan-900/50 text-cyan-300">${state.proxy === 'cloudflared' ? 'Cloudflare Tunnel' : state.proxy === 'webhook-proxy' ? 'Webhook Proxy' : 'Custom Proxy'}</span>`);
+    if (state.scope) badges.push(`<span class="px-3 py-1 rounded-full bg-green-900/50 text-green-300">${scopeLabels[state.scope] || state.scope}</span>`);
+    if (state.platform && needsPlatform()) badges.push(`<span class="px-3 py-1 rounded-full bg-purple-900/50 text-purple-300">${state.platform.name}</span>`);
+    if (state.remotePath) badges.push(`<span class="px-3 py-1 rounded-full bg-cyan-900/50 text-cyan-300">${remotePathLabels[state.remotePath] || state.remotePath}</span>`);
     summaryEl.innerHTML = badges.join('');
 
     // Build instructions
@@ -1319,8 +1373,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 
     // Add link to full guide for Claude Desktop + Local
     if (state.client?.id === 'claude-desktop' && isLocal) {
-      const guideUrl = state.platform?.id === 'macos' ? '/ha-mcp/guide-macos' :
-                       state.platform?.id === 'windows' ? '/ha-mcp/guide-windows' : null;
+      const guideUrl = state.platform?.id === 'macos' ? `${base}/guide-macos` :
+                       state.platform?.id === 'windows' ? `${base}/guide-windows` : null;
       if (guideUrl) {
         instructions.push(`<div class="instruction-block border-blue-700/50 bg-blue-900/10">
           <h3 class="instruction-title text-blue-300">Full Step-by-Step Guide Available</h3>
@@ -1332,8 +1386,9 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
       }
     }
 
-    // Platform instructions (uvx installation or Docker) - for local or uvx deployment
-    const platformId = isLocal ? state.platform?.id : derivedPlatform;
+    // Platform instructions (uvx installation or Docker) - shown only when the
+    // platform step ran (stdio run OS, uvx server OS, or mcp-proxy client OS).
+    const platformId = derivedPlatform;
     const isDockerPlatform = platformId === 'docker';
 
     if (isDockerPlatform && isLocal) {
@@ -1371,7 +1426,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
     if (derivedDeployment && !isLocal) {
       let deployInstr = '';
       // For remote connections, add secret path for security (not needed for webhook-proxy — handled automatically)
-      const secretPathNote = (isRemote && state.proxy !== 'webhook-proxy') ? `
+      const secretPathNote = (isRemote && state.remotePath !== 'webhook-proxy') ? `
           <div class="bg-red-900/30 border border-red-700/50 rounded-lg p-3 mt-3">
             <p class="text-red-300 text-sm font-medium">Security Warning</p>
             <p class="text-red-200/80 text-xs mt-1">When exposing to the internet, <strong>always use a secret path</strong> to prevent unauthorized access. Keep this path private!</p>
@@ -1385,7 +1440,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           </div>` : '';
 
       if (derivedDeployment === 'uvx') {
-        const useSecretPath = isRemote && state.proxy !== 'webhook-proxy';
+        const useSecretPath = isRemote && state.remotePath !== 'webhook-proxy';
         const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const portNote = `<p class="text-xs text-slate-500 mt-2">Optional: Set <code>MCP_PORT</code> to change the default port (8086).</p>`;
         if (platformId === 'windows') {
@@ -1408,7 +1463,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
         </div>`;
         }
       } else if (derivedDeployment === 'docker') {
-        const useSecretPath = isRemote && state.proxy !== 'webhook-proxy';
+        const useSecretPath = isRemote && state.remotePath !== 'webhook-proxy';
         const secretPathEnv = useSecretPath ? `-e MCP_SECRET_PATH=/private_{{RANDOM_STRING}}` : '';
         const serverPath = useSecretPath ? '/private_{{RANDOM_STRING}}' : '/mcp';
         const dockerPortNote = `<p class="text-xs text-slate-500 mt-2">Optional: Change <code>-p 8086:8086</code> to use a different port (e.g., <code>-p 9000:8086</code>).</p>`;
@@ -1476,14 +1531,52 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
             <p class="text-amber-200/90 text-sm"><strong class="text-amber-300">No access token here.</strong> The app authenticates behind the secret path in the URL. Don't also configure the local/stdio version for the same client (a <code>uvx ha-mcp@latest</code> entry with <code>HOMEASSISTANT_URL</code> / <code>HOMEASSISTANT_TOKEN</code>) — running the app and the stdio version together is a known cause of connection hangs.</p>
           </div>
         </div>`;
+      } else if (derivedDeployment === 'ha-component') {
+        const componentUrlGuidance = isRemote
+          ? (state.remotePath === 'builtin-webhook'
+              ? `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
+            <p class="text-slate-300 text-sm font-medium">Your connect URL (built-in webhook)</p>
+            <p class="text-slate-400 text-xs mt-1">Use the webhook URL from the entry's Configure screen: <code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>. It works through Nabu Casa or any reverse proxy already pointed at Home Assistant — no separate tunnel or port forwarding. To use your own domain, set <strong>External URL</strong> in the integration options.</p>
+            <p class="text-slate-400 text-xs mt-2"><strong class="text-slate-300">Optional auth:</strong> set <strong>Webhook authentication</strong> to <code class="bg-slate-800 px-1 rounded">ha_auth</code> to require signing in with your Home Assistant account instead of relying on the secret URL.</p>
+          </div>`
+              : `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
+            <p class="text-slate-300 text-sm font-medium">Your connect URL (via tunnel / reverse proxy)</p>
+            <p class="text-slate-400 text-xs mt-1">Point the tunnel or reverse proxy below at the component's own port (default <code class="bg-slate-800 px-1 rounded">9584</code>). Your MCP URL is then <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/private_&lt;random&gt;</code> using the direct-access path from the Home Assistant log. For most setups the built-in webhook is simpler.</p>
+          </div>`)
+          : `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
+            <p class="text-slate-300 text-sm font-medium">Your connect URL (local)</p>
+            <p class="text-slate-400 text-xs mt-1">Use the direct LAN URL from the entry's Configure screen (also in the Home Assistant log): <code class="bg-slate-800 px-1 rounded">http://&lt;ha-ip&gt;:9584/private_&lt;random&gt;</code>.</p>
+            <p class="text-slate-400 text-xs mt-2"><strong class="text-slate-300">Want local-only?</strong> Turn off <strong>Remote access via webhook</strong> in the entry options — no webhook is registered at all; the direct port and sidebar panel keep working.</p>
+          </div>`;
+        deployInstr = `<div class="instruction-block">
+          <h3 class="instruction-title">HA Custom Component (in-process server)</h3>
+          <p class="text-slate-300 text-sm mb-3">Runs the full ha-mcp server inside Home Assistant. Works on every install type — Home Assistant OS, Supervised, Container, and Core.</p>
+          <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration" target="_blank" rel="noopener noreferrer" class="inline-block mb-3">
+            <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open the HA-MCP Custom Component in HACS" />
+          </a>
+          <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
+            <li>Install <strong>HA-MCP Custom Component</strong> from HACS (or copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> into <code class="bg-slate-800 px-1 rounded">config/custom_components/</code>), then restart Home Assistant.</li>
+            <li>Go to <strong>Settings → Devices &amp; Services → Add Integration</strong>, search <strong>HA-MCP Custom Component</strong>, and choose <strong>HA-MCP Server</strong>.</li>
+            <li>Submit — creating the entry starts the server (the first start takes a little longer while it installs the package).</li>
+            <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there; the URL is also printed in the Home Assistant log).</li>
+            <li>Paste it into ${state.client.name} using the config below.</li>
+          </ol>
+          ${componentUrlGuidance}
+          <div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
+            <p class="text-slate-300 text-sm font-medium">Settings: the HA-MCP sidebar panel</p>
+            <p class="text-slate-400 text-xs mt-1">While the server runs, an admin-only <strong>HA-MCP</strong> panel appears in the Home Assistant sidebar — open it to enable, disable, and pin tools, toggle feature flags, and manage backups. No URL or secret needed.</p>
+          </div>
+          <p class="text-xs text-slate-500 mt-3"><a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/in-process-server.md" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Full in-process server documentation →</a></p>
+        </div>`;
       }
       instructions.push(deployInstr);
     }
 
-    // Proxy instructions (for remote)
-    if (isRemote && state.proxy) {
+    // Remote-path instructions (for remote scope). builtin-webhook is covered
+    // by the ha-component block above, so it emits no separate block here.
+    if (isRemote && state.remotePath) {
       let proxyInstr = '';
-      if (state.proxy === 'cloudflared') {
+      if (state.remotePath === 'cloudflared') {
         proxyInstr = `<div class="instruction-block">
           <h3 class="instruction-title">Cloudflare Tunnel</h3>
           <p class="text-slate-400 text-xs mb-3">No port forwarding required, free tier available, works behind CGNAT. Optional: layer Cloudflare Access on top of the tunnel for SSO/policy-based authentication.</p>
@@ -1500,10 +1593,10 @@ echo "deb [signed-by=/usr/share/keyrings/cloudflare-archive-keyring.gpg] https:/
 sudo apt update && sudo apt install cloudflared
 
 # Or use Docker
-docker run cloudflare/cloudflared:latest tunnel --url http://host.docker.internal:8086</code></pre>
+docker run cloudflare/cloudflared:latest tunnel --url http://host.docker.internal:${serverPort}</code></pre>
           <p class="text-xs text-slate-500 mt-2 mb-3">More options: <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:underline">Cloudflare Downloads</a></p>
           <p class="text-slate-300 mb-2">Quick tunnel (temporary URL - changes on restart):</p>
-          <pre class="code-block"><code>cloudflared tunnel --url http://localhost:8086</code></pre>
+          <pre class="code-block"><code>cloudflared tunnel --url http://localhost:${serverPort}</code></pre>
           <p class="text-sm text-slate-400 mt-2">This gives you a URL like <code>https://random-words.trycloudflare.com</code></p>
           <p class="text-sm text-brand font-medium">Your MCP URL: <code>https://random-words.trycloudflare.com/private_{{RANDOM_STRING}}</code></p>
           <p class="text-xs text-slate-500 mt-1">Use the secret path you set in the server config above</p>
@@ -1523,7 +1616,7 @@ credentials-file: /path/to/.cloudflared/&lt;tunnel-id&gt;.json
 
 ingress:
   - hostname: ha-mcp.yourdomain.com
-    service: http://localhost:8086
+    service: http://localhost:${serverPort}
   - service: http_status:404</code></pre>
           </div>
           <details class="mt-4">
@@ -1554,7 +1647,7 @@ ingress:
             <p class="text-amber-200/80 text-xs mt-2"><strong>Also check geo / country blocking:</strong> most AI/LLM services connect from US-based cloud infrastructure, so blocking US IPs (or allowing only your own country) also blocks your client. Allow your AI provider's IP ranges — Claude.ai connects from Anthropic's network, <code>160.79.104.0/21</code>.</p>
           </div>
         </div>`;
-      } else if (state.proxy === 'webhook-proxy') {
+      } else if (state.remotePath === 'webhook-proxy') {
         proxyInstr = `<div class="instruction-block">
           <h3 class="instruction-title">Webhook Proxy App</h3>
           <p class="text-slate-300 mb-3">The Webhook Proxy app routes MCP traffic through your existing Home Assistant reverse proxy (Nabu Casa, Cloudflare, DuckDNS, nginx, etc.) — no separate tunnel to port 9583 needed.</p>
@@ -1629,12 +1722,12 @@ ingress:
             <p class="text-purple-200/80 text-xs mt-1">Either set new values in the config fields, or flip <strong>Regenerate OAuth Credentials on Next Start</strong> on and restart — the app auto-clears the toggle after generating fresh values, then update Claude.ai with the new pair. Beta — works with Claude.ai today; other clients may vary.</p>
           </div>
         </div>`;
-      } else if (state.proxy === 'custom') {
+      } else if (state.remotePath === 'custom') {
         proxyInstr = `<div class="instruction-block">
           <h3 class="instruction-title">Custom Reverse Proxy</h3>
           <p class="text-slate-300 mb-2">Configure your reverse proxy (Caddy, Nginx, Traefik) to:</p>
           <ul class="text-sm text-slate-400 list-disc list-inside space-y-1">
-            <li>Proxy requests to <code>http://localhost:8086</code></li>
+            <li>Proxy requests to <code>http://localhost:${serverPort}</code></li>
             <li>Enable HTTPS with a valid certificate</li>
             <li>Pass through WebSocket connections</li>
           </ul>
@@ -1648,7 +1741,7 @@ ingress:
           </div>
         </div>`;
       }
-      instructions.push(proxyInstr);
+      if (proxyInstr) instructions.push(proxyInstr);
     }
 
     // Verify by visiting URL in browser (for all HTTP-based setups)
@@ -1697,10 +1790,10 @@ ingress:
       </div>`);
     }
 
-    // Generate client config
-    const isStdio = isLocal;
-    const isDocker = state.platform?.id === 'docker';
-    const mcpUrl = isRemote ? '{{MCP_SERVER_URL}}' : '{{MCP_SERVER_URL}}';
+    // Generate client config (isStdio is defined in the preamble). isDocker is
+    // the local stdio "docker run --rm -i" shape — only the stdio path offers it.
+    const isDocker = isStdio && state.platform?.id === 'docker';
+    const mcpUrl = '{{MCP_SERVER_URL}}';
 
     // Docker config for local stdio
     const dockerConfig = {
@@ -2407,30 +2500,36 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
     // deployment, with the access method matched to how it's running.
     {
       let settingsHint = '';
-      if (isStdio) {
+      if (isComponent) {
+        settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
+        <h3 class="instruction-title">After it's running: the HA-MCP sidebar panel</h3>
+        <p class="text-slate-300 mb-2">While the in-process server runs, the component adds an admin-only <strong>HA-MCP</strong> panel to the Home Assistant sidebar where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
+        <p class="text-slate-400 text-sm">Open it from the sidebar &mdash; no URL or secret needed. See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+      </div>`;
+      } else if (isStdio) {
         const uiUrlPath = platformId === 'windows' ? '%USERPROFILE%\\.ha-mcp\\ui.url' : '~/.ha-mcp/ui.url';
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the settings page</h3>
         <p class="text-slate-300 mb-2">ha-mcp ships a local web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests. To find the URL, ask the AI something like <em>"how do I open the ha-mcp settings page?"</em> — it's included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response.</p>
-        <p class="text-slate-400 text-sm">The URL is also written to <code class="bg-slate-800 px-1 rounded">${uiUrlPath}</code>. It's bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> and gated by a random secret path. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a> for all access methods and how to disable the sidecar.</p>
+        <p class="text-slate-400 text-sm">The URL is also written to <code class="bg-slate-800 px-1 rounded">${uiUrlPath}</code>. It's bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> and gated by a random secret path. See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a> for all access methods and how to disable the sidecar.</p>
       </div>`;
-      } else if (derivedDeployment === 'ha-addon' || state.proxy === 'webhook-proxy') {
+      } else if (isAddon || state.remotePath === 'webhook-proxy') {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the settings page</h3>
         <p class="text-slate-300 mb-2">The MCP Server app ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the app page (Home Assistant ingress &mdash; no secret needed). For direct or remote access it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the app's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the app page (Home Assistant ingress &mdash; no secret needed). For direct or remote access it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the app's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       } else if (isRemote) {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the settings page</h3>
         <p class="text-slate-300 mb-2">ha-mcp ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">It's served under the same secret path as your MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your public server URL using the secret path you set above, e.g. <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/&lt;secret-path&gt;/settings</code>. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-400 text-sm">It's served under the same secret path as your MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your public server URL using the secret path you set above, e.g. <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/&lt;secret-path&gt;/settings</code>. See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       } else {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the settings page</h3>
         <p class="text-slate-300 mb-2">ha-mcp ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">It's served by your MCP server under the same secret path as the MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your server URL (e.g. <code class="bg-slate-800 px-1 rounded">http://YOUR_IP:8086/mcp/settings</code> with the default secret path). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-400 text-sm">It's served by your MCP server under the same secret path as the MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your server URL (e.g. <code class="bg-slate-800 px-1 rounded">http://YOUR_IP:8086/mcp/settings</code> with the default secret path). See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       }
       instructions.push(settingsHint);
@@ -2460,13 +2559,15 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
       }
       hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_TOKEN}}</code> (braces and all) with your long-lived access token</li>`);
     }
-    if (isRemote && (derivedDeployment === 'uvx' || derivedDeployment === 'docker') && state.proxy !== 'webhook-proxy') {
+    if (isRemote && (derivedDeployment === 'uvx' || derivedDeployment === 'docker') && state.remotePath !== 'webhook-proxy') {
       hints.push(`<li>Replace <code class="bg-red-900/30 px-1 rounded text-red-300">{{RANDOM_STRING}}</code> (braces and all) with a random secret string (e.g., <code>abc123xyz</code>) — <strong class="text-red-400">keep this private!</strong></li>`);
     }
     if (!isStdio) {
-      const urlHint = state.proxy === 'webhook-proxy'
-        ? 'your webhook proxy URL (from the webhook proxy app logs)'
-        : 'your MCP server URL (from deployment step above)';
+      const urlHint = isComponent
+        ? "the connect URL from the HA-MCP Server entry's Configure screen"
+        : state.remotePath === 'webhook-proxy'
+          ? 'your webhook proxy URL (from the webhook proxy app logs)'
+          : 'your MCP server URL (from the deployment step above)';
       hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{MCP_SERVER_URL}}</code> (braces and all) with ${urlHint}</li>`);
     }
     hintsEl.innerHTML = hints.join('');

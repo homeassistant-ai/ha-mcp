@@ -6,6 +6,11 @@ Remote access proxy for the Home Assistant MCP Server addon via webhooks.
 
 This addon enables remote access to your HA MCP Server through any reverse proxy — Nabu Casa, Cloudflare, DuckDNS, nginx, or any other. It does **not** run its own MCP server; instead it discovers your existing MCP Server addon (stable or dev) and proxies requests to it via a Home Assistant webhook.
 
+> **Using the HA-MCP custom component (in-process server)?** You do not need this
+> add-on — the component has its own built-in webhook for remote access. This
+> proxy is for the **MCP Server add-on** (it can also front another external
+> server via the `mcp_server_url` option).
+
 ## Only one flavor runs at a time (dev vs stable)
 
 This is the **dev** build. It is fully isolated from the stable Webhook Proxy add-on

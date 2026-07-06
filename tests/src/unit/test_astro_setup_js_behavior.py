@@ -1,20 +1,24 @@
 """Behavioural tests for ``site/src/pages/setup.astro``'s wizard script.
 
-The setup wizard's correctness is a multidimensional grid (19 clients x
-4 platforms x 3 connections x 5 deployments). The script is one giant
-state machine driving per-client instruction templates; a typo or
-condition inversion silently breaks setup for one or more branches and
-the only signal today is a user complaint.
+The setup wizard's correctness is a multidimensional grid (5 server
+methods x 19 clients x 2 scopes x 4 platforms x 4 remote paths). The
+script is one giant state machine driving per-client instruction
+templates; a typo or condition inversion silently breaks setup for one
+or more branches and the only signal today is a user complaint.
 
 Tests in this module:
 
-* Pin the state-machine progression for the three connection shapes
-  (local / network / remote).
+* Pin the state-machine progression for the reworked server-method-first
+  flow: method -> client -> scope -> (platform) -> (remote-path) ->
+  config, including the branches where scope is skipped (stdio-local),
+  where config is gated behind a remote-path choice (remote scope), and
+  where an HTTP method plus a stdio-only client forces the platform step
+  for the mcp-proxy bridge.
 * Loop over every real client id and drive the happy path to config
   generation, asserting both that the per-client branch emitted into
-  ``config-output`` AND that the emitted content names the client (so
-  a typo that drops the JSON / CLI / instruction block is caught — not
-  just "no JS error", which fires the moment any badge renders).
+  ``config-output`` AND that the emitted content is non-empty (so a typo
+  that drops the JSON / CLI / instruction block is caught — not just "no
+  JS error", which fires the moment any badge renders).
 
 The harness rebuilds Astro's ``<script define:vars={...}>`` injection
 by reading the real arrays out of the page frontmatter, so changes to
@@ -42,14 +46,14 @@ from ._js_harness import (
 SITE = Path(__file__).resolve().parents[3] / "site" / "src"
 SETUP_ASTRO = SITE / "pages" / "setup.astro"
 
-# Names the wizard's ``<script define:vars={...}>`` pulls in.
+# Names the wizard's ``<script define:vars={...}>`` pulls in. The rework
+# replaced the old connection/deployment model with a server-method +
+# scope model, dropping ``connectionsData`` / ``deploymentData`` /
+# ``httpOnlyClients`` entirely.
 WIZARD_VAR_NAMES = [
     "clientsData",
     "platformsData",
-    "connectionsData",
-    "deploymentData",
     "stdioOnlyClients",
-    "httpOnlyClients",
     "remoteOnlyClients",
 ]
 
@@ -69,7 +73,9 @@ def wizard_vars() -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def prelude(wizard_vars: dict[str, Any]) -> str:
-    return astro_vars_prelude(wizard_vars)
+    # `base` is injected via define:vars from import.meta.env.BASE_URL, which
+    # frontmatter extraction cannot evaluate - define it empty here.
+    return astro_vars_prelude(wizard_vars) + "\nconst base = '';"
 
 
 def _assert_clean_init(result: HarnessResult) -> None:
@@ -104,49 +110,66 @@ def _section_has_hidden_class(dom: str, section_id: str) -> bool:
     return "hidden" in match.group(1).split()
 
 
+def _click(attr: str, val: str) -> str:
+    """A single JSDOM click on the tile carrying ``data-<attr>="<val>"``."""
+    return f"document.querySelector('[data-{attr}=\"{val}\"]').click();\n"
+
+
 def _build_wizard_dom(wizard_vars: dict[str, Any]) -> str:
     """Build the minimum DOM the wizard script touches.
 
     Includes every section the script toggles, every selected-* badge
-    it writes to, every tile data-* attribute it listens for clicks on
-    (one per id in each array), plus the config-output structure
-    ``generateConfig`` writes into. Built from the real var data so a
-    new client / platform / connection / deployment gets a tile
-    automatically.
+    and step-number element it writes to, every tile ``data-*`` attribute
+    it listens for clicks on (one per hardcoded id or per array entry),
+    plus the config-output structure ``generateConfig`` writes into.
+    Client / platform tiles are built from the real var data so a new
+    client / platform gets a tile automatically; server-method, scope,
+    and remote-path ids are hardcoded in the markup so they are hardcoded
+    here too.
     """
-    section_ids = [
+    # Sections ``updateSections`` toggles. ``section-method`` (step 1) is
+    # statically visible in the real markup and never toggled, so it is
+    # emitted separately without the ``hidden`` class.
+    toggled_section_ids = [
         "section-client",
-        "section-connection",
+        "section-scope",
         "section-architecture",
         "section-platform",
-        "section-server-setup",
-        "section-proxy",
+        "section-remote-path",
         "section-config",
     ]
     arch_ids = ["arch-local", "arch-network", "arch-remote"]
     badge_ids = [
+        "selected-method",
         "selected-client",
-        "selected-connection",
-        "selected-connection-server",
-        "selected-platform",
-        "selected-server-setup",
+        "selected-platform-prev",
+        "selected-remotepath-prev",
         "selected-final",
     ]
 
     parts = ["<!DOCTYPE html><html><body>"]
-    parts.extend(f'<div id="{sid}" class="hidden"></div>' for sid in section_ids)
+    # Step 1 is always visible; the script only ever scrolls to it.
+    parts.append('<section id="section-method"></section>')
+    parts.extend(
+        f'<div id="{sid}" class="hidden"></div>' for sid in toggled_section_ids
+    )
     parts.extend(f'<div id="{aid}" class="hidden"></div>' for aid in arch_ids)
     parts.extend(f'<span id="{bid}"></span>' for bid in badge_ids)
     parts.extend(
         [
+            '<span id="platform-step-num"></span>',
+            '<span id="remotepath-step-num"></span>',
             '<span id="config-step-num"></span>',
+            '<p id="platform-help"></p>',
+            # `start-over` is the one init-time getElementById the script
+            # does NOT null-guard — omitting it aborts the whole wizard.
             '<button id="start-over"></button>',
             '<div id="config-summary"></div>',
             '<div id="setup-instructions"></div>',
             # `section-config` (the whole section, toggled by
-            # updateSections) and `config-section` (the inner code
-            # block, toggled by generateConfig for UI-format clients) —
-            # similar names, distinct elements in the real page.
+            # updateSections) and `config-section` (the inner code block,
+            # toggled by generateConfig for UI-format clients) — similar
+            # names, distinct elements in the real page.
             '<div id="config-section"></div>',
             '<pre id="config-output"><code></code></pre>',
             '<div id="replace-hints"></div>',
@@ -154,11 +177,16 @@ def _build_wizard_dom(wizard_vars: dict[str, Any]) -> str:
         ]
     )
 
-    # Client tiles also carry `data-transports` (a JSON array) — the
-    # script's connection-click handler reads it via JSON.parse to
-    # decide which connection options apply per client. Missing the
-    # attr triggers `JSON.parse(undefined)` and aborts the wizard
-    # interaction with a non-obvious error.
+    # Server-method tiles — ids hardcoded in the markup.
+    parts.extend(
+        f'<button data-server-method="{mid}">{mid}</button>'
+        for mid in ("ha-component", "ha-addon", "docker", "uvx", "stdio-local")
+    )
+    # Client tiles also carry `data-transports` (a JSON array) to mirror
+    # the real markup. The reworked script reads transports from
+    # `clientsData` (injected via define:vars) rather than this attr, but
+    # keeping it matches production and guards a future handler that
+    # parses it.
     parts.extend(
         "<button data-client=\"{cid}\" data-transports='{transports}'>{name}</button>".format(
             cid=c["id"],
@@ -167,22 +195,30 @@ def _build_wizard_dom(wizard_vars: dict[str, Any]) -> str:
         )
         for c in wizard_vars["clientsData"]
     )
-    parts.extend(
-        f'<button data-connection="{c["id"]}">{c["id"]}</button>'
-        for c in wizard_vars["connectionsData"]
-    )
+    # Scope tiles — ids hardcoded (local | remote). `.scope-option`
+    # carries the hover-preview listeners in the real markup. The remote
+    # tile embeds a `.complexity-badge` child (as the real markup does) so
+    # updateSections' badge relabel — Quick for ha-component, Advanced for
+    # the tunnel/proxy methods — has a target element to write into.
+    for sid in ("local", "remote"):
+        if sid == "remote":
+            parts.append(
+                f'<button data-scope="{sid}" class="scope-option">{sid}'
+                '<span class="complexity-badge" data-complexity="advanced">'
+                "Advanced</span></button>"
+            )
+        else:
+            parts.append(
+                f'<button data-scope="{sid}" class="scope-option">{sid}</button>'
+            )
     parts.extend(
         f'<button data-platform="{p["id"]}">{p["id"]}</button>'
         for p in wizard_vars["platformsData"]
     )
-    # serverSetupOptions ids are hardcoded in the script body.
+    # Remote-path tiles — ids hardcoded in the markup.
     parts.extend(
-        f'<button data-server-setup="{sid}">{sid}</button>'
-        for sid in ("macos-uvx", "linux-uvx", "windows-uvx", "ha-addon", "docker")
-    )
-    parts.extend(
-        f'<button data-proxy="{pid}">{pid}</button>'
-        for pid in ("cloudflared", "webhook-proxy")
+        f'<button data-remote-path="{pid}">{pid}</button>'
+        for pid in ("builtin-webhook", "webhook-proxy", "cloudflared", "custom")
     )
 
     parts.append("</body></html>")
@@ -195,17 +231,18 @@ def _build_wizard_dom(wizard_vars: dict[str, Any]) -> str:
 
 
 class TestWizardStateMachine:
-    """Local / network / remote each unlock a different section
+    """Each server method / scope combination unlocks a different section
     sequence; the tests below pin the visibility shape after each step.
     """
 
-    def test_initial_state_only_client_section_visible(
+    def test_initial_state_downstream_sections_hidden(
         self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
     ) -> None:
         """Before any click, every downstream section
-        (connection / architecture / platform / server-setup / proxy /
-        config) stays hidden. A regression that toggled visibility at
-        script init would skip the staged-flow UX entirely.
+        (client / scope / architecture / platform / remote-path / config)
+        stays hidden — only step 1 (section-method) is visible at load. A
+        regression that toggled visibility at script init would skip the
+        staged-flow UX entirely.
         """
         result = run_script(
             setup_script,
@@ -214,93 +251,152 @@ class TestWizardStateMachine:
         )
         _assert_clean_init(result)
         for sid in (
-            "section-connection",
+            "section-client",
+            "section-scope",
             "section-architecture",
             "section-platform",
-            "section-server-setup",
-            "section-proxy",
+            "section-remote-path",
             "section-config",
         ):
             assert _section_has_hidden_class(result.dom, sid), (
                 f"#{sid} should still be hidden before any click"
             )
 
-    def test_local_flow_progresses_to_config_after_platform(
+    def test_component_local_flow_reaches_config_without_platform(
         self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
     ) -> None:
-        """Pick claude-desktop -> local -> macos -> config section unhides."""
+        """ha-component -> cursor -> local: config unhides and the platform
+        step never appears (the in-HA component needs no OS-specific
+        commands)."""
         result = run_script(
             setup_script,
             prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
-            invoke="""
-              document.querySelector('[data-client="claude-desktop"]').click();
-              document.querySelector('[data-connection="local"]').click();
-              document.querySelector('[data-platform="macos"]').click();
-            """,
+            invoke=(
+                _click("server-method", "ha-component")
+                + _click("client", "cursor")
+                + _click("scope", "local")
+            ),
         )
         _assert_clean_init(result)
         assert not _section_has_hidden_class(result.dom, "section-config"), (
-            "section-config should be visible after local+platform"
+            "section-config should be visible after ha-component + local scope"
         )
-        # config-output > code should have been populated by generateConfig.
-        assert "<code>" in result.dom and "</code>" in result.dom, (
-            "config-output should be populated"
+        assert _section_has_hidden_class(result.dom, "section-platform"), (
+            "platform step should stay hidden for the ha-component local flow"
         )
 
-    def test_network_flow_progresses_to_config_after_server_setup(
+    def test_stdio_flow_skips_scope_and_reaches_config(
         self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
     ) -> None:
+        """stdio-local forces scope=local and has no scope step:
+        stdio-local -> claude-desktop -> macos reaches config while
+        section-scope stays hidden the whole time."""
         result = run_script(
             setup_script,
             prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
-            invoke="""
-              document.querySelector('[data-client="cursor"]').click();
-              document.querySelector('[data-connection="network"]').click();
-              document.querySelector('[data-server-setup="ha-addon"]').click();
-            """,
+            invoke=(
+                _click("server-method", "stdio-local")
+                + _click("client", "claude-desktop")
+                + _click("platform", "macos")
+            ),
         )
         _assert_clean_init(result)
+        assert _section_has_hidden_class(result.dom, "section-scope"), (
+            "section-scope must stay hidden for the stdio-local flow "
+            "(scope is forced to 'local')"
+        )
         assert not _section_has_hidden_class(result.dom, "section-config"), (
-            "section-config should be visible after network+server-setup"
+            "section-config should be visible after stdio-local + platform"
         )
 
-    def test_remote_flow_requires_proxy_before_config(
+    def test_remote_flow_requires_remote_path_before_config(
         self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
     ) -> None:
-        """Remote shape: client -> remote -> server-setup -> proxy -> config.
+        """Remote scope gates config behind a remote-path choice.
 
-        Without the proxy step, ``shouldShowConfig()`` returns false
-        and the section stays hidden — the safety net that prevents
+        ha-component -> claude-ai -> remote leaves ``shouldShowConfig()``
+        false until a remote path is chosen — the safety net that prevents
         the wizard from offering instructions that omit the HTTPS
         front-end entirely. Records visibility before AND after the
-        proxy click as body data-* attrs so the assertion checks both
-        transitions.
+        remote-path click as body data-* attrs so the assertion checks
+        both transitions.
         """
+        assert "claude-ai" in wizard_vars["remoteOnlyClients"], (
+            "test premise: claude-ai must be a remote-only client"
+        )
         result = run_script(
             setup_script,
             prelude=prelude,
             initial_html=_build_wizard_dom(wizard_vars),
-            invoke="""
-              document.querySelector('[data-client="claude-ai"]').click();
-              document.querySelector('[data-connection="remote"]').click();
-              document.querySelector('[data-server-setup="docker"]').click();
-              document.body.dataset.beforeProxy = String(
+            invoke=(
+                _click("server-method", "ha-component")
+                + _click("client", "claude-ai")
+                + _click("scope", "remote")
+                + """
+              document.body.dataset.beforeRemotePath = String(
                 document.getElementById('section-config').classList.contains('hidden')
               );
-              document.querySelector('[data-proxy="cloudflared"]').click();
-              document.body.dataset.afterProxy = String(
+            """
+                + _click("remote-path", "builtin-webhook")
+                + """
+              document.body.dataset.afterRemotePath = String(
                 document.getElementById('section-config').classList.contains('hidden')
               );
-            """,
+            """
+            ),
         )
         _assert_clean_init(result)
-        assert 'data-before-proxy="true"' in result.dom, (
-            "config section should still be hidden before proxy is chosen"
+        assert 'data-before-remote-path="true"' in result.dom, (
+            "config section should still be hidden before a remote path is chosen"
         )
-        assert 'data-after-proxy="false"' in result.dom, (
-            "config section should be visible after proxy is chosen"
+        assert 'data-after-remote-path="false"' in result.dom, (
+            "config section should be visible after the remote path is chosen"
+        )
+
+    def test_http_method_stdio_only_client_requires_platform(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        """An HTTP server method plus a stdio-only client forces the
+        platform step for the mcp-proxy bridge.
+
+        ha-addon -> claude-desktop (stdio-only) -> local leaves config
+        hidden until a platform is chosen, because ``needsPlatform()``
+        fires on ``isStdioOnly(client)`` for non-stdio-local methods.
+        Records visibility before AND after the platform click.
+        """
+        assert "claude-desktop" in wizard_vars["stdioOnlyClients"], (
+            "test premise: claude-desktop must be a stdio-only client"
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-addon")
+                + _click("client", "claude-desktop")
+                + _click("scope", "local")
+                + """
+              document.body.dataset.beforePlatform = String(
+                document.getElementById('section-config').classList.contains('hidden')
+              );
+            """
+                + _click("platform", "macos")
+                + """
+              document.body.dataset.afterPlatform = String(
+                document.getElementById('section-config').classList.contains('hidden')
+              );
+            """
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-before-platform="true"' in result.dom, (
+            "config section should still be hidden before the platform "
+            "(mcp-proxy OS) is chosen"
+        )
+        assert 'data-after-platform="false"' in result.dom, (
+            "config section should be visible after the platform is chosen"
         )
 
 
@@ -318,6 +414,40 @@ def _load_client_ids() -> list[str]:
 
 
 CLIENT_IDS = _load_client_ids()
+
+
+def _flow_for_client(
+    client_id: str, transports: list[str], remote_only: set[str]
+) -> str:
+    """Shortest click sequence that drives ``client_id`` to config.
+
+    One flow per transport shape, each reaching ``generateConfig``:
+
+    * remote-only (ChatGPT, Claude.ai): ha-component -> remote ->
+      built-in webhook (they can't use local scope).
+    * no stdio transport (Open WebUI): ha-addon -> local — an HTTP
+      server serving an HTTP-only client, no platform step.
+    * everything else (has stdio, whether or not it's stdio-only):
+      stdio-local -> macOS platform — the simplest happy path.
+    """
+    if client_id in remote_only:
+        return (
+            _click("server-method", "ha-component")
+            + _click("client", client_id)
+            + _click("scope", "remote")
+            + _click("remote-path", "builtin-webhook")
+        )
+    if "stdio" not in transports:
+        return (
+            _click("server-method", "ha-addon")
+            + _click("client", client_id)
+            + _click("scope", "local")
+        )
+    return (
+        _click("server-method", "stdio-local")
+        + _click("client", client_id)
+        + _click("platform", "macos")
+    )
 
 
 class TestPerClientInstructionTemplate:
@@ -343,35 +473,12 @@ class TestPerClientInstructionTemplate:
         prelude: str,
         wizard_vars: dict[str, Any],
     ) -> None:
-        stdio_only = set(wizard_vars["stdioOnlyClients"])
-        http_only = set(wizard_vars["httpOnlyClients"])
+        # Transports come from the real clientsData, not a hardcoded list,
+        # so a client whose transports change gets the right flow next run.
+        clients = {c["id"]: c for c in wizard_vars["clientsData"]}
+        transports = clients[client_id].get("transports", [])
         remote_only = set(wizard_vars["remoteOnlyClients"])
-
-        if client_id in remote_only:
-            flow = (
-                f"document.querySelector('[data-client=\"{client_id}\"]').click();\n"
-                "document.querySelector('[data-connection=\"remote\"]').click();\n"
-                "document.querySelector('[data-server-setup=\"docker\"]').click();\n"
-                "document.querySelector('[data-proxy=\"cloudflared\"]').click();\n"
-            )
-        elif client_id in http_only:
-            flow = (
-                f"document.querySelector('[data-client=\"{client_id}\"]').click();\n"
-                "document.querySelector('[data-connection=\"network\"]').click();\n"
-                "document.querySelector('[data-server-setup=\"ha-addon\"]').click();\n"
-            )
-        elif client_id in stdio_only:
-            flow = (
-                f"document.querySelector('[data-client=\"{client_id}\"]').click();\n"
-                "document.querySelector('[data-connection=\"local\"]').click();\n"
-                "document.querySelector('[data-platform=\"macos\"]').click();\n"
-            )
-        else:
-            flow = (
-                f"document.querySelector('[data-client=\"{client_id}\"]').click();\n"
-                "document.querySelector('[data-connection=\"local\"]').click();\n"
-                "document.querySelector('[data-platform=\"macos\"]').click();\n"
-            )
+        flow = _flow_for_client(client_id, transports, remote_only)
 
         # After the flow, snapshot the emitted content into body dataset
         # attrs the assertion can read. Two captures: the <code> body
@@ -422,3 +529,311 @@ class TestPerClientInstructionTemplate:
             f"probably bailed; "
             f"config_code={code_body!r}, instructions_len={instructions_len}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Remote-path tile filtering (updateSections -> remotePathsForMethod)
+# ---------------------------------------------------------------------------
+
+# The remote-path tiles surfaced for a given server method, keyed by the tile's
+# ``data-remote-path`` id and the camelCase body-dataset key each hidden-state
+# capture writes into.
+_REMOTE_PATH_TILES = {
+    "builtin-webhook": "builtinHidden",
+    "webhook-proxy": "proxyHidden",
+    "cloudflared": "cloudflaredHidden",
+    "custom": "customHidden",
+}
+
+
+def _remote_path_hidden_states(
+    setup_script: str, prelude: str, wizard_vars: dict[str, Any], method: str
+) -> dict[str, bool]:
+    """Drive ``method -> cursor -> remote`` and return ``{remote-path id: hidden}``.
+
+    Captures each remote-path tile's ``classList.contains('hidden')`` into a
+    body-dataset attr inside ``invoke`` (the live-DOM pattern the other tests
+    use) so the post-run serialized DOM carries the visibility decision.
+    """
+    capture = "".join(
+        f"document.body.dataset.{camel} = String("
+        f"document.querySelector('[data-remote-path=\"{pid}\"]')"
+        f".classList.contains('hidden'));\n"
+        for pid, camel in _REMOTE_PATH_TILES.items()
+    )
+    result = run_script(
+        setup_script,
+        prelude=prelude,
+        initial_html=_build_wizard_dom(wizard_vars),
+        invoke=(
+            _click("server-method", method)
+            + _click("client", "cursor")
+            + _click("scope", "remote")
+            + capture
+        ),
+    )
+    _assert_clean_init(result)
+    states: dict[str, bool] = {}
+    for pid, camel in _REMOTE_PATH_TILES.items():
+        attr = "data-" + re.sub(r"([A-Z])", r"-\1", camel).lower()
+        match = re.search(rf'{attr}="(true|false)"', result.dom)
+        assert match is not None, f"{attr} not captured for method {method!r}"
+        states[pid] = match.group(1) == "true"
+    return states
+
+
+class TestRemotePathFiltering:
+    """``updateSections`` shows only the remote-path tiles that apply to the
+    chosen server method (``remotePathsForMethod``); the rest are hidden. A tile
+    surfaced for the wrong method offers an instruction path that can't work.
+    """
+
+    def test_ha_component_shows_builtin_hides_proxy(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # ha-component's own webhook is built in; the webhook-proxy app is not
+        # its path, so that tile is hidden while builtin-webhook is shown.
+        states = _remote_path_hidden_states(
+            setup_script, prelude, wizard_vars, "ha-component"
+        )
+        assert states["builtin-webhook"] is False
+        assert states["webhook-proxy"] is True
+        assert states["cloudflared"] is False
+        assert states["custom"] is False
+
+    def test_ha_addon_shows_proxy_hides_builtin(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # The add-on has no built-in HA webhook; the webhook-proxy app is its
+        # first-class remote path, so the two swap visibility versus component.
+        states = _remote_path_hidden_states(
+            setup_script, prelude, wizard_vars, "ha-addon"
+        )
+        assert states["webhook-proxy"] is False
+        assert states["builtin-webhook"] is True
+        assert states["cloudflared"] is False
+        assert states["custom"] is False
+
+    def test_docker_hides_builtin_and_proxy(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # A raw docker/uvx HTTP server has neither an HA webhook nor the proxy
+        # app; only the generic tunnel/custom-proxy paths apply.
+        states = _remote_path_hidden_states(
+            setup_script, prelude, wizard_vars, "docker"
+        )
+        assert states["builtin-webhook"] is True
+        assert states["webhook-proxy"] is True
+        assert states["cloudflared"] is False
+        assert states["custom"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tile disable guards (incompatible method/client/scope combinations)
+# ---------------------------------------------------------------------------
+
+
+class TestTileDisableGuards:
+    """Picking a method or client disables the tiles that can't work with it,
+    so the user can't step into an unbuildable combination.
+    """
+
+    def test_stdio_local_disables_transportless_client(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # ChatGPT has no stdio transport (sse/streamable-http only); the local
+        # stdio server can't serve it, so its client tile is disabled.
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "stdio-local")
+                + "document.body.dataset.chatgptDisabled = String("
+                "document.querySelector('[data-client=\"chatgpt\"]').disabled);\n"
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-chatgpt-disabled="true"' in result.dom
+
+    def test_remote_only_client_disables_local_scope(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # Claude.ai is remote-only (requires HTTPS); once chosen, the local
+        # scope tile is disabled so it can't be paired with a LAN-only setup.
+        assert "claude-ai" in wizard_vars["remoteOnlyClients"], (
+            "test premise: claude-ai must be a remote-only client"
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-component")
+                + _click("client", "claude-ai")
+                + "document.body.dataset.localScopeDisabled = String("
+                "document.querySelector('[data-scope=\"local\"]').disabled);\n"
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-local-scope-disabled="true"' in result.dom
+
+
+# ---------------------------------------------------------------------------
+# uvx platform gating (needsPlatform for the server host OS)
+# ---------------------------------------------------------------------------
+
+
+class TestUvxPlatformGating:
+    """The uvx server method always needs the host OS, so config is gated behind
+    the platform step even for a full-transport client on local scope.
+    """
+
+    def test_uvx_local_gates_config_behind_platform(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # uvx -> cursor -> local leaves config hidden (needsPlatform() fires on
+        # the uvx method) until an OS is chosen, then it unhides. Mirrors the
+        # mcp-proxy gating test: records visibility before AND after the click.
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "uvx")
+                + _click("client", "cursor")
+                + _click("scope", "local")
+                + """
+              document.body.dataset.beforePlatform = String(
+                document.getElementById('section-config').classList.contains('hidden')
+              );
+            """
+                + _click("platform", "linux")
+                + """
+              document.body.dataset.afterPlatform = String(
+                document.getElementById('section-config').classList.contains('hidden')
+              );
+            """
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-before-platform="true"' in result.dom, (
+            "config section should still be hidden before the uvx host OS is chosen"
+        )
+        assert 'data-after-platform="false"' in result.dom, (
+            "config section should be visible after the uvx host OS is chosen"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Start over (reset back to step 1)
+# ---------------------------------------------------------------------------
+
+
+class TestStartOver:
+    def test_start_over_hides_downstream_sections(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        """A full flow followed by Start Over collapses the wizard back to step
+        1: client / scope / config are all hidden again."""
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-component")
+                + _click("client", "cursor")
+                + _click("scope", "local")
+                + "document.getElementById('start-over').click();\n"
+            ),
+        )
+        _assert_clean_init(result)
+        for sid in ("section-client", "section-scope", "section-config"):
+            assert _section_has_hidden_class(result.dom, sid), (
+                f"#{sid} should be hidden again after Start Over"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Remote-scope complexity badge relabel (updateSections)
+# ---------------------------------------------------------------------------
+
+
+class TestRemoteScopeBadge:
+    def test_badge_is_quick_for_component_advanced_for_docker(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        """ha-component makes remote access the easy path (its built-in webhook),
+        so the Remote scope badge reads 'Quick'; a tunnel/proxy method (docker)
+        relabels it 'Advanced'."""
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-component")
+                + "document.body.dataset.badgeAfterComponent = "
+                'document.querySelector(\'[data-scope="remote"] '
+                ".complexity-badge').textContent;\n"
+                + _click("server-method", "docker")
+                + "document.body.dataset.badgeAfterDocker = "
+                'document.querySelector(\'[data-scope="remote"] '
+                ".complexity-badge').textContent;\n"
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-badge-after-component="Quick"' in result.dom
+        assert 'data-badge-after-docker="Advanced"' in result.dom
+
+
+# ---------------------------------------------------------------------------
+# Tunnel port per server method (serverPort regression)
+# ---------------------------------------------------------------------------
+
+
+class TestTunnelPort:
+    """The cloudflared/tunnel instructions must target the port that matches the
+    server method — 9583 for the HA add-on, 8086 for a raw docker/uvx HTTP
+    server — never the other one. Pinned in both directions; the docker case
+    also click-drives the docker server-method branch.
+    """
+
+    @pytest.mark.parametrize(
+        "method, expected_port, wrong_port",
+        [
+            ("ha-addon", "localhost:9583", "localhost:8086"),
+            ("docker", "localhost:8086", "localhost:9583"),
+        ],
+        ids=["ha-addon", "docker"],
+    )
+    def test_cloudflared_targets_method_port(
+        self,
+        method: str,
+        expected_port: str,
+        wrong_port: str,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", method)
+                + _click("client", "cursor")
+                + _click("scope", "remote")
+                + _click("remote-path", "cloudflared")
+                + "document.body.dataset.instructions = "
+                "document.getElementById('setup-instructions').innerHTML;\n"
+            ),
+        )
+        _assert_clean_init(result)
+        match = re.search(r'data-instructions="([^"]*)"', result.dom)
+        assert match is not None, "setup-instructions innerHTML was not captured"
+        instructions = match.group(1)
+        # `localhost:` prefix is deliberate: the cloudflared block also carries
+        # hardcoded bare `...:9583` HAOS-app examples, so a bare port substring
+        # would false-match. Only the `localhost:${serverPort}` lines vary.
+        assert expected_port in instructions
+        assert wrong_port not in instructions

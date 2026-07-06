@@ -99,6 +99,7 @@ module = [
     "aiohasupervisor",
     "aiohasupervisor.*",
     "aiohttp",
+    "awesomeversion",
     "yarl",
     "voluptuous",
     "jsonschema",
@@ -220,11 +221,6 @@ dev = [
 version_toml = ["pyproject.toml:project.version"]
 version_variables = [
     "src/ha_mcp/__init__.py:__version__",
-    # Keeps the in-process server's stable-channel pin in lockstep with the
-    # released server/add-on version - a hand-edited pin would drift the
-    # moment a release ships (owner: the server entry must always match the
-    # add-on version to avoid confusion).
-    "custom_components/ha_mcp_tools/const.py:PINNED_HA_MCP_VERSION",
 ]
 build_command = """
 pip install uv && uv lock

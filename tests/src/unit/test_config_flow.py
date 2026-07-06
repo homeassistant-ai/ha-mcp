@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -138,9 +138,11 @@ class TestMenuStep:
         menu = asyncio.run(flow.async_step_user(None))
         assert menu["type"] == "menu"
         assert menu["step_id"] == "user"
+        # Server first: it is the recommended entry; tools is the opt-in
+        # file/YAML services entry (#1715).
         assert menu["menu_options"] == [
-            const.ENTRY_TYPE_TOOLS,
             const.ENTRY_TYPE_SERVER,
+            const.ENTRY_TYPE_TOOLS,
         ]
 
 
@@ -223,6 +225,61 @@ class TestServerOptionsFlow:
         assert form["step_id"] == "init"
         assert "mcp_abc" in form["description_placeholders"]["connect_url"]
 
+    def test_versions_placeholder_present_and_populated(self, monkeypatch):
+        # The Configure form carries a "versions" placeholder that names the
+        # component version (from the manifest) and the installed server version.
+        flow = _make_options_flow(
+            options={const.OPT_CHANNEL: const.CHANNEL_DEV},
+            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
+        )
+        flow.hass = MagicMock()
+        # The server-version read is offloaded to the executor (blocking I/O);
+        # make the mock actually run the callable.
+        flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="0.14.0")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.9.0")
+
+        form = asyncio.run(flow.async_step_init(None))
+        versions = form["description_placeholders"]["versions"]
+        assert versions == "Component 0.14.0 - Server ha-mcp 7.9.0 (dev channel)"
+
+    def test_versions_placeholder_is_failure_proof(self, monkeypatch):
+        # A broken version read must not break the form: the component read
+        # failing and the server read raising both degrade to safe text.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        flow.hass = MagicMock()
+        flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
+        monkeypatch.setattr(
+            cf, "async_get_integration", AsyncMock(side_effect=RuntimeError("boom"))
+        )
+
+        def _raise():
+            raise RuntimeError("metadata boom")
+
+        monkeypatch.setattr(cf, "_installed_server_version", _raise)
+
+        form = asyncio.run(flow.async_step_init(None))  # must not raise
+        versions = form["description_placeholders"]["versions"]
+        assert (
+            versions
+            == "Component unknown - Server ha-mcp not installed yet (stable channel)"
+        )
+
+    def test_versions_placeholder_server_not_installed_yet(self, monkeypatch):
+        # Before the server package is installed, the server half reads
+        # "not installed yet" rather than a bogus version.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: None)
+        form = asyncio.run(flow.async_step_init(None))
+        versions = form["description_placeholders"]["versions"]
+        # No hass on the flow ⇒ component "unknown"; server not installed yet.
+        assert "not installed yet" in versions
+        assert versions.startswith("Component unknown")
+
     def test_channel_is_first_option_field(self):
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         form = asyncio.run(flow.async_step_init(None))
@@ -237,12 +294,23 @@ class TestServerOptionsFlow:
         )
         assert channel.default() == const.CHANNEL_STABLE
 
+    def test_auto_update_defaults_on(self):
+        # The auto-update checkbox is present and defaults on (checked) when the
+        # option has never been saved.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        marker = next(
+            m for m in form["data_schema"].schema if m.schema == const.OPT_AUTO_UPDATE
+        )
+        assert marker.default() is True
+
     def test_form_prefills_every_field_from_saved_options(self):
         # Review gap: the form must show the user's SAVED values, not the
         # defaults, for every field (a regression here silently reverts a
         # user's config on the next save).
         saved = {
             const.OPT_CHANNEL: const.CHANNEL_DEV,
+            const.OPT_AUTO_UPDATE: False,
             const.OPT_SERVER_PORT: 12345,
             const.OPT_BIND_HOST: const.BIND_HOST_LOOPBACK,
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,
@@ -321,6 +389,132 @@ class TestServerOptionsFlow:
         # The LAN hint uses the CONFIGURED port, not the 9584 default.
         assert ":9999/private_x" in hint
 
-    def test_connect_url_hint_without_webhook_prompts_notification(self):
+    def test_connect_url_hint_before_start_points_at_log(self):
         flow = _make_options_flow(data={})
-        assert "notification" in flow._connect_url_hint().lower()
+        hint = flow._connect_url_hint().lower()
+        assert "once the server has started" in hint
+        assert "notification" not in hint
+
+    def test_connect_url_hint_resolves_actual_urls_via_builder(self):
+        """With hass available, the hint lists the REAL resolved URLs.
+
+        The builder import is module-local (``from .embedded_setup import
+        build_connect_urls``), so injecting a stub module into sys.modules
+        substitutes it without importing the real embedded_setup (which
+        needs a full Home Assistant install).
+        """
+        calls: list[dict] = []
+
+        def fake_builder(hass, entry, *, webhook_enabled=True):
+            calls.append({"hass": hass, "webhook_enabled": webhook_enabled})
+            return [
+                "https://example.duckdns.org/api/webhook/mcp_abc",
+                "http://192.168.1.150:9584/private_x (direct access)",
+            ]
+
+        stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
+        stub.build_connect_urls = fake_builder
+        flow = _make_options_flow(
+            options={const.OPT_ENABLE_WEBHOOK: False},
+            data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
+        )
+        flow.hass = MagicMock()
+        orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
+        sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
+        try:
+            hint = flow._connect_url_hint()
+        finally:
+            if orig is None:
+                del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
+            else:
+                sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = orig
+        assert "https://example.duckdns.org/api/webhook/mcp_abc" in hint
+        assert "http://192.168.1.150:9584/private_x" in hint
+        assert "<your-home-assistant-url>" not in hint
+        # The enable_webhook option is forwarded to the builder.
+        assert calls and calls[0]["webhook_enabled"] is False
+
+    def _hint_with_stub_builder(self, builder, *, data, options=None):
+        """Call ``_connect_url_hint`` with ``build_connect_urls`` stubbed.
+
+        Injects a fake ``embedded_setup`` module so the flow's module-local
+        ``from .embedded_setup import build_connect_urls`` resolves to ``builder``
+        without importing the real module (which needs a full HA install).
+        """
+        stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
+        stub.build_connect_urls = builder
+        flow = _make_options_flow(data=data, options=options)
+        flow.hass = MagicMock()
+        orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
+        sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
+        try:
+            return flow._connect_url_hint()
+        finally:
+            if orig is None:
+                del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
+            else:
+                sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = orig
+
+    def test_connect_url_hint_falls_back_when_builder_raises(self):
+        # A resolution bug in build_connect_urls must not escape and take down
+        # the whole options form: the hint degrades to the placeholder form.
+        def boom_builder(hass, entry, *, webhook_enabled=True):
+            raise RuntimeError("resolution boom")
+
+        hint = self._hint_with_stub_builder(
+            boom_builder, data={"webhook_id": "mcp_abc", "secret_path": "/private_x"}
+        )
+        assert "<your-home-assistant-url>" in hint
+        assert "/api/webhook/mcp_abc" in hint
+
+    def test_connect_url_hint_falls_back_when_builder_returns_empty(self):
+        # An empty resolver result (nothing resolvable yet) also degrades to the
+        # placeholder form rather than an empty "Connect URL(s):" header.
+        def empty_builder(hass, entry, *, webhook_enabled=True):
+            return []
+
+        hint = self._hint_with_stub_builder(
+            empty_builder, data={"webhook_id": "mcp_abc", "secret_path": "/private_x"}
+        )
+        assert "<your-home-assistant-url>" in hint
+        assert "/api/webhook/mcp_abc" in hint
+
+    def test_connect_url_hint_local_only_never_shows_webhook_url(self):
+        """Webhook disabled + nothing resolvable: no dead webhook URL.
+
+        With remote access via webhook off, the webhook endpoint is never
+        registered - the fallback must state local-only mode with the real
+        loopback direct URL instead of rendering a webhook URL that 404s.
+        """
+
+        def empty_builder(hass, entry, *, webhook_enabled=True):
+            return []
+
+        hint = self._hint_with_stub_builder(
+            empty_builder,
+            data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
+            options={const.OPT_ENABLE_WEBHOOK: False, const.OPT_SERVER_PORT: 9999},
+        )
+        assert hint.startswith("Remote access via webhook is disabled")
+        assert "http://127.0.0.1:9999/private_x" in hint
+        assert "/api/webhook/" not in hint
+
+    def test_connect_url_hint_local_only_when_builder_raises(self):
+        """Webhook disabled + resolver RAISES: same local-only contract.
+
+        The ``except`` path must also fall through to the local-only message
+        (loopback direct URL, no webhook URL), not the placeholder webhook form
+        — a resolution error must not resurrect a webhook URL that 404s.
+        """
+
+        def boom_builder(hass, entry, *, webhook_enabled=True):
+            raise RuntimeError("resolution boom")
+
+        hint = self._hint_with_stub_builder(
+            boom_builder,
+            data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
+            options={const.OPT_ENABLE_WEBHOOK: False},
+        )
+        assert hint.startswith("Remote access via webhook is disabled")
+        assert "http://127.0.0.1:9584/private_x" in hint  # DEFAULT_SERVER_PORT
+        assert "/api/webhook/" not in hint

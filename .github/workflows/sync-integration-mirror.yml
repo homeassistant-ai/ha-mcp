@@ -2,8 +2,10 @@ name: Sync Integration Mirror
 
 # Keeps homeassistant-ai/ha-mcp-integration (the HACS distribution mirror)
 # in lockstep: master pushes sync the dev channel (mirror main), releases
-# cut a matching mirror release (stable channel). The mirror carries no
-# hand-made changes.
+# cut a matching mirror release (stable channel). The mirror's README is
+# composed from a permanent prefix blurb plus the main repo README (with
+# relative links/images absolutized) so the HACS page mirrors the main docs.
+# The mirror carries no hand-made changes.
 permissions:
   contents: read
 
@@ -14,6 +16,9 @@ on:
       - "custom_components/ha_mcp_tools/**"
       - "hacs.json"
       - "LICENSE"
+      - "README.md"
+      - ".github/integration-mirror-readme-prefix.md"
+      - "scripts/build_mirror_readme.py"
   release:
     types: [published]
   workflow_dispatch:
@@ -46,6 +51,10 @@ jobs:
           cp -r custom_components/ha_mcp_tools /tmp/mirror/custom_components/
           rm -rf /tmp/mirror/custom_components/ha_mcp_tools/__pycache__
           cp hacs.json LICENSE /tmp/mirror/
+          python3 scripts/build_mirror_readme.py \
+            --prefix .github/integration-mirror-readme-prefix.md \
+            --readme README.md \
+            --out /tmp/mirror/README.md
 
       - name: Commit and push
         env:

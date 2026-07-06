@@ -167,9 +167,12 @@ class TestSetupEntry:
         # Bring-up scheduled as a config-entry background task and stored.
         entry.async_create_background_task.assert_called_once()
         assert domain_data[DATA_BRINGUP_TASK] == "BRINGUP_TASK"
-        # Reload-on-options-change listener registered under async_on_unload.
+        # Reload-on-options-change listener AND the periodic auto-update interval
+        # are both registered under async_on_unload for cleanup.
         entry.add_update_listener.assert_called_once_with(pkg._async_options_updated)
-        entry.async_on_unload.assert_called_once_with("UNSUB")
+        unload_args = [c.args[0] for c in entry.async_on_unload.call_args_list]
+        assert "UNSUB" in unload_args  # options-change listener unsub
+        assert len(unload_args) == 2  # + the auto-update interval cancel callback
 
 
 class TestUnloadEntry:

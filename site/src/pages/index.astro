@@ -32,8 +32,8 @@ const withBase = (path: string) => {
         <a href={withBase('/setup')} class="px-7 py-3 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors brand-glow">
           Get Started
         </a>
-        <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener noreferrer" class="flex items-center" title="Add the ha-mcp app (add-on) repository to your Home Assistant (HA OS)">
-          <img src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg" alt="Add the ha-mcp app (add-on) repository to your Home Assistant" height="40" />
+        <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration" target="_blank" rel="noopener noreferrer" class="flex items-center" title="Install the HA-MCP custom component via HACS — preferred install">
+          <img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Install the HA-MCP custom component via HACS (preferred install)" height="40" />
         </a>
         <a href="https://github.com/homeassistant-ai/ha-mcp" class="px-7 py-3 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors">
           View on GitHub
@@ -55,7 +55,7 @@ const withBase = (path: string) => {
         <p class="text-[var(--text-secondary)]">No paid subscription required.</p>
       </div>
 
-      <!-- Recommended path: Home Assistant App (add-on) -->
+      <!-- Recommended path: HA Custom Component (in-process server) -->
       <div class="max-w-5xl mx-auto mb-8">
         <div class="glass-card rounded-2xl p-6 md:p-8 relative overflow-hidden">
           <div class="absolute inset-0 bg-gradient-to-br from-brand/[0.06] to-transparent pointer-events-none" aria-hidden="true"></div>
@@ -66,32 +66,33 @@ const withBase = (path: string) => {
               </div>
               <div>
                 <div class="flex items-center gap-2 mb-1.5 flex-wrap">
-                  <h3 class="font-display font-semibold text-white text-lg">Home Assistant App (add-on)</h3>
-                  <span class="px-2 py-0.5 text-xs rounded-full bg-brand/[0.12] text-brand font-medium">Recommended on Home Assistant OS</span>
+                  <h3 class="font-display font-semibold text-white text-lg">HA Custom Component</h3>
+                  <span class="px-2 py-0.5 text-xs rounded-full bg-brand/[0.12] text-brand font-medium">Recommended &mdash; every Home Assistant installation type</span>
                 </div>
-                <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Runs inside Home Assistant &mdash; no access token to manage. Can run on your local network or be configured for HTTP / internet access, and works with Claude Desktop, Claude.ai, ChatGPT and any other MCP client.</p>
+                <p class="text-[var(--text-secondary)] text-sm leading-relaxed">Runs the full ha-mcp server inside Home Assistant &mdash; every installation type (Home Assistant OS, Supervised, Container, Core), with full feature parity. Reachable on your local network, or remotely through a built-in Home Assistant webhook via Nabu Casa or your reverse proxy. Works with Claude Desktop, Claude.ai, ChatGPT and any other MCP client.</p>
               </div>
             </div>
             <div class="grid md:grid-cols-[1fr_auto] gap-6 md:items-center">
               <ol class="text-[var(--text-secondary)] space-y-2 text-sm">
-                <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">1.</span> Add the ha-mcp repository, then install <strong class="text-white/70">Home Assistant MCP Server</strong> from the App Store.</li>
-                <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">2.</span> Start it and copy the server URL from its <strong class="text-white/70">Logs</strong> tab.</li>
-                <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">3.</span> Connect your client to that URL &mdash; no token. Ask: <em class="text-white/70">"Can you see my Home Assistant?"</em></li>
+                <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">1.</span> Install <strong class="text-white/70">HA-MCP Custom Component</strong> from HACS, then restart Home Assistant.</li>
+                <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">2.</span> <strong class="text-white/70">Settings &rarr; Devices &amp; Services &rarr; Add Integration</strong>, then choose <strong class="text-white/70">HA-MCP Server</strong>.</li>
+                <li class="flex gap-2"><span class="text-[var(--text-muted)] tabular-nums">3.</span> Copy the URL from the entry's <strong class="text-white/70">Configure</strong> screen, connect your client, and ask: <em class="text-white/70">"Can you see my Home Assistant?"</em></li>
               </ol>
               <div class="flex flex-col sm:flex-row md:flex-col gap-3 md:w-56 flex-shrink-0">
-                <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fhomeassistant-ai%2Fha-mcp" target="_blank" rel="noopener noreferrer" class="px-5 py-2.5 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors text-center text-sm">Add to Home Assistant</a>
-                <a href={withBase('/guide-addon')} class="px-5 py-2.5 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors text-center text-sm">App setup guide &rarr;</a>
+                <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration" target="_blank" rel="noopener noreferrer" class="px-5 py-2.5 bg-brand hover:bg-brand-light text-surface-0 font-semibold rounded-xl transition-colors text-center text-sm">Install via HACS</a>
+                <a href="https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/in-process-server.md" target="_blank" rel="noopener noreferrer" class="px-5 py-2.5 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors text-center text-sm">Full docs &rarr;</a>
+                <a href={withBase('/setup')} class="px-5 py-2.5 bg-white/[0.05] hover:bg-white/[0.08] text-white font-semibold rounded-xl border border-white/[0.08] transition-colors text-center text-sm">Setup Wizard &rarr;</a>
               </div>
             </div>
-            <p class="text-[var(--text-muted)] text-xs mt-4">If "Add to Home Assistant" opens the App Store without an add-repository dialog (a <a href="https://github.com/home-assistant/my.home-assistant.io/issues/698" target="_blank" rel="noopener noreferrer" class="underline hover:text-white">known Home Assistant issue</a>), add it manually: <strong>App Store &rarr; &#8942; &rarr; Repositories</strong>, paste <code class="bg-slate-800 px-1 rounded break-all">https://github.com/homeassistant-ai/ha-mcp</code>.</p>
           </div>
         </div>
+        <p class="text-center text-[var(--text-muted)] text-sm mt-4">Prefer the add-on (Home Assistant OS)? <a href={withBase('/guide-addon')} class="text-brand hover:underline">App setup guide &rarr;</a></p>
       </div>
 
-      <!-- Local path: Claude Desktop via stdio -->
+      <!-- Demo server: local stdio quick-install scripts -->
       <div class="flex items-center gap-3 mb-5 max-w-5xl mx-auto flex-wrap">
-        <h3 class="text-[var(--text-secondary)] font-medium">Or run locally with Claude Desktop</h3>
-        <span class="px-2 py-0.5 text-xs rounded-full bg-white/[0.05] text-[var(--text-muted)] border border-white/[0.06]">stdio &middot; advanced &middot; local machine only</span>
+        <h3 class="text-[var(--text-secondary)] font-medium">Try the demo server (local stdio)</h3>
+        <span class="px-2 py-0.5 text-xs rounded-full bg-white/[0.05] text-[var(--text-muted)] border border-white/[0.06]">stdio &middot; demo server &middot; not recommended</span>
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-3 gap-5 max-w-5xl mx-auto">

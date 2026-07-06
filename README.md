@@ -1,7 +1,7 @@
 > **Breaking change (v7.3.0):** `ha_config_set_yaml` has been moved to [beta](docs/beta.md).
 
 <div align="center">
-  <img src="docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
+  <img src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
   # The Unofficial and Awesome Home Assistant MCP Server
 
@@ -28,23 +28,40 @@
 
 ---
 
-![Demo with Claude Desktop](docs/img/demo.webp)
+![Demo with Claude Desktop](https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/docs/img/demo.webp)
 
 ---
 
 ## 🚀 Get Started
 
-**Set up for your operating system** — you'll pick **Local (Claude Desktop)** or the **Home Assistant App** on the setup page:
+The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It installs into Home Assistant through HACS, runs the full server **in-process**, and works on **every** Home Assistant installation type — Home Assistant OS, Supervised, Container, and Core — with full feature parity. It is the easiest setup in every case, with no access token to manage.
 
-<p>
-<a href="https://homeassistant-ai.github.io/ha-mcp/setup/#easy-macos"><img src="https://img.shields.io/badge/Setup_Guide_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Setup for macOS" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/setup/#easy-linux"><img src="https://img.shields.io/badge/Setup_Guide_for_Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Setup for Linux" height="120"></a>&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://homeassistant-ai.github.io/ha-mcp/setup/#easy-windows"><img src="https://img.shields.io/badge/Setup_Guide_for_Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Setup for Windows" height="120"></a>
-</p>
+**Add it to Home Assistant via HACS (the preferred install):**
 
-Prefer to set it up by hand? The detailed paths are below.
+[![Add HA-MCP to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration)
 
-### 🏠 Recommended: Home Assistant App (add-on)
+**Quick start:**
 
-Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access token to manage, works with Claude Desktop, Claude.ai, ChatGPT and any other MCP client, and can stay on your local network or be configured for remote / HTTP access.
+1. Install the **HA-MCP Custom Component** from HACS — click the badge above, or in HACS open **Integrations → ⋮ → Custom repositories**, add `https://github.com/homeassistant-ai/ha-mcp-integration` (category: **Integration**), then **Download**.
+2. **Restart Home Assistant.**
+3. Go to **Settings → Devices & Services → Add Integration**, search for **HA-MCP Custom Component**, choose **HA-MCP Server**, and click **Submit**. Creating the entry starts the server.
+4. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**) — it is also printed in the Home Assistant log. A notification confirms the server started and points you there.
+5. Paste that URL into your AI client — done.
+
+**Connect URL.** The Configure screen gives you a Home Assistant webhook URL for remote clients — `https://<your-ha-domain>/api/webhook/<webhook-id>` through Nabu Casa or any reverse proxy already pointed at Home Assistant (locally, `http://<ha-host>:8123/api/webhook/<webhook-id>`). For clients on the same network, the server is also reachable directly at `http://<ha-ip>:9584/private_<random>`.
+
+- **Local only?** Turn off **Remote access via webhook** in the entry options — no webhook is registered at all, while the direct port and sidebar panel keep working.
+- **Settings panel:** while the server runs, an admin-only **HA-MCP** panel appears in the Home Assistant sidebar for managing tools, feature flags, backups, and themes.
+- **Optional authentication:** set **Webhook authentication** to `ha_auth` to require a Home Assistant account sign-in instead of using the secret URL as the credential.
+- **Manual install (no HACS):** copy `custom_components/ha_mcp_tools/` from this repository into your Home Assistant `config/custom_components/` directory, then restart and add the integration as above.
+
+The component's second entry type, **HA MCP Tools**, is only needed if you enable ha-mcp's opt-in file and YAML editing tools (feature flags, off by default) — skip it otherwise; you can add it later at any time.
+
+[Full in-process server documentation →](docs/in-process-server.md) · [Setup Wizard for client-specific config →](https://homeassistant-ai.github.io/ha-mcp/setup/)
+
+### 🏠 Home Assistant App (add-on)
+
+Prefer to run ha-mcp as a Home Assistant **app / add-on**? On **Home Assistant OS** and **Supervised** installs it is a close second — no access token to manage, and it works with Claude Desktop, Claude.ai, ChatGPT, and any other MCP client on your local network or configured for remote access.
 
 1. Add the repository to your Home Assistant instance:
 
@@ -53,33 +70,47 @@ Running Home Assistant OS? Run ha-mcp **inside** Home Assistant — no access to
    If that opens the App Store without an add-repository dialog (a [known Home Assistant issue](https://github.com/home-assistant/my.home-assistant.io/issues/698)), add it manually: **App Store → ⋮ → Repositories**, then paste `https://github.com/homeassistant-ai/ha-mcp`.
 
 2. Install **"Home Assistant MCP Server"** from the App Store and click **Start**. *(Home Assistant 2026.2 renamed "Add-ons" to "Apps"; on older versions this is the Add-on Store.)*
-3. Open the **Logs** tab to find your unique MCP URL
-4. Connect your AI client to that URL — **no token or credential setup needed**
+3. Open the **Logs** tab to find your unique MCP URL.
+4. Connect your AI client to that URL — **no token or credential setup needed**.
 
 [Full add-on documentation →](homeassistant-addon/DOCS.md)
 
-> ⚠️ **Two ways to run ha-mcp — don't mix them.** The add-on above is the recommended path. The local **stdio** path below runs ha-mcp on your own computer; it is more advanced, has fewer features, and is behind most connection problems. If you use the add-on, your Claude Desktop config points at the add-on URL through `mcp-proxy` with **no token** — do **not** also keep a local `uvx ha-mcp@latest` entry (with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN`) in your Claude Desktop config. Running both at once is a known cause of connection hangs.
+> ⚠️ **Configure exactly one install method per client.** The custom component, the add-on, Docker/PyPI, and local stdio are independent ways to run the same server — pick one and point your AI client at that single URL. Keeping two entries for the same server in one client (for example a local `uvx ha-mcp@latest` entry with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN` alongside an add-on or component URL) is a known cause of connection hangs.
+
+### Other install methods
+
+These run the server outside Home Assistant — useful for **Container** / **Core** installs (which can't run add-ons) or a separate host. The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates the exact client-specific config for each.
+
+- **Docker (HTTP server):** run `ghcr.io/homeassistant-ai/ha-mcp` in HTTP mode, pointed at your Home Assistant URL and a long-lived token, and connect your client to its secret URL. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for the full command and per-client config.
+- **PyPI / uvx (HTTP server):** run the published `ha-mcp` package with `uvx ha-mcp@latest` (or pip) as a streamable-HTTP server the same way. Details in the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
+- **Local stdio (not recommended):** runs ha-mcp on your own machine over stdio. The one-command installers in the **Demo server** section below use this path; the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) covers connecting it to your own Home Assistant.
+
+  > ⚠️ **stdio has known transport issues.** The stdio transport has connection problems that streamable HTTP does not ([#1713](https://github.com/homeassistant-ai/ha-mcp/issues/1713)). It is recommended only for demo/testing tinkering — for a real setup, use the custom component or an HTTP method above.
 
 <details>
-<summary><b>Run inside Home Assistant (Container / Core — no add-on)</b></summary>
+<summary><b>🌐 Remote access (Nabu Casa / Webhook Proxy add-on)</b></summary>
 
-Not on Home Assistant OS? Home Assistant **Container** and **Core** installs can't run add-ons, but the **HA-MCP Custom Component** (`ha_mcp_tools`) can run the **full ha-mcp server in-process**, inside Home Assistant — no separate Docker container, no token to manage. It works on Home Assistant OS too, and coexists with the add-on. The connect URL is a Home Assistant webhook, so it reaches remote MCP clients through **Nabu Casa** (or any reverse proxy) with no extra tunnel.
+> **Using the HA-MCP custom component?** You do not need this — the component has its own built-in webhook for remote access (see the **Get Started** quick start at the top). This proxy is for the **add-on** (it can also front another external server via its `mcp_server_url` option).
 
-1. Install **HA-MCP Custom Component** from HACS (the same repository you use for ha-mcp), or copy `custom_components/ha_mcp_tools` from this repository into your Home Assistant `config/custom_components/` directory; then restart Home Assistant
-2. Add the integration (**Settings → Devices & Services → Add Integration → HA-MCP Custom Component**) and choose **HA-MCP Server** from the menu, then submit — creating the entry starts the server
-3. Copy the connect URL from the **HA-MCP Server** notification (also shown on the entry's Configure screen)
-4. Manage the server from the **HA-MCP** sidebar panel (admin-only web settings UI)
-5. Connect your AI client to that URL
+Already have **Nabu Casa** or another reverse proxy pointing at your Home Assistant? The Webhook Proxy add-on routes MCP traffic through your existing setup — no separate tunnel or port forwarding needed.
 
-[Full in-process server documentation →](docs/in-process-server.md)
+1. Install the **MCP Server add-on** (see above) and the **Webhook Proxy** add-on from the same store
+2. Start the webhook proxy and **restart Home Assistant** when prompted
+3. Copy the webhook URL from the add-on logs:
+   ```
+   MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
+   ```
+4. Configure your AI client with that URL
+
+For other remote access methods (Cloudflare Tunnel, custom reverse proxy), see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
+
+[Webhook proxy documentation →](https://github.com/homeassistant-ai/ha-mcp/blob/master/homeassistant-addon-webhook-proxy/DOCS.md)
 
 </details>
 
-### 💻 Run locally with Claude Desktop (stdio · advanced)
+### 🧪 Demo server (Windows / macOS / Linux)
 
-*No paid subscription required.* This runs ha-mcp on your own machine over stdio.
-
-### Quick install (~5 min)
+Want to try ha-mcp before connecting your own Home Assistant? *No paid subscription required.* These one-command scripts set up a local **stdio** connection to a hosted **demo** environment so you can see it working in a few minutes. Each script's **Connect your own Home Assistant** link then shows how to point it at your instance.
 
 <details>
 <summary><b>🍎 macOS</b></summary>
@@ -135,25 +166,6 @@ Anthropic doesn't ship Claude Desktop for Linux, so pick one path:
 4. Ask Claude: **"Can you see my Home Assistant?"**
 
 You're now connected to the demo environment! [Connect your own Home Assistant →](https://homeassistant-ai.github.io/ha-mcp/guide-windows/#step-6-connect-your-home-assistant)
-
-</details>
-
-<details>
-<summary><b>🌐 Remote Access (Nabu Casa / Webhook Proxy)</b></summary>
-
-Already have **Nabu Casa** or another reverse proxy pointing at your Home Assistant? The Webhook Proxy add-on routes MCP traffic through your existing setup — no separate tunnel or port forwarding needed.
-
-1. Install the **MCP Server add-on** (see above) and the **Webhook Proxy** add-on from the same store
-2. Start the webhook proxy and **restart Home Assistant** when prompted
-3. Copy the webhook URL from the add-on logs:
-   ```
-   MCP Server URL (remote): https://xxxxx.ui.nabu.casa/api/webhook/mcp_xxxxxxxx
-   ```
-4. Configure your AI client with that URL
-
-For other remote access methods (Cloudflare Tunnel, custom reverse proxy), see the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/).
-
-[Webhook proxy documentation →](https://github.com/homeassistant-ai/ha-mcp/blob/master/homeassistant-addon-webhook-proxy/DOCS.md)
 
 </details>
 
@@ -257,9 +269,9 @@ ha-mcp is a standalone server built for **configuring, building, and debugging**
 
 ---
 
-## 🔌 Custom Component (ha_mcp_tools) *(beta)*
+## 🔌 Custom Component (ha_mcp_tools) — File & YAML Services
 
-Some tools require a companion custom component installed in Home Assistant. Standard HA APIs do not expose file system access or YAML config editing. This component provides both.
+The **HA-MCP Custom Component** also powers a set of privileged tools that standard Home Assistant APIs can't provide: file system access and YAML config editing. (The same component runs the full server in-process — that's the recommended install in the **Get Started** section at the top.) Its **HA MCP Tools** services entry enables the tools below.
 
 **Tools that require the component:**
 
@@ -275,32 +287,17 @@ All other tools work without the component. These five return an error with inst
 
 These tools also require feature flags: `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` (file tools) and `ENABLE_YAML_CONFIG_EDITING=true` (YAML editing). To enable the `ha_install_mcp_tools` installer tool, set `HAMCP_ENABLE_CUSTOM_COMPONENT_INTEGRATION=true`.
 
-### Install using HACS (recommended)
+### Install
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp&category=integration)
+Install the **HA MCP Tools** services entry from the same **HA-MCP Custom Component**:
 
-To add manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp` (category: Integration) > **Download**.
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration)
 
-After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP Custom Component**.
+To add manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp-integration` (category: Integration) > **Download**. Or copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory.
 
-Want a server too? Add the **HA-MCP Server** entry (see the in-process server section below) — it runs the full server inside Home Assistant on every install type. The add-on remains available from the add-on store for Home Assistant OS / Supervised users who prefer it.
+After installing, restart Home Assistant, then open **Settings** > **Devices & Services** > **Add Integration**, search for **HA-MCP Custom Component**, and add the **HA MCP Tools** services entry.
 
-### Install manually
-
-Copy `custom_components/ha_mcp_tools/` from this repository into your HA `config/custom_components/` directory. Restart Home Assistant, then add the integration as described above.
-
-### Run the MCP server inside Home Assistant (in-process server entry)
-
-The **HA-MCP Custom Component** offers a second config-entry type, **HA-MCP Server**, that runs the **full ha-mcp server in-process**, inside Home Assistant, and exposes it remotely through a Home Assistant webhook. This is a full install method in its own right — useful for **Home Assistant Container / Core** users who can't run add-ons, and available on Home Assistant OS too (it coexists with the add-on on a different default port, `9584` vs `9583`).
-
-- **Install:** install **HA-MCP Custom Component** from HACS, or copy `custom_components/ha_mcp_tools` into your `config/custom_components/` directory and restart Home Assistant. Then **Add Integration → HA-MCP Custom Component → HA-MCP Server** and submit — creating the entry starts the server.
-- **Connect URL:** appears in the **HA-MCP Server** notification and on the entry's Configure screen. It's a Home Assistant webhook — `https://<nabu-casa-domain>/api/webhook/<id>` remotely (through Nabu Casa or any reverse proxy) or `http://<home-assistant-host>:8123/api/webhook/<id>` locally. The server is also reachable directly on its own port by default (set **Network access** to `127.0.0.1` to turn direct access off).
-- **Settings panel:** while the server runs, an admin-only **HA-MCP** panel in the Home Assistant sidebar opens its web settings UI (enable/disable/pin tools, feature flags, backups, themes) through Home Assistant itself — no loopback URL needed, the same idea as the add-on's "Open Web UI" button.
-- **Authentication:** by default the secret webhook URL is the credential; optionally require Home Assistant account sign-in (`ha_auth`) for clients that support it.
-- **Release channel:** the entry options let you pick `stable` (the pinned release) or `dev` (the latest development build, refreshed on every reload/restart).
-- **The HA MCP Tools services entry is optional but recommended alongside it** — that second entry type of the same component provides the privileged file/YAML services the server's file tools use, exactly as with the add-on, Docker, and pip installs.
-
-[Full in-process server documentation →](docs/in-process-server.md)
+To run the full ha-mcp server in-process through this same component, see the **Get Started** section at the top and the [full in-process server documentation →](docs/in-process-server.md).
 
 ---
 
