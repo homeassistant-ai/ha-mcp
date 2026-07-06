@@ -38,17 +38,17 @@ wheels = [
 
 [[package]]
 name = "ast-grep-cli"
-version = "0.44.0"
+version = "0.44.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f7/23/4437c1e2f91bba450a62c35334c67fb3beddc6900806dff837ef1a5599a1/ast_grep_cli-0.44.0.tar.gz", hash = "sha256:d65a9ea18cee3368d3319b83aba234d49b0bb366cb22b35264cfe844091ab77f", size = 274753, upload-time = "2026-06-22T01:57:09.014Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cf/b6/700b2a79eed7be029d3885ae2dda638604ee34970fc14ec154f5084915b7/ast_grep_cli-0.44.1.tar.gz", hash = "sha256:391e9d60f118d0a15c905b2de1287a162d1891c2f05d94919a37784230fab559", size = 278332, upload-time = "2026-07-04T14:13:29.529Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a6/16/b2a3e1a189fc8ede5e7e955ce62065fa99361796ecea8cadbc1bf019527f/ast_grep_cli-0.44.0-py3-none-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:719c0716c3d14bf905e078ee6862216f2c3cfcdeb3202a12ade26deda99e1555", size = 16058252, upload-time = "2026-06-22T01:56:53.869Z" },
-    { url = "https://files.pythonhosted.org/packages/65/c4/98fb6a547d6dd1155bf778855643cff265c78b7892d1fb9087b332d3e910/ast_grep_cli-0.44.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:c42b41c06759c5cf2254343c89a97c63ac0480d0d8f021b5092d43958d27851d", size = 8034188, upload-time = "2026-06-22T01:56:57.622Z" },
-    { url = "https://files.pythonhosted.org/packages/8b/aa/46f08c2631f1db4b23cde3164646691efe060bb078e309adbbeb91da58dc/ast_grep_cli-0.44.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:c30e01f432186b17d6d2f27c09bf47d3521a503a17b27161492e653c04cb2295", size = 7881722, upload-time = "2026-06-22T01:56:59.438Z" },
-    { url = "https://files.pythonhosted.org/packages/56/d4/e7d09fd8c05b82c8bc9537dd2d389065a6b6c7ddb1f59928d75fa2c5c6f3/ast_grep_cli-0.44.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:f5841719ac9593112b6bb4eb50646a37e7a0a35b4b72c84c9f4cc34a259734fd", size = 8180950, upload-time = "2026-06-22T01:57:01.568Z" },
-    { url = "https://files.pythonhosted.org/packages/d8/78/d64369ad514e47d0895cd88feb4d66c5b8d4918632c24725360e5e8e5b55/ast_grep_cli-0.44.0-py3-none-win32.whl", hash = "sha256:72be9a8eff8472e1c3f9941a59680a372d16981ee8dbafc4804a1bac30b83044", size = 7715079, upload-time = "2026-06-22T01:57:03.452Z" },
-    { url = "https://files.pythonhosted.org/packages/2f/85/51e98cd5d510a27208275a7c0fb36e0e0d1da0b0deeb9992ddd7f48387b6/ast_grep_cli-0.44.0-py3-none-win_amd64.whl", hash = "sha256:e12ab5a6f6276f729385c05c4349f55eccb86fa6fc8469d8cf2155cd85d99f56", size = 8215047, upload-time = "2026-06-22T01:57:05.403Z" },
-    { url = "https://files.pythonhosted.org/packages/d9/eb/f62d70cccbaed6ff820e4f149ba6cc82c3907181f16624d8b4bfa53bcc9c/ast_grep_cli-0.44.0-py3-none-win_arm64.whl", hash = "sha256:a6173eaf7ff7b8990094d6392bfa1566cc219dcf4cad502d661ee5438d55fe10", size = 7926736, upload-time = "2026-06-22T01:57:07.501Z" },
+    { url = "https://files.pythonhosted.org/packages/67/50/94f0654fe86cff7ac2f52b94a417c9918632f324cada4a7b02d07906934e/ast_grep_cli-0.44.1-py3-none-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:34fd5494fed41e5461e46a7932cd9a3e8c42136dd6b040ccc5ceca00c1c2e553", size = 16058060, upload-time = "2026-07-04T14:13:18.009Z" },
+    { url = "https://files.pythonhosted.org/packages/53/2e/185dff98167af423436556267af472674d400154a238141b4ba2f8f42e35/ast_grep_cli-0.44.1-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:ce408938e3e4ba8570102a5a54a674dc18b8fa21bc9560dc859a66f7c96a4291", size = 8034861, upload-time = "2026-07-04T14:13:20.338Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/30/6f1e5a379854a1be22983f964572a20d2229d695a63c5d6fd03570d7eab2/ast_grep_cli-0.44.1-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:54c21864c497275ed99c5fd9cf605aa9758cc3f21fc769fcde8c5ebc7c25d87d", size = 7882812, upload-time = "2026-07-04T14:13:21.819Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/84/1ff86aded236180eedc3c3a3ec4edb2fed13c1928104432501e21a4f2efb/ast_grep_cli-0.44.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:ad11a5eb8d7bd557754b21a360a3be1bc1b19e7f4bed95b444ffc25b9451844f", size = 8184902, upload-time = "2026-07-04T14:13:23.544Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/7a/796166f5ed48e2f665a85d62e260a209beef8a597ea4dd36129e5ef1452b/ast_grep_cli-0.44.1-py3-none-win32.whl", hash = "sha256:47356ab8eef7fb269e63a944427765d642bd93af20bdb966587fd706da0a61bb", size = 7716418, upload-time = "2026-07-04T14:13:25.123Z" },
+    { url = "https://files.pythonhosted.org/packages/23/f8/cbf9f39ec10be756bafc5f9def09083b6d4c3833f87a2d6818ffd2a53c48/ast_grep_cli-0.44.1-py3-none-win_amd64.whl", hash = "sha256:43dd6a281bf55269ad101460f291e7447f4dbfced794f92ced896610e5bfa589", size = 8212412, upload-time = "2026-07-04T14:13:26.665Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/a7/e078c3c4a200984ac91590fc42f3c51418d02d168dbdb5a96148b11309c7/ast_grep_cli-0.44.1-py3-none-win_arm64.whl", hash = "sha256:ce18f7f13aee07e9ec169122458ce241910c876ef5536f9115d6fec8c42a4d86", size = 7937089, upload-time = "2026-07-04T14:13:28.224Z" },
 ]
 
 [[package]]
