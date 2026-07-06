@@ -432,3 +432,23 @@ class TestServerOptionsFlow:
         assert hint.startswith("Remote access via webhook is disabled")
         assert "http://127.0.0.1:9999/private_x" in hint
         assert "/api/webhook/" not in hint
+
+    def test_connect_url_hint_local_only_when_builder_raises(self):
+        """Webhook disabled + resolver RAISES: same local-only contract.
+
+        The ``except`` path must also fall through to the local-only message
+        (loopback direct URL, no webhook URL), not the placeholder webhook form
+        — a resolution error must not resurrect a webhook URL that 404s.
+        """
+
+        def boom_builder(hass, entry, *, webhook_enabled=True):
+            raise RuntimeError("resolution boom")
+
+        hint = self._hint_with_stub_builder(
+            boom_builder,
+            data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
+            options={const.OPT_ENABLE_WEBHOOK: False},
+        )
+        assert hint.startswith("Remote access via webhook is disabled")
+        assert "http://127.0.0.1:9584/private_x" in hint  # DEFAULT_SERVER_PORT
+        assert "/api/webhook/" not in hint
