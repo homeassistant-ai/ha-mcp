@@ -99,6 +99,7 @@ module = [
     "aiohasupervisor",
     "aiohasupervisor.*",
     "aiohttp",
+    "awesomeversion",
     "yarl",
     "voluptuous",
     "jsonschema",
