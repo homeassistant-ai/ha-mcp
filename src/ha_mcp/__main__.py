@@ -318,6 +318,15 @@ def _create_server() -> "HomeAssistantSmartMCPServer":
     """Create server instance (deferred to avoid import during smoke test)."""
     from pydantic import ValidationError
 
+    # Every deferred-``mcp`` entry point funnels through here before its
+    # Streamable-HTTP app is built -- ha-mcp-web, the add-on, and the
+    # ``fastmcp run fastmcp-http.json`` container path -- so default fastmcp's
+    # DNS-rebinding guard off once, here, for all of them. Direct-construction
+    # paths (_run_oauth_server, the in-process component server) call it themselves.
+    from ha_mcp.transport_security import ensure_host_origin_guard_default_off
+
+    ensure_host_origin_guard_default_off()
+
     try:
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
@@ -823,8 +832,6 @@ def _maybe_spawn_settings_sidecar() -> None:
 
 def main_dev() -> None:
     """Run server with DEBUG logging enabled (for ha-mcp-dev package)."""
-    import os
-
     os.environ["LOG_LEVEL"] = "DEBUG"
     main()
 
@@ -1094,6 +1101,8 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     """
     from ha_mcp.settings_ui import register_settings_routes
 
+    # The DNS-rebinding guard is defaulted off in _create_server (reached here via
+    # _get_mcp below, before the app is built) -- see transport_security.
     host, port, path = _get_http_runtime(default_port)
     _warn_if_default_path_exposed(host, port, path)
     # SSE transport answers GET with 200 (the event stream), so a GET->405 there
@@ -1224,6 +1233,12 @@ async def _run_oauth_server(
     """
     from ha_mcp.auth import HomeAssistantOAuthProvider
     from ha_mcp.server import HomeAssistantSmartMCPServer
+    from ha_mcp.transport_security import ensure_host_origin_guard_default_off
+
+    # Browser OAuth clients (Claude.ai / ChatGPT) reach the discovery endpoints
+    # cross-origin, and users front this server with proxies/tunnels on arbitrary
+    # hosts; default fastmcp's DNS-rebinding guard off so it does not 403/421 them.
+    ensure_host_origin_guard_default_off()
 
     # Create OAuth provider
     auth_provider = HomeAssistantOAuthProvider(
