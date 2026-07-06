@@ -734,8 +734,11 @@ class TestComponentCompat:
     def test_read_min_component_version_skips_when_server_absent(self, monkeypatch):
         # Simulate the server package being uninstalled regardless of the test
         # environment (CI installs the real ha_mcp; the local stub tier does
-        # not): a None sys.modules entry makes the import raise ImportError,
-        # which the guarded read must translate into None rather than raising.
-        monkeypatch.setitem(sys.modules, "ha_mcp", None)
-        monkeypatch.delitem(sys.modules, "ha_mcp.tools.tools_filesystem", raising=False)
+        # not). The None entry MUST be the full dotted module name: Python
+        # resolves ``from a.b.c import x`` through the immediate parent
+        # ``a.b``, so a ``sys.modules["a"] = None`` is short-circuited whenever
+        # the submodule chain is already imported — and accidentally importing
+        # the real ha_mcp here poisons its in-process settings caches for
+        # unrelated tests on the same xdist worker.
+        monkeypatch.setitem(sys.modules, "ha_mcp.tools.tools_filesystem", None)
         assert esetup._read_min_component_version() is None
