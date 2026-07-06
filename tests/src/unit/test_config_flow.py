@@ -138,9 +138,11 @@ class TestMenuStep:
         menu = asyncio.run(flow.async_step_user(None))
         assert menu["type"] == "menu"
         assert menu["step_id"] == "user"
+        # Server first: it is the recommended entry; tools is the opt-in
+        # file/YAML services entry (#1715).
         assert menu["menu_options"] == [
-            const.ENTRY_TYPE_TOOLS,
             const.ENTRY_TYPE_SERVER,
+            const.ENTRY_TYPE_TOOLS,
         ]
 
 
