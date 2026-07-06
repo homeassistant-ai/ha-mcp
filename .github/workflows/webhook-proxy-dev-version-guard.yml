@@ -12,7 +12,7 @@ jobs:
   require-version-bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Require a dev version bump and config/manifest parity
