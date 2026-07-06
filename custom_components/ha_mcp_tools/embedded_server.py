@@ -344,10 +344,23 @@ class EmbeddedServerManager:
             _installed_ha_mcp_version
         )
 
-        # Re-resolve the spec now that the installed version is known off-loop:
-        # an auto-update-off channel pins to it here (the __init__ value was the
-        # bare dist to avoid a blocking read on the event loop).
-        self._pip_spec = self._resolve_pip_spec(installed_version)
+        # Re-pin an auto-update-off channel to its TARGET distribution's
+        # installed version, read off-loop (the __init__ value was the bare
+        # dist to avoid a blocking read on the event loop). Reading the target
+        # dist specifically — not whichever dist happens to be present — keeps a
+        # cross-channel switch correct: the previous channel's dist is still
+        # installed at this point (removal happens below), so a whichever-present
+        # read would pin the new dist to a version that does not exist for it and
+        # fail the install. Nothing of the target channel installed yet => None
+        # => stays unpinned and installs the newest once.
+        if not self._pip_spec_override and not self._auto_update:
+            target_dist = (
+                DEV_PIP_SPEC if self._channel == CHANNEL_DEV else DIST_NAME_STABLE
+            )
+            pin_version = await self._hass.async_add_executor_job(
+                _installed_dist_version, target_dist
+            )
+            self._pip_spec = self._resolve_pip_spec(pin_version)
 
         # A "stable" spec (an explicit override, or a channel pinned because
         # auto-update is off) is eligible for the fast path; an unpinned

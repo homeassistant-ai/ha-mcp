@@ -208,7 +208,7 @@ class TestChannelResolution:
     async def test_ensure_package_repins_stable_from_installed_when_auto_off(
         self, tmp_path, monkeypatch
     ):
-        # The executor-read installed version re-pins the spec inside
+        # The executor-read version of the TARGET dist re-pins the spec inside
         # _async_ensure_package (off-loop), so the forced install targets the
         # exact installed build.
         mgr, _hass, _entry = _manager(
@@ -220,12 +220,44 @@ class TestChannelResolution:
         monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
         monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.9.0")
         monkeypatch.setattr(es, "_dist_installed", lambda name: False)
         monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
 
         await mgr._async_ensure_package()
 
         assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.9.0"
+
+    async def test_ensure_package_channel_switch_auto_off_stays_unpinned(
+        self, tmp_path, monkeypatch
+    ):
+        # Regression: dev->stable with auto-update off. The old dev dist is still
+        # installed when the re-pin reads, but the pin must come from the TARGET
+        # (stable) dist — which is not installed yet — so the spec stays unpinned
+        # and installs the newest stable, rather than pinning ha-mcp to a
+        # dev-only version that does not exist (a failed bring-up).
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_CHANNEL: CHANNEL_STABLE, OPT_AUTO_UPDATE: False},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "stale"},
+        )
+        monkeypatch.setattr(es, "async_process_requirements", AsyncMock())
+        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        # Whichever-present read sees the old dev build; the target-dist read
+        # sees nothing (stable not installed on this machine yet).
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "8.0.0.dev3")
+        monkeypatch.setattr(
+            es,
+            "_installed_dist_version",
+            lambda dist: "8.0.0.dev3" if dist == DEV_PIP_SPEC else None,
+        )
+        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
+
+        await mgr._async_ensure_package()
+
+        assert mgr._pip_spec == DIST_NAME_STABLE
 
     def test_auto_update_off_falls_back_to_unpinned_on_first_setup(
         self, tmp_path, monkeypatch
