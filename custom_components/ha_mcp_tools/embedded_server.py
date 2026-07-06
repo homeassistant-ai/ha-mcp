@@ -631,6 +631,22 @@ class EmbeddedServerManager:
         # uvicorn.Config defaults + _lifespan_manager), pinned by ha-mcp.
         import uvicorn
 
+        # fastmcp >= 3.4.3 ships an on-by-default Host/Origin (DNS-rebinding)
+        # guard that would 421 this in-process server's direct LAN listener
+        # (bind 0.0.0.0:9584 by default), reached on arbitrary hosts. Default it
+        # off to match the CLI / add-on entry points. Guard only the import: a
+        # bundled ha-mcp old enough to lack the helper also predates the guard,
+        # so there is nothing to disable.
+        try:
+            from ha_mcp.transport_security import (
+                ensure_host_origin_guard_default_off,
+            )
+        except ImportError:
+            # Older bundled ha-mcp: no helper, and no guard to disable either.
+            pass
+        else:
+            ensure_host_origin_guard_default_off()
+
         app = server.mcp.http_app(path=self._secret_path, stateless_http=True)
         config = uvicorn.Config(
             app,

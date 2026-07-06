@@ -783,6 +783,11 @@ def main() -> int:
         StatelessSessionLogFilter()
     )
 
+    # fastmcp's DNS-rebinding guard is defaulted off in ha_mcp's _create_server
+    # (reached above via _get_server() / the `mcp` proxy, before the app is
+    # built), so the addon -- ingress, direct port, and reverse proxies / tunnels
+    # on arbitrary hosts -- is covered. See ha_mcp.transport_security.
+
     # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
     # reach it inside the container; MCP_HOST override is provided for
     # parity with the standard CLI entry points (see issue #1434).
