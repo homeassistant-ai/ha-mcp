@@ -367,3 +367,68 @@ class TestServerOptionsFlow:
         assert "<your-home-assistant-url>" not in hint
         # The enable_webhook option is forwarded to the builder.
         assert calls and calls[0]["webhook_enabled"] is False
+
+    def _hint_with_stub_builder(self, builder, *, data, options=None):
+        """Call ``_connect_url_hint`` with ``build_connect_urls`` stubbed.
+
+        Injects a fake ``embedded_setup`` module so the flow's module-local
+        ``from .embedded_setup import build_connect_urls`` resolves to ``builder``
+        without importing the real module (which needs a full HA install).
+        """
+        stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
+        stub.build_connect_urls = builder
+        flow = _make_options_flow(data=data, options=options)
+        flow.hass = MagicMock()
+        orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
+        sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
+        try:
+            return flow._connect_url_hint()
+        finally:
+            if orig is None:
+                del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
+            else:
+                sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = orig
+
+    def test_connect_url_hint_falls_back_when_builder_raises(self):
+        # A resolution bug in build_connect_urls must not escape and take down
+        # the whole options form: the hint degrades to the placeholder form.
+        def boom_builder(hass, entry, *, webhook_enabled=True):
+            raise RuntimeError("resolution boom")
+
+        hint = self._hint_with_stub_builder(
+            boom_builder, data={"webhook_id": "mcp_abc", "secret_path": "/private_x"}
+        )
+        assert "<your-home-assistant-url>" in hint
+        assert "/api/webhook/mcp_abc" in hint
+
+    def test_connect_url_hint_falls_back_when_builder_returns_empty(self):
+        # An empty resolver result (nothing resolvable yet) also degrades to the
+        # placeholder form rather than an empty "Connect URL(s):" header.
+        def empty_builder(hass, entry, *, webhook_enabled=True):
+            return []
+
+        hint = self._hint_with_stub_builder(
+            empty_builder, data={"webhook_id": "mcp_abc", "secret_path": "/private_x"}
+        )
+        assert "<your-home-assistant-url>" in hint
+        assert "/api/webhook/mcp_abc" in hint
+
+    def test_connect_url_hint_local_only_never_shows_webhook_url(self):
+        """Webhook disabled + nothing resolvable: no dead webhook URL.
+
+        With remote access via webhook off, the webhook endpoint is never
+        registered - the fallback must state local-only mode with the real
+        loopback direct URL instead of rendering a webhook URL that 404s.
+        """
+
+        def empty_builder(hass, entry, *, webhook_enabled=True):
+            return []
+
+        hint = self._hint_with_stub_builder(
+            empty_builder,
+            data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
+            options={const.OPT_ENABLE_WEBHOOK: False, const.OPT_SERVER_PORT: 9999},
+        )
+        assert hint.startswith("Remote access via webhook is disabled")
+        assert "http://127.0.0.1:9999/private_x" in hint
+        assert "/api/webhook/" not in hint

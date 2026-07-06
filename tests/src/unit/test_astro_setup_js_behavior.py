@@ -73,7 +73,9 @@ def wizard_vars() -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def prelude(wizard_vars: dict[str, Any]) -> str:
-    return astro_vars_prelude(wizard_vars)
+    # `base` is injected via define:vars from import.meta.env.BASE_URL, which
+    # frontmatter extraction cannot evaluate - define it empty here.
+    return astro_vars_prelude(wizard_vars) + "\nconst base = '';"
 
 
 def _assert_clean_init(result: HarnessResult) -> None:
@@ -194,11 +196,21 @@ def _build_wizard_dom(wizard_vars: dict[str, Any]) -> str:
         for c in wizard_vars["clientsData"]
     )
     # Scope tiles — ids hardcoded (local | remote). `.scope-option`
-    # carries the hover-preview listeners in the real markup.
-    parts.extend(
-        f'<button data-scope="{sid}" class="scope-option">{sid}</button>'
-        for sid in ("local", "remote")
-    )
+    # carries the hover-preview listeners in the real markup. The remote
+    # tile embeds a `.complexity-badge` child (as the real markup does) so
+    # updateSections' badge relabel — Quick for ha-component, Advanced for
+    # the tunnel/proxy methods — has a target element to write into.
+    for sid in ("local", "remote"):
+        if sid == "remote":
+            parts.append(
+                f'<button data-scope="{sid}" class="scope-option">{sid}'
+                '<span class="complexity-badge" data-complexity="advanced">'
+                "Advanced</span></button>"
+            )
+        else:
+            parts.append(
+                f'<button data-scope="{sid}" class="scope-option">{sid}</button>'
+            )
     parts.extend(
         f'<button data-platform="{p["id"]}">{p["id"]}</button>'
         for p in wizard_vars["platformsData"]
@@ -517,3 +529,311 @@ class TestPerClientInstructionTemplate:
             f"probably bailed; "
             f"config_code={code_body!r}, instructions_len={instructions_len}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Remote-path tile filtering (updateSections -> remotePathsForMethod)
+# ---------------------------------------------------------------------------
+
+# The remote-path tiles surfaced for a given server method, keyed by the tile's
+# ``data-remote-path`` id and the camelCase body-dataset key each hidden-state
+# capture writes into.
+_REMOTE_PATH_TILES = {
+    "builtin-webhook": "builtinHidden",
+    "webhook-proxy": "proxyHidden",
+    "cloudflared": "cloudflaredHidden",
+    "custom": "customHidden",
+}
+
+
+def _remote_path_hidden_states(
+    setup_script: str, prelude: str, wizard_vars: dict[str, Any], method: str
+) -> dict[str, bool]:
+    """Drive ``method -> cursor -> remote`` and return ``{remote-path id: hidden}``.
+
+    Captures each remote-path tile's ``classList.contains('hidden')`` into a
+    body-dataset attr inside ``invoke`` (the live-DOM pattern the other tests
+    use) so the post-run serialized DOM carries the visibility decision.
+    """
+    capture = "".join(
+        f"document.body.dataset.{camel} = String("
+        f"document.querySelector('[data-remote-path=\"{pid}\"]')"
+        f".classList.contains('hidden'));\n"
+        for pid, camel in _REMOTE_PATH_TILES.items()
+    )
+    result = run_script(
+        setup_script,
+        prelude=prelude,
+        initial_html=_build_wizard_dom(wizard_vars),
+        invoke=(
+            _click("server-method", method)
+            + _click("client", "cursor")
+            + _click("scope", "remote")
+            + capture
+        ),
+    )
+    _assert_clean_init(result)
+    states: dict[str, bool] = {}
+    for pid, camel in _REMOTE_PATH_TILES.items():
+        attr = "data-" + re.sub(r"([A-Z])", r"-\1", camel).lower()
+        match = re.search(rf'{attr}="(true|false)"', result.dom)
+        assert match is not None, f"{attr} not captured for method {method!r}"
+        states[pid] = match.group(1) == "true"
+    return states
+
+
+class TestRemotePathFiltering:
+    """``updateSections`` shows only the remote-path tiles that apply to the
+    chosen server method (``remotePathsForMethod``); the rest are hidden. A tile
+    surfaced for the wrong method offers an instruction path that can't work.
+    """
+
+    def test_ha_component_shows_builtin_hides_proxy(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # ha-component's own webhook is built in; the webhook-proxy app is not
+        # its path, so that tile is hidden while builtin-webhook is shown.
+        states = _remote_path_hidden_states(
+            setup_script, prelude, wizard_vars, "ha-component"
+        )
+        assert states["builtin-webhook"] is False
+        assert states["webhook-proxy"] is True
+        assert states["cloudflared"] is False
+        assert states["custom"] is False
+
+    def test_ha_addon_shows_proxy_hides_builtin(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # The add-on has no built-in HA webhook; the webhook-proxy app is its
+        # first-class remote path, so the two swap visibility versus component.
+        states = _remote_path_hidden_states(
+            setup_script, prelude, wizard_vars, "ha-addon"
+        )
+        assert states["webhook-proxy"] is False
+        assert states["builtin-webhook"] is True
+        assert states["cloudflared"] is False
+        assert states["custom"] is False
+
+    def test_docker_hides_builtin_and_proxy(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # A raw docker/uvx HTTP server has neither an HA webhook nor the proxy
+        # app; only the generic tunnel/custom-proxy paths apply.
+        states = _remote_path_hidden_states(
+            setup_script, prelude, wizard_vars, "docker"
+        )
+        assert states["builtin-webhook"] is True
+        assert states["webhook-proxy"] is True
+        assert states["cloudflared"] is False
+        assert states["custom"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tile disable guards (incompatible method/client/scope combinations)
+# ---------------------------------------------------------------------------
+
+
+class TestTileDisableGuards:
+    """Picking a method or client disables the tiles that can't work with it,
+    so the user can't step into an unbuildable combination.
+    """
+
+    def test_stdio_local_disables_transportless_client(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # ChatGPT has no stdio transport (sse/streamable-http only); the local
+        # stdio server can't serve it, so its client tile is disabled.
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "stdio-local")
+                + "document.body.dataset.chatgptDisabled = String("
+                "document.querySelector('[data-client=\"chatgpt\"]').disabled);\n"
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-chatgpt-disabled="true"' in result.dom
+
+    def test_remote_only_client_disables_local_scope(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # Claude.ai is remote-only (requires HTTPS); once chosen, the local
+        # scope tile is disabled so it can't be paired with a LAN-only setup.
+        assert "claude-ai" in wizard_vars["remoteOnlyClients"], (
+            "test premise: claude-ai must be a remote-only client"
+        )
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-component")
+                + _click("client", "claude-ai")
+                + "document.body.dataset.localScopeDisabled = String("
+                "document.querySelector('[data-scope=\"local\"]').disabled);\n"
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-local-scope-disabled="true"' in result.dom
+
+
+# ---------------------------------------------------------------------------
+# uvx platform gating (needsPlatform for the server host OS)
+# ---------------------------------------------------------------------------
+
+
+class TestUvxPlatformGating:
+    """The uvx server method always needs the host OS, so config is gated behind
+    the platform step even for a full-transport client on local scope.
+    """
+
+    def test_uvx_local_gates_config_behind_platform(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        # uvx -> cursor -> local leaves config hidden (needsPlatform() fires on
+        # the uvx method) until an OS is chosen, then it unhides. Mirrors the
+        # mcp-proxy gating test: records visibility before AND after the click.
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "uvx")
+                + _click("client", "cursor")
+                + _click("scope", "local")
+                + """
+              document.body.dataset.beforePlatform = String(
+                document.getElementById('section-config').classList.contains('hidden')
+              );
+            """
+                + _click("platform", "linux")
+                + """
+              document.body.dataset.afterPlatform = String(
+                document.getElementById('section-config').classList.contains('hidden')
+              );
+            """
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-before-platform="true"' in result.dom, (
+            "config section should still be hidden before the uvx host OS is chosen"
+        )
+        assert 'data-after-platform="false"' in result.dom, (
+            "config section should be visible after the uvx host OS is chosen"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Start over (reset back to step 1)
+# ---------------------------------------------------------------------------
+
+
+class TestStartOver:
+    def test_start_over_hides_downstream_sections(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        """A full flow followed by Start Over collapses the wizard back to step
+        1: client / scope / config are all hidden again."""
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-component")
+                + _click("client", "cursor")
+                + _click("scope", "local")
+                + "document.getElementById('start-over').click();\n"
+            ),
+        )
+        _assert_clean_init(result)
+        for sid in ("section-client", "section-scope", "section-config"):
+            assert _section_has_hidden_class(result.dom, sid), (
+                f"#{sid} should be hidden again after Start Over"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Remote-scope complexity badge relabel (updateSections)
+# ---------------------------------------------------------------------------
+
+
+class TestRemoteScopeBadge:
+    def test_badge_is_quick_for_component_advanced_for_docker(
+        self, setup_script: str, prelude: str, wizard_vars: dict[str, Any]
+    ) -> None:
+        """ha-component makes remote access the easy path (its built-in webhook),
+        so the Remote scope badge reads 'Quick'; a tunnel/proxy method (docker)
+        relabels it 'Advanced'."""
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", "ha-component")
+                + "document.body.dataset.badgeAfterComponent = "
+                'document.querySelector(\'[data-scope="remote"] '
+                ".complexity-badge').textContent;\n"
+                + _click("server-method", "docker")
+                + "document.body.dataset.badgeAfterDocker = "
+                'document.querySelector(\'[data-scope="remote"] '
+                ".complexity-badge').textContent;\n"
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-badge-after-component="Quick"' in result.dom
+        assert 'data-badge-after-docker="Advanced"' in result.dom
+
+
+# ---------------------------------------------------------------------------
+# Tunnel port per server method (serverPort regression)
+# ---------------------------------------------------------------------------
+
+
+class TestTunnelPort:
+    """The cloudflared/tunnel instructions must target the port that matches the
+    server method — 9583 for the HA add-on, 8086 for a raw docker/uvx HTTP
+    server — never the other one. Pinned in both directions; the docker case
+    also click-drives the docker server-method branch.
+    """
+
+    @pytest.mark.parametrize(
+        "method, expected_port, wrong_port",
+        [
+            ("ha-addon", "localhost:9583", "localhost:8086"),
+            ("docker", "localhost:8086", "localhost:9583"),
+        ],
+        ids=["ha-addon", "docker"],
+    )
+    def test_cloudflared_targets_method_port(
+        self,
+        method: str,
+        expected_port: str,
+        wrong_port: str,
+        setup_script: str,
+        prelude: str,
+        wizard_vars: dict[str, Any],
+    ) -> None:
+        result = run_script(
+            setup_script,
+            prelude=prelude,
+            initial_html=_build_wizard_dom(wizard_vars),
+            invoke=(
+                _click("server-method", method)
+                + _click("client", "cursor")
+                + _click("scope", "remote")
+                + _click("remote-path", "cloudflared")
+                + "document.body.dataset.instructions = "
+                "document.getElementById('setup-instructions').innerHTML;\n"
+            ),
+        )
+        _assert_clean_init(result)
+        match = re.search(r'data-instructions="([^"]*)"', result.dom)
+        assert match is not None, "setup-instructions innerHTML was not captured"
+        instructions = match.group(1)
+        # `localhost:` prefix is deliberate: the cloudflared block also carries
+        # hardcoded bare `...:9583` HAOS-app examples, so a bare port substring
+        # would false-match. Only the `localhost:${serverPort}` lines vary.
+        assert expected_port in instructions
+        assert wrong_port not in instructions

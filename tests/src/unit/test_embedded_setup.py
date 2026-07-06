@@ -363,8 +363,8 @@ class TestSurfaceConnectUrls:
         )
         with caplog.at_level(logging.INFO):
             esetup._surface_connect_urls(hass, entry, "none")
-        assert "(direct access)" in caplog.text
-        assert ":9999/priv" in caplog.text
+        # Strengthened: the direct line names the resolved host, not just the port.
+        assert "http://192.168.1.5:9999/priv (direct access)" in caplog.text
 
     def test_default_bind_logs_direct_access_line(self, caplog):
         # LAN default (add-on parity): no explicit bind option -> the direct
@@ -376,8 +376,8 @@ class TestSurfaceConnectUrls:
         entry = _make_entry(data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/priv"})
         with caplog.at_level(logging.INFO):
             esetup._surface_connect_urls(hass, entry, "none")
-        assert "(direct access)" in caplog.text
-        assert ":9584/priv" in caplog.text
+        # Strengthened: the resolved host rides the default-port direct line.
+        assert "http://192.168.1.5:9584/priv (direct access)" in caplog.text
         assert "/priv" not in self._message()
 
     def test_loopback_bind_omits_direct_access_line(self, caplog):
@@ -407,7 +407,8 @@ class TestSurfaceConnectUrls:
         with caplog.at_level(logging.INFO):
             esetup._surface_connect_urls(hass, entry, "none", webhook_enabled=False)
         assert "/api/webhook/" not in caplog.text
-        assert "(direct access)" in caplog.text  # default LAN bind
+        # Strengthened: even in local-only mode the direct line names the host.
+        assert "http://192.168.1.5:9584/priv (direct access)" in caplog.text
         assert "disabled" in self._message()
 
     def test_cloud_import_error_falls_back_to_local_url(self, monkeypatch, caplog):
@@ -431,3 +432,52 @@ class TestSurfaceConnectUrls:
         with caplog.at_level(logging.INFO):
             esetup._surface_connect_urls(hass, entry, "none")
         assert "http://192.168.1.5:8123/api/webhook/mcp_id" in caplog.text
+
+
+class TestBuildConnectUrls:
+    """Direct coverage of ``build_connect_urls`` — the shared URL resolver that
+    ``_surface_connect_urls`` (log/notification) and the config flow's Configure
+    hint both call. Exercised here without the surfacing layer so the resolution
+    decisions (host, secret-path guard, webhook-disabled) are asserted directly.
+    """
+
+    def test_direct_access_line_carries_resolved_host(self):
+        # 0.0.0.0 bind: the direct-access URL must name the ACTUAL resolved host
+        # (from get_url), not a placeholder, so an admin can paste it verbatim.
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/private_x"},
+            options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
+        )
+        urls = esetup.build_connect_urls(hass, entry)
+        direct = [u for u in urls if "(direct access)" in u]
+        assert direct == ["http://192.168.1.5:9584/private_x (direct access)"]
+
+    def test_missing_secret_path_omits_direct_access_line(self):
+        # Guard added in this PR: a URL must never render without its secret
+        # segment, so a missing secret path drops the direct-access line entirely
+        # rather than emitting a credential-less (and therefore useless) URL.
+        _install_network_cloud(cloud_url=None, local_url="http://192.168.1.5:8123")
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id"},  # no DATA_SECRET_PATH
+            options={esetup.OPT_BIND_HOST: esetup.BIND_HOST_ALL},
+        )
+        urls = esetup.build_connect_urls(hass, entry)
+        assert not any("(direct access)" in u for u in urls)
+
+    def test_webhook_disabled_returns_no_webhook_urls(self):
+        # Local-only mode: the webhook is never registered, so no /api/webhook/
+        # URL may be surfaced — the external, Nabu Casa, and local webhook forms
+        # are all suppressed even though every source is otherwise available.
+        _install_network_cloud(
+            cloud_url="https://abc.ui.nabu.casa", local_url="http://192.168.1.5:8123"
+        )
+        hass = _make_hass()
+        entry = _make_entry(
+            data={DATA_WEBHOOK_ID: "mcp_id", DATA_SECRET_PATH: "/private_x"},
+            options={esetup.OPT_EXTERNAL_URL: "https://ha.example.com"},
+        )
+        urls = esetup.build_connect_urls(hass, entry, webhook_enabled=False)
+        assert not any("/api/webhook/" in u for u in urls)
