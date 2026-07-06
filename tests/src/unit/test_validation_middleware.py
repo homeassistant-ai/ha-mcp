@@ -33,6 +33,39 @@ def _make_mcp() -> FastMCP:
 
 
 @pytest.mark.asyncio
+async def test_wrapped_fastmcp_validation_error_is_structured():
+    """fastmcp >= 3.4.3 wraps an arg-validation pydantic error in
+    ``fastmcp.exceptions.ValidationError`` (chained via ``from e``); the
+    middleware must recover the pydantic cause and still emit a structured
+    ToolError. Version-independent: the wrapped error is synthesised, so this
+    exercises the 3.4.3 code path even on older fastmcp.
+    """
+    from fastmcp.exceptions import ValidationError as FastMCPValidationError
+    from pydantic import BaseModel
+    from pydantic import ValidationError as PydanticValidationError
+
+    class _Args(BaseModel):
+        config: dict
+
+    with pytest.raises(PydanticValidationError) as pyd_info:
+        _Args(config="{}")  # str where a dict is required -> dict_type error
+
+    wrapped = FastMCPValidationError(str(pyd_info.value))
+    wrapped.__cause__ = pyd_info.value
+
+    async def _raise_wrapped(_context):
+        raise wrapped
+
+    middleware = ValidationErrorMiddleware()
+    with pytest.raises(ToolError) as exc_info:
+        await middleware.on_call_tool(None, _raise_wrapped)
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "config" in msg
+    assert "JSON object" in msg
+
+
+@pytest.mark.asyncio
 async def test_string_for_dict_gives_actionable_message():
     """Passing a JSON string where a dict is expected raises a structured ToolError."""
     mcp = _make_mcp()
