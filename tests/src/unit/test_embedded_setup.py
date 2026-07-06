@@ -731,7 +731,11 @@ class TestComponentCompat:
 
         esetup.ir.async_create_issue.assert_not_called()
 
-    def test_read_min_component_version_skips_when_server_absent(self):
-        # ha_mcp is not installed in the unit tier, so the guarded import
-        # returns None rather than raising.
+    def test_read_min_component_version_skips_when_server_absent(self, monkeypatch):
+        # Simulate the server package being uninstalled regardless of the test
+        # environment (CI installs the real ha_mcp; the local stub tier does
+        # not): a None sys.modules entry makes the import raise ImportError,
+        # which the guarded read must translate into None rather than raising.
+        monkeypatch.setitem(sys.modules, "ha_mcp", None)
+        monkeypatch.delitem(sys.modules, "ha_mcp.tools.tools_filesystem", raising=False)
         assert esetup._read_min_component_version() is None
