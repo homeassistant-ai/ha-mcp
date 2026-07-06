@@ -107,6 +107,10 @@ class AwesomeVersion:
         return self._version
 
 
+class AwesomeVersionException(Exception):
+    """Stand-in for ``awesomeversion.AwesomeVersionException`` (its base)."""
+
+
 GROUP_ID_ADMIN = "system-admin"
 TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN = "long_lived_access_token"
 
@@ -333,7 +337,11 @@ def install() -> None:
     )
     # awesomeversion (bundled with HA at runtime) for version comparison in the
     # auto-update and component-compat checks.
-    setmod("awesomeversion", AwesomeVersion=AwesomeVersion)
+    setmod(
+        "awesomeversion",
+        AwesomeVersion=AwesomeVersion,
+        AwesomeVersionException=AwesomeVersionException,
+    )
     setmod(
         "homeassistant.setup",
         async_setup_component=AsyncMock(

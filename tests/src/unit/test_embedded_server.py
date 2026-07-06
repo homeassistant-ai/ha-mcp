@@ -189,19 +189,43 @@ class TestChannelResolution:
         )
         assert mgr._conflicting_dist_name() is None
 
-    def test_auto_update_off_pins_stable_to_installed(self, tmp_path, monkeypatch):
-        # Auto-update off: a non-override channel pins to the version currently
-        # installed so reloads keep exactly that build.
-        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.9.0")
+    def test_auto_update_off_pins_stable_to_installed(self, tmp_path):
+        # Auto-update off: a non-override channel pins to the passed installed
+        # version so reloads keep exactly that build. The version is passed in
+        # (not read) so _resolve_pip_spec never blocks the event loop.
         mgr, _hass, _entry = _manager(tmp_path, options={OPT_AUTO_UPDATE: False})
-        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.9.0"
+        # Construction defers the read: the initial spec is the bare dist.
+        assert mgr._pip_spec == DIST_NAME_STABLE
+        assert mgr._resolve_pip_spec("7.9.0") == f"{DIST_NAME_STABLE}==7.9.0"
 
-    def test_auto_update_off_pins_dev_to_installed(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.9.0.dev5")
+    def test_auto_update_off_pins_dev_to_installed(self, tmp_path):
         mgr, _hass, _entry = _manager(
             tmp_path, options={OPT_CHANNEL: CHANNEL_DEV, OPT_AUTO_UPDATE: False}
         )
-        assert mgr._pip_spec == f"{DEV_PIP_SPEC}==7.9.0.dev5"
+        assert mgr._pip_spec == DEV_PIP_SPEC
+        assert mgr._resolve_pip_spec("7.9.0.dev5") == f"{DEV_PIP_SPEC}==7.9.0.dev5"
+
+    async def test_ensure_package_repins_stable_from_installed_when_auto_off(
+        self, tmp_path, monkeypatch
+    ):
+        # The executor-read installed version re-pins the spec inside
+        # _async_ensure_package (off-loop), so the forced install targets the
+        # exact installed build.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_AUTO_UPDATE: False},
+            data={DATA_SECRET_PATH: "/p", DATA_LAST_PIP_SPEC: "stale"},
+        )
+        monkeypatch.setattr(es, "async_process_requirements", AsyncMock())
+        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
+
+        await mgr._async_ensure_package()
+
+        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.9.0"
 
     def test_auto_update_off_falls_back_to_unpinned_on_first_setup(
         self, tmp_path, monkeypatch

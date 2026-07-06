@@ -233,6 +233,9 @@ class TestServerOptionsFlow:
             data={const.DATA_WEBHOOK_ID: "mcp_abc"},
         )
         flow.hass = MagicMock()
+        # The server-version read is offloaded to the executor (blocking I/O);
+        # make the mock actually run the callable.
+        flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
         monkeypatch.setattr(
             cf,
             "async_get_integration",
@@ -249,6 +252,7 @@ class TestServerOptionsFlow:
         # failing and the server read raising both degrade to safe text.
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         flow.hass = MagicMock()
+        flow.hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
         monkeypatch.setattr(
             cf, "async_get_integration", AsyncMock(side_effect=RuntimeError("boom"))
         )

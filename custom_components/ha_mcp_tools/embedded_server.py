@@ -152,6 +152,10 @@ class EmbeddedServerManager:
         self._auto_update: bool = bool(
             options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)
         )
+        # Initial spec without the installed-version read (that would block the
+        # event loop). For an auto-update-off channel this is the bare dist here;
+        # _async_ensure_package re-resolves it with the executor-read version
+        # before installing.
         self._pip_spec: str = self._resolve_pip_spec()
         self._secret_path: str = str(entry.data.get(DATA_SECRET_PATH, ""))
         self._config_dir: str = hass.config.path(SERVER_CONFIG_SUBDIR)
@@ -267,7 +271,7 @@ class EmbeddedServerManager:
 
     # -- package install ---------------------------------------------------
 
-    def _resolve_pip_spec(self) -> str:
+    def _resolve_pip_spec(self, installed_version: str | None = None) -> str:
         """Return the effective pip requirement for the configured channel.
 
         An explicit override wins (any pip requirement string — a version pin, a
@@ -276,18 +280,21 @@ class EmbeddedServerManager:
 
         * auto-update ON (default): the bare, unpinned distribution name, so the
           newest build of the channel resolves at install time.
-        * auto-update OFF: the distribution pinned to the version currently
-          installed (``dist==X``), so reloads/restarts keep that exact version;
-          falls back to the unpinned name when nothing is installed yet (first
-          setup has no version to pin to, so it installs the newest once).
+        * auto-update OFF: the distribution pinned to ``installed_version``
+          (``dist==X``), so reloads/restarts keep that exact version; falls back
+          to the unpinned name when ``installed_version`` is None (nothing
+          installed yet — first setup has no version to pin to, so it installs
+          the newest once).
+
+        ``installed_version`` is passed in (never read here) so this stays a pure,
+        non-blocking function: the ``importlib.metadata`` read that discovers it
+        happens on the executor in :meth:`_async_ensure_package`, off the loop.
         """
         if self._pip_spec_override:
             return self._pip_spec_override
         dist = DEV_PIP_SPEC if self._channel == CHANNEL_DEV else DIST_NAME_STABLE
-        if not self._auto_update:
-            installed = _installed_dist_version(dist)
-            if installed is not None:
-                return f"{dist}=={installed}"
+        if not self._auto_update and installed_version is not None:
+            return f"{dist}=={installed_version}"
         return dist
 
     def _conflicting_dist_name(self) -> str | None:
@@ -336,6 +343,11 @@ class EmbeddedServerManager:
         installed_version = await self._hass.async_add_executor_job(
             _installed_ha_mcp_version
         )
+
+        # Re-resolve the spec now that the installed version is known off-loop:
+        # an auto-update-off channel pins to it here (the __init__ value was the
+        # bare dist to avoid a blocking read on the event loop).
+        self._pip_spec = self._resolve_pip_spec(installed_version)
 
         # A "stable" spec (an explicit override, or a channel pinned because
         # auto-update is off) is eligible for the fast path; an unpinned

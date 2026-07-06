@@ -339,7 +339,14 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 )
 
         try:
-            server_version = _installed_server_version() or "not installed yet"
+            # importlib.metadata scans dist-info via os.listdir (blocking I/O),
+            # so run it on the executor rather than the event loop.
+            raw_version = (
+                await hass.async_add_executor_job(_installed_server_version)
+                if hass is not None
+                else _installed_server_version()
+            )
+            server_version = raw_version or "not installed yet"
         except Exception as err:
             _LOGGER.debug("Could not read server version for the options hint: %s", err)
             server_version = "not installed yet"

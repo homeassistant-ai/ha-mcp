@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from aiohttp import ClientError
-from awesomeversion import AwesomeVersion
+from awesomeversion import AwesomeVersion, AwesomeVersionException
 from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
@@ -360,7 +360,9 @@ async def async_check_for_update(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
     try:
         newer = AwesomeVersion(latest) > AwesomeVersion(installed)
-    except Exception as err:  # awesomeversion raises on incomparable strategies
+    except AwesomeVersionException as err:
+        # Incomparable version strategies (e.g. a non-semver build string) — the
+        # only expected failure here. Real bugs (TypeError, etc.) propagate.
         _LOGGER.debug("HA-MCP auto-update version compare failed: %s", err)
         return
 
@@ -418,12 +420,21 @@ async def _async_check_component_compat(
     try:
         integration = await async_get_integration(hass, DOMAIN)
         own = str(integration.version)
-        outdated = AwesomeVersion(own) < AwesomeVersion(required)
     except Exception:
+        # The loader legitimately raises a wide, varied surface
+        # (IntegrationNotFound, manifest errors); advisory check, logged
+        # visibly with the traceback rather than swallowed silently.
         _LOGGER.warning(
-            "Could not evaluate HA-MCP component/server version compatibility",
+            "Could not read the HA-MCP component version for the compatibility check",
             exc_info=True,
         )
+        return
+
+    try:
+        outdated = AwesomeVersion(own) < AwesomeVersion(required)
+    except AwesomeVersionException as err:
+        # Incomparable version strategies only; real bugs propagate.
+        _LOGGER.debug("HA-MCP component-compat version compare failed: %s", err)
         return
 
     if outdated:
