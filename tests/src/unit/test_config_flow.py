@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -323,6 +323,47 @@ class TestServerOptionsFlow:
         # The LAN hint uses the CONFIGURED port, not the 9584 default.
         assert ":9999/private_x" in hint
 
-    def test_connect_url_hint_without_webhook_prompts_notification(self):
+    def test_connect_url_hint_before_start_points_at_log(self):
         flow = _make_options_flow(data={})
-        assert "notification" in flow._connect_url_hint().lower()
+        hint = flow._connect_url_hint().lower()
+        assert "once the server has started" in hint
+        assert "notification" not in hint
+
+    def test_connect_url_hint_resolves_actual_urls_via_builder(self):
+        """With hass available, the hint lists the REAL resolved URLs.
+
+        The builder import is module-local (``from .embedded_setup import
+        build_connect_urls``), so injecting a stub module into sys.modules
+        substitutes it without importing the real embedded_setup (which
+        needs a full Home Assistant install).
+        """
+        calls: list[dict] = []
+
+        def fake_builder(hass, entry, *, webhook_enabled=True):
+            calls.append({"hass": hass, "webhook_enabled": webhook_enabled})
+            return [
+                "https://example.duckdns.org/api/webhook/mcp_abc",
+                "http://192.168.1.150:9584/private_x (direct access)",
+            ]
+
+        stub = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
+        stub.build_connect_urls = fake_builder
+        flow = _make_options_flow(
+            options={const.OPT_ENABLE_WEBHOOK: False},
+            data={"webhook_id": "mcp_abc", "secret_path": "/private_x"},
+        )
+        flow.hass = MagicMock()
+        orig = sys.modules.get("custom_components.ha_mcp_tools.embedded_setup")
+        sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = stub
+        try:
+            hint = flow._connect_url_hint()
+        finally:
+            if orig is None:
+                del sys.modules["custom_components.ha_mcp_tools.embedded_setup"]
+            else:
+                sys.modules["custom_components.ha_mcp_tools.embedded_setup"] = orig
+        assert "https://example.duckdns.org/api/webhook/mcp_abc" in hint
+        assert "http://192.168.1.150:9584/private_x" in hint
+        assert "<your-home-assistant-url>" not in hint
+        # The enable_webhook option is forwarded to the builder.
+        assert calls and calls[0]["webhook_enabled"] is False

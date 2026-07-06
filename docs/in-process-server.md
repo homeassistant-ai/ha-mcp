@@ -86,9 +86,9 @@ as the add-on), bypassing the webhook, at the secret path (which looks like
 - **Direct LAN access:** `http://<home-assistant-ip>:9584/private_<random>`
 
 Set **Network access** to `127.0.0.1` to turn direct access off and keep only
-the webhook and panel paths. The remote and local webhook URLs are listed on
-the entry's Configure screen and in the Home Assistant log; the direct URL goes
-to the log whenever direct access is on.
+the webhook and panel paths. All connect URLs — the webhook forms and, whenever
+direct access is on, the direct URL — are listed on the entry's Configure
+screen and in the Home Assistant log.
 
 ## Settings panel ("HA-MCP" in the sidebar)
 

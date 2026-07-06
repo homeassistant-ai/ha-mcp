@@ -1543,7 +1543,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           </div>`)
           : `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Your connect URL (local)</p>
-            <p class="text-slate-400 text-xs mt-1">Use the direct LAN URL from the Home Assistant log: <code class="bg-slate-800 px-1 rounded">http://&lt;ha-ip&gt;:9584/private_&lt;random&gt;</code> (the entry's Configure screen shows the webhook URLs).</p>
+            <p class="text-slate-400 text-xs mt-1">Use the direct LAN URL from the entry's Configure screen (also in the Home Assistant log): <code class="bg-slate-800 px-1 rounded">http://&lt;ha-ip&gt;:9584/private_&lt;random&gt;</code>.</p>
             <p class="text-slate-400 text-xs mt-2"><strong class="text-slate-300">Want local-only?</strong> Turn off <strong>Remote access via webhook</strong> in the entry options — no webhook is registered at all; the direct port and sidebar panel keep working.</p>
           </div>`;
         deployInstr = `<div class="instruction-block">

@@ -18,6 +18,7 @@ configurable options flow (the tools entry aborts with ``no_options``).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import voluptuous as vol
@@ -73,6 +74,9 @@ _SERVER_ENTRY_TITLE = "HA-MCP Server"
 # The single-instance server entry's unique id — distinct from the tools entry's
 # unique id (``DOMAIN``) so both entry types coexist under the one domain.
 _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
@@ -282,14 +286,35 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         return cleaned
 
     def _connect_url_hint(self) -> str:
-        """Return a human-readable connect-URL hint for the options form."""
+        """Return the connect URLs for the options form.
+
+        The Configure screen is admin-only, so it shows the real resolved
+        URLs (the start-up notification deliberately does not - it is visible
+        to every signed-in user). Falls back to a placeholder form when
+        resolution is unavailable.
+        """
         webhook_id = self.config_entry.data.get(DATA_WEBHOOK_ID)
         secret_path = self.config_entry.data.get(DATA_SECRET_PATH)
         if not webhook_id:
             return (
-                "The remote connect URL will appear as a notification once the "
-                "server starts."
+                "The connect URLs appear here (and in the Home Assistant log) "
+                "once the server has started."
             )
+        hass = getattr(self, "hass", None)
+        if hass is not None:
+            try:
+                from .embedded_setup import build_connect_urls
+
+                webhook_enabled = bool(
+                    self.config_entry.options.get(OPT_ENABLE_WEBHOOK, True)
+                )
+                urls = build_connect_urls(
+                    hass, self.config_entry, webhook_enabled=webhook_enabled
+                )
+                if urls:
+                    return "Connect URL(s):\n" + "\n".join(f"- {u}" for u in urls)
+            except Exception as err:
+                _LOGGER.debug("Connect-URL resolution failed: %s", err)
         port = self.config_entry.options.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT)
         external = str(self.config_entry.options.get(OPT_EXTERNAL_URL) or "").rstrip(
             "/"

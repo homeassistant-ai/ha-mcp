@@ -17,6 +17,7 @@ import asyncio
 import logging
 from contextlib import suppress
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
@@ -126,17 +127,22 @@ async def async_revoke_credentials_on_remove(
     _clear_issues(hass)
 
 
-def _surface_connect_urls(
+def build_connect_urls(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    auth_mode: str,
     *,
     webhook_enabled: bool = True,
-) -> None:
-    """Log the connect URLs and (re)create a persistent notification with them."""
+) -> list[str]:
+    """Resolve the entry's connect URLs (webhook forms first, then direct).
+
+    Shared by the admin-only surfaces that show real URLs: the Home Assistant
+    log on start-up and the entry's Configure screen (the notification
+    deliberately carries none - it is visible to every signed-in user). Each
+    source is best-effort: a URL that cannot be resolved is omitted.
+    """
     from homeassistant.helpers.network import NoURLAvailableError, get_url
 
-    webhook_id = entry.data[DATA_WEBHOOK_ID]
+    webhook_id = entry.data.get(DATA_WEBHOOK_ID)
     urls: list[str] = []
     external = str(entry.options.get(OPT_EXTERNAL_URL) or "").rstrip("/")
     if not webhook_enabled:
@@ -164,9 +170,11 @@ def _surface_connect_urls(
     except ImportError:
         pass  # Cloud integration not installed (e.g. HA Core) - local URL only.
 
+    local_host: str | None = None
     try:
+        local_base = get_url(hass, allow_external=False, prefer_external=False)
+        local_host = urlparse(local_base).hostname
         if webhook_id:
-            local_base = get_url(hass, allow_external=False, prefer_external=False)
             urls.append(f"{local_base}/api/webhook/{webhook_id}")
     except NoURLAvailableError:
         pass  # No internal/local URL configured - fall through to the hint form.
@@ -176,6 +184,25 @@ def _surface_connect_urls(
 
     port = int(entry.options.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT))
     bind_host = str(entry.options.get(OPT_BIND_HOST, DEFAULT_BIND_HOST))
+    if bind_host == BIND_HOST_ALL:
+        # Direct-access URL: admin-gated surfaces only (log + Configure screen).
+        secret_path = entry.data.get(DATA_SECRET_PATH, "")
+        urls.append(
+            f"http://{local_host or '<home-assistant-ip>'}:{port}{secret_path}"
+            " (direct access)"
+        )
+    return urls
+
+
+def _surface_connect_urls(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    auth_mode: str,
+    *,
+    webhook_enabled: bool = True,
+) -> None:
+    """Log the connect URLs and (re)create a persistent notification."""
+    urls = build_connect_urls(hass, entry, webhook_enabled=webhook_enabled)
     auth_note = (
         "Webhook access is disabled (local-only mode)."
         if not webhook_enabled
@@ -184,13 +211,6 @@ def _surface_connect_urls(
         else "Clients authenticate with your Home Assistant account (ha_auth)."
     )
 
-    if bind_host == BIND_HOST_ALL:
-        # Direct-access URL goes to the LOG only (admin-gated), never the
-        # notification - see the security note below.
-        urls.append(
-            f"http://<home-assistant-ip>:{port}{entry.data[DATA_SECRET_PATH]}"
-            " (direct access)"
-        )
     url_lines = "\n".join(f"- {url}" for url in urls)
     _LOGGER.info(
         "HA-MCP in-process server is running. Connect URL(s):\n%s\n%s",
