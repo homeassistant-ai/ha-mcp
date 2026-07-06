@@ -1,7 +1,7 @@
 > **Breaking change (v7.3.0):** `ha_config_set_yaml` has been moved to [beta](docs/beta.md).
 
 <div align="center">
-  <img src="docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
+  <img src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/docs/img/ha-mcp-logo.png" alt="Home Assistant MCP Server Logo" width="300"/>
 
   # The Unofficial and Awesome Home Assistant MCP Server
 
@@ -28,7 +28,7 @@
 
 ---
 
-![Demo with Claude Desktop](docs/img/demo.webp)
+![Demo with Claude Desktop](https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/docs/img/demo.webp)
 
 ---
 
