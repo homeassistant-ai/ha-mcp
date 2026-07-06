@@ -8,7 +8,8 @@ This addon enables remote access to your HA MCP Server through any reverse proxy
 
 > **Using the HA-MCP custom component (in-process server)?** You do not need this
 > add-on — the component has its own built-in webhook for remote access. This
-> proxy is for the **add-on / Docker / pip** server installs.
+> proxy is for the **MCP Server add-on** (it can also front another external
+> server via the `mcp_server_url` option).
 
 ## Only one flavor runs at a time (dev vs stable)
 

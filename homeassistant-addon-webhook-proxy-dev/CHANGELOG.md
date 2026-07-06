@@ -15,7 +15,8 @@ history from before the fork.
 
 - Note that this proxy is unnecessary with the HA-MCP custom component's
   in-process server, which has its own built-in webhook for remote access.
-  The proxy remains for the add-on / Docker / pip server installs.
+  The proxy remains for the MCP Server add-on (and, via the
+  `mcp_server_url` option, other external servers).
 
 
 ## v1.2.3.dev5 (2026-07-04)

@@ -258,7 +258,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 <Layout title="Home Assistant MCP Setup Wizard">
   <Nav active="setup" />
 
-  <main id="main-content" tabindex="-1" class="focus:outline-none" data-base={base}>
+  <main id="main-content" tabindex="-1" class="focus:outline-none">
 
   <div class="container mx-auto px-4 py-8 max-w-4xl">
     <!-- Hero Section -->
@@ -966,10 +966,10 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
   }
 </style>
 
-<script define:vars={{ clientsData, platformsData, stdioOnlyClients, remoteOnlyClients }}>
-  // Site base path (e.g. /ha-mcp) for links built inside instruction templates —
-  // read from the DOM so preview builds with a different --base keep working.
-  const base = document.querySelector('main')?.dataset.base || '';
+<script define:vars={{ clientsData, platformsData, stdioOnlyClients, remoteOnlyClients, base }}>
+  // `base` is the site base path (import.meta.env.BASE_URL, e.g. /ha-mcp),
+  // injected via define:vars so links built inside instruction templates keep
+  // working when the site is built with a different --base.
 
   // State
   let state = {
@@ -1352,7 +1352,9 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 
     const derivedDeployment = isStdio ? null : method; // ha-component | ha-addon | docker | uvx
     const derivedPlatform = state.platform?.id || null;
-    const serverPort = isComponent ? '9584' : '8086';
+    // Port the tunnel/proxy instructions target: component 9584, add-on 9583,
+    // docker/uvx HTTP server 8086.
+    const serverPort = isComponent ? '9584' : isAddon ? '9583' : '8086';
 
     // Build summary badges
     const badges = [];

@@ -184,9 +184,11 @@ def build_connect_urls(
 
     port = int(entry.options.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT))
     bind_host = str(entry.options.get(OPT_BIND_HOST, DEFAULT_BIND_HOST))
-    if bind_host == BIND_HOST_ALL:
+    secret_path = entry.data.get(DATA_SECRET_PATH)
+    if bind_host == BIND_HOST_ALL and secret_path:
         # Direct-access URL: admin-gated surfaces only (log + Configure screen).
-        secret_path = entry.data.get(DATA_SECRET_PATH, "")
+        # Guarded on the secret path so a missing one omits the line instead of
+        # rendering a valid-looking URL without its credential segment.
         urls.append(
             f"http://{local_host or '<home-assistant-ip>'}:{port}{secret_path}"
             " (direct access)"

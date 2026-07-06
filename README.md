@@ -90,7 +90,7 @@ These run the server outside Home Assistant — useful for **Container** / **Cor
 <details>
 <summary><b>🌐 Remote access (Nabu Casa / Webhook Proxy add-on)</b></summary>
 
-> **Using the HA-MCP custom component?** You do not need this — the component has its own built-in webhook for remote access (see the **Get Started** quick start at the top). This proxy is for the **add-on / Docker / pip** server installs.
+> **Using the HA-MCP custom component?** You do not need this — the component has its own built-in webhook for remote access (see the **Get Started** quick start at the top). This proxy is for the **add-on** (it can also front another external server via its `mcp_server_url` option).
 
 Already have **Nabu Casa** or another reverse proxy pointing at your Home Assistant? The Webhook Proxy add-on routes MCP traffic through your existing setup — no separate tunnel or port forwarding needed.
 

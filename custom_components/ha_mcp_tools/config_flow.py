@@ -300,22 +300,36 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 "The connect URLs appear here (and in the Home Assistant log) "
                 "once the server has started."
             )
+        webhook_enabled = bool(self.config_entry.options.get(OPT_ENABLE_WEBHOOK, True))
+        port = self.config_entry.options.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT)
         hass = getattr(self, "hass", None)
         if hass is not None:
             try:
                 from .embedded_setup import build_connect_urls
 
-                webhook_enabled = bool(
-                    self.config_entry.options.get(OPT_ENABLE_WEBHOOK, True)
-                )
                 urls = build_connect_urls(
                     hass, self.config_entry, webhook_enabled=webhook_enabled
                 )
                 if urls:
                     return "Connect URL(s):\n" + "\n".join(f"- {u}" for u in urls)
             except Exception as err:
-                _LOGGER.debug("Connect-URL resolution failed: %s", err)
-        port = self.config_entry.options.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT)
+                # The hint is auxiliary display data: a resolution bug must not
+                # take down the whole options form, but the degradation should
+                # be visible by default - hence warning, not debug.
+                _LOGGER.warning(
+                    "Falling back to the placeholder connect-URL hint: %s", err
+                )
+        if not webhook_enabled:
+            # Local-only mode: the webhook endpoint is never registered, so
+            # a webhook URL here would 404. With loopback binding the builder
+            # resolves no URLs at all - state that instead of inventing one.
+            hint = "Remote access via webhook is disabled (local-only mode)."
+            if secret_path:
+                hint += (
+                    f"\nDirect access from the Home Assistant machine: "
+                    f"http://127.0.0.1:{port}{secret_path}"
+                )
+            return hint
         external = str(self.config_entry.options.get(OPT_EXTERNAL_URL) or "").rstrip(
             "/"
         )
