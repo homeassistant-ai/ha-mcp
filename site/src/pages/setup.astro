@@ -258,7 +258,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 <Layout title="Home Assistant MCP Setup Wizard">
   <Nav active="setup" />
 
-  <main id="main-content" tabindex="-1" class="focus:outline-none">
+  <main id="main-content" tabindex="-1" class="focus:outline-none" data-base={base}>
 
   <div class="container mx-auto px-4 py-8 max-w-4xl">
     <!-- Hero Section -->
@@ -283,7 +283,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <li>Install <strong>HA-MCP Custom Component</strong> from HACS, then restart Home Assistant.</li>
           <li>Go to <strong>Settings → Devices &amp; Services → Add Integration</strong>, search <strong>HA-MCP Custom Component</strong>, and choose <strong>HA-MCP Server</strong>.</li>
           <li>Submit — creating the entry starts the server.</li>
-          <li>Copy the connect URL from the <strong>HA-MCP Server</strong> notification (also shown on the entry's Configure screen).</li>
+          <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there; the URL is also printed in the Home Assistant log).</li>
           <li>Paste it into your AI client — pick the client below for its exact config.</li>
         </ol>
         <p class="text-slate-500 text-sm mt-4">Need client-specific config, or a different install method (add-on, Docker, uvx, or local stdio)? Use the setup wizard below.</p>
@@ -340,9 +340,9 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
           <button data-server-method="stdio-local" class="option-card-large">
             <div class="flex items-center gap-2 mb-2">
               <PlatformIcon icon="computer" size={22} class="text-[var(--text-secondary)]" />
-              <span class="complexity-badge" data-complexity="advanced">Advanced</span>
+              <span class="complexity-badge" data-complexity="advanced">Not recommended</span>
             </div>
-            <h3 class="font-semibold text-white">Local stdio (advanced)</h3>
+            <h3 class="font-semibold text-white">Local stdio</h3>
             <p class="text-sm text-slate-400">Legacy — known transport issues; fine for the demo server</p>
           </button>
         </div>
@@ -660,7 +660,7 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
         <span class="inline-flex rounded-full h-2 w-2 bg-slate-500"></span>
         Demo server (local stdio)
       </h2>
-      <p class="text-slate-500 text-sm mb-4">Prefer to run ha-mcp locally over stdio, or just try the public demo Home Assistant? These per-OS walkthroughs cover it. Advanced — stdio has known transport issues; not recommended for a permanent setup.</p>
+      <p class="text-slate-500 text-sm mb-4">Prefer to run ha-mcp locally over stdio, or just try the public demo Home Assistant? These per-OS walkthroughs cover it. stdio has known transport issues; not recommended for a permanent setup.</p>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl items-start">
         <details id="easy-macos" class="qs-details group">
           <summary class="quick-start-card">
@@ -967,6 +967,10 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 </style>
 
 <script define:vars={{ clientsData, platformsData, stdioOnlyClients, remoteOnlyClients }}>
+  // Site base path (e.g. /ha-mcp) for links built inside instruction templates —
+  // read from the DOM so preview builds with a different --base keep working.
+  const base = document.querySelector('main')?.dataset.base || '';
+
   // State
   let state = {
     method: null,      // ha-component | ha-addon | docker | uvx | stdio-local
@@ -1367,8 +1371,8 @@ const remoteOnlyClients = ['chatgpt', 'claude-ai'];
 
     // Add link to full guide for Claude Desktop + Local
     if (state.client?.id === 'claude-desktop' && isLocal) {
-      const guideUrl = state.platform?.id === 'macos' ? '/ha-mcp/guide-macos' :
-                       state.platform?.id === 'windows' ? '/ha-mcp/guide-windows' : null;
+      const guideUrl = state.platform?.id === 'macos' ? `${base}/guide-macos` :
+                       state.platform?.id === 'windows' ? `${base}/guide-windows` : null;
       if (guideUrl) {
         instructions.push(`<div class="instruction-block border-blue-700/50 bg-blue-900/10">
           <h3 class="instruction-title text-blue-300">Full Step-by-Step Guide Available</h3>
@@ -1530,16 +1534,16 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
           ? (state.remotePath === 'builtin-webhook'
               ? `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Your connect URL (built-in webhook)</p>
-            <p class="text-slate-400 text-xs mt-1">Use the webhook URL from the notification: <code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>. It works through Nabu Casa or any reverse proxy already pointed at Home Assistant — no separate tunnel or port forwarding. To use your own domain, set <strong>External URL</strong> in the integration options.</p>
+            <p class="text-slate-400 text-xs mt-1">Use the webhook URL from the entry's Configure screen: <code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>. It works through Nabu Casa or any reverse proxy already pointed at Home Assistant — no separate tunnel or port forwarding. To use your own domain, set <strong>External URL</strong> in the integration options.</p>
             <p class="text-slate-400 text-xs mt-2"><strong class="text-slate-300">Optional auth:</strong> set <strong>Webhook authentication</strong> to <code class="bg-slate-800 px-1 rounded">ha_auth</code> to require signing in with your Home Assistant account instead of relying on the secret URL.</p>
           </div>`
               : `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Your connect URL (via tunnel / reverse proxy)</p>
-            <p class="text-slate-400 text-xs mt-1">Point the tunnel or reverse proxy below at the component's own port (default <code class="bg-slate-800 px-1 rounded">9584</code>). Your MCP URL is then <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/private_&lt;random&gt;</code> using the direct-access path from the notification. For most setups the built-in webhook is simpler.</p>
+            <p class="text-slate-400 text-xs mt-1">Point the tunnel or reverse proxy below at the component's own port (default <code class="bg-slate-800 px-1 rounded">9584</code>). Your MCP URL is then <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/private_&lt;random&gt;</code> using the direct-access path from the Home Assistant log. For most setups the built-in webhook is simpler.</p>
           </div>`)
           : `<div class="bg-slate-800/50 border border-slate-700/50 rounded-lg p-3 mt-3">
             <p class="text-slate-300 text-sm font-medium">Your connect URL (local)</p>
-            <p class="text-slate-400 text-xs mt-1">Use the direct LAN URL from the notification: <code class="bg-slate-800 px-1 rounded">http://&lt;ha-ip&gt;:9584/private_&lt;random&gt;</code>.</p>
+            <p class="text-slate-400 text-xs mt-1">Use the direct LAN URL from the Home Assistant log: <code class="bg-slate-800 px-1 rounded">http://&lt;ha-ip&gt;:9584/private_&lt;random&gt;</code> (the entry's Configure screen shows the webhook URLs).</p>
             <p class="text-slate-400 text-xs mt-2"><strong class="text-slate-300">Want local-only?</strong> Turn off <strong>Remote access via webhook</strong> in the entry options — no webhook is registered at all; the direct port and sidebar panel keep working.</p>
           </div>`;
         deployInstr = `<div class="instruction-block">
@@ -1552,7 +1556,7 @@ ${secretPathEnv}uvx --from ha-mcp@latest ha-mcp-web</code></pre>
             <li>Install <strong>HA-MCP Custom Component</strong> from HACS (or copy <code class="bg-slate-800 px-1 rounded">custom_components/ha_mcp_tools/</code> into <code class="bg-slate-800 px-1 rounded">config/custom_components/</code>), then restart Home Assistant.</li>
             <li>Go to <strong>Settings → Devices &amp; Services → Add Integration</strong>, search <strong>HA-MCP Custom Component</strong>, and choose <strong>HA-MCP Server</strong>.</li>
             <li>Submit — creating the entry starts the server (the first start takes a little longer while it installs the package).</li>
-            <li>Copy the connect URL from the <strong>HA-MCP Server</strong> notification (also shown on the entry's Configure screen).</li>
+            <li>Copy the connect URL from the entry's <strong>Configure</strong> screen (a notification points you there; the URL is also printed in the Home Assistant log).</li>
             <li>Paste it into ${state.client.name} using the config below.</li>
           </ol>
           ${componentUrlGuidance}
@@ -2498,32 +2502,32 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the HA-MCP sidebar panel</h3>
         <p class="text-slate-300 mb-2">While the in-process server runs, the component adds an admin-only <strong>HA-MCP</strong> panel to the Home Assistant sidebar where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">Open it from the sidebar &mdash; no URL or secret needed. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-400 text-sm">Open it from the sidebar &mdash; no URL or secret needed. See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       } else if (isStdio) {
         const uiUrlPath = platformId === 'windows' ? '%USERPROFILE%\\.ha-mcp\\ui.url' : '~/.ha-mcp/ui.url';
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the settings page</h3>
         <p class="text-slate-300 mb-2">ha-mcp ships a local web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests. To find the URL, ask the AI something like <em>"how do I open the ha-mcp settings page?"</em> — it's included in <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>'s response.</p>
-        <p class="text-slate-400 text-sm">The URL is also written to <code class="bg-slate-800 px-1 rounded">${uiUrlPath}</code>. It's bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> and gated by a random secret path. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a> for all access methods and how to disable the sidecar.</p>
+        <p class="text-slate-400 text-sm">The URL is also written to <code class="bg-slate-800 px-1 rounded">${uiUrlPath}</code>. It's bound to <code class="bg-slate-800 px-1 rounded">127.0.0.1</code> and gated by a random secret path. See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a> for all access methods and how to disable the sidecar.</p>
       </div>`;
       } else if (isAddon || state.remotePath === 'webhook-proxy') {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the settings page</h3>
         <p class="text-slate-300 mb-2">The MCP Server app ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the app page (Home Assistant ingress &mdash; no secret needed). For direct or remote access it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the app's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the app page (Home Assistant ingress &mdash; no secret needed). For direct or remote access it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the app's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       } else if (isRemote) {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the settings page</h3>
         <p class="text-slate-300 mb-2">ha-mcp ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">It's served under the same secret path as your MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your public server URL using the secret path you set above, e.g. <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/&lt;secret-path&gt;/settings</code>. See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-400 text-sm">It's served under the same secret path as your MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your public server URL using the secret path you set above, e.g. <code class="bg-slate-800 px-1 rounded">https://&lt;your-host&gt;/&lt;secret-path&gt;/settings</code>. See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       } else {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the settings page</h3>
         <p class="text-slate-300 mb-2">ha-mcp ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">It's served by your MCP server under the same secret path as the MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your server URL (e.g. <code class="bg-slate-800 px-1 rounded">http://YOUR_IP:8086/mcp/settings</code> with the default secret path). See the <a href="/ha-mcp/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-400 text-sm">It's served by your MCP server under the same secret path as the MCP endpoint &mdash; append <code class="bg-slate-800 px-1 rounded">/settings</code> to your server URL (e.g. <code class="bg-slate-800 px-1 rounded">http://YOUR_IP:8086/mcp/settings</code> with the default secret path). See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       }
       instructions.push(settingsHint);
@@ -2558,7 +2562,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
     }
     if (!isStdio) {
       const urlHint = isComponent
-        ? 'the connect URL from the HA-MCP Server notification'
+        ? "the connect URL from the HA-MCP Server entry's Configure screen"
         : state.remotePath === 'webhook-proxy'
           ? 'your webhook proxy URL (from the webhook proxy app logs)'
           : 'your MCP server URL (from the deployment step above)';

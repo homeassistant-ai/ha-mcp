@@ -56,9 +56,12 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
    the **HA MCP Tools** services entry, use the same **Add Integration** flow;
    the two entries appear together under the one integration tile.)
 3. **Copy your connect URL.** As soon as the server starts, a notification titled
-   **HA-MCP Server** appears under **Settings → Notifications** with
-   the connect URL(s). The same URL is shown on the entry's **Configure** screen
-   and written to the Home Assistant log.
+   **HA-MCP Server** confirms it is running and points you to the URL. The
+   connect URL itself is on the entry's **Configure** screen (**Settings →
+   Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**)
+   and in the Home Assistant log — both admin-only surfaces, because the URL is
+   the credential. The notification deliberately carries no URL: notifications
+   are visible to every signed-in user.
 4. **Connect your MCP client** to that URL.
 
 To pause the server, **disable** its config entry (**Settings → Devices &
@@ -83,9 +86,9 @@ as the add-on), bypassing the webhook, at the secret path (which looks like
 - **Direct LAN access:** `http://<home-assistant-ip>:9584/private_<random>`
 
 Set **Network access** to `127.0.0.1` to turn direct access off and keep only
-the webhook and panel paths. The remote and local webhook URLs are listed in
-the notification and on the Configure screen; the direct URL is listed
-whenever direct access is on.
+the webhook and panel paths. The remote and local webhook URLs are listed on
+the entry's Configure screen and in the Home Assistant log; the direct URL goes
+to the log whenever direct access is on.
 
 ## Settings panel ("HA-MCP" in the sidebar)
 
@@ -157,7 +160,7 @@ the secret path) and the admin-only sidebar panel.
 If a connect URL may have leaked, open the entry's options and check
 **Regenerate connect secrets now**, then save - both the webhook secret and the
 direct-access path are re-minted on the spot and every old URL stops working.
-Update your MCP clients with the new URL from the notification. (Removing and
+Update your MCP clients with the new URL from the Configure screen. (Removing and
 re-adding the entry also rotates everything, including the internal token.)
 
 ## Security
@@ -196,12 +199,13 @@ See [SECURITY.md](../SECURITY.md) for the full threat model.
 
 The in-process server entry and the **HA MCP Tools** services entry are two
 config-entry types of the same **HA-MCP Custom Component** (`ha_mcp_tools`). They
-are independent: the server works on its own, but adding the tools services entry
-alongside it is recommended — it provides the privileged file and
-YAML-configuration services that ha-mcp's file tools use, exactly as it does for
-the add-on, Docker, and pip deployments. Add it from the same **Add Integration**
-menu (choose **HA MCP Tools**); it is optional and changes nothing about how the
-in-process server runs.
+are independent: the server works on its own, and most installs never need the
+tools entry. Add it only if you enable ha-mcp's opt-in file and YAML editing
+tools (feature flags, off by default) — those tools call the privileged services
+the tools entry registers, and that applies to every server type, including the
+in-process server. Add or remove it at any time from the same **Add Integration**
+menu (choose **HA MCP Tools**); it changes nothing about how the in-process
+server runs.
 
 ## First start takes a little longer
 
@@ -238,8 +242,8 @@ content); the tarball override is only meant for quick pre-release testing.
 log (**Settings → System → Logs**, or `home-assistant.log`). Its working data
 lives in `.ha_mcp/` under your Home Assistant config directory.
 
-**The connect URL isn't in the notification.** If Home Assistant cannot determine
-an external or internal URL, the notification and Configure screen show the
+**The Configure screen shows only a webhook path.** If Home Assistant cannot
+determine an external or internal URL, the Configure screen and log show the
 webhook path on its own (`/api/webhook/<webhook-id>`); prefix it with your Home
 Assistant URL. Set your internal/external URLs under **Settings → System →
 Network** so the full URL is shown.
