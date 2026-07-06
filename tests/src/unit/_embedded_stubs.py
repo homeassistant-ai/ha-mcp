@@ -67,6 +67,46 @@ class ClientError(Exception):
     """Stand-in for ``aiohttp.ClientError`` (must be a real Exception)."""
 
 
+class AwesomeVersion:
+    """Minimal stand-in for ``awesomeversion.AwesomeVersion``.
+
+    Compares by numeric release segments — enough for the clean semantic
+    versions the embedded-setup tests use (``7.9.0`` vs ``7.10.0``, ``0.11.0``
+    vs ``0.14.0``); pre/dev suffixes are ignored. ``__init__`` accepts a str or
+    another ``AwesomeVersion`` so the component code's ``AwesomeVersion(a) >
+    AwesomeVersion(b)`` works unchanged.
+    """
+
+    def __init__(self, version: Any) -> None:
+        self._version = str(version)
+
+    def _key(self) -> tuple[int, ...]:
+        import re
+
+        return tuple(int(n) for n in re.findall(r"\d+", self._version))
+
+    def __eq__(self, other: Any) -> bool:
+        return self._key() == AwesomeVersion(other)._key()
+
+    def __lt__(self, other: Any) -> bool:
+        return self._key() < AwesomeVersion(other)._key()
+
+    def __gt__(self, other: Any) -> bool:
+        return self._key() > AwesomeVersion(other)._key()
+
+    def __le__(self, other: Any) -> bool:
+        return self._key() <= AwesomeVersion(other)._key()
+
+    def __ge__(self, other: Any) -> bool:
+        return self._key() >= AwesomeVersion(other)._key()
+
+    def __hash__(self) -> int:
+        return hash(self._key())
+
+    def __str__(self) -> str:
+        return self._version
+
+
 GROUP_ID_ADMIN = "system-admin"
 TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN = "long_lived_access_token"
 
@@ -278,6 +318,22 @@ def install() -> None:
         async_delete_issue=MagicMock(name="async_delete_issue"),
         IssueSeverity=IssueSeverity,
     )
+    # aiohttp_client + event helpers for the periodic auto-update check
+    # (embedded_setup fetches PyPI; embedded_entry registers the interval).
+    setmod(
+        "homeassistant.helpers.aiohttp_client",
+        async_get_clientsession=MagicMock(name="async_get_clientsession"),
+    )
+    setmod(
+        "homeassistant.helpers.event",
+        async_track_time_interval=MagicMock(
+            name="async_track_time_interval",
+            return_value=MagicMock(name="cancel_interval"),
+        ),
+    )
+    # awesomeversion (bundled with HA at runtime) for version comparison in the
+    # auto-update and component-compat checks.
+    setmod("awesomeversion", AwesomeVersion=AwesomeVersion)
     setmod(
         "homeassistant.setup",
         async_setup_component=AsyncMock(

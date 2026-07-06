@@ -57,6 +57,7 @@ from .const import (
     DATA_REFRESH_TOKEN_ID,
     DATA_SECRET_PATH,
     DATA_SERVER_USER_ID,
+    DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
     DEFAULT_CHANNEL,
     DEFAULT_LOOPBACK_URL,
@@ -66,6 +67,7 @@ from .const import (
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
     DOMAIN,
+    OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
     OPT_CHANNEL,
     OPT_PIP_SPEC,
@@ -143,6 +145,12 @@ class EmbeddedServerManager:
         raw_pip_spec = str(options.get(OPT_PIP_SPEC) or "").strip()
         self._pip_spec_override: str = (
             raw_pip_spec if raw_pip_spec and raw_pip_spec != DEFAULT_PIP_SPEC else ""
+        )
+        # Auto-update toggle (default on). Off pins a non-override channel to the
+        # currently-installed version and disables the periodic check. Read
+        # before _resolve_pip_spec, which consults it.
+        self._auto_update: bool = bool(
+            options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)
         )
         self._pip_spec: str = self._resolve_pip_spec()
         self._secret_path: str = str(entry.data.get(DATA_SECRET_PATH, ""))
@@ -264,14 +272,23 @@ class EmbeddedServerManager:
 
         An explicit override wins (any pip requirement string — a version pin, a
         GitHub tarball URL — the pre-release test channel). Otherwise the channel
-        picks the distribution: ``dev`` → the unpinned ``ha-mcp-dev`` (latest dev
-        build), ``stable`` → the pinned ``ha-mcp==<PINNED>``.
+        picks the distribution (``dev`` → ``ha-mcp-dev``, ``stable`` → ``ha-mcp``):
+
+        * auto-update ON (default): the bare, unpinned distribution name, so the
+          newest build of the channel resolves at install time.
+        * auto-update OFF: the distribution pinned to the version currently
+          installed (``dist==X``), so reloads/restarts keep that exact version;
+          falls back to the unpinned name when nothing is installed yet (first
+          setup has no version to pin to, so it installs the newest once).
         """
         if self._pip_spec_override:
             return self._pip_spec_override
-        if self._channel == CHANNEL_DEV:
-            return DEV_PIP_SPEC
-        return DEFAULT_PIP_SPEC
+        dist = DEV_PIP_SPEC if self._channel == CHANNEL_DEV else DIST_NAME_STABLE
+        if not self._auto_update:
+            installed = _installed_dist_version(dist)
+            if installed is not None:
+                return f"{dist}=={installed}"
+        return dist
 
     def _conflicting_dist_name(self) -> str | None:
         """Return the other channel's distribution name, or None to skip.
@@ -288,17 +305,23 @@ class EmbeddedServerManager:
     async def _async_ensure_package(self) -> None:
         """Ensure ``ha-mcp`` is importable, installing the pip spec if needed.
 
-        Fast path: when the configured pip spec matches the one last installed
-        and the package imports, delegate the "already satisfied?" decision to
-        Home Assistant's requirements manager. Otherwise (spec changed — the
-        pre-release test channel — or the package is missing) force a real
-        reinstall that bypasses the requirements manager's is-installed shortcut,
-        so a changed spec actually takes effect.
-
-        The ``dev`` channel ALWAYS takes the force-install path so every entry
-        reload / HA restart picks up the newest ``ha-mcp-dev`` build. This runs in
-        a background task, so it never blocks HA startup, and uv no-ops quickly
+        With auto-update on (the default) both channels install their
+        distribution UNPINNED, so every entry reload / HA restart must pick up
+        the newest build. Such a spec ALWAYS takes the force-install path
+        (``upgrade=True``, bypassing the requirements manager's is-installed
+        shortcut) — that is what makes the channel auto-update. This runs in a
+        background task, so it never blocks HA startup, and uv no-ops quickly
         when the newest build is already installed.
+
+        Fast path: reserved for a STABLE spec — an explicit pip-spec override (a
+        version pin or tarball URL) or a channel with auto-update turned OFF
+        (which pins to the installed version, see :meth:`_resolve_pip_spec`).
+        When that spec matches the one last installed and the package imports,
+        delegate the "already satisfied?" decision to Home Assistant's
+        requirements manager; a pinned spec does not move, so there is nothing to
+        upgrade to. A CHANGED spec (a new override, a toggled auto-update, a
+        channel switch) still falls through to the force-install path below so
+        the change actually takes effect.
 
         On a channel switch the other channel's distribution is uninstalled first
         (:meth:`_async_remove_conflicting_dist`): ``ha-mcp`` and ``ha-mcp-dev``
@@ -314,8 +337,12 @@ class EmbeddedServerManager:
             _installed_ha_mcp_version
         )
 
+        # A "stable" spec (an explicit override, or a channel pinned because
+        # auto-update is off) is eligible for the fast path; an unpinned
+        # auto-updating channel never is.
+        spec_is_stable = bool(self._pip_spec_override) or not self._auto_update
         fast_path_ok = (
-            self._channel != CHANNEL_DEV
+            spec_is_stable
             and stored_spec == self._pip_spec
             and installed_version is not None
         )
@@ -337,7 +364,7 @@ class EmbeddedServerManager:
             self._store_installed_spec()
 
     async def _async_process_requirements_fast(self) -> None:
-        """Fast path: let HA's requirements manager satisfy the pinned spec."""
+        """Fast path: let HA's requirements manager satisfy the override spec."""
         try:
             await async_process_requirements(
                 self._hass,
@@ -722,6 +749,22 @@ def _dist_installed(dist_name: str) -> bool:
     except importlib.metadata.PackageNotFoundError:
         return False
     return True
+
+
+def _installed_dist_version(dist_name: str) -> str | None:
+    """Return the installed version of a SPECIFIC distribution, or None (blocking).
+
+    Invalidates the import caches first so a just-completed (un)install is seen.
+    Unlike :func:`_installed_ha_mcp_version` (which reports whichever of the two
+    channel distributions is present) this pins the given distribution name, so
+    the auto-update check compares the newest PyPI build against the version of
+    the channel actually installed.
+    """
+    importlib.invalidate_caches()
+    try:
+        return importlib.metadata.version(dist_name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 
 def _uninstall_distribution(dist_name: str) -> None:

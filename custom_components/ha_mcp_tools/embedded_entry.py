@@ -31,6 +31,7 @@ from .const import (
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
     OPT_WEBHOOK_ID_OVERRIDE,
+    UPDATE_CHECK_INTERVAL,
 )
 
 # NOTE: embedded_setup (and its embedded_server / mcp_webhook chain) is imported
@@ -42,6 +43,8 @@ from .const import (
 # modules they use.
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from homeassistant.config_entries import ConfigEntry
 
 
@@ -57,7 +60,9 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     """
     # Imported lazily (see the import note) so the aiohttp / auth / requirements
     # chain is pulled in only when an entry is actually set up.
-    from .embedded_setup import async_bring_up_server
+    from homeassistant.helpers.event import async_track_time_interval
+
+    from .embedded_setup import async_bring_up_server, async_check_for_update
     from .ui_panel import async_register_ui_panel
 
     _ensure_secrets(hass, entry)
@@ -79,6 +84,19 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     domain_data[DATA_BRINGUP_TASK] = task
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
+    # Periodic channel auto-update: poll PyPI for a newer server build and reload
+    # the entry (which reinstalls + restarts) when one is published, so a
+    # long-running instance tracks its channel without a manual restart. The
+    # check self-skips for a pip-spec override and before the first install, so
+    # registering it here (independent of bring-up completing) is safe. Cleaned
+    # up on unload via the returned cancel callback.
+    async def _scheduled_update_check(now: datetime) -> None:
+        await async_check_for_update(hass, entry)
+
+    entry.async_on_unload(
+        async_track_time_interval(hass, _scheduled_update_check, UPDATE_CHECK_INTERVAL)
+    )
     return True
 
 

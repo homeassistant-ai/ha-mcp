@@ -225,6 +225,57 @@ class TestServerOptionsFlow:
         assert form["step_id"] == "init"
         assert "mcp_abc" in form["description_placeholders"]["connect_url"]
 
+    def test_versions_placeholder_present_and_populated(self, monkeypatch):
+        # The Configure form carries a "versions" placeholder that names the
+        # component version (from the manifest) and the installed server version.
+        flow = _make_options_flow(
+            options={const.OPT_CHANNEL: const.CHANNEL_DEV},
+            data={const.DATA_WEBHOOK_ID: "mcp_abc"},
+        )
+        flow.hass = MagicMock()
+        monkeypatch.setattr(
+            cf,
+            "async_get_integration",
+            AsyncMock(return_value=SimpleNamespace(version="0.14.0")),
+        )
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: "7.9.0")
+
+        form = asyncio.run(flow.async_step_init(None))
+        versions = form["description_placeholders"]["versions"]
+        assert versions == "Component 0.14.0 - Server ha-mcp 7.9.0 (dev channel)"
+
+    def test_versions_placeholder_is_failure_proof(self, monkeypatch):
+        # A broken version read must not break the form: the component read
+        # failing and the server read raising both degrade to safe text.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        flow.hass = MagicMock()
+        monkeypatch.setattr(
+            cf, "async_get_integration", AsyncMock(side_effect=RuntimeError("boom"))
+        )
+
+        def _raise():
+            raise RuntimeError("metadata boom")
+
+        monkeypatch.setattr(cf, "_installed_server_version", _raise)
+
+        form = asyncio.run(flow.async_step_init(None))  # must not raise
+        versions = form["description_placeholders"]["versions"]
+        assert (
+            versions
+            == "Component unknown - Server ha-mcp not installed yet (stable channel)"
+        )
+
+    def test_versions_placeholder_server_not_installed_yet(self, monkeypatch):
+        # Before the server package is installed, the server half reads
+        # "not installed yet" rather than a bogus version.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        monkeypatch.setattr(cf, "_installed_server_version", lambda: None)
+        form = asyncio.run(flow.async_step_init(None))
+        versions = form["description_placeholders"]["versions"]
+        # No hass on the flow ⇒ component "unknown"; server not installed yet.
+        assert "not installed yet" in versions
+        assert versions.startswith("Component unknown")
+
     def test_channel_is_first_option_field(self):
         flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
         form = asyncio.run(flow.async_step_init(None))
@@ -239,12 +290,23 @@ class TestServerOptionsFlow:
         )
         assert channel.default() == const.CHANNEL_STABLE
 
+    def test_auto_update_defaults_on(self):
+        # The auto-update checkbox is present and defaults on (checked) when the
+        # option has never been saved.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        marker = next(
+            m for m in form["data_schema"].schema if m.schema == const.OPT_AUTO_UPDATE
+        )
+        assert marker.default() is True
+
     def test_form_prefills_every_field_from_saved_options(self):
         # Review gap: the form must show the user's SAVED values, not the
         # defaults, for every field (a regression here silently reverts a
         # user's config on the next save).
         saved = {
             const.OPT_CHANNEL: const.CHANNEL_DEV,
+            const.OPT_AUTO_UPDATE: False,
             const.OPT_SERVER_PORT: 12345,
             const.OPT_BIND_HOST: const.BIND_HOST_LOOPBACK,
             const.OPT_WEBHOOK_AUTH: const.WEBHOOK_AUTH_HA,

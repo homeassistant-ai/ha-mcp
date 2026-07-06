@@ -19,29 +19,59 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from aiohttp import ClientError
+from awesomeversion import AwesomeVersion
 from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.loader import async_get_integration
 
 from .const import (
     BIND_HOST_ALL,
+    CHANNEL_DEV,
     DATA_MANAGER,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
+    DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
+    DEFAULT_CHANNEL,
+    DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
+    DIST_NAME_DEV,
+    DIST_NAME_STABLE,
     DOMAIN,
+    ISSUE_COMPONENT_OUTDATED,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
+    OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
+    OPT_CHANNEL,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
+    OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_WEBHOOK_AUTH,
+    PYPI_JSON_URL,
     WEBHOOK_AUTH_NONE,
 )
-from .embedded_server import EmbeddedServerError, EmbeddedServerManager
+from .embedded_server import (
+    EmbeddedServerError,
+    EmbeddedServerManager,
+    _installed_dist_version,
+)
 from .mcp_webhook import async_register_webhook, async_unregister_webhook
+
+# Per-request timeout for the PyPI auto-update poll — short so a slow or wedged
+# PyPI never ties up the periodic check; a miss just retries next interval.
+_PYPI_TIMEOUT_SECONDS = 30
+
+# HACS "add repository" deep link for the custom component, surfaced as the
+# component-outdated repair issue's Learn More link so the fix is one click away.
+_HACS_COMPONENT_URL = (
+    "https://my.home-assistant.io/redirect/hacs_repository/"
+    "?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration"
+)
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -68,6 +98,12 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
 
     try:
         await manager.async_start()
+
+        # The package is installed and importable now: verify the running
+        # component satisfies the server's MIN_COMPONENT_VERSION and file/clear
+        # the component-outdated repair issue. Advisory only — it never blocks
+        # the (already started) server.
+        await _async_check_component_compat(hass, entry)
 
         auth_mode = str(entry.options.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE))
         secret_path = str(entry.data[DATA_SECRET_PATH])
@@ -125,6 +161,7 @@ async def async_revoke_credentials_on_remove(
     """Revoke the provisioned credentials when the config entry is removed."""
     await EmbeddedServerManager(hass, entry).async_revoke_credentials()
     _clear_issues(hass)
+    ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)
 
 
 def build_connect_urls(
@@ -272,3 +309,139 @@ def _clear_issues(hass: HomeAssistant) -> None:
     """Clear any previously-filed server-bring-up repair issues."""
     for issue_id in _ISSUE_IDS:
         ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+
+# ---------------------------------------------------------------------------
+# Automatic server-version updates (channel auto-update)
+# ---------------------------------------------------------------------------
+
+
+async def async_check_for_update(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry when the channel's PyPI dist has a newer build.
+
+    Registered on a periodic interval by the entry setup (:mod:`embedded_entry`).
+    Both channels are unpinned, so reloading reinstalls the newest build and
+    restarts the server — the actual upgrade happens on the reload path, not
+    here. Skips entirely when a pip-spec override is set (the user pinned a
+    specific build and opted out of auto-update).
+
+    Best-effort: an expected transient — a PyPI fetch error, a timeout, or an
+    unexpected payload shape — is logged at debug and swallowed (the next
+    interval retries). Genuine bugs propagate per the repo's no-silent-failure
+    convention.
+    """
+    if not bool(entry.options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)):
+        # Auto-update turned off: stay on the currently-installed version.
+        return
+
+    override = str(entry.options.get(OPT_PIP_SPEC) or "").strip()
+    if override and override != DEFAULT_PIP_SPEC:
+        return
+
+    channel = str(entry.options.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
+    dist = DIST_NAME_DEV if channel == CHANNEL_DEV else DIST_NAME_STABLE
+
+    try:
+        session = async_get_clientsession(hass)
+        async with asyncio.timeout(_PYPI_TIMEOUT_SECONDS):
+            async with session.get(PYPI_JSON_URL.format(dist=dist)) as resp:
+                resp.raise_for_status()
+                payload = await resp.json()
+        latest = payload["info"]["version"]
+    except (ClientError, TimeoutError, KeyError, ValueError) as err:
+        _LOGGER.debug("HA-MCP auto-update check skipped for %s: %s", dist, err)
+        return
+
+    installed = await hass.async_add_executor_job(_installed_dist_version, dist)
+    if installed is None:
+        # Not installed yet (the first bring-up may still be running) — nothing
+        # to compare; the bring-up path installs the newest build itself.
+        return
+
+    try:
+        newer = AwesomeVersion(latest) > AwesomeVersion(installed)
+    except Exception as err:  # awesomeversion raises on incomparable strategies
+        _LOGGER.debug("HA-MCP auto-update version compare failed: %s", err)
+        return
+
+    if newer:
+        _LOGGER.info(
+            "HA-MCP server update available on the %s channel (%s -> %s); "
+            "reloading the entry to install it.",
+            channel,
+            installed,
+            latest,
+        )
+        await hass.config_entries.async_reload(entry.entry_id)
+
+
+# ---------------------------------------------------------------------------
+# Component / server version-compatibility repair issue
+# ---------------------------------------------------------------------------
+
+
+def _read_min_component_version() -> str | None:
+    """Return the server's declared ``MIN_COMPONENT_VERSION``, or None (blocking).
+
+    Imported here (in an executor thread) so the heavy ``ha_mcp`` import stays
+    off the event loop and out of this module's top level. Guards older/newer
+    server layouts that do not expose the constant by returning None (skip).
+    """
+    try:
+        from ha_mcp.tools.tools_filesystem import MIN_COMPONENT_VERSION
+    except (ImportError, AttributeError):
+        return None
+    return str(MIN_COMPONENT_VERSION)
+
+
+async def _async_check_component_compat(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """File/clear the component-outdated repair issue for the running server.
+
+    The ha-mcp server declares the minimum custom-component version it needs
+    (``MIN_COMPONENT_VERSION``). HACS pushes a new server package ahead of a
+    component update, so the running component can lag what the server expects.
+    When it does, surface a WARNING repair issue pointing at the HACS component
+    update; clear it once the component is new enough.
+
+    Advisory only — it must never block or fail server startup, so an
+    unexpected error is logged (visible, not silent) and swallowed rather than
+    propagated to the bring-up's failure handling.
+    """
+    required = await hass.async_add_executor_job(_read_min_component_version)
+    if required is None:
+        # Server predates MIN_COMPONENT_VERSION, or a newer layout moved it —
+        # nothing to enforce.
+        return
+
+    try:
+        integration = await async_get_integration(hass, DOMAIN)
+        own = str(integration.version)
+        outdated = AwesomeVersion(own) < AwesomeVersion(required)
+    except Exception:
+        _LOGGER.warning(
+            "Could not evaluate HA-MCP component/server version compatibility",
+            exc_info=True,
+        )
+        return
+
+    if outdated:
+        _LOGGER.warning(
+            "The installed ha-mcp server requires HA-MCP Custom Component %s or "
+            "newer, but %s is running; update the component via HACS.",
+            required,
+            own,
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            ISSUE_COMPONENT_OUTDATED,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_COMPONENT_OUTDATED,
+            translation_placeholders={"required": required, "installed": own},
+            learn_more_url=_HACS_COMPONENT_URL,
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)

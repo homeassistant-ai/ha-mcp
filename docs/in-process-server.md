@@ -118,11 +118,12 @@ Configure there just reports that.)
 
 | Option | Default | What it does |
 |--------|---------|--------------|
-| **Release channel** | `stable` | `stable` installs the pinned, tested release; `dev` installs the latest development build, refreshed on every reload or restart. See [Release channels](#release-channels). |
+| **Release channel** | `stable` | `stable` installs the latest stable release; `dev` installs the latest development build. Both channels update automatically (a reload or restart, plus a periodic check, install the newest build of the selected channel). See [Release channels](#release-channels). |
+| **Automatic server updates** | on | When on, the selected channel's newest release is installed automatically (on reload/restart and via a periodic check). When off, the server stays on the version currently installed until you turn this back on. Governs the ha-mcp **server package** only — component updates still come through HACS. A package override below overrides this. |
 | **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the add-on's `9583` so an existing add-on install does not conflict. |
 | **Network access** | `0.0.0.0` | The default matches the add-on: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
 | **Webhook authentication** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. See [Security](#security). |
-| **ha-mcp package (advanced)** | the pinned stable release (for example `ha-mcp==7.9.0`; the pin follows every release automatically) | The pip requirement installed at runtime. Leave it unless you are testing a pre-release — it accepts any pip requirement string, including a GitHub tarball URL. An explicit value overrides the release channel, and changing it forces a reinstall on the next reload. |
+| **ha-mcp package (advanced)** | empty (tracks the selected release channel) | The pip requirement installed at runtime. Leave it empty unless you are testing a pre-release — it accepts any pip requirement string, including a version pin or a GitHub tarball URL. An explicit value overrides the release channel and **disables automatic updates** (a pin stays put until you clear it); changing it forces a reinstall on the next reload. |
 | **Home Assistant URL for the server (advanced)** | `http://127.0.0.1:8123` | How the in-process server reaches Home Assistant. The loopback default works for almost everyone; only change it for unusual SSL-only setups. |
 | **Remote access via webhook** | on | Turn off for local-only mode: the webhook is never registered, so Home Assistant (including Nabu Casa) cannot reach the server at all. Direct port access and the sidebar panel keep working. |
 | **External URL (optional)** | empty | Shown as the primary connect URL - for your own domain / reverse proxy (e.g. `https://ha.example.com`). Empty = Nabu Casa / local automatically. |
@@ -132,22 +133,36 @@ Configure there just reports that.)
 
 ### Release channels
 
-The **Release channel** option selects which build of the server is installed:
+The **Release channel** option selects which build of the server is installed.
+Both channels install unpinned and **update automatically**:
 
-- **`stable` (default):** the pinned `ha-mcp` release. Its version is kept in
-  lockstep with the project's releases by the release pipeline, so it only
-  changes when you update the component (and restart Home Assistant).
+- **`stable` (default):** the latest `ha-mcp` release from PyPI.
 - **`dev`:** the latest development build, published to PyPI as `ha-mcp-dev` on
-  every change to the project's main branch. Because it moves quickly, the
-  server reinstalls the newest dev build on every entry reload and Home Assistant
-  restart — so a restart always lands on the current dev build. Use it to try
-  upcoming fixes, and expect the occasional rough edge.
+  every change to the project's main branch. Use it to try upcoming fixes, and
+  expect the occasional rough edge.
+
+While **Automatic server updates** is on (the default), both channels install
+unpinned: an entry reload or a Home Assistant restart always reinstalls the
+newest build of the selected channel, and on top of that the component checks
+PyPI for a newer build every 6 hours and reloads the entry automatically when
+one is published — so a long-running instance picks up releases without a
+restart. Turn **Automatic server updates** off to freeze the server on the
+version currently installed: the periodic check stops and reloads/restarts keep
+that exact version until you turn it back on (this governs the server package
+only — component updates still arrive through HACS). Setting the **ha-mcp
+package (advanced)** field overrides the channel entirely (pin a version, or
+install from a URL for pre-release testing) and also disables automatic updates
+until you clear it.
 
 Switching channels reinstalls the server from the other channel on the next
 reload. `ha-mcp` and `ha-mcp-dev` share the same import package, so the previous
 channel's package is uninstalled first — only one is ever installed at a time.
-The **ha-mcp package (advanced)** field overrides the channel entirely: set it to
-pin a specific version or install from a URL for pre-release testing.
+
+If the installed server needs a newer version of the custom component than the
+one you have (HACS can deliver a server build before you update the component),
+a repair issue titled **Update the HA-MCP Custom Component via HACS** appears
+under **Settings → Repairs** with a link to the HACS update. The server keeps
+running; update the component via HACS to clear it.
 
 ### Local-only mode
 

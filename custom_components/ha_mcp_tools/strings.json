@@ -29,9 +29,10 @@
         "step": {
             "init": {
                 "title": "HA-MCP Server",
-                "description": "Configure the HA-MCP server. Open the [HA-MCP settings panel](/ha-mcp) for tool management and server settings. Changes here are applied on save.\n\n{connect_url}",
+                "description": "Configure the HA-MCP server. Open the [HA-MCP settings panel](/ha-mcp) for tool management and server settings. Changes here are applied on save.\n\n{versions}\n\n{connect_url}",
                 "data": {
                     "channel": "Release channel",
+                    "auto_update": "Automatic server updates",
                     "server_port": "MCP server listening port",
                     "bind_host": "Network access",
                     "webhook_auth": "Authentication mode",
@@ -44,11 +45,12 @@
                     "enable_webhook": "Remote access via webhook"
                 },
                 "data_description": {
-                    "channel": "Stable is the pinned, tested release. Development installs the newest build and refreshes it on every reload or restart. A developer package override below takes precedence over this.",
+                    "channel": "Stable installs the latest stable release; Development installs the newest development build. When automatic updates are on, a reload or restart, plus a periodic check, install the newest build of the selected channel. A developer package override below takes precedence and disables automatic updates.",
+                    "auto_update": "When on, the newest release of the selected channel is installed automatically - on a reload or restart, and via a periodic check. When off, the server stays on the version currently installed until you turn this back on. This controls the ha-mcp server package only; updates to the HA-MCP Custom Component itself still come through HACS.",
                     "server_port": "The port this server listens on. The ha-mcp add-on uses 9583, so this defaults to 9584 to let both run side by side - if you don't run the add-on, any free port works.",
                     "bind_host": "Who can connect to the MCP server port directly. The default matches the add-on: reachable on your local network, with the secret path as the credential. Choose loopback to allow only connections from the Home Assistant machine itself - the webhook URL and the sidebar panel work either way.",
                     "webhook_auth": "How MCP clients prove themselves at the webhook URL. With the secret URL, the link itself is the credential. With Home Assistant sign-in, clients such as claude.ai log in with a Home Assistant administrator account (OAuth).",
-                    "pip_spec": "Leave empty. Only for testing a specific ha-mcp build (for example a pre-release pin); overrides the release channel until cleared.",
+                    "pip_spec": "Leave empty. Only for testing a specific ha-mcp build (for example a pre-release pin); overrides the release channel and disables automatic updates until cleared.",
                     "server_url": "The URL the in-process server uses to reach your Home Assistant (usually this instance itself). Leave the default unless you know you need a different route.",
                     "external_url": "Shown as the primary connect URL - use this when Home Assistant sits behind your own domain or reverse proxy. Enter the full base address including the scheme. Leave empty to use Nabu Casa / the local address automatically.",
                     "webhook_id_override": "Replaces the random webhook secret in the connect URL (/api/webhook/...). The URL is the credential - use a long, hard-to-guess value. Leave empty to keep the current one.",
@@ -67,6 +69,10 @@
         "server_package_install_failed": {
             "title": "The HA-MCP in-process server package could not be installed",
             "description": "Installing the ha-mcp package for the in-process server failed:\n\n{detail}\n\nCheck the Home Assistant logs and network connectivity, then reload the integration to retry."
+        },
+        "component_outdated": {
+            "title": "Update the HA-MCP Custom Component via HACS",
+            "description": "The installed ha-mcp server requires HA-MCP Custom Component {required} or newer, but you have {installed}. Update the component via HACS and restart Home Assistant. The server keeps running in the meantime, but some newer features may not work until the component is updated."
         }
     },
     "selector": {

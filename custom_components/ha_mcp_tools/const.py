@@ -14,6 +14,7 @@ block was folded in from the former standalone ``ha_mcp_server`` integration.
 """
 
 import re
+from datetime import timedelta
 
 DOMAIN = "ha_mcp_tools"
 
@@ -182,37 +183,57 @@ RESERVED_DASHBOARD_URL_PATHS = frozenset(
 # ``DOMAIN`` (distinct hass.data sub-keys, distinct entry unique_id).
 # ---------------------------------------------------------------------------
 
-# The pinned ha-mcp release installed at runtime via
-# homeassistant.requirements.async_process_requirements. Kept in lockstep with
-# pyproject.toml's project.version. The options flow's advanced "pip requirement"
-# field overrides this with any pip spec (e.g. a GitHub tarball URL) for
-# pre-release testing.
-# Managed by semantic-release (pyproject version_variables): bumped to the
-# released server version on every release so the stable channel always
-# installs the same ha-mcp version the add-on ships.
-PINNED_HA_MCP_VERSION = "7.9.0"
-
-# PyPI distribution names. Stable ships as ``ha-mcp`` (pinned above); the dev
-# channel ships as ``ha-mcp-dev`` — published on every master push, unpinned so
-# the newest dev build resolves at install time. Both wheels contain the *same*
-# ``ha_mcp`` import package (publish-dev.yml only renames the distribution), so
-# only one may be installed at a time — see EmbeddedServerManager's channel-
-# switch handling.
+# PyPI distribution names. Stable ships as ``ha-mcp``; the dev channel ships as
+# ``ha-mcp-dev`` — published on every master push. BOTH are installed unpinned,
+# so every install / reload resolves the newest build of the selected channel
+# (the component auto-updates the server rather than pinning a lockstep version
+# — see ``UPDATE_CHECK_INTERVAL`` and
+# ``EmbeddedServerManager._async_ensure_package``). Both wheels contain the
+# *same* ``ha_mcp`` import package (publish-dev.yml only renames the
+# distribution), so only one may be installed at a time — see
+# EmbeddedServerManager's channel-switch handling.
 DIST_NAME_STABLE = "ha-mcp"
 DIST_NAME_DEV = "ha-mcp-dev"
 
-DEFAULT_PIP_SPEC = f"{DIST_NAME_STABLE}=={PINNED_HA_MCP_VERSION}"
+# Default pip requirement for the stable channel: the unpinned ``ha-mcp``
+# distribution, so each install resolves the newest stable release. The options
+# flow's advanced "pip requirement" field overrides this with any pip spec
+# (e.g. a version pin or a GitHub tarball URL) for pre-release testing — an
+# explicit override also disables automatic updates.
+DEFAULT_PIP_SPEC = DIST_NAME_STABLE
 DEV_PIP_SPEC = DIST_NAME_DEV
 
-# Release channels (options-flow selector). ``stable`` installs the pinned
-# DEFAULT_PIP_SPEC; ``dev`` installs the latest ha-mcp-dev, refreshed on every
-# entry reload / HA restart. An explicit OPT_PIP_SPEC override wins over both.
+# Release channels (options-flow selector). ``stable`` installs the unpinned
+# ``ha-mcp`` and ``dev`` installs the unpinned ``ha-mcp-dev``; both refresh to
+# the newest build of that channel on every entry reload / HA restart, and the
+# periodic auto-update check reloads the entry when PyPI publishes a newer one.
+# An explicit OPT_PIP_SPEC override wins over both and disables auto-update.
 CHANNEL_STABLE = "stable"
 CHANNEL_DEV = "dev"
 DEFAULT_CHANNEL = CHANNEL_STABLE
 
+# Automatic server-version updates. Both channels are unpinned, so an entry
+# reload / HA restart already reinstalls the newest build; on top of that the
+# component polls PyPI on this interval and reloads the entry when a newer build
+# is published, so a long-running instance picks up releases without a restart.
+# An explicit pip-spec override disables the check, as does turning off the
+# ``auto_update`` option (OPT_AUTO_UPDATE).
+UPDATE_CHECK_INTERVAL = timedelta(hours=6)
+
+# PyPI JSON API for the latest published version of a distribution. ``{dist}``
+# is DIST_NAME_STABLE or DIST_NAME_DEV depending on the selected channel.
+PYPI_JSON_URL = "https://pypi.org/pypi/{dist}/json"
+
 # Options-flow keys (stored in entry.options).
 OPT_CHANNEL = "channel"
+# Automatic server-version updates toggle (default on). When on, the channel is
+# unpinned and auto-updates (force-install on reload/restart + the periodic
+# check). When off, the server stays on the version currently installed:
+# _resolve_pip_spec pins the channel's dist to that version and the periodic
+# check is skipped. Governs the ha-mcp server package only — component updates
+# still come through HACS. An explicit OPT_PIP_SPEC override wins over both.
+OPT_AUTO_UPDATE = "auto_update"
+DEFAULT_AUTO_UPDATE = True
 OPT_SERVER_PORT = "server_port"
 OPT_BIND_HOST = "bind_host"
 OPT_WEBHOOK_AUTH = "webhook_auth"
@@ -291,3 +312,8 @@ OAUTH_BASE = "/api/ha_mcp_tools/oauth"
 # Repair-issue ids surfaced when server bring-up fails.
 ISSUE_PACKAGE_FAILED = "server_package_install_failed"
 ISSUE_START_FAILED = "server_start_failed"
+# Repair issue surfaced when the installed ha-mcp server requires a newer
+# custom component than the one running. HACS pushes the server package ahead
+# of a component update, so the running component can lag what the server
+# expects; this points the user at the HACS component update (non-blocking).
+ISSUE_COMPONENT_OUTDATED = "component_outdated"

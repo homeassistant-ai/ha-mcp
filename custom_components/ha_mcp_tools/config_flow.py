@@ -35,6 +35,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorConfig,
     SelectSelectorMode,
 )
+from homeassistant.loader import async_get_integration
 
 from .const import (
     BIND_HOST_ALL,
@@ -44,14 +45,18 @@ from .const import (
     CONF_ENTRY_TYPE,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
+    DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
     DEFAULT_CHANNEL,
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
+    DIST_NAME_DEV,
+    DIST_NAME_STABLE,
     DOMAIN,
     ENTRY_TYPE_SERVER,
     ENTRY_TYPE_TOOLS,
+    OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
     OPT_CHANNEL,
     OPT_ENABLE_WEBHOOK,
@@ -77,6 +82,23 @@ _SERVER_UNIQUE_ID = f"{DOMAIN}-server"
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _installed_server_version() -> str | None:
+    """Return the installed ha-mcp server version, or None if not installed.
+
+    Checks both channel distributions (only one is ever installed at a time).
+    Kept dependency-free (``importlib.metadata``) and swallow-nothing-surprising
+    so a read can never break the options form.
+    """
+    import importlib.metadata
+
+    for dist in (DIST_NAME_STABLE, DIST_NAME_DEV):
+        try:
+            return importlib.metadata.version(dist)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return None
 
 
 class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
@@ -190,6 +212,10 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     )
                 ),
                 vol.Required(
+                    OPT_AUTO_UPDATE,
+                    default=bool(opts.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)),
+                ): bool,
+                vol.Required(
                     OPT_SERVER_PORT,
                     default=opts.get(OPT_SERVER_PORT, DEFAULT_SERVER_PORT),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
@@ -227,7 +253,8 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 vol.Optional(
                     OPT_PIP_SPEC,
                     # ``or DEFAULT_PIP_SPEC`` so a stored-empty spec (the normalized
-                    # "no override" state) re-displays the pinned default as a hint.
+                    # "no override" state) re-displays the default (the unpinned
+                    # stable distribution) as a hint.
                     default=opts.get(OPT_PIP_SPEC) or DEFAULT_PIP_SPEC,
                 ): str,
                 vol.Optional(
@@ -259,19 +286,22 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="init",
             data_schema=schema,
-            description_placeholders={"connect_url": self._connect_url_hint()},
+            description_placeholders={
+                "versions": await self._versions_hint(),
+                "connect_url": self._connect_url_hint(),
+            },
         )
 
     @staticmethod
     def _normalize(user_input: dict[str, Any]) -> dict[str, Any]:
-        """Store the pinned default pip spec as empty so it is not an override.
+        """Collapse the default pip spec to empty so it is not stored as an override.
 
-        The pip-spec field is pre-filled with ``DEFAULT_PIP_SPEC``, whose version
-        moves with each release. Persisting that value verbatim would later read
-        as an intentional pin once the default changes, freezing a stable-channel
-        entry on the old version. Collapsing "equals the default" to empty keeps
-        the entry tracking the selected channel across upgrades; a genuine
-        override (any other string) is stored as-is.
+        The pip-spec field is pre-filled with ``DEFAULT_PIP_SPEC`` (the unpinned
+        ``ha-mcp`` distribution) as a hint. Persisting that value verbatim would
+        read as an intentional override and disable the stable channel's
+        automatic updates. Collapsing "equals the default" (or empty) to empty
+        keeps the entry tracking the selected channel; a genuine override (any
+        other string) is stored as-is.
         """
         cleaned = dict(user_input)
         if cleaned.get(OPT_PIP_SPEC, "").strip() in ("", DEFAULT_PIP_SPEC):
@@ -284,6 +314,40 @@ class HaMcpServerOptionsFlow(OptionsFlow):
             cleaned[key] = str(cleaned.get(key, "") or "").strip()
         cleaned[OPT_EXTERNAL_URL] = cleaned[OPT_EXTERNAL_URL].rstrip("/")
         return cleaned
+
+    async def _versions_hint(self) -> str:
+        """Return a one-line component + server version summary for the form.
+
+        Reads the component version from the integration manifest and the
+        installed server version from the channel's distribution metadata.
+        Failure-proof like the connect-URL hint: any read error degrades to a
+        best-effort string ("unknown" / "not installed yet") rather than
+        breaking the options form.
+        """
+        opts = self.config_entry.options
+        channel = str(opts.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
+
+        component_version = "unknown"
+        hass = getattr(self, "hass", None)
+        if hass is not None:
+            try:
+                integration = await async_get_integration(hass, DOMAIN)
+                component_version = str(integration.version)
+            except Exception as err:
+                _LOGGER.debug(
+                    "Could not read component version for the options hint: %s", err
+                )
+
+        try:
+            server_version = _installed_server_version() or "not installed yet"
+        except Exception as err:
+            _LOGGER.debug("Could not read server version for the options hint: %s", err)
+            server_version = "not installed yet"
+
+        return (
+            f"Component {component_version} - "
+            f"Server ha-mcp {server_version} ({channel} channel)"
+        )
 
     def _connect_url_hint(self) -> str:
         """Return the connect URLs for the options form.
