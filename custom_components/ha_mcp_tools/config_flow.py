@@ -99,7 +99,7 @@ class HaMcpToolsConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
         """Choose which entry type to add: the services tools or the server."""
         return self.async_show_menu(
             step_id="user",
-            menu_options=[ENTRY_TYPE_TOOLS, ENTRY_TYPE_SERVER],
+            menu_options=[ENTRY_TYPE_SERVER, ENTRY_TYPE_TOOLS],
         )
 
     # -- tools entry: privileged file / YAML services -----------------------

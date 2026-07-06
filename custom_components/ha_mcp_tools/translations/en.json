@@ -3,15 +3,15 @@
         "step": {
             "user": {
                 "title": "HA-MCP Custom Component",
-                "description": "Choose what to add. **HA MCP Tools** enables the privileged file and YAML configuration services used by ha-mcp. **HA-MCP Server** runs the full ha-mcp server inside Home Assistant and exposes it remotely through a webhook. You can add both.",
+                "description": "Choose what to add. **HA-MCP Server** runs the full ha-mcp server inside Home Assistant and exposes it through a Home Assistant webhook - this is the install most people want. **HA MCP Tools** adds the privileged file and YAML editing services, which are only needed if you turn on ha-mcp's opt-in file/YAML tools; you can add it later at any time.",
                 "menu_options": {
-                    "tools": "HA MCP Tools (file & YAML services)",
-                    "server": "HA-MCP Server"
+                    "server": "HA-MCP Server (recommended)",
+                    "tools": "HA MCP Tools (optional file & YAML services)"
                 }
             },
             "tools": {
                 "title": "HA MCP Tools",
-                "description": "Sets up the file and YAML configuration services used by ha-mcp. To also run the MCP server inside Home Assistant, add the HA-MCP Server entry afterwards from the same Add Integration menu."
+                "description": "Sets up the privileged file and YAML configuration services. Only needed if you enable ha-mcp's opt-in file/YAML editing tools (feature flags, off by default) - this applies to every server type, including the in-process HA-MCP Server. You can add or remove this entry at any time."
             },
             "server": {
                 "title": "HA-MCP Server",
