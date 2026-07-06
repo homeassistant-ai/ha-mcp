@@ -53,6 +53,20 @@ def oauth_app(tmp_path, monkeypatch):
     test hermetic — mirrors the ``isolate_data_dir`` fixture in ``test_oauth.py``.
     """
     monkeypatch.setattr("ha_mcp.auth.provider.get_data_dir", lambda: tmp_path)
+
+    # Assemble the app the way production serves it: ha-mcp defaults fastmcp's
+    # Host/Origin (DNS-rebinding) guard off (see ha_mcp.transport_security),
+    # because it is reached through operator-chosen proxies on arbitrary hosts.
+    # Without this, fastmcp >= 3.4.3's on-by-default guard 403s the cross-origin
+    # discovery preflight (and 421s a non-loopback Host) before the request
+    # reaches our metadata route. raising=False keeps this a no-op on fastmcp
+    # < 3.4.3, where the setting field does not exist.
+    import fastmcp
+
+    monkeypatch.setenv("FASTMCP_HTTP_HOST_ORIGIN_PROTECTION", "false")
+    if hasattr(fastmcp.settings, "http_host_origin_protection"):
+        monkeypatch.setattr(fastmcp.settings, "http_host_origin_protection", False)
+
     server = FastMCP("test")
     server.auth = HomeAssistantOAuthProvider(base_url=BASE_URL)
     return server.http_app(path="/mcp", stateless_http=True)

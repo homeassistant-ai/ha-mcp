@@ -783,6 +783,14 @@ def main() -> int:
         StatelessSessionLogFilter()
     )
 
+    # The addon is reached via HA ingress, a direct port, and operator-chosen
+    # reverse proxies / tunnels on arbitrary hosts; default fastmcp's
+    # DNS-rebinding guard off so it does not 421 them (or the browser landing
+    # page). See ha_mcp.transport_security for the rationale.
+    from ha_mcp.transport_security import ensure_host_origin_guard_default_off
+
+    ensure_host_origin_guard_default_off()
+
     # The addon normally binds to 0.0.0.0 so HA Supervisor ingress can
     # reach it inside the container; MCP_HOST override is provided for
     # parity with the standard CLI entry points (see issue #1434).

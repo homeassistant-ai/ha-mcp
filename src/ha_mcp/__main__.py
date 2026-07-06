@@ -1093,6 +1093,12 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
         default_port: Default port to use if MCP_PORT env var is not set.
     """
     from ha_mcp.settings_ui import register_settings_routes
+    from ha_mcp.transport_security import ensure_host_origin_guard_default_off
+
+    # ha-mcp is reached through operator-chosen proxies / LAN IPs whose Host
+    # headers we cannot enumerate; default fastmcp's DNS-rebinding guard off so
+    # it does not 421 them (or the browser landing page). See transport_security.
+    ensure_host_origin_guard_default_off()
 
     host, port, path = _get_http_runtime(default_port)
     _warn_if_default_path_exposed(host, port, path)
@@ -1224,6 +1230,12 @@ async def _run_oauth_server(
     """
     from ha_mcp.auth import HomeAssistantOAuthProvider
     from ha_mcp.server import HomeAssistantSmartMCPServer
+    from ha_mcp.transport_security import ensure_host_origin_guard_default_off
+
+    # Browser OAuth clients (Claude.ai / ChatGPT) reach the discovery endpoints
+    # cross-origin, and users front this server with proxies/tunnels on arbitrary
+    # hosts; default fastmcp's DNS-rebinding guard off so it does not 403/421 them.
+    ensure_host_origin_guard_default_off()
 
     # Create OAuth provider
     auth_provider = HomeAssistantOAuthProvider(
