@@ -90,3 +90,33 @@ def _clear_update_check_memo():
         # ha_mcp not importable in this test run; nothing to clear.
         pass
     yield
+
+
+@pytest.fixture(autouse=True)
+def _restore_fastmcp_host_origin_guard():
+    """Restore fastmcp's Host/Origin guard env var + setting after each test.
+
+    ``transport_security.ensure_host_origin_guard_default_off`` runs for real in
+    server-creation paths some unit tests exercise (e.g. via ``_create_server``)
+    and writes ``os.environ`` and the fastmcp settings singleton directly, which
+    ``monkeypatch`` cannot revert. Snapshot and restore both so those mutations do
+    not leak across tests once fastmcp exposes the guard (>= 3.4.3).
+    """
+    env_key = "FASTMCP_HTTP_HOST_ORIGIN_PROTECTION"
+    attr = "http_host_origin_protection"
+    prev_env = os.environ.get(env_key)
+    try:
+        import fastmcp
+
+        settings = getattr(fastmcp, "settings", None)
+    except ImportError:
+        settings = None
+    has_attr = settings is not None and hasattr(settings, attr)
+    prev_setting = getattr(settings, attr) if has_attr else None
+    yield
+    if prev_env is None:
+        os.environ.pop(env_key, None)
+    else:
+        os.environ[env_key] = prev_env
+    if has_attr:
+        setattr(settings, attr, prev_setting)

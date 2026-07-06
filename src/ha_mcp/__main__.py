@@ -318,6 +318,15 @@ def _create_server() -> "HomeAssistantSmartMCPServer":
     """Create server instance (deferred to avoid import during smoke test)."""
     from pydantic import ValidationError
 
+    # Every deferred-``mcp`` entry point funnels through here before its
+    # Streamable-HTTP app is built -- ha-mcp-web, the add-on, and the
+    # ``fastmcp run fastmcp-http.json`` container path -- so default fastmcp's
+    # DNS-rebinding guard off once, here, for all of them. Direct-construction
+    # paths (_run_oauth_server, the in-process component server) call it themselves.
+    from ha_mcp.transport_security import ensure_host_origin_guard_default_off
+
+    ensure_host_origin_guard_default_off()
+
     try:
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
@@ -823,8 +832,6 @@ def _maybe_spawn_settings_sidecar() -> None:
 
 def main_dev() -> None:
     """Run server with DEBUG logging enabled (for ha-mcp-dev package)."""
-    import os
-
     os.environ["LOG_LEVEL"] = "DEBUG"
     main()
 
@@ -1093,13 +1100,9 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
         default_port: Default port to use if MCP_PORT env var is not set.
     """
     from ha_mcp.settings_ui import register_settings_routes
-    from ha_mcp.transport_security import ensure_host_origin_guard_default_off
 
-    # ha-mcp is reached through operator-chosen proxies / LAN IPs whose Host
-    # headers we cannot enumerate; default fastmcp's DNS-rebinding guard off so
-    # it does not 421 them (or the browser landing page). See transport_security.
-    ensure_host_origin_guard_default_off()
-
+    # The DNS-rebinding guard is defaulted off in _create_server (reached here via
+    # _get_mcp below, before the app is built) -- see transport_security.
     host, port, path = _get_http_runtime(default_port)
     _warn_if_default_path_exposed(host, port, path)
     # SSE transport answers GET with 200 (the event stream), so a GET->405 there

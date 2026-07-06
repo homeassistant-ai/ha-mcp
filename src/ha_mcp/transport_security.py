@@ -1,11 +1,11 @@
 """Transport-security defaults for ha-mcp's Streamable-HTTP servers.
 
 fastmcp >= 3.4.3 ships ``HostOriginGuardMiddleware`` (a DNS-rebinding guard) that
-is **on by default**. Inserted at the front of the ASGI stack, it rejects any
-request whose ``Host`` header is not loopback / an explicitly-allowed host with
-``421 Misdirected Request``, and any browser ``Origin`` that is not same-origin /
-loopback / explicitly allowed with ``403 Forbidden`` -- before the request
-reaches any route.
+is **on by default**. Inserted at the front of the Streamable-HTTP ASGI stack, it
+rejects any request whose ``Host`` header is not loopback / an explicitly-allowed
+host with ``421 Misdirected Request``, and any browser ``Origin`` that is not
+same-origin / loopback / explicitly allowed with ``403 Forbidden`` -- before the
+request reaches any route.
 
 That default is wrong for ha-mcp. We are *designed* to be reached through
 operator-chosen reverse proxies and tunnels (Cloudflare Tunnel, nginx, Traefik,
@@ -15,11 +15,10 @@ including the plain browser landing page, which is a no-``Origin`` navigation
 that still trips the ``Host`` check.
 
 Our security boundary is the high-entropy secret path (and, in OAuth mode, the
-per-user token), not the ``Host`` header. The genuinely unauthenticated loopback
-surface -- the settings sidecar -- already enforces its *own* Host/Origin
-allow-list (see ``stdio_settings_sidecar``). So defaulting fastmcp's guard off on
-the main server restores exactly the pre-3.4.3 behaviour without giving up the
-protection that matters.
+per-user token), not the ``Host`` header. The loopback settings sidecar enforces
+its *own* Host/Origin allow-list (see ``stdio_settings_sidecar``), independent of
+this setting. So defaulting fastmcp's guard off on the main server restores
+exactly the pre-3.4.3 behaviour without giving up the protection that matters.
 
 Operators who front ha-mcp differently can re-enable the guard (and pin their
 own allow-lists) via ``FASTMCP_HTTP_HOST_ORIGIN_PROTECTION=true`` plus
@@ -42,33 +41,50 @@ _HOST_ORIGIN_PROTECTION_ATTR = "http_host_origin_protection"
 
 
 def ensure_host_origin_guard_default_off() -> None:
-    """Default fastmcp's Host/Origin guard off for ha-mcp HTTP servers.
+    """Default fastmcp's Host/Origin guard off for ha-mcp's Streamable-HTTP servers.
 
-    Idempotent. Call once before building/serving any Streamable-HTTP app
-    (``mcp.http_app()`` / ``mcp.run(transport="http"|"sse")`` /
-    ``mcp.run_async(...)``) -- ``http_app`` reads
+    Idempotent and safe to call from every server-creation path. Call before the
+    Streamable-HTTP app is built (``mcp.http_app()`` / ``mcp.run(transport="http")``
+    / ``mcp.run_async(...)``): ``http_app`` reads
     ``fastmcp.settings.http_host_origin_protection`` at build time, so mutating
     that singleton beforehand deterministically neutralises the guard.
 
-    No-op when:
-    - the operator has set ``FASTMCP_HTTP_HOST_ORIGIN_PROTECTION`` explicitly
-      (either direction -- their choice wins), or
-    - the running fastmcp predates the guard (the setting field is absent).
+    Does nothing when the running fastmcp predates the guard (the setting field is
+    absent, i.e. < 3.4.3) or when the operator set the env var explicitly (their
+    choice wins). A failed mutation is logged at WARNING and left retryable -- it
+    is not recorded as done -- so a later reload re-attempts it.
     """
-    if HOST_ORIGIN_PROTECTION_ENV in os.environ:
-        # Respect an explicit operator choice in either direction.
-        return
-
-    # Belt: honoured by any fresh ``Settings()`` read and by child processes.
-    os.environ[HOST_ORIGIN_PROTECTION_ENV] = "false"
-
-    # Suspenders (load-bearing): fastmcp's ``http_app`` reads the already-built
-    # module-global settings singleton, so mutate it directly.
     try:
         import fastmcp
+    except Exception:  # pragma: no cover - fastmcp is a hard dependency
+        return
 
-        settings = getattr(fastmcp, "settings", None)
-        if settings is not None and hasattr(settings, _HOST_ORIGIN_PROTECTION_ATTR):
-            setattr(settings, _HOST_ORIGIN_PROTECTION_ATTR, False)
-    except Exception:  # pragma: no cover - defensive: never block startup
-        logger.debug("Could not default fastmcp Host/Origin guard off", exc_info=True)
+    settings = getattr(fastmcp, "settings", None)
+    if settings is None or not hasattr(settings, _HOST_ORIGIN_PROTECTION_ATTR):
+        # fastmcp < 3.4.3: no guard exists, nothing to disable.
+        return
+
+    if getattr(settings, _HOST_ORIGIN_PROTECTION_ATTR) is False:
+        # Already off -- a prior call, or the operator's own default. Idempotent.
+        return
+
+    if HOST_ORIGIN_PROTECTION_ENV in os.environ:
+        # Operator explicitly opted in (guard on); honour their choice.
+        return
+
+    try:
+        setattr(settings, _HOST_ORIGIN_PROTECTION_ATTR, False)
+    except Exception:
+        logger.warning(
+            "Could not disable fastmcp's Host/Origin (DNS-rebinding) guard; MCP "
+            "reached through a reverse proxy, tunnel, or LAN IP -- and the browser "
+            "landing page -- may fail with 421/403. Set %s=false, or pin "
+            "FASTMCP_HTTP_ALLOWED_HOSTS / FASTMCP_HTTP_ALLOWED_ORIGINS.",
+            HOST_ORIGIN_PROTECTION_ENV,
+            exc_info=True,
+        )
+        return
+
+    # Belt: honoured by any fresh ``Settings()`` read and by child processes. Set
+    # only after a confirmed mutation so a failed attempt stays retryable.
+    os.environ.setdefault(HOST_ORIGIN_PROTECTION_ENV, "false")

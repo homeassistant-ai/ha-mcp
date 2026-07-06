@@ -5,7 +5,11 @@ non-loopback ``Host`` headers (421) and cross-origin ``Origin`` headers (403)
 before routing. ha-mcp is reached through operator-chosen proxies/tunnels and
 LAN IPs on arbitrary hosts, so it defaults that guard off. These tests pin the
 helper's contract and -- on fastmcp versions that actually have the guard --
-prove it is the disable that lets a cross-origin discovery preflight through.
+prove both that the guard is real (Host and Origin paths) and that the default
+neutralises it, plus that ``_create_server`` wires the call in.
+
+Global-state cleanup (env var + settings singleton) is handled by the autouse
+``_restore_fastmcp_host_origin_guard`` fixture in ``conftest.py``.
 """
 
 import os
@@ -20,10 +24,8 @@ from ha_mcp.transport_security import (
     ensure_host_origin_guard_default_off,
 )
 
-# The guard (and its backing setting) exist only on fastmcp >= 3.4.3. Tests that
-# assert on the setting / real middleware behaviour are skipped on older fastmcp,
-# where the helper is a documented no-op.
-_HAS_GUARD = hasattr(fastmcp.settings, "http_host_origin_protection")
+_ATTR = "http_host_origin_protection"
+_HAS_GUARD = hasattr(fastmcp.settings, _ATTR)
 _requires_guard = pytest.mark.skipif(
     not _HAS_GUARD,
     reason="fastmcp < 3.4.3 has no Host/Origin (DNS-rebinding) guard to disable",
@@ -33,34 +35,15 @@ _CROSS_ORIGIN_PREFLIGHT = {
     "Origin": "https://claude.ai",
     "Access-Control-Request-Method": "GET",
 }
+_NON_LOOPBACK_HOST = {"Host": "mcp.example.com"}
 
 
-@pytest.fixture(autouse=True)
-def _restore_global_guard_state():
-    """Undo the helper's direct process-global mutations after each test.
-
-    ``ensure_host_origin_guard_default_off`` writes ``os.environ`` and the
-    fastmcp settings singleton directly (by design), so restore both here to
-    keep the module hermetic and avoid leaking into other test modules.
-    """
-    original_env = os.environ.get(HOST_ORIGIN_PROTECTION_ENV)
-    original_setting = (
-        fastmcp.settings.http_host_origin_protection if _HAS_GUARD else None
-    )
-    yield
-    if original_env is None:
-        os.environ.pop(HOST_ORIGIN_PROTECTION_ENV, None)
-    else:
-        os.environ[HOST_ORIGIN_PROTECTION_ENV] = original_env
-    if _HAS_GUARD:
-        fastmcp.settings.http_host_origin_protection = original_setting
+# --- helper contract ---------------------------------------------------------
 
 
-def test_defaults_env_off_when_unset(monkeypatch):
-    """With the env var unset, the helper defaults it to 'false'."""
-    monkeypatch.delenv(HOST_ORIGIN_PROTECTION_ENV, raising=False)
+def test_noop_never_raises():
+    """On any fastmcp version, calling the helper is safe (no exception)."""
     ensure_host_origin_guard_default_off()
-    assert os.environ[HOST_ORIGIN_PROTECTION_ENV] == "false"
 
 
 def test_respects_explicit_env_value(monkeypatch):
@@ -71,33 +54,47 @@ def test_respects_explicit_env_value(monkeypatch):
 
 
 @_requires_guard
-def test_sets_setting_off_when_env_unset(monkeypatch):
-    """The load-bearing effect: the fastmcp settings singleton flips to False."""
+def test_sets_setting_off_and_env_when_unset(monkeypatch):
+    """The load-bearing effect: the settings singleton flips off + env is set."""
     monkeypatch.delenv(HOST_ORIGIN_PROTECTION_ENV, raising=False)
-    monkeypatch.setattr(fastmcp.settings, "http_host_origin_protection", True)
+    monkeypatch.setattr(fastmcp.settings, _ATTR, True)
     ensure_host_origin_guard_default_off()
-    assert fastmcp.settings.http_host_origin_protection is False
+    assert getattr(fastmcp.settings, _ATTR) is False
+    assert os.environ[HOST_ORIGIN_PROTECTION_ENV] == "false"
 
 
 @_requires_guard
 def test_explicit_opt_in_is_preserved(monkeypatch):
-    """An operator who re-enabled the guard keeps it on."""
+    """An operator who re-enabled the guard (env=true) keeps it on."""
     monkeypatch.setenv(HOST_ORIGIN_PROTECTION_ENV, "true")
-    monkeypatch.setattr(fastmcp.settings, "http_host_origin_protection", True)
+    monkeypatch.setattr(fastmcp.settings, _ATTR, True)
     ensure_host_origin_guard_default_off()
-    assert fastmcp.settings.http_host_origin_protection is True
+    assert getattr(fastmcp.settings, _ATTR) is True
+
+
+@_requires_guard
+def test_idempotent_when_already_off(monkeypatch):
+    """Already-off is a no-op and does not write the env var (retry-safe path)."""
+    monkeypatch.delenv(HOST_ORIGIN_PROTECTION_ENV, raising=False)
+    monkeypatch.setattr(fastmcp.settings, _ATTR, False)
+    ensure_host_origin_guard_default_off()
+    assert getattr(fastmcp.settings, _ATTR) is False
+    assert HOST_ORIGIN_PROTECTION_ENV not in os.environ
+
+
+# --- end-to-end against the real middleware (guard-bearing fastmcp only) ------
+
+
+def _build_app():
+    return FastMCP("t").http_app(path="/mcp", stateless_http=True)
 
 
 @_requires_guard
 @pytest.mark.asyncio
 async def test_guard_blocks_cross_origin_preflight_when_forced_on(monkeypatch):
-    """Non-vacuous guard: forced ON, a cross-origin preflight is 403ed.
-
-    Proves the guard is real and active, so the ``allows`` test below (and the
-    metadata preflight tests) are not passing vacuously.
-    """
-    monkeypatch.setattr(fastmcp.settings, "http_host_origin_protection", True)
-    app = FastMCP("t").http_app(path="/mcp", stateless_http=True)
+    """Non-vacuous: forced ON, a cross-origin Origin preflight is 403ed."""
+    monkeypatch.setattr(fastmcp.settings, _ATTR, True)
+    app = _build_app()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -107,15 +104,50 @@ async def test_guard_blocks_cross_origin_preflight_when_forced_on(monkeypatch):
 
 @_requires_guard
 @pytest.mark.asyncio
-async def test_helper_allows_cross_origin_preflight(monkeypatch):
-    """After the helper runs, the same preflight is no longer guard-blocked."""
-    monkeypatch.delenv(HOST_ORIGIN_PROTECTION_ENV, raising=False)
-    monkeypatch.setattr(fastmcp.settings, "http_host_origin_protection", True)
-    ensure_host_origin_guard_default_off()
-    app = FastMCP("t").http_app(path="/mcp", stateless_http=True)
+async def test_guard_blocks_non_loopback_host_when_forced_on(monkeypatch):
+    """Non-vacuous: forced ON, a non-loopback Host is 421ed (landing-page case)."""
+    monkeypatch.setattr(fastmcp.settings, _ATTR, True)
+    app = _build_app()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.options("/mcp", headers=_CROSS_ORIGIN_PREFLIGHT)
-    # 403 == Origin blocked, 421 == Host blocked; neither may come from the guard.
-    assert resp.status_code not in (403, 421)
+        resp = await client.get("/mcp", headers=_NON_LOOPBACK_HOST)
+    assert resp.status_code == 421
+
+
+@_requires_guard
+@pytest.mark.asyncio
+async def test_helper_allows_cross_origin_and_non_loopback(monkeypatch):
+    """After the helper runs, neither the Origin (403) nor Host (421) guard fires."""
+    monkeypatch.delenv(HOST_ORIGIN_PROTECTION_ENV, raising=False)
+    monkeypatch.setattr(fastmcp.settings, _ATTR, True)
+    ensure_host_origin_guard_default_off()
+    app = _build_app()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        preflight = await client.options("/mcp", headers=_CROSS_ORIGIN_PREFLIGHT)
+        host_req = await client.get("/mcp", headers=_NON_LOOPBACK_HOST)
+    assert preflight.status_code not in (403, 421)
+    assert host_req.status_code != 421
+
+
+# --- wiring: the deferred-mcp chokepoint calls the helper --------------------
+
+
+def test_create_server_disables_guard(monkeypatch):
+    """_create_server -- the chokepoint for ha-mcp-web/sse, the add-on, and the
+    ``fastmcp run fastmcp-http.json`` container path -- calls the guard-disable
+    before building the server."""
+    import ha_mcp.__main__ as main_module
+
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "ha_mcp.transport_security.ensure_host_origin_guard_default_off",
+        lambda: calls.append(1),
+    )
+    monkeypatch.setattr(
+        "ha_mcp.server.HomeAssistantSmartMCPServer", lambda *a, **kw: object()
+    )
+    main_module._create_server()
+    assert calls == [1]

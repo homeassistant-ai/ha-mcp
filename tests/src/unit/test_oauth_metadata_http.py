@@ -59,8 +59,8 @@ def oauth_app(tmp_path, monkeypatch):
     # because it is reached through operator-chosen proxies on arbitrary hosts.
     # Without this, fastmcp >= 3.4.3's on-by-default guard 403s the cross-origin
     # discovery preflight (and 421s a non-loopback Host) before the request
-    # reaches our metadata route. raising=False keeps this a no-op on fastmcp
-    # < 3.4.3, where the setting field does not exist.
+    # reaches our metadata route. The ``hasattr`` check keeps this a no-op on
+    # fastmcp < 3.4.3, where the setting field does not exist.
     import fastmcp
 
     monkeypatch.setenv("FASTMCP_HTTP_HOST_ORIGIN_PROTECTION", "false")
