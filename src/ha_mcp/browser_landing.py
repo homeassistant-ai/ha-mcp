@@ -35,7 +35,8 @@ class CustomRouteServer(Protocol):
     ``include_in_schema`` parameters this module never passes).
     """
 
-    def custom_route(self, path: str, methods: list[str]) -> Any: ...
+    def custom_route(self, path: str, methods: list[str]) -> Any:
+        """Return a decorator that registers a handler for ``methods`` at ``path``."""
 
 
 # The landing body. Plain text so no browser ever interprets it as markup, and
