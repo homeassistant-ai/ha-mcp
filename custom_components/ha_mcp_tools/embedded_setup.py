@@ -402,10 +402,11 @@ async def _async_check_component_compat(
     """File/clear the component-outdated repair issue for the running server.
 
     The ha-mcp server declares the minimum custom-component version it needs
-    (``MIN_COMPONENT_VERSION``). HACS pushes a new server package ahead of a
-    component update, so the running component can lag what the server expects.
-    When it does, surface a WARNING repair issue pointing at the HACS component
-    update; clear it once the component is new enough.
+    (``MIN_COMPONENT_VERSION``). The server package updates independently of
+    the HACS component (this manager pip-installs new server builds), so the
+    running component can lag what the server expects. When it does, surface a
+    WARNING repair issue pointing at the HACS component update; clear it once
+    the component is new enough.
 
     Advisory only — it must never block or fail server startup, so an
     unexpected error is logged (visible, not silent) and swallowed rather than

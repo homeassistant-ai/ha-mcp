@@ -183,6 +183,25 @@ class TestForwardingHandler:
         resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, make_request())
         assert resp.headers["Content-Type"] == "application/json"
 
+    async def test_text_plain_landing_content_type_preserved(self):
+        # The server's friendly landing page (a plain-text 405 shown to a browser
+        # that GETs the endpoint) must forward as text/plain, not be relabeled
+        # application/json — so it renders as readable text through the ingress URL.
+        # text/plain is XSS-safe; text/html (below) stays coerced.
+        upstream = FakeUpstream(
+            status=405,
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+            body=b"HA-MCP server is up and running!",
+        )
+        session = FakeSession(upstream=upstream)
+        hass = _make_hass()
+        _store_cfg(hass, session=session)
+
+        resp = await mw._async_handle_webhook(hass, WEBHOOK_ID, make_request())
+        assert resp.status == 405
+        assert resp.headers["Content-Type"] == "text/plain; charset=utf-8"
+        assert resp.body == b"HA-MCP server is up and running!"
+
     async def test_sse_branch_streams_chunks_with_anti_buffering_headers(self):
         chunks = [b"event: message\ndata: 1\n\n", b"data: 2\n\n"]
         upstream = FakeUpstream(

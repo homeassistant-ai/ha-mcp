@@ -66,9 +66,12 @@ _STRIPPED_REQUEST_HEADERS = frozenset(
     }
 )
 
-# Content-Types an MCP response may carry; anything else is coerced to JSON to
-# prevent HTML injection / XSS through the proxy.
-_ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream")
+# Content-Types the forwarded response may carry as-is; anything else is coerced
+# to JSON to prevent HTML injection / XSS through the proxy. ``text/plain`` is
+# safe (a browser never executes it) and lets the server's friendly landing page
+# — a plain-text 405 shown when a browser GETs the endpoint — render as text
+# instead of a mislabeled JSON blob. ``text/html`` and friends stay coerced.
+_ALLOWED_CONTENT_TYPES = ("application/json", "text/event-stream", "text/plain")
 
 # Long timeout for streamed MCP responses (matches mcp_proxy).
 _CLIENT_TIMEOUT = aiohttp.ClientTimeout(total=300, sock_connect=10, sock_read=300)

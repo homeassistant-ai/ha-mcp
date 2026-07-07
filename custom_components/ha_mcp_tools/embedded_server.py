@@ -647,6 +647,21 @@ class EmbeddedServerManager:
         # same secret path as the MCP endpoint.
         register_settings_routes(server.mcp, server, secret_path=self._secret_path)
 
+        # Parity with the CLI HTTP runner: answer a browser GET on the MCP path
+        # with the friendly landing page (405 + setup guidance) instead of a
+        # bare "Method Not Allowed" — both on the direct URL and through the
+        # ingress webhook. Guard only the import: the installed server version
+        # is user-controlled (channel choice, pip-spec override), so an older
+        # ha-mcp without this module must keep serving; the landing is simply
+        # absent there, as it is today.
+        try:
+            from ha_mcp.browser_landing import register_browser_landing
+        except ImportError:
+            # Older installed ha-mcp: no landing helper to register.
+            pass
+        else:
+            register_browser_landing(server.mcp, self._secret_path)
+
         # Own the uvicorn server instead of calling mcp.run_async(): cancelling
         # run_async's task does NOT release the listening socket in-process
         # (live-found: the next bring-up failed with EADDRINUSE and uvicorn's

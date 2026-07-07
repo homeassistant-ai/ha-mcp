@@ -313,7 +313,8 @@ OAUTH_BASE = "/api/ha_mcp_tools/oauth"
 ISSUE_PACKAGE_FAILED = "server_package_install_failed"
 ISSUE_START_FAILED = "server_start_failed"
 # Repair issue surfaced when the installed ha-mcp server requires a newer
-# custom component than the one running. HACS pushes the server package ahead
-# of a component update, so the running component can lag what the server
-# expects; this points the user at the HACS component update (non-blocking).
+# custom component than the one running. The server package updates
+# independently of the HACS component, so the running component can lag what
+# the server expects; this points the user at the HACS component update
+# (non-blocking).
 ISSUE_COMPONENT_OUTDATED = "component_outdated"

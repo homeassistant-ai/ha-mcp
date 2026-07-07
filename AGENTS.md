@@ -651,11 +651,10 @@ fully validate a component change before merge.
   gates on it, so without a bump the old and new component are
   indistinguishable: a caller on the old version passes the gate and then hits
   raw "service not found" errors instead of an actionable "update" prompt.
-- **The component reaches users ahead of the server – keep it
-  backward-compatible with the released server.** HACS pushes a component
-  update immediately, while the server (add-on or PyPI/Docker) stays on the
-  prior stable until its next release, so a new component runs against the
-  *old* server in that window. Never remove or tighten an existing service
+- **Keep the component backward-compatible with the released server.** The
+  component (HACS) and the server (add-on / PyPI / Docker) follow the same
+  release cycle but are updated independently per install, so a new component
+  can run against an *older* server. Never remove or tighten an existing service
   schema (e.g. dropping a param from a strict `vol.Schema`) without a shim the
   prior server still satisfies; the version gate can't protect this direction
   (the old server is the caller). Remove the shim once the matching

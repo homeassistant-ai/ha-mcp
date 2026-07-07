@@ -110,6 +110,59 @@ def _rt(rt_id="rt-1", user=None, client_name="", token_type=""):
     )
 
 
+def _stub_ha_mcp_surface(monkeypatch, *, mcp, landing_mod=None) -> None:
+    """Install a minimal in-memory ``ha_mcp`` package so ``_serve`` runs hermetically.
+
+    Wires a non-sentinel connection (so ``_serve`` passes its refuse-to-serve
+    guard), a server whose ``.mcp`` is ``mcp``, no-op settings routes, and a stub
+    uvicorn. Pass ``landing_mod`` to stub ``ha_mcp.browser_landing``; omit it to
+    simulate an OLDER installed server without the landing helper — modeled as a
+    module missing the ``register_browser_landing`` attribute, so the from-import
+    in ``_serve`` raises the same ImportError class its guard catches. Injection
+    (a sys.modules hit) is the only hermetic way to force that failure: deleting
+    the entry is NOT enough, because the editable install (``uv sync``) adds a
+    meta-path finder that resolves ``ha_mcp.*`` by name and would re-import the
+    REAL module even though the parent ``ha_mcp`` is faked with an empty
+    ``__path__`` (live-found in CI).
+    """
+    settings = SimpleNamespace(
+        homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
+    )
+    ha_mcp_mod = ModuleType("ha_mcp")
+    ha_mcp_mod.__path__ = []  # package semantics for submodule imports
+    cfg = ModuleType("ha_mcp.config")
+    cfg.reset_global_settings = lambda: None
+    cfg.set_embedded_connection = lambda u, t: None
+    cfg.OAUTH_MODE_URL = "__sentinel_url__"
+    cfg.OAUTH_MODE_TOKEN = "__sentinel_token__"
+    cfg.get_global_settings = lambda: settings
+    server_mod = ModuleType("ha_mcp.server")
+    server_mod.HomeAssistantSmartMCPServer = lambda: SimpleNamespace(mcp=mcp)
+    ui_mod = ModuleType("ha_mcp.settings_ui")
+    ui_mod.register_settings_routes = lambda *a, **k: None
+    uvicorn_mod = ModuleType("uvicorn")
+    uvicorn_mod.Config = lambda *a, **k: SimpleNamespace()
+    uvicorn_mod.Server = lambda config: SimpleNamespace(should_exit=False)
+    ha_mcp_mod.config = cfg
+    ha_mcp_mod.server = server_mod
+    ha_mcp_mod.settings_ui = ui_mod
+    mods = {
+        "ha_mcp": ha_mcp_mod,
+        "ha_mcp.config": cfg,
+        "ha_mcp.server": server_mod,
+        "ha_mcp.settings_ui": ui_mod,
+        "uvicorn": uvicorn_mod,
+    }
+    if landing_mod is None:
+        # Older-server stand-in: module present, helper attribute absent — the
+        # from-import raises ImportError, same class as a missing module.
+        landing_mod = ModuleType("ha_mcp.browser_landing")
+    ha_mcp_mod.browser_landing = landing_mod
+    mods["ha_mcp.browser_landing"] = landing_mod
+    for name, mod in mods.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+
+
 # ---------------------------------------------------------------------------
 # Construction / option parsing
 # ---------------------------------------------------------------------------
@@ -1111,6 +1164,17 @@ class TestReadinessProbe:
         ha_mcp_mod.config = cfg
         ha_mcp_mod.server = server_mod
         ha_mcp_mod.settings_ui = ui_mod
+        # Inject an attributeless ha_mcp.browser_landing so _serve's landing
+        # import raises ImportError and is skipped (this test is about the
+        # OSError choreography). A sys.modules hit is the only hermetic way:
+        # without it, the editable install's meta-path finder resolves the
+        # REAL module by name and its register call would hit _FakeMcp
+        # (no custom_route), masking the OSError (live-found in CI).
+        monkeypatch.setitem(
+            sys.modules,
+            "ha_mcp.browser_landing",
+            ModuleType("ha_mcp.browser_landing"),
+        )
 
         try:
             mgr._thread_main("tok")
@@ -1135,6 +1199,89 @@ class TestReadinessProbe:
         with pytest.raises(es.EmbeddedServerError, match="did not become reachable"):
             await mgr._async_wait_until_ready()
         stop.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _serve browser-landing registration
+# ---------------------------------------------------------------------------
+
+
+class TestServeBrowserLanding:
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self):
+        # _thread_main stages HA_MCP_CONFIG_DIR/HA_MCP_EMBEDDED into os.environ;
+        # snapshot + restore so the flags never leak into unrelated suites on
+        # this worker (as TestThreadEnvStaging documents).
+        keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        saved = {k: os.environ.get(k) for k in keys}
+        for key in keys:
+            os.environ.pop(key, None)
+        yield
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_serve_registers_browser_landing(self, tmp_path, monkeypatch):
+        # Parity with the CLI HTTP runner (the reported bug): _serve must register
+        # the friendly browser landing on the MCP app so a browser GET — direct or
+        # forwarded by the ingress webhook — sees setup guidance, not a bare 405.
+        # Stop _serve right after by having http_app raise.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                raise _StopServe
+
+        fake_mcp = _FakeMcp()
+        landing_calls: list = []
+        landing_mod = ModuleType("ha_mcp.browser_landing")
+        landing_mod.register_browser_landing = lambda mcp, path: landing_calls.append(
+            (mcp, path)
+        )
+        _stub_ha_mcp_surface(monkeypatch, mcp=fake_mcp, landing_mod=landing_mod)
+
+        mgr._thread_main("tok")
+
+        # Registered on the real MCP app, at the server's secret path.
+        assert landing_calls == [(fake_mcp, "/private_secret")]
+        assert isinstance(mgr._thread_exc, _StopServe)
+
+    def test_serve_tolerates_missing_browser_landing_module(
+        self, tmp_path, monkeypatch
+    ):
+        # Backward-compat: an OLDER bundled ha-mcp (the component reaches users
+        # ahead of the server) has no browser_landing module. _serve must swallow
+        # the ImportError and keep serving — the landing is simply absent, as today.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        reached: list = []
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                reached.append(path)
+                raise _StopServe
+
+        # landing_mod omitted ⇒ ha_mcp.browser_landing is absent (import fails).
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+
+        mgr._thread_main("tok")
+
+        # _serve got PAST the failed landing import to build the app (ImportError
+        # was swallowed, not propagated).
+        assert reached == ["/private_secret"]
+        assert isinstance(mgr._thread_exc, _StopServe)
 
 
 # ---------------------------------------------------------------------------
