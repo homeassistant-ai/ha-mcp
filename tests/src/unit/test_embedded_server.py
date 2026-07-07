@@ -115,13 +115,15 @@ def _stub_ha_mcp_surface(monkeypatch, *, mcp, landing_mod=None) -> None:
 
     Wires a non-sentinel connection (so ``_serve`` passes its refuse-to-serve
     guard), a server whose ``.mcp`` is ``mcp``, no-op settings routes, and a stub
-    uvicorn. Pass ``landing_mod`` to also stub ``ha_mcp.browser_landing``; omit it
-    to make that submodule ABSENT — the older-server path ``_serve`` must
-    tolerate. Absence is enforced by evicting the module from ``sys.modules``:
-    other unit files in the same worker import the REAL ``ha_mcp.browser_landing``
-    (via ``ha_mcp.__main__``), and a lingering real entry would satisfy the
-    ``from ha_mcp.browser_landing import ...`` in ``_serve`` even though the
-    parent ``ha_mcp`` is faked here.
+    uvicorn. Pass ``landing_mod`` to stub ``ha_mcp.browser_landing``; omit it to
+    simulate an OLDER installed server without the landing helper — modeled as a
+    module missing the ``register_browser_landing`` attribute, so the from-import
+    in ``_serve`` raises the same ImportError class its guard catches. Injection
+    (a sys.modules hit) is the only hermetic way to force that failure: deleting
+    the entry is NOT enough, because the editable install (``uv sync``) adds a
+    meta-path finder that resolves ``ha_mcp.*`` by name and would re-import the
+    REAL module even though the parent ``ha_mcp`` is faked with an empty
+    ``__path__`` (live-found in CI).
     """
     settings = SimpleNamespace(
         homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
@@ -151,11 +153,12 @@ def _stub_ha_mcp_surface(monkeypatch, *, mcp, landing_mod=None) -> None:
         "ha_mcp.settings_ui": ui_mod,
         "uvicorn": uvicorn_mod,
     }
-    if landing_mod is not None:
-        ha_mcp_mod.browser_landing = landing_mod
-        mods["ha_mcp.browser_landing"] = landing_mod
-    else:
-        monkeypatch.delitem(sys.modules, "ha_mcp.browser_landing", raising=False)
+    if landing_mod is None:
+        # Older-server stand-in: module present, helper attribute absent — the
+        # from-import raises ImportError, same class as a missing module.
+        landing_mod = ModuleType("ha_mcp.browser_landing")
+    ha_mcp_mod.browser_landing = landing_mod
+    mods["ha_mcp.browser_landing"] = landing_mod
     for name, mod in mods.items():
         monkeypatch.setitem(sys.modules, name, mod)
 
@@ -1161,11 +1164,17 @@ class TestReadinessProbe:
         ha_mcp_mod.config = cfg
         ha_mcp_mod.server = server_mod
         ha_mcp_mod.settings_ui = ui_mod
-        # Evict any REAL ha_mcp.browser_landing left in sys.modules by other
-        # unit files in this worker (imported via ha_mcp.__main__); it would
-        # satisfy _serve's landing import and call custom_route on _FakeMcp,
-        # masking the OSError this test is about. Absent, _serve skips it.
-        monkeypatch.delitem(sys.modules, "ha_mcp.browser_landing", raising=False)
+        # Inject an attributeless ha_mcp.browser_landing so _serve's landing
+        # import raises ImportError and is skipped (this test is about the
+        # OSError choreography). A sys.modules hit is the only hermetic way:
+        # without it, the editable install's meta-path finder resolves the
+        # REAL module by name and its register call would hit _FakeMcp
+        # (no custom_route), masking the OSError (live-found in CI).
+        monkeypatch.setitem(
+            sys.modules,
+            "ha_mcp.browser_landing",
+            ModuleType("ha_mcp.browser_landing"),
+        )
 
         try:
             mgr._thread_main("tok")
