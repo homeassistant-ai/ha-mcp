@@ -28,8 +28,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Validate hotfix is based on stable tag
+        env:
+          # Route the untrusted PR branch name through env, not template
+          # interpolation, so shell metacharacters in a fork branch name
+          # cannot inject commands into this run: script.
+          HEAD_REF: ${{ github.head_ref }}
         run: |
-          echo "Validating hotfix branch: ${{ github.head_ref }}"
+          echo "Validating hotfix branch: $HEAD_REF"
 
           # Check if stable tag exists
           if ! git rev-parse stable &>/dev/null; then
@@ -82,7 +87,7 @@ jobs:
             echo ""
             echo "To fix this, rebase your hotfix onto the 'stable' tag:"
             echo ""
-            echo "  git checkout ${{ github.head_ref }}"
+            echo "  git checkout $HEAD_REF"
             echo "  git rebase --onto stable \$(git merge-base origin/master HEAD) HEAD"
             echo "  git push --force-with-lease"
             echo ""

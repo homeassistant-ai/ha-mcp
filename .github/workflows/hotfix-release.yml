@@ -129,11 +129,16 @@ jobs:
 
     - name: Summary
       if: steps.semantic.outputs.released == 'true'
+      env:
+        # Route the untrusted PR branch name through env, not template
+        # interpolation, so shell metacharacters in the branch name cannot
+        # inject commands into this run: script.
+        HEAD_REF: ${{ github.event.pull_request.head.ref }}
       run: |
         echo "## 🚨 Hotfix Release" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Version:** ${{ steps.semantic.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-        echo "**Branch:** ${{ github.event.pull_request.head.ref }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** $HEAD_REF" >> $GITHUB_STEP_SUMMARY
         echo "**PR:** #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
 
   # Build binaries and attach to release
