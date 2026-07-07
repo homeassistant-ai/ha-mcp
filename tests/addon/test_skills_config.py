@@ -78,12 +78,12 @@ class TestBundledSkillFiles:
             assert filepath.exists(), f"Reference file {filename} not found"
             assert filepath.stat().st_size > 0, f"Reference file {filename} is empty"
 
-    def test_total_skill_content_size(self):
-        """Check that bundled skill content is approximately the expected size (~68KB)."""
+    def test_skill_content_fully_vendored(self):
+        """Check that bundled skill content is not an empty or stub submodule checkout.
+
+        Floor only — no ceiling. Content size is governed by review in the
+        skills repo; a ceiling here just breaks digest bumps on organic growth.
+        """
         skill_dir = self._get_skills_dir() / "home-assistant-best-practices"
         total_size = sum(f.stat().st_size for f in skill_dir.rglob("*") if f.is_file())
-        # Should be roughly 60-80KB
         assert total_size > 50_000, f"Skill content too small: {total_size} bytes"
-        assert total_size < 200_000, (
-            f"Skill content unexpectedly large: {total_size} bytes"
-        )
