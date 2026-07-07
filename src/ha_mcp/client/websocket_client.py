@@ -30,6 +30,15 @@ from .rest_client import (
 
 logger = logging.getLogger(__name__)
 
+# Matches the Supervisor's own Core-connection receive limit
+# (MAX_MESSAGE_SIZE_FROM_CORE in home-assistant/supervisor, see supervisor
+# issue #4392). On the add-on path frames above that limit die at the
+# Supervisor proxy anyway, so a larger client-side cap adds nothing there.
+# Registry list responses scale with entity count and arrive as ONE frame
+# (the HA WebSocket API has no pagination); a ~6.4k-entity instance
+# overflowed the previous 20MB cap (#1721).
+MAX_WS_MESSAGE_BYTES = 64 * 1024 * 1024
+
 
 class WebSocketConnectionState:
     """Encapsulates mutable state used by the WebSocket client."""
@@ -109,20 +118,43 @@ class WebSocketConnectionState:
         """Retrieve and remove an authentication message if present."""
         return self._auth_messages.pop(message_type, None)
 
-    def reset_connection(self) -> None:
-        """Reset connection-specific state while preserving handlers."""
+    def reset_connection(self, close_reason: str | None = None) -> None:
+        """Reset connection-specific state while preserving handlers.
+
+        Args:
+            close_reason: Human-readable description of why the connection
+                went away (e.g. a close code/reason pair), included in the
+                error surfaced to any request still awaiting a response.
+        """
         self.connected = False
         self.authenticated = False
         self._message_id = 0
 
+        # ``future.cancel()`` makes awaiters see ``asyncio.CancelledError``,
+        # a BaseException that skips every ``except Exception`` handler in
+        # the tool layer and reaches the MCP SDK, which treats it as a
+        # client-initiated cancellation, suppresses the response entirely,
+        # and leaves the MCP client hanging until its own timeout (#1721).
+        # ``set_exception`` with a normal exception propagates through
+        # ``except Exception`` as expected instead.
+        message = (
+            "WebSocket connection to Home Assistant closed while waiting for a response"
+        )
+        if close_reason:
+            message = f"{message} ({close_reason})"
+
         for future in self._pending_requests.values():
             if not future.done():
-                future.cancel()
+                # A fresh instance per future: sharing one exception object
+                # across multiple ``set_exception`` calls means the second
+                # raise attaches a traceback to an exception already
+                # associated with another future's stack.
+                future.set_exception(HomeAssistantConnectionError(message))
         self._pending_requests.clear()
 
         for future in self._event_responses.values():
             if not future.done():
-                future.cancel()
+                future.set_exception(HomeAssistantConnectionError(message))
         self._event_responses.clear()
 
         # Drop any subscription queues — readers wake on the close signal
@@ -144,9 +176,9 @@ class WebSocketConnectionState:
         """Mark the socket as authenticated and ready for commands."""
         self.authenticated = True
 
-    def mark_disconnected(self) -> None:
+    def mark_disconnected(self, close_reason: str | None = None) -> None:
         """Reset connection state when the socket is closed."""
-        self.reset_connection()
+        self.reset_connection(close_reason)
 
     @property
     def is_ready(self) -> bool:
@@ -293,9 +325,7 @@ class HomeAssistantWebSocketClient:
                 ping_timeout=10,
                 additional_headers={"Authorization": f"Bearer {self.token}"},
                 ssl=ssl_ctx,
-                # Increase max message size to 20MB for large responses
-                # (e.g., HACS repository list can be 2MB+)
-                max_size=20 * 1024 * 1024,
+                max_size=MAX_WS_MESSAGE_BYTES,
             )
             self._state.mark_connected()
 
@@ -390,6 +420,11 @@ class HomeAssistantWebSocketClient:
         """Background task to handle incoming WebSocket messages."""
         if not self.websocket:
             raise Exception("WebSocket not connected")
+        # None means a clean exit (the async-for loop simply ended); the
+        # except blocks below fill this in so pending futures — and the
+        # log — carry *why* the connection went away instead of a bare
+        # "WebSocket connection closed" that gave no lead on #1721.
+        close_reason: str | None = None
         try:
             async for message in self.websocket:
                 try:
@@ -400,12 +435,30 @@ class HomeAssistantWebSocketClient:
                     logger.error(f"Invalid JSON received: {e}")
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("WebSocket connection closed")
+        except websockets.exceptions.ConnectionClosed as e:
+            # Prefer the frame we received (the peer closed on us); fall
+            # back to the frame we sent (we failed the connection
+            # ourselves, e.g. an over-max_size frame produces a sent
+            # Close(1009, ...) with no frame received at all).
+            close = e.rcvd if e.rcvd is not None else e.sent
+            if close is not None:
+                verb = "received" if e.rcvd is not None else "sent"
+                close_reason = f"{verb} close code {close.code}"
+                if close.reason:
+                    close_reason = f"{close_reason} ({close.reason})"
+            else:
+                close_reason = "connection dropped without a close frame"
+
+            log_message = f"WebSocket connection closed ({close_reason})"
+            if close is None or close.code not in (1000, 1001):
+                logger.warning(log_message)
+            else:
+                logger.info(log_message)
         except Exception as e:
+            close_reason = str(e)
             logger.error(f"WebSocket message handler error: {e}")
         finally:
-            self._state.mark_disconnected()
+            self._state.mark_disconnected(close_reason)
 
     async def _process_message(self, data: dict[str, Any]) -> None:
         """Process incoming WebSocket message."""
@@ -649,9 +702,15 @@ class HomeAssistantWebSocketClient:
             result_response = await asyncio.wait_for(
                 result_future, timeout=wait_timeout
             )
-        except TimeoutError:
+        except BaseException:
             self.cancel_pending_response(message_id)
             self.cancel_event_response(message_id)
+            # A connection drop fails BOTH futures via reset_connection;
+            # only result_future gets awaited on this path, so retrieve
+            # event_future's exception too or asyncio logs an ERROR-level
+            # "Future exception was never retrieved" when it is GC'd.
+            if event_future.done() and not event_future.cancelled():
+                event_future.exception()
             raise
 
         if not result_response.get("success"):
