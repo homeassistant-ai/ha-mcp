@@ -6,11 +6,8 @@ import httpx
 import pytest
 from fastmcp import FastMCP
 
-from ha_mcp.__main__ import (
-    ProbeAccessLogFilter,
-    _registered_landing_paths,
-    register_browser_landing,
-)
+from ha_mcp.__main__ import ProbeAccessLogFilter, register_browser_landing
+from ha_mcp.browser_landing import _registered_landing_paths
 
 
 @pytest.fixture(autouse=True)
@@ -176,6 +173,44 @@ def test_register_attaches_filter():
     register_browser_landing(server, "/mcp")
     access_logger = logging.getLogger("uvicorn.access")
     assert any(isinstance(f, ProbeAccessLogFilter) for f in access_logger.filters)
+
+
+@pytest.mark.asyncio
+async def test_same_path_registers_on_a_new_server_instance():
+    """An in-process config-entry reload builds a NEW FastMCP with the SAME
+    secret path, in the same Python process. The landing must register on the
+    new instance — dedup is per (instance, path), not a process-global path
+    set — or the page silently vanishes after the first reload."""
+    from ha_mcp import browser_landing
+
+    first = FastMCP("test")
+    assert browser_landing.register_browser_landing(first, "/private_x") is True
+
+    reloaded = FastMCP("test")
+    assert browser_landing.register_browser_landing(reloaded, "/private_x") is True
+
+    app = reloaded.http_app(path="/private_x", stateless_http=True)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/private_x")
+    assert resp.status_code == 405
+    assert "HA-MCP server is up and running" in resp.text
+
+
+def test_core_register_returns_bool_and_skips_log_filter():
+    """The reusable core registers once (True), no-ops on repeat (False), and
+    never touches uvicorn.access — attaching the probe filter is the __main__
+    wrapper's job. This lets the in-process server register the landing without
+    disturbing Home Assistant's logging."""
+    from ha_mcp import browser_landing
+
+    server = FastMCP("test")
+    access_logger = logging.getLogger("uvicorn.access")
+    before = list(access_logger.filters)
+    assert browser_landing.register_browser_landing(server, "/mcp") is True
+    assert browser_landing.register_browser_landing(server, "/mcp") is False
+    assert access_logger.filters == before
 
 
 @pytest.mark.asyncio
