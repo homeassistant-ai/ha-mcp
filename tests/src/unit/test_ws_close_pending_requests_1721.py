@@ -118,12 +118,15 @@ async def test_reset_connection_fails_pending_futures_with_exception():
 
     state.mark_disconnected("received close code 1009 (frame exceeds limit)")
 
+    # reset_connection sets the exception synchronously, so the futures are
+    # already done: result() re-raises the stored exception directly, which is
+    # the state contract under test (no event loop round-trip needed).
     assert not request_future.cancelled()
     with pytest.raises(HomeAssistantConnectionError, match="1009"):
-        await request_future
+        request_future.result()
     assert not event_future.cancelled()
     with pytest.raises(HomeAssistantConnectionError):
-        await event_future
+        event_future.result()
 
 
 async def test_reset_connection_without_reason_still_raises_connection_error():
@@ -135,7 +138,7 @@ async def test_reset_connection_without_reason_still_raises_connection_error():
 
     assert not request_future.cancelled()
     with pytest.raises(HomeAssistantConnectionError):
-        await request_future
+        request_future.result()
 
 
 def test_max_ws_message_bytes_matches_supervisor_ceiling():
