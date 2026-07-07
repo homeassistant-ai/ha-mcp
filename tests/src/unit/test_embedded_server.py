@@ -116,7 +116,12 @@ def _stub_ha_mcp_surface(monkeypatch, *, mcp, landing_mod=None) -> None:
     Wires a non-sentinel connection (so ``_serve`` passes its refuse-to-serve
     guard), a server whose ``.mcp`` is ``mcp``, no-op settings routes, and a stub
     uvicorn. Pass ``landing_mod`` to also stub ``ha_mcp.browser_landing``; omit it
-    to leave that submodule ABSENT — the older-server path ``_serve`` must tolerate.
+    to make that submodule ABSENT — the older-server path ``_serve`` must
+    tolerate. Absence is enforced by evicting the module from ``sys.modules``:
+    other unit files in the same worker import the REAL ``ha_mcp.browser_landing``
+    (via ``ha_mcp.__main__``), and a lingering real entry would satisfy the
+    ``from ha_mcp.browser_landing import ...`` in ``_serve`` even though the
+    parent ``ha_mcp`` is faked here.
     """
     settings = SimpleNamespace(
         homeassistant_url="http://127.0.0.1:8123", homeassistant_token="jwt"
@@ -149,6 +154,8 @@ def _stub_ha_mcp_surface(monkeypatch, *, mcp, landing_mod=None) -> None:
     if landing_mod is not None:
         ha_mcp_mod.browser_landing = landing_mod
         mods["ha_mcp.browser_landing"] = landing_mod
+    else:
+        monkeypatch.delitem(sys.modules, "ha_mcp.browser_landing", raising=False)
     for name, mod in mods.items():
         monkeypatch.setitem(sys.modules, name, mod)
 
@@ -1154,6 +1161,11 @@ class TestReadinessProbe:
         ha_mcp_mod.config = cfg
         ha_mcp_mod.server = server_mod
         ha_mcp_mod.settings_ui = ui_mod
+        # Evict any REAL ha_mcp.browser_landing left in sys.modules by other
+        # unit files in this worker (imported via ha_mcp.__main__); it would
+        # satisfy _serve's landing import and call custom_route on _FakeMcp,
+        # masking the OSError this test is about. Absent, _serve skips it.
+        monkeypatch.delitem(sys.modules, "ha_mcp.browser_landing", raising=False)
 
         try:
             mgr._thread_main("tok")
