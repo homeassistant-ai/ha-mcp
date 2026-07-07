@@ -18,12 +18,25 @@ from __future__ import annotations
 
 import logging
 import weakref
-from typing import Any
+from typing import Any, Protocol
 
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 logger = logging.getLogger(__name__)
+
+
+class CustomRouteServer(Protocol):
+    """Structural type for servers exposing FastMCP's ``custom_route`` decorator.
+
+    Matches the real FastMCP server and ``__main__``'s deferred proxy. Only the
+    ``(path, methods)`` call shape used here is pinned; the decorator's return
+    type is left to the implementation (fastmcp also takes optional ``name`` /
+    ``include_in_schema`` parameters this module never passes).
+    """
+
+    def custom_route(self, path: str, methods: list[str]) -> Any: ...
+
 
 # The landing body. Plain text so no browser ever interprets it as markup, and
 # so it survives the ha_mcp_tools webhook proxy (which forwards text/plain but
@@ -82,12 +95,12 @@ LANDING_MESSAGE = (
 # SAME Python process while keeping the same secret path — a process-global
 # path set would skip the re-registration and silently drop the landing page
 # after the first reload. The CLI/add-on never sees this (their process exits).
-_registered_landing_paths: weakref.WeakKeyDictionary[Any, set[str]] = (
+_registered_landing_paths: weakref.WeakKeyDictionary[CustomRouteServer, set[str]] = (
     weakref.WeakKeyDictionary()
 )
 
 
-def register_browser_landing(mcp_instance: Any, path: str) -> bool:
+def register_browser_landing(mcp_instance: CustomRouteServer, path: str) -> bool:
     """Register a GET handler that returns 405 with the friendly landing message.
 
     ``mcp_instance`` is a FastMCP-like object exposing ``custom_route`` (the real
