@@ -71,7 +71,7 @@ jobs:
 
     - name: Run semantic-release
       id: semantic
-      uses: python-semantic-release/python-semantic-release@v10.6.1
+      uses: python-semantic-release/python-semantic-release@39dd2052f2ce8282a5d932c31d58a2ca06d2550e # v10.6.1
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         verbosity: "2"

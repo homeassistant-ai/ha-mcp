@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: HACS validation
-        uses: hacs/action@main
+        uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
         with:
           category: integration
 
@@ -33,4 +33,4 @@ jobs:
       # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
       - name: Remove vendored test fixtures
         run: rm -rf tests/initial_test_state
-      - uses: home-assistant/actions/hassfest@master
+      - uses: home-assistant/actions/hassfest@f4ca6f671bd429efb108c0f2fa0ae8af0215986c # master

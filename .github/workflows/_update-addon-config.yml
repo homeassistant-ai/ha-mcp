@@ -59,16 +59,23 @@ jobs:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
+      # persist-credentials: false so the push token is not written into the
+      # workspace, where any later step could read it. The version-bump push
+      # below re-authenticates explicitly with the token instead. The public
+      # repo checkout reads fine with the default token. (#1762)
       - uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 1
-          token: ${{ steps.token.outputs.value }}
+          persist-credentials: false
 
-      - name: Install yq
-        uses: mikefarah/yq@master
-
+      # NOTE: yq runs from the runner's preinstalled binary (ubuntu-latest ships
+      # yq 4.x). The previous `mikefarah/yq@master` step was a no-op that only
+      # pulled a mutable-ref third-party container into this credentialed job, so
+      # it was removed rather than pinned. (#1762)
       - name: Update config.yaml with release version
+        env:
+          PUSH_TOKEN: ${{ steps.token.outputs.value }}
         run: |
           VERSION="${{ inputs.version }}"
           echo "Updating addon config.yaml to version $VERSION (using token: ${{ steps.token.outputs.source }})"
@@ -85,6 +92,6 @@ jobs:
             echo "No changes to config.yaml, skipping commit"
           else
             git commit -m "chore(addon): ${{ inputs.commit_message_prefix }} $VERSION [skip ci]"
-            git push
+            git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:master
             echo "✓ Updated addon config.yaml to $VERSION"
           fi
