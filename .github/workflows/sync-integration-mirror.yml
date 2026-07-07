@@ -1,11 +1,17 @@
 name: Sync Integration Mirror
 
 # Keeps homeassistant-ai/ha-mcp-integration (the HACS distribution mirror)
-# in lockstep: master pushes sync the dev channel (mirror main), releases
-# cut a matching mirror release (stable channel). The mirror's README is
-# composed from a permanent prefix blurb plus the main repo README (with
+# in lockstep: master pushes sync the dev channel (mirror main), and a stable
+# release cuts a matching mirror release (stable channel). The mirror's README
+# is composed from a permanent prefix blurb plus the main repo README (with
 # relative links/images absolutized) so the HACS page mirrors the main docs.
 # The mirror carries no hand-made changes.
+#
+# The stable-release tagging runs on `workflow_run` after "SemVer Release"
+# completes, NOT on the `release` event: the release is created by the
+# release-bot App and that `release: published` event does not reliably fan out
+# to this workflow, so the mirror never got tagged. This is the same reason
+# release-publish.yml uses workflow_run — mirroring that proven trigger here.
 permissions:
   contents: read
 
@@ -19,8 +25,9 @@ on:
       - "README.md"
       - ".github/integration-mirror-readme-prefix.md"
       - "scripts/build_mirror_readme.py"
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["SemVer Release"]
+    types: [completed]
   workflow_dispatch:
 
 jobs:
@@ -72,10 +79,16 @@ jobs:
           fi
 
       - name: Tag mirror for stable release
-        # The mirror's own release-on-tag workflow turns this tag into a
-        # GitHub release (the monorepo GITHUB_TOKEN has no cross-repo API
-        # access; the deploy key can only push).
-        if: github.event_name == 'release' && github.event.release.prerelease == false
+        # Tags the mirror with the current component version after a successful
+        # SemVer Release (or a manual re-run). The mirror's own release-on-tag
+        # workflow turns this tag into a GitHub release (the monorepo
+        # GITHUB_TOKEN has no cross-repo API access; the deploy key can only
+        # push). Idempotent: an existing tag no-ops, so a release that did not
+        # change the component version simply re-confirms the current tag.
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'workflow_run' &&
+           github.event.workflow_run.conclusion == 'success')
         env:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
         run: |
