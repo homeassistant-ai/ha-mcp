@@ -12,6 +12,11 @@ from ._base import _SearchBase
 
 logger = logging.getLogger(__name__)
 
+# Bounds the per-frame response size of config/entity_registry/get_entries
+# (extended entries, ~1KB typical each) so alias enrichment can't produce an
+# over-cap WebSocket frame on large instances (#1721).
+_GET_ENTRIES_CHUNK_SIZE = 500
+
 
 class EntitySearchMixin(_SearchBase):
     """``smart_entity_search`` and ``get_entities_by_area`` plus helpers."""
@@ -148,36 +153,67 @@ class EntitySearchMixin(_SearchBase):
         """Batch-fetch full registry entries for aliases.
 
         ``config/entity_registry/list`` deliberately omits ``aliases``;
-        ``get_entries`` includes them. One extra round-trip enriches the
-        survivor set without N+1 fan-out.
+        ``get_entries`` includes them. Survivors are split into
+        ``_GET_ENTRIES_CHUNK_SIZE``-sized chunks fetched concurrently: a
+        bounded number of round-trips (len(ids) / 500), not N+1 fan-out, and
+        each response frame stays bounded regardless of instance size.
+        Enrichment is best-effort per chunk — one chunk failing does not
+        drop aliases fetched by the others.
         """
         aliases_map: dict[str, list[str]] = {}
         if not survivor_ids:
             return aliases_map
-        try:
-            entries_resp = await self.client.send_websocket_message(
-                {
-                    "type": "config/entity_registry/get_entries",
-                    "entity_ids": survivor_ids,
-                }
-            )
-            if isinstance(entries_resp, dict) and entries_resp.get("success"):
-                for eid, entry in (entries_resp.get("result", {}) or {}).items():
-                    if isinstance(entry, dict):
-                        aliases_map[eid] = entry.get("aliases", []) or []
-            else:
+
+        chunks: list[list[str]] = [
+            survivor_ids[i : i + _GET_ENTRIES_CHUNK_SIZE]
+            for i in range(0, len(survivor_ids), _GET_ENTRIES_CHUNK_SIZE)
+        ]
+        responses: list[Any] = await asyncio.gather(
+            *(
+                self.client.send_websocket_message(
+                    {
+                        "type": "config/entity_registry/get_entries",
+                        "entity_ids": chunk,
+                    }
+                )
+                for chunk in chunks
+            ),
+            return_exceptions=True,
+        )
+
+        for chunk, entries_resp in zip(chunks, responses, strict=True):
+            # Same convention as _fetch_search_entities: a captured
+            # CancelledError means the surrounding task is being torn
+            # down — propagate it instead of degrading to a warning.
+            if isinstance(entries_resp, asyncio.CancelledError):
+                raise entries_resp
+            if isinstance(entries_resp, BaseException):
                 logger.warning(
-                    "alias_enrichment_failed: get_entries returned non-success "
-                    "for %d entities (resp=%r)",
-                    len(survivor_ids),
+                    "alias_enrichment_failed: get_entries chunk of %d entities "
+                    "raised (err=%r)",
+                    len(chunk),
                     entries_resp,
                 )
-        except (KeyError, TypeError, AttributeError) as alias_err:
-            logger.warning(
-                "alias_enrichment_failed: malformed payload for %d entities (err=%r)",
-                len(survivor_ids),
-                alias_err,
-            )
+                continue
+            try:
+                if isinstance(entries_resp, dict) and entries_resp.get("success"):
+                    for eid, entry in (entries_resp.get("result", {}) or {}).items():
+                        if isinstance(entry, dict):
+                            aliases_map[eid] = entry.get("aliases", []) or []
+                else:
+                    logger.warning(
+                        "alias_enrichment_failed: get_entries returned non-success "
+                        "for a chunk of %d entities (resp=%r)",
+                        len(chunk),
+                        entries_resp,
+                    )
+            except (KeyError, TypeError, AttributeError) as alias_err:
+                logger.warning(
+                    "alias_enrichment_failed: malformed payload for a chunk of "
+                    "%d entities (err=%r)",
+                    len(chunk),
+                    alias_err,
+                )
         return aliases_map
 
     async def _fetch_search_entities(
