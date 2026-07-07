@@ -702,9 +702,15 @@ class HomeAssistantWebSocketClient:
             result_response = await asyncio.wait_for(
                 result_future, timeout=wait_timeout
             )
-        except TimeoutError:
+        except BaseException:
             self.cancel_pending_response(message_id)
             self.cancel_event_response(message_id)
+            # A connection drop fails BOTH futures via reset_connection;
+            # only result_future gets awaited on this path, so retrieve
+            # event_future's exception too or asyncio logs an ERROR-level
+            # "Future exception was never retrieved" when it is GC'd.
+            if event_future.done() and not event_future.cancelled():
+                event_future.exception()
             raise
 
         if not result_response.get("success"):

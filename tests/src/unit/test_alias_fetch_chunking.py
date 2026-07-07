@@ -10,6 +10,7 @@ replacement: bounded per-frame size, concurrent fetch, and per-chunk
 best-effort failure handling.
 """
 
+import asyncio
 import logging
 import math
 from unittest.mock import patch
@@ -39,18 +40,28 @@ class RecordingClient:
         self,
         fail_on_call: int | None = None,
         fail_response_on_call: int | None = None,
+        cancel_on_call: int | None = None,
+        malformed_on_call: int | None = None,
     ) -> None:
         self.calls: list[dict] = []
         self.fail_on_call = fail_on_call
         self.fail_response_on_call = fail_response_on_call
+        self.cancel_on_call = cancel_on_call
+        self.malformed_on_call = malformed_on_call
 
     async def send_websocket_message(self, message: dict) -> dict:
         self.calls.append(message)
         call_number = len(self.calls)
         if self.fail_on_call == call_number:
             raise RuntimeError(f"simulated failure on call {call_number}")
+        if self.cancel_on_call == call_number:
+            raise asyncio.CancelledError
         if self.fail_response_on_call == call_number:
             return {"success": False, "error": "simulated failure"}
+        if self.malformed_on_call == call_number:
+            # success=True but result is a list, not the expected dict --
+            # .items() raises AttributeError in the merge loop.
+            return {"success": True, "result": ["not-a-dict"]}
         entity_ids = message["entity_ids"]
         return {
             "success": True,
@@ -70,8 +81,9 @@ class TestAliasFetchChunking:
         tools = _make_tools(client)
         survivor_ids = _entity_ids(2501)
 
-        aliases_map = await tools._fetch_entity_aliases(survivor_ids)
+        aliases_map, warnings = await tools._fetch_entity_aliases(survivor_ids)
 
+        assert warnings == []
         expected_calls = math.ceil(len(survivor_ids) / _GET_ENTRIES_CHUNK_SIZE)
         assert len(client.calls) == expected_calls == 6
 
@@ -92,8 +104,9 @@ class TestAliasFetchChunking:
         tools = _make_tools(client)
         survivor_ids = _entity_ids(3)
 
-        aliases_map = await tools._fetch_entity_aliases(survivor_ids)
+        aliases_map, warnings = await tools._fetch_entity_aliases(survivor_ids)
 
+        assert warnings == []
         assert len(client.calls) == 1
         assert client.calls[0]["entity_ids"] == survivor_ids
         assert len(aliases_map) == 3
@@ -109,8 +122,9 @@ class TestAliasFetchChunking:
         with caplog.at_level(
             logging.WARNING, logger="ha_mcp.tools.smart_search._entities"
         ):
-            aliases_map = await tools._fetch_entity_aliases(survivor_ids)
+            aliases_map, warnings = await tools._fetch_entity_aliases(survivor_ids)
 
+        assert any("Alias enrichment incomplete" in w for w in warnings)
         assert len(client.calls) == 2
         # First chunk's aliases survive the second chunk's failure.
         first_chunk_id = survivor_ids[0]
@@ -131,8 +145,9 @@ class TestAliasFetchChunking:
         with caplog.at_level(
             logging.WARNING, logger="ha_mcp.tools.smart_search._entities"
         ):
-            aliases_map = await tools._fetch_entity_aliases(survivor_ids)
+            aliases_map, warnings = await tools._fetch_entity_aliases(survivor_ids)
 
+        assert any("Alias enrichment incomplete" in w for w in warnings)
         assert len(client.calls) == 2
         # The failed first chunk contributed no aliases...
         first_chunk_id = survivor_ids[0]
@@ -144,11 +159,44 @@ class TestAliasFetchChunking:
         assert "alias_enrichment_failed" in caplog.text
 
     @pytest.mark.asyncio
+    async def test_cancelled_chunk_propagates(self):
+        """A cancelled sub-fetch must abort enrichment, not degrade to a warning.
+
+        Swallowing a captured CancelledError as best-effort would reintroduce
+        the #1721 failure class on the new concurrent path.
+        """
+        client = RecordingClient(cancel_on_call=2)
+        tools = _make_tools(client)
+        survivor_ids = _entity_ids(_GET_ENTRIES_CHUNK_SIZE + 1)
+
+        with pytest.raises(asyncio.CancelledError):
+            await tools._fetch_entity_aliases(survivor_ids)
+
+    @pytest.mark.asyncio
+    async def test_malformed_success_payload_tolerated(self, caplog):
+        """success=True with a non-dict result warns and keeps other chunks."""
+        client = RecordingClient(malformed_on_call=1)
+        tools = _make_tools(client)
+        survivor_ids = _entity_ids(_GET_ENTRIES_CHUNK_SIZE + 1)
+
+        with caplog.at_level(
+            logging.WARNING, logger="ha_mcp.tools.smart_search._entities"
+        ):
+            aliases_map, warnings = await tools._fetch_entity_aliases(survivor_ids)
+
+        assert any("Alias enrichment incomplete" in w for w in warnings)
+        assert survivor_ids[0] not in aliases_map
+        second_chunk_id = survivor_ids[-1]
+        assert aliases_map[second_chunk_id] == [f"alias-{second_chunk_id}"]
+        assert "alias_enrichment_failed" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_empty_survivor_ids_returns_empty_and_makes_no_calls(self):
         client = RecordingClient()
         tools = _make_tools(client)
 
-        aliases_map = await tools._fetch_entity_aliases([])
+        aliases_map, warnings = await tools._fetch_entity_aliases([])
 
         assert aliases_map == {}
+        assert warnings == []
         assert client.calls == []

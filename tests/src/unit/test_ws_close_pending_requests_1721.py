@@ -20,6 +20,8 @@ import logging
 
 import pytest
 import websockets
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from websockets.frames import Close
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.client.websocket_client import (
@@ -99,11 +101,14 @@ async def test_close_code_and_reason_surface_in_log_and_error(caplog):
             with pytest.raises(HomeAssistantConnectionError) as excinfo:
                 await client.send_command("config/entity_registry/list")
         assert "1009" in str(excinfo.value)
-        messages = [record.getMessage() for record in caplog.records]
+        # Abnormal closes must stay visible at WARNING -- the #1721 pain was
+        # a close that logged nothing actionable at default log levels.
         assert any(
-            "1009" in message and "frame exceeds limit" in message
-            for message in messages
-        ), f"close code/reason not logged; got: {messages}"
+            record.levelno == logging.WARNING
+            and "1009" in record.getMessage()
+            and "frame exceeds limit" in record.getMessage()
+            for record in caplog.records
+        ), f"close code/reason not logged at WARNING; got: {caplog.records}"
         await client.disconnect()
     finally:
         server.close()
@@ -151,3 +156,169 @@ def test_max_ws_message_bytes_matches_supervisor_ceiling():
     WebSocket API); a ~6.4k-entity instance overflowed the previous 20MB cap.
     """
     assert MAX_WS_MESSAGE_BYTES == 64 * 1024 * 1024
+
+
+async def test_connect_wires_max_size_into_websockets(monkeypatch):
+    """MAX_WS_MESSAGE_BYTES must actually reach websockets.connect."""
+    captured: dict = {}
+
+    async def fake_connect(url, **kwargs):
+        captured.update(kwargs)
+        raise OSError("abort after capture")
+
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+    client = HomeAssistantWebSocketClient(
+        "http://127.0.0.1:1", "test-token", verify_ssl=False
+    )
+    assert await client.connect() is False
+    assert captured["max_size"] == MAX_WS_MESSAGE_BYTES
+
+
+class _ClosingFakeWebSocket:
+    """Async-iterable stub whose iteration raises a given exception.
+
+    Lets tests drive ``_message_handler`` through close paths a real
+    loopback server cannot produce on demand -- most importantly the
+    self-initiated close (``rcvd=None, sent=Close(1009)``), which is the
+    literal #1721 trigger (the client fails the connection on an
+    over-``max_size`` frame).
+    """
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    def __aiter__(self) -> "_ClosingFakeWebSocket":
+        return self
+
+    async def __anext__(self) -> str:
+        raise self._exc
+
+    async def close(self) -> None:
+        return None
+
+
+async def _run_handler_with(
+    exc: BaseException,
+) -> tuple[HomeAssistantWebSocketClient, "asyncio.Future[dict]"]:
+    """Drive _message_handler against a stub socket that dies with ``exc``."""
+    client = HomeAssistantWebSocketClient(
+        "http://127.0.0.1:1", "test-token", verify_ssl=False
+    )
+    client.websocket = _ClosingFakeWebSocket(exc)  # type: ignore[assignment]
+    future = client._state.register_pending_request(1)
+    await client._message_handler()
+    return client, future
+
+
+async def test_sent_close_1009_reaches_future_and_logs_warning(caplog):
+    """Self-initiated close (over-max_size frame) surfaces 'sent close code 1009'."""
+    caplog.set_level(logging.INFO, logger="ha_mcp.client.websocket_client")
+    exc = ConnectionClosedError(
+        rcvd=None,
+        sent=Close(1009, "frame exceeds limit of 67108864 bytes"),
+    )
+    _, future = await _run_handler_with(exc)
+
+    with pytest.raises(HomeAssistantConnectionError, match="sent close code 1009"):
+        future.result()
+    assert any(
+        record.levelno == logging.WARNING
+        and "sent close code 1009" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+async def test_clean_close_logs_info(caplog):
+    """A normal close (1000) stays at INFO -- no alarm for routine teardown."""
+    caplog.set_level(logging.INFO, logger="ha_mcp.client.websocket_client")
+    exc = ConnectionClosedOK(
+        rcvd=Close(1000, ""),
+        sent=Close(1000, ""),
+        rcvd_then_sent=True,
+    )
+    _, future = await _run_handler_with(exc)
+
+    # Consume the future's exception: even a clean close fails pending
+    # requests (and an unretrieved exception would pollute caplog with
+    # asyncio's own ERROR record).
+    assert isinstance(future.exception(), HomeAssistantConnectionError)
+    close_records = [
+        record
+        for record in caplog.records
+        if record.name == "ha_mcp.client.websocket_client"
+        and "received close code 1000" in record.getMessage()
+    ]
+    assert close_records, f"clean close not logged; got: {caplog.records}"
+    assert all(record.levelno == logging.INFO for record in close_records)
+
+
+async def test_abrupt_drop_without_close_frame_logs_warning(caplog):
+    """Transport loss with no close frame still warns and fails the future."""
+    caplog.set_level(logging.INFO, logger="ha_mcp.client.websocket_client")
+    exc = ConnectionClosedError(rcvd=None, sent=None)
+    _, future = await _run_handler_with(exc)
+
+    with pytest.raises(
+        HomeAssistantConnectionError, match="dropped without a close frame"
+    ):
+        future.result()
+    assert any(
+        record.levelno == logging.WARNING
+        and "dropped without a close frame" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+async def test_handler_generic_exception_fails_future_with_reason():
+    """A non-ConnectionClosed handler error still fails futures with its text."""
+    _, future = await _run_handler_with(RuntimeError("boom"))
+
+    with pytest.raises(HomeAssistantConnectionError, match="boom"):
+        future.result()
+
+
+async def test_command_with_event_drop_retrieves_event_future_exception():
+    """A drop during the result phase must not leak event_future's exception.
+
+    reset_connection fails BOTH futures registered by send_command_with_event;
+    only result_future is awaited on that path, so the client must retrieve
+    event_future's exception itself or asyncio logs an ERROR-level "Future
+    exception was never retrieved" when the future is garbage-collected.
+    ``_log_traceback`` is asyncio's retrieved-flag: True after set_exception,
+    flipped False only by result()/exception() — asserting it False proves the
+    production code consumed the exception (GC-log-based detection is not
+    deterministic because the raised exception's traceback keeps the future
+    alive).
+    """
+
+    async def close_on_command(connection, msg):
+        await connection.close(code=1011, reason="backend went away")
+
+    server = await websockets.serve(_fake_ha_server(close_on_command), "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        client = await _connect_client(port)
+        captured: list[asyncio.Future] = []
+        original = client.register_event_response
+
+        def capturing(message_id: int) -> asyncio.Future:
+            future = original(message_id)
+            captured.append(future)
+            return future
+
+        client.register_event_response = capturing  # type: ignore[method-assign]
+        async with asyncio.timeout(5):
+            with pytest.raises(HomeAssistantConnectionError):
+                await client.send_command_with_event("system_health/info")
+
+        (event_future,) = captured
+        assert event_future.done() and not event_future.cancelled()
+        assert event_future._log_traceback is False, (
+            "event_future's exception was never retrieved -- asyncio would "
+            "log 'Future exception was never retrieved' at GC"
+        )
+        assert isinstance(event_future.exception(), HomeAssistantConnectionError)
+        await client.disconnect()
+    finally:
+        server.close()
+        await server.wait_closed()
