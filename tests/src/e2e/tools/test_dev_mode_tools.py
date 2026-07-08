@@ -29,6 +29,19 @@ FEATURE_FLAG = "HAMCP_ENABLE_DEV_MODE"
 DEV_TOOL_NAMES = {"ha_dev_manage_server", "ha_dev_manage_settings"}
 
 
+def _reset_settings_state():
+    """Drop the cached Settings singleton + data-dir memo.
+
+    Both are read-once caches; every env mutation in this module must be
+    followed by this reset or the server under test sees stale values.
+    """
+    from ha_mcp.config import reset_global_settings
+    from ha_mcp.utils.data_paths import get_data_dir
+
+    get_data_dir.cache_clear()
+    reset_global_settings()
+
+
 @pytest.fixture(scope="module")
 def dev_mode_enabled(ha_container_with_fresh_config, tmp_path_factory):
     """Enable dev mode + isolate the data dir for the test module.
@@ -37,17 +50,12 @@ def dev_mode_enabled(ha_container_with_fresh_config, tmp_path_factory):
     ``get_data_dir()``; pointing ``HA_MCP_CONFIG_DIR`` at a module tmp
     dir keeps those writes away from the developer's real data dir.
     """
-    from ha_mcp.utils.data_paths import get_data_dir
-
     old_flag = os.environ.get(FEATURE_FLAG)
     old_dir = os.environ.get("HA_MCP_CONFIG_DIR")
     data_dir = tmp_path_factory.mktemp("dev-mode-data")
     os.environ[FEATURE_FLAG] = "true"
     os.environ["HA_MCP_CONFIG_DIR"] = str(data_dir)
-    get_data_dir.cache_clear()
-    import ha_mcp.config
-
-    ha_mcp.config._settings = None
+    _reset_settings_state()
     logger.info("Dev mode feature flag enabled (data dir: %s)", data_dir)
     yield data_dir
     if old_flag is not None:
@@ -58,8 +66,7 @@ def dev_mode_enabled(ha_container_with_fresh_config, tmp_path_factory):
         os.environ["HA_MCP_CONFIG_DIR"] = old_dir
     else:
         os.environ.pop("HA_MCP_CONFIG_DIR", None)
-    get_data_dir.cache_clear()
-    ha_mcp.config._settings = None
+    _reset_settings_state()
 
 
 @pytest.fixture(scope="module")
@@ -92,9 +99,7 @@ class TestDevModeAvailability:
         """Verify the ha_dev_* tools are NOT registered when the flag is off."""
         original = os.environ.pop(FEATURE_FLAG, None)
         try:
-            import ha_mcp.config
-
-            ha_mcp.config._settings = None
+            _reset_settings_state()
 
             from fastmcp import Client
 
@@ -115,9 +120,7 @@ class TestDevModeAvailability:
         finally:
             if original:
                 os.environ[FEATURE_FLAG] = original
-            import ha_mcp.config
-
-            ha_mcp.config._settings = None
+            _reset_settings_state()
 
     async def test_dev_tools_registered_when_enabled(self, mcp_client_with_dev_mode):
         tool_names = {t.name for t in await mcp_client_with_dev_mode.list_tools()}
