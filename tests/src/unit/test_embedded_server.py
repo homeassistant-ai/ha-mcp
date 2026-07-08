@@ -1422,6 +1422,7 @@ class TestLifecycle:
             "_async_wait_until_ready",
             AsyncMock(side_effect=lambda: calls.append("ready")),
         )
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: calls.append("purge"))
         # Replace the thread body so no real ha_mcp import happens.
         started = []
         monkeypatch.setattr(mgr, "_thread_main", lambda token: started.append(token))
@@ -1430,7 +1431,10 @@ class TestLifecycle:
         if mgr._thread is not None:
             mgr._thread.join(timeout=2)
 
-        assert calls == ["ensure", "token", "dir", "ready"]
+        # The module purge must land between the pip install (so the fresh
+        # code is on disk) and the thread spawn (so the worker's import
+        # resolves from disk, not the process-wide module cache).
+        assert calls == ["ensure", "token", "dir", "purge", "ready"]
         assert started == ["tok"]
 
     async def test_stop_without_start_is_noop(self, tmp_path):
@@ -1517,3 +1521,108 @@ class TestLifecycle:
         mgr, _hass, _entry = _manager(tmp_path)
         mgr._prepare_config_dir()
         assert os.path.isdir(mgr._config_dir)
+
+
+class TestPurgeHaMcpModules:
+    """The stale-worker fix: cached ha_mcp modules are dropped per start.
+
+    Regression guard for the live-found bug where an entry reload
+    reinstalled the package but the new worker silently reused the OLD
+    code from ``sys.modules`` — updates only took effect after a full HA
+    core restart.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _preserve_real_modules(self):
+        """Restore any genuinely imported ha_mcp modules after each test.
+
+        Other unit tests in the same pytest session import the real
+        ``ha_mcp``; purging it here without restoring would change module
+        identity for everything that runs afterwards.
+        """
+        saved = {
+            name: mod
+            for name, mod in sys.modules.items()
+            if name == "ha_mcp" or name.startswith("ha_mcp.")
+        }
+        yield
+        sys.modules.update(saved)
+
+    def test_purges_only_ha_mcp_modules(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "ha_mcp", ModuleType("ha_mcp"))
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ModuleType("ha_mcp.config"))
+        unrelated = ModuleType("ha_mcp_other")
+        monkeypatch.setitem(sys.modules, "ha_mcp_other", unrelated)
+
+        es._purge_ha_mcp_modules()
+
+        assert "ha_mcp" not in sys.modules
+        assert "ha_mcp.config" not in sys.modules
+        # Prefix match must not swallow lookalike top-level names.
+        assert sys.modules["ha_mcp_other"] is unrelated
+
+    def test_noop_when_nothing_cached(self):
+        for name in [
+            n for n in list(sys.modules) if n == "ha_mcp" or n.startswith("ha_mcp.")
+        ]:
+            sys.modules.pop(name)
+        es._purge_ha_mcp_modules()  # must not raise
+
+
+class TestRunningVersionStalenessWarning:
+    async def test_start_warns_when_running_version_stale(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "9.9.9")
+
+        def _ready_with_stale_worker():
+            # Deterministic stand-in for the _serve stash: the worker
+            # imported an older generation than what pip just installed.
+            mgr._running_version = "1.1.1"
+
+        monkeypatch.setattr(
+            mgr,
+            "_async_wait_until_ready",
+            AsyncMock(side_effect=_ready_with_stale_worker),
+        )
+
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert "running version 1.1.1" in caplog.text
+        assert "restart Home Assistant" in caplog.text
+
+    async def test_start_quiet_when_versions_match(self, tmp_path, monkeypatch, caplog):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "1.1.1")
+
+        def _ready_with_current_worker():
+            mgr._running_version = "1.1.1"
+
+        monkeypatch.setattr(
+            mgr,
+            "_async_wait_until_ready",
+            AsyncMock(side_effect=_ready_with_current_worker),
+        )
+
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert "restart Home Assistant" not in caplog.text

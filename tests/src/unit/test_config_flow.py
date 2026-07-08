@@ -371,6 +371,19 @@ class TestServerOptionsFlow:
         )
         assert result["data"][const.OPT_PIP_SPEC] == ""
 
+    def test_pip_spec_field_empty_when_no_override(self):
+        # The "leave blank to follow the channel" field must actually BE
+        # blank when no override is stored — pre-filling the default dist
+        # name as a hint made it always look populated (and showed the
+        # STABLE dist name even on the dev channel). A saved override still
+        # pre-fills: see test_form_prefills_every_field_from_saved_options.
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        form = asyncio.run(flow.async_step_init(None))
+        marker = next(
+            m for m in form["data_schema"].schema if m.schema == const.OPT_PIP_SPEC
+        )
+        assert marker.default() == ""
+
     def test_no_enable_toggle_option_exists(self):
         # Regression guard for the single-instance pivot: the enable/disable
         # toggle was dropped (entry-exists = server runs).

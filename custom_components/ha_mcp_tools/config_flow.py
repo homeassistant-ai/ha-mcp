@@ -252,10 +252,12 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                 ),
                 vol.Optional(
                     OPT_PIP_SPEC,
-                    # ``or DEFAULT_PIP_SPEC`` so a stored-empty spec (the normalized
-                    # "no override" state) re-displays the default (the unpinned
-                    # stable distribution) as a hint.
-                    default=opts.get(OPT_PIP_SPEC) or DEFAULT_PIP_SPEC,
+                    # Pre-fill only a genuinely saved override. The normalized
+                    # "no override" state renders an EMPTY field — pre-filling
+                    # DEFAULT_PIP_SPEC as a hint made a field whose help text
+                    # says "leave blank" always look populated, and showed the
+                    # STABLE dist name even on the dev channel.
+                    default=opts.get(OPT_PIP_SPEC, ""),
                 ): str,
                 vol.Optional(
                     OPT_SERVER_URL,
