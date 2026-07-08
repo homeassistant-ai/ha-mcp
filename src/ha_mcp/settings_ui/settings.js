@@ -217,6 +217,22 @@ async function applyInfoChrome() {
           'Desktop. Restarting the App (add-on) alone does not refresh your ' +
           'client\'s cached tool list.';
       }
+    } else if (info.deployment_mode === 'embedded') {
+      // In-process (custom component) server: the restart endpoint reloads
+      // the server config entry, which reinstalls-if-newer and swaps the
+      // worker onto the freshly installed code.
+      const rbtn = document.getElementById('restartBtn');
+      rbtn.style.display = '';
+      rbtn.textContent = 'Restart HA-MCP Server';
+      if (noticeEl) {
+        noticeEl.textContent =
+          '⚠ Changes saved. Click "Restart HA-MCP Server" (reloads the ' +
+          'in-process server integration) for them to take effect. ' +
+          'Disabled tools will be fully removed from the MCP tool list on ' +
+          'next startup. Then refresh the tool list in your AI client — ' +
+          'e.g. refresh tool list on claude.ai, re-add or refresh the ' +
+          'connector in ChatGPT, or close and reopen Claude Desktop.';
+      }
     } else if (info.is_sidecar) {
       if (noticeEl) {
         noticeEl.textContent =
@@ -414,7 +430,7 @@ async function _runRestartReloadCycle(previousInstanceId) {
 async function restartAddon() {
   if (restartInProgress) return;
   const btn = document.getElementById('restartBtn');
-  if (!confirm('Restart the App (add-on) now? The page will reload automatically once the App (add-on) is back online.')) return;
+  if (!confirm('Restart HA-MCP now? The page will reload automatically once it is back online.')) return;
   restartInProgress = true;
   btn.disabled = true;
   btn.textContent = 'Restarting…';

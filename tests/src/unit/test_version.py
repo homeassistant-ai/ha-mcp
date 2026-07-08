@@ -288,3 +288,47 @@ class TestLogStartupVersion:
         # add-on upgrade hint, not the dev-channel banner (suppressed in add-on)
         assert any("Settings -> Add-ons" in m for m in warnings), warnings
         assert not any("dev channel" in m for m in warnings), warnings
+
+
+class TestGetVersionDistOwnership:
+    """get_version prefers the distribution that owns the ha_mcp package.
+
+    Regression guard for the live-found ambiguity: both channel dists can
+    leave metadata behind (interrupted channel switch / failed best-effort
+    uninstall), and the old fixed name order then reported the leftover
+    dist's version instead of the installed one.
+    """
+
+    def test_prefers_owning_distribution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from ha_mcp import _version
+
+        monkeypatch.delenv("HA_MCP_BUILD_VERSION", raising=False)
+        monkeypatch.setattr(
+            _version.importlib.metadata,
+            "packages_distributions",
+            lambda: {"ha_mcp": ["ha-mcp-dev"]},
+        )
+        monkeypatch.setattr(
+            _version.importlib.metadata,
+            "version",
+            lambda dist: {"ha-mcp": "1.0.0", "ha-mcp-dev": "2.0.0.dev5"}[dist],
+        )
+        assert get_version() == "2.0.0.dev5"
+
+    def test_ambiguous_owners_fall_back_to_name_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ha_mcp import _version
+
+        monkeypatch.delenv("HA_MCP_BUILD_VERSION", raising=False)
+        monkeypatch.setattr(
+            _version.importlib.metadata,
+            "packages_distributions",
+            lambda: {"ha_mcp": ["ha-mcp", "ha-mcp-dev"]},
+        )
+        monkeypatch.setattr(
+            _version.importlib.metadata,
+            "version",
+            lambda dist: {"ha-mcp": "1.0.0", "ha-mcp-dev": "2.0.0.dev5"}[dist],
+        )
+        assert get_version() == "1.0.0"
