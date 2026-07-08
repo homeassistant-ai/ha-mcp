@@ -119,7 +119,7 @@ Configure there just reports that.)
 | Option | Default | What it does |
 |--------|---------|--------------|
 | **Release channel** | `stable` | `stable` installs the latest stable release; `dev` installs the latest development build. Both channels update automatically (a reload or restart, plus a periodic check, install the newest build of the selected channel). See [Release channels](#release-channels). |
-| **Automatic server updates** | on | When on, the selected channel's newest release is installed automatically (on reload/restart and via a periodic check). When off, the server stays on the version currently installed until you turn this back on. Governs the ha-mcp **server package** only — component updates still come through HACS. A package override below overrides this. |
+| **Automatic server updates** | on | When on, the selected channel's newest release is installed automatically (on reload/restart and via a periodic check). When off, the server stays on the version currently installed — new releases are still offered on the server's update entity, and its **Install** button installs one without turning automatic updates back on. Governs the ha-mcp **server package** only — component updates still come through HACS. A package override below overrides this. |
 | **Server port** | `9584` | Local TCP port the server listens on. `9584` avoids the add-on's `9583` so an existing add-on install does not conflict. |
 | **Network access** | `0.0.0.0` | The default matches the add-on: the port is reachable on your LAN with the secret path as the credential. `127.0.0.1` restricts direct access to the Home Assistant machine (the webhook and panel work either way). |
 | **Webhook authentication** | `none` | `none`: the secret webhook URL is the credential. `ha_auth`: clients sign in with your Home Assistant account. See [Security](#security). |
@@ -146,13 +146,24 @@ unpinned: an entry reload or a Home Assistant restart always reinstalls the
 newest build of the selected channel, and on top of that the component checks
 PyPI for a newer build every 6 hours and reloads the entry automatically when
 one is published — so a long-running instance picks up releases without a
-restart. Turn **Automatic server updates** off to freeze the server on the
-version currently installed: the periodic check stops and reloads/restarts keep
-that exact version until you turn it back on (this governs the server package
+restart. Each automatic update also raises a notification naming the old and
+new version, with a link to the release notes. Turn **Automatic server
+updates** off to freeze the server on the version currently installed:
+reloads/restarts keep that exact version until you turn it back on or install
+a newer build yourself from the update entity (this governs the server package
 only — component updates still arrive through HACS). Setting the **ha-mcp
 package (advanced)** field overrides the channel entirely (pin a version, or
 install from a URL for pre-release testing) and also disables automatic updates
 until you clear it.
+
+The server's version is always visible on its **update entity**, under
+**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server**
+(and under **Settings → System → Updates** whenever an update is available).
+The entity shows the installed and latest version of the selected channel and
+links the release notes — the 6-hour PyPI check keeps it populated even with
+automatic updates off, where its **Install** button installs the offered
+version on your schedule. The server (`7.x`) and the component (`1.x`) are
+versioned independently: this entity and HACS each own one of the two numbers.
 
 Switching channels reinstalls the server from the other channel on the next
 reload. `ha-mcp` and `ha-mcp-dev` share the same import package, so the previous
@@ -163,6 +174,16 @@ one you have (HACS can deliver a server build before you update the component),
 a repair issue titled **Update the HA-MCP Custom Component via HACS** appears
 under **Settings → Repairs** with a link to the HACS update. The server keeps
 running; update the component via HACS to clear it.
+
+If the component was installed from the legacy location — the main `ha-mcp`
+server repository added directly as a HACS custom repository, before the
+dedicated [`ha-mcp-integration`](https://github.com/homeassistant-ai/ha-mcp-integration)
+mirror existed — a repair issue titled **Component installed from the legacy
+repository** appears. Such an install keeps working, but HACS displays the
+server's `7.x` version numbers and the server's release notes for the
+component. Follow the issue's link to add the mirror in HACS and reinstall the
+component from it (your settings and config entries are kept), then restart
+Home Assistant; the issue clears itself afterwards.
 
 ### Local-only mode
 
