@@ -509,3 +509,18 @@ class TestServerInfoDegradation:
         assert result["success"] is True
         assert any("component server entry" in w for w in result["warnings"])
         assert result["data"]["server_version"]
+
+
+class TestConcurrentSettingsWrites:
+    async def test_concurrent_sets_serialize_under_the_lock(self):
+        # Two overlapping set calls must both land — the shared override-file
+        # lock serializes the read-merge-write so neither clobbers the other.
+        dev_tools = DevTools(MagicMock())
+        await asyncio.gather(
+            dev_tools.ha_dev_manage_settings(
+                action="set", setting="log_level", value="DEBUG"
+            ),
+            dev_tools.ha_dev_manage_settings(action="set", setting="debug", value=True),
+        )
+        persisted = json.loads(_override_file_path().read_text())
+        assert persisted == {"log_level": "DEBUG", "debug": True}

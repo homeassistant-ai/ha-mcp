@@ -454,7 +454,7 @@ class DevTools:
                 return {
                     "success": True,
                     "data": {
-                        "settings": self._settings_rows(),
+                        "settings": await asyncio.to_thread(self._settings_rows),
                         "is_addon": is_running_in_addon(),
                         "is_embedded": is_embedded(),
                         "note": (
@@ -500,7 +500,7 @@ class DevTools:
                 choices = None
             elif setting in advanced:
                 env_name, ftype, _section, registry_editable = advanced[setting]
-                overrides = _read_feature_flag_override_file()
+                overrides = await asyncio.to_thread(_read_feature_flag_override_file)
                 origin = self._advanced_origin(setting, env_name, overrides)
                 editable = registry_editable and origin != "env"
                 bounds = _ADVANCED_SETTINGS_BOUNDS.get(setting)
@@ -728,7 +728,7 @@ class DevTools:
     async def _server_info(self) -> dict[str, Any]:
         from ..utils.data_paths import get_data_dir
 
-        version = get_version()
+        version = await asyncio.to_thread(get_version)
         if is_embedded():
             mode = "embedded"
         elif is_running_in_addon():

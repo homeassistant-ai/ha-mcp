@@ -1321,7 +1321,7 @@ class TestEmbeddedRestart:
         # The probe flow must not be left open.
         server.client.abort_options_flow.assert_awaited_once_with("f1")
 
-    def test_embedded_restart_500_when_entry_missing(self, monkeypatch):
+    def test_embedded_restart_409_when_entry_missing(self, monkeypatch):
         from unittest.mock import AsyncMock, MagicMock
 
         server = MagicMock()
@@ -1332,7 +1332,9 @@ class TestEmbeddedRestart:
         resp = self._post_restart(
             server, monkeypatch, lambda client, entry_id: scheduled.append(entry_id)
         )
-        assert resp.status_code == 500
+        # Below 500 on purpose: the restart JS treats 5xx as
+        # restart-in-flight and would start its poll-reload cycle.
+        assert resp.status_code == 409
         assert scheduled == []
 
 
@@ -1357,3 +1359,43 @@ class TestSettingsInfoDeploymentMode:
         resp = TestClient(app).get("/api/settings/info")
         assert resp.status_code == 200
         assert resp.json()["deployment_mode"] == "embedded"
+
+
+class TestEmbeddedRestartDiscoveryFailure:
+    def test_discovery_failure_is_not_masked_as_not_found(self, monkeypatch):
+        # A WS/connection failure during entry discovery must answer as a
+        # connection problem (and below 500 — no restart was initiated),
+        # not as "entry not found" with a reinstall-flavored suggestion.
+        from unittest.mock import AsyncMock, MagicMock
+
+        from starlette.routing import Route
+
+        from ha_mcp.tools import tools_dev
+
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        server = MagicMock()
+        server.client.send_websocket_message = AsyncMock(
+            side_effect=Exception("ws down")
+        )
+        scheduled: list = []
+        monkeypatch.setattr(
+            tools_dev,
+            "schedule_deferred_entry_reload",
+            lambda client, entry_id: scheduled.append(entry_id),
+        )
+        handlers = build_settings_handlers(server=server)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/settings/restart",
+                    handlers["restart_addon"],
+                    methods=["POST"],
+                )
+            ]
+        )
+        resp = TestClient(app).post("/api/settings/restart")
+        assert resp.status_code == 409
+        body = resp.json()
+        assert body["error"]["code"] == "CONNECTION_FAILED"
+        assert "not locate" not in body["error"]["message"]
+        assert scheduled == []

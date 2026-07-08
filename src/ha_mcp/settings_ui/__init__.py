@@ -1518,8 +1518,24 @@ def build_settings_handlers(
             try:
                 found = await find_server_config_entry(server.client)
             except Exception as exc:
+                # A discovery FAILURE is not "entry not found" — masking a
+                # WS/connection hiccup as not-found steers users toward
+                # reinstalling a running component. Also: the restart JS
+                # treats any 5xx as "restart in flight" and starts its
+                # poll-reload cycle, so a restart that was never initiated
+                # must answer BELOW 500.
                 logger.warning("Embedded restart: entry discovery failed: %s", exc)
-                found = None
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        "Could not reach Home Assistant to locate the "
+                        f"in-process server's config entry: {exc}",
+                        suggestions=[
+                            "Retry once Home Assistant is responsive",
+                        ],
+                    ),
+                    status_code=409,
+                )
             if found is None:
                 return JSONResponse(
                     create_error_response(
@@ -1531,7 +1547,9 @@ def build_settings_handlers(
                             "Devices & Services instead",
                         ],
                     ),
-                    status_code=500,
+                    # Below 500 on purpose: no restart was initiated, and the
+                    # restart JS interprets 5xx as restart-in-flight.
+                    status_code=409,
                 )
             entry_id, flow, _options = found
             await abort_options_flow_quietly(server.client, flow)
@@ -1666,7 +1684,10 @@ def build_settings_handlers(
         # either channel; standalone Docker / uvx falls back to the
         # installed package's metadata.
         try:
-            version = get_version()
+            # Executor: get_version's distribution-ownership scan reads
+            # metadata for every installed package — too heavy for the
+            # event loop on an endpoint the restart cycle polls.
+            version = await asyncio.to_thread(get_version)
         except Exception:  # pragma: no cover — defensive only
             logger.warning("get_version() raised; omitting version from info")
             version = None

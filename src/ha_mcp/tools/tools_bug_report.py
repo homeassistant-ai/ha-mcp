@@ -5,6 +5,7 @@ This module provides a tool to collect diagnostic information and guide users
 on how to create effective bug reports.
 """
 
+import asyncio
 import importlib
 import logging
 import os
@@ -133,7 +134,7 @@ def _detect_installed_version() -> str | None:
         importlib.invalidate_caches()
         return get_version()
     except Exception as e:
-        logger.debug("Installed-version probe failed: %s", e)
+        logger.info("Installed-version probe failed: %s", e)
         return None
 
 
@@ -598,7 +599,7 @@ class BugReportTools:
             version = payload.get("version") if isinstance(payload, dict) else None
             return str(version) if version else None
         except Exception as e:
-            logger.debug("Component version probe failed: %s", e)
+            logger.info("Component version probe failed: %s", e)
             return None
 
     @tool(
@@ -675,7 +676,7 @@ class BugReportTools:
         config_toggles = _get_config_toggles()
         mcp_transport = _detect_mcp_transport()
         client_info = _extract_client_info(ctx)
-        installed_version = _detect_installed_version()
+        installed_version = await asyncio.to_thread(_detect_installed_version)
         component_version = await self._detect_component_version()
 
         diagnostic_info: dict[str, Any] = {
