@@ -229,6 +229,7 @@ class DevTools:
                 context={"setting": fname, "value": raw},
             )
         )
+        return None  # unreachable; explicit for CodeQL
 
     @staticmethod
     async def _merge_file_override(changes: dict[str, Any]) -> None:
@@ -389,7 +390,7 @@ class DevTools:
     @tool(
         name="ha_dev_manage_settings",
         tags={"Developer"},
-        annotations={"title": "Manage Server Settings (dev)"},
+        annotations={"title": "Manage Server Settings (dev)", "destructiveHint": True},
     )
     @log_tool_usage
     async def ha_dev_manage_settings(
@@ -630,7 +631,7 @@ class DevTools:
     @tool(
         name="ha_dev_manage_server",
         tags={"Developer"},
-        annotations={"title": "Manage MCP Server (dev)"},
+        annotations={"title": "Manage MCP Server (dev)", "destructiveHint": True},
     )
     @log_tool_usage
     async def ha_dev_manage_server(

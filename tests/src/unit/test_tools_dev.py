@@ -1,5 +1,6 @@
 """Unit tests for tools_dev (developer-mode tools, issue #1775)."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -46,8 +47,13 @@ def _override_file_path():
 
 async def _drain_background_tasks():
     """Await any fire-and-forget tasks the tool spawned."""
-    for task in list(tools_dev._BACKGROUND_TASKS):
-        await task
+    tasks = list(tools_dev._BACKGROUND_TASKS)
+    if not tasks:
+        return
+    done, pending = await asyncio.wait(tasks)
+    assert not pending
+    for task in done:
+        task.result()  # re-raise anything the background task threw
 
 
 class TestRegistrationGating:
