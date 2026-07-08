@@ -212,12 +212,31 @@ CHANNEL_STABLE = "stable"
 CHANNEL_DEV = "dev"
 DEFAULT_CHANNEL = CHANNEL_STABLE
 
-# Automatic server-version updates. Both channels are unpinned, so an entry
-# reload / HA restart already reinstalls the newest build; on top of that the
-# component polls PyPI on this interval and reloads the entry when a newer build
-# is published, so a long-running instance picks up releases without a restart.
-# An explicit pip-spec override disables the check, as does turning off the
-# ``auto_update`` option (OPT_AUTO_UPDATE).
+
+def dist_for_channel(channel: str) -> str:
+    """Map a release channel to its PyPI distribution name.
+
+    The channel <-> distribution correspondence is used by the version
+    coordinator, the auto-update notification, and the server manager's pip
+    resolution — one shared mapping so a future third channel cannot be added
+    to some sites and missed in others (review finding on #1760).
+    """
+    return DIST_NAME_DEV if channel == CHANNEL_DEV else DIST_NAME_STABLE
+
+
+def channel_for_dist(dist: str) -> str:
+    """Inverse of :func:`dist_for_channel`."""
+    return CHANNEL_DEV if dist == DIST_NAME_DEV else CHANNEL_STABLE
+
+
+# Interval of the ServerVersionCoordinator's PyPI poll (coordinator.py). The
+# poll itself ALWAYS runs — it feeds the `update` platform entity, which must
+# stay populated even when automatic updates are off (issue #1760). Whether a
+# newer build actually triggers a reload/reinstall is decided separately, per
+# refresh, in embedded_setup.async_maybe_auto_update (gated on OPT_AUTO_UPDATE
+# and on no pip-spec override). Only an explicit pip-spec override skips the
+# PyPI fetch — comparing PyPI-latest against an arbitrary pip spec is
+# meaningless.
 UPDATE_CHECK_INTERVAL = timedelta(hours=6)
 
 # PyPI JSON API for the latest published version of a distribution. ``{dist}``
@@ -227,11 +246,13 @@ PYPI_JSON_URL = "https://pypi.org/pypi/{dist}/json"
 # Options-flow keys (stored in entry.options).
 OPT_CHANNEL = "channel"
 # Automatic server-version updates toggle (default on). When on, the channel is
-# unpinned and auto-updates (force-install on reload/restart + the periodic
-# check). When off, the server stays on the version currently installed:
-# _resolve_pip_spec pins the channel's dist to that version and the periodic
-# check is skipped. Governs the ha-mcp server package only — component updates
-# still come through HACS. An explicit OPT_PIP_SPEC override wins over both.
+# unpinned and auto-updates (force-install on reload/restart + a reload when the
+# periodic check sees a newer build). When off, the server stays on the version
+# currently installed: _resolve_pip_spec pins the channel's dist to that version
+# — but the periodic PyPI check KEEPS running so the update entity still shows
+# newer builds; its Install button is the manual path (issue #1760). Governs the
+# ha-mcp server package only — component updates still come through HACS. An
+# explicit OPT_PIP_SPEC override wins over both and skips the check entirely.
 OPT_AUTO_UPDATE = "auto_update"
 DEFAULT_AUTO_UPDATE = True
 OPT_SERVER_PORT = "server_port"
@@ -262,6 +283,14 @@ DATA_ACCESS_TOKEN = "access_token"
 # pre-release test channel) force an actual reinstall on the next start instead
 # of hitting the requirements manager's is-installed shortcut.
 DATA_LAST_PIP_SPEC = "last_pip_spec"
+# One-shot marker set by the update entity's Install button (issue #1760):
+# with auto-update off, EmbeddedServerManager._resolve_pip_spec pins the
+# channel to the CURRENTLY installed version, so a bare reload would just
+# reinstall the same build. This pins the next install to a specific version
+# regardless of auto_update; embedded_server clears it when it CONSUMES it
+# (before the install attempt) — one marker buys exactly one attempt, so a
+# failing pinned version can never re-pin later reloads (review finding).
+DATA_PENDING_INSTALL_VERSION = "pending_install_version"
 
 # hass.data[DOMAIN] sub-keys for the server runtime. Distinct from the tools
 # entry's sub-keys ("caller_token" / "allowed_paths") so both entry types can
@@ -273,6 +302,17 @@ DATA_BRINGUP_TASK = "bringup_task"
 # on a genuine options change — the background bring-up persists ids/token/pip
 # spec to entry.data, and those writes must not trigger a self-reload.
 DATA_LAST_OPTIONS = "last_options"
+# The ServerVersionCoordinator instance backing the `update` platform entity
+# (issue #1760) — stored so the platform's async_setup_entry can retrieve it.
+DATA_UPDATE_COORDINATOR = "update_coordinator"
+# Set by async_maybe_auto_update right before it reloads the entry for an
+# automatic update ({"old": <version>}): the "server updated" notification must
+# only fire once the reloaded entry's bring-up actually installed and started
+# the new build — the reload call returns as soon as entry SETUP finishes,
+# while the pip install still runs in the background and can fail (review
+# finding on #1760). Bring-up pops it: notification on success, silent drop on
+# failure (the package/start repair issues cover that path).
+DATA_PENDING_UPDATE_NOTIFY = "pending_update_notify"
 
 # Webhook auth modes (mirrors the webhook-proxy add-on's default posture).
 WEBHOOK_AUTH_NONE = "none"  # secret webhook URL is the shared secret (default)
@@ -309,6 +349,14 @@ SERVER_USER_NAME = "HA-MCP Server"
 # namespace (mirrors the webhook-proxy add-on's /api/mcp_proxy/oauth base).
 OAUTH_BASE = "/api/ha_mcp_tools/oauth"
 
+# HACS "add repository" deep link for the custom component. Shared learn_more_url
+# for every repair issue that ends with "install/reinstall the component via
+# HACS" (the component-outdated issue and the legacy-HACS-source issue below).
+HACS_COMPONENT_URL = (
+    "https://my.home-assistant.io/redirect/hacs_repository/"
+    "?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration"
+)
+
 # Repair-issue ids surfaced when server bring-up fails.
 ISSUE_PACKAGE_FAILED = "server_package_install_failed"
 ISSUE_START_FAILED = "server_start_failed"
@@ -318,3 +366,11 @@ ISSUE_START_FAILED = "server_start_failed"
 # the server expects; this points the user at the HACS component update
 # (non-blocking).
 ISSUE_COMPONENT_OUTDATED = "component_outdated"
+# Repair issue surfaced when HACS is tracking the MAIN ha-mcp server repo for
+# this component (the pre-mirror install path — issue #1760). That install
+# keeps working (HACS downloads the repo snapshot at the release tag, which
+# contains the component), but HACS shows the SERVER's version numbers and
+# release notes, not the component's own; HACS has no repository-migration
+# mechanism, so this only self-resolves if the user re-adds the dedicated
+# mirror (homeassistant-ai/ha-mcp-integration).
+ISSUE_LEGACY_HACS_SOURCE = "legacy_hacs_source"

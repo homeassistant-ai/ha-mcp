@@ -25,6 +25,7 @@ on:
       - "README.md"
       - ".github/integration-mirror-readme-prefix.md"
       - "scripts/build_mirror_readme.py"
+      - ".github/integration-mirror-workflows/**"
   workflow_run:
     workflows: ["SemVer Release"]
     types: [completed]
@@ -35,6 +36,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The release-notes step needs the full stable-tag history
+          # (git tag -l 'v*') to find the previous and current server
+          # release, not just the default single-commit shallow checkout.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up mirror push key
         env:
@@ -62,6 +69,13 @@ jobs:
             --prefix .github/integration-mirror-readme-prefix.md \
             --readme README.md \
             --out /tmp/mirror/README.md
+          # Deploy keys can push workflow files (unlike a PAT, they aren't
+          # subject to the `workflow` scope restriction), and the mirror
+          # carries no hand-made changes, so its release-on-tag.yml is
+          # synced from here too rather than hand-edited in the mirror.
+          mkdir -p /tmp/mirror/.github/workflows
+          cp .github/integration-mirror-workflows/release-on-tag.yml \
+            /tmp/mirror/.github/workflows/release-on-tag.yml
 
       - name: Commit and push
         env:
@@ -80,11 +94,18 @@ jobs:
 
       - name: Tag mirror for stable release
         # Tags the mirror with the current component version after a successful
-        # SemVer Release (or a manual re-run). The mirror's own release-on-tag
-        # workflow turns this tag into a GitHub release (the monorepo
-        # GITHUB_TOKEN has no cross-repo API access; the deploy key can only
-        # push). Idempotent: an existing tag no-ops, so a release that did not
-        # change the component version simply re-confirms the current tag.
+        # SemVer Release (or a manual re-run). The tag is ANNOTATED and its
+        # message carries the release notes body: the deploy key can push git
+        # refs (including annotated tags) but has no cross-repo GitHub API
+        # access to set a release body directly, so the mirror's
+        # release-on-tag.yml (synced from
+        # .github/integration-mirror-workflows/release-on-tag.yml) reads the
+        # tag message and uses it as-is. `--cleanup=verbatim` is required:
+        # `git tag -a -F` defaults to `--cleanup=strip`, which silently drops
+        # any line starting with "#" -- including the markdown heading the
+        # notes script emits. Idempotent: an existing tag no-ops, so a
+        # release that did not change the component version simply
+        # re-confirms the current tag.
         if: >-
           github.event_name == 'workflow_dispatch' ||
           (github.event_name == 'workflow_run' &&
@@ -93,10 +114,15 @@ jobs:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
         run: |
           VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
-          cd /tmp/mirror
-          if git ls-remote --tags origin "refs/tags/v${VER}" | grep -q .; then
+          if git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}" | grep -q .; then
             echo "mirror tag v${VER} exists"
             exit 0
           fi
-          git tag "v${VER}"
+          python3 scripts/build_mirror_release_notes.py \
+            --component-version "$VER" \
+            --out /tmp/mirror_notes.md
+          echo "--- release notes for v${VER} ---"
+          cat /tmp/mirror_notes.md
+          cd /tmp/mirror
+          git tag -a "v${VER}" -F /tmp/mirror_notes.md --cleanup=verbatim
           git push origin "v${VER}"

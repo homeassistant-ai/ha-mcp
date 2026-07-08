@@ -16,7 +16,11 @@ sys.modules["homeassistant"] = homeassistant
 sys.modules["homeassistant.components"] = homeassistant.components
 sys.modules["homeassistant.config"] = homeassistant.config
 sys.modules["homeassistant.config_entries"] = homeassistant.config_entries
-sys.modules["homeassistant.core"] = homeassistant.core
+# setdefault (not =): other test modules stub homeassistant.core with a real
+# `callback` identity function (production code decorates real closures with
+# it - a clobbered auto-mock attribute would silently replace them). This
+# file doesn't care what's already there, only that something importable is.
+sys.modules.setdefault("homeassistant.core", homeassistant.core)
 sys.modules["homeassistant.helpers"] = homeassistant.helpers
 sys.modules["homeassistant.helpers.config_validation"] = (
     homeassistant.helpers.config_validation

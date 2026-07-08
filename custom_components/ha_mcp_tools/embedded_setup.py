@@ -19,66 +19,52 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-from aiohttp import ClientError
 from awesomeversion import AwesomeVersion, AwesomeVersionException
 from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.loader import async_get_integration
 
 from .const import (
     BIND_HOST_ALL,
     CHANNEL_DEV,
+    DATA_BRINGUP_TASK,
     DATA_MANAGER,
+    DATA_PENDING_UPDATE_NOTIFY,
     DATA_SECRET_PATH,
+    DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
     DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
-    DEFAULT_CHANNEL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
-    DIST_NAME_DEV,
-    DIST_NAME_STABLE,
     DOMAIN,
+    HACS_COMPONENT_URL,
     ISSUE_COMPONENT_OUTDATED,
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
-    OPT_CHANNEL,
     OPT_ENABLE_WEBHOOK,
     OPT_EXTERNAL_URL,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_WEBHOOK_AUTH,
-    PYPI_JSON_URL,
     WEBHOOK_AUTH_NONE,
+    channel_for_dist,
 )
-from .embedded_server import (
-    EmbeddedServerError,
-    EmbeddedServerManager,
-    _installed_dist_version,
-)
+from .embedded_server import EmbeddedServerError, EmbeddedServerManager
 from .mcp_webhook import async_register_webhook, async_unregister_webhook
-
-# Per-request timeout for the PyPI auto-update poll — short so a slow or wedged
-# PyPI never ties up the periodic check; a miss just retries next interval.
-_PYPI_TIMEOUT_SECONDS = 30
-
-# HACS "add repository" deep link for the custom component, surfaced as the
-# component-outdated repair issue's Learn More link so the fix is one click away.
-_HACS_COMPONENT_URL = (
-    "https://my.home-assistant.io/redirect/hacs_repository/"
-    "?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration"
-)
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
+    from .coordinator import ServerVersionInfo
+
 _LOGGER = logging.getLogger(__name__)
 
 _NOTIFICATION_ID = "ha_mcp_tools_server_connect"
+_UPDATE_NOTIFICATION_ID = "ha_mcp_tools_server_updated"
 _ISSUE_IDS = (ISSUE_PACKAGE_FAILED, ISSUE_START_FAILED)
 
 
@@ -122,9 +108,12 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
                 "(direct port + sidebar panel)"
             )
         _surface_connect_urls(hass, entry, auth_mode, webhook_enabled=webhook_enabled)
+        await _async_finish_update_cycle(hass)
     except asyncio.CancelledError:
         # Unloaded mid-bring-up: undo whatever partial state exists, then let the
-        # cancellation propagate so the task ends cancelled.
+        # cancellation propagate so the task ends cancelled. The pending
+        # update-notification marker (if any) deliberately survives — it
+        # belongs to a bring-up that has not run yet, not to this one.
         await async_teardown_server(hass)
         raise
     except EmbeddedServerError as err:
@@ -135,11 +124,15 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         with suppress(Exception):
             await async_teardown_server(hass)
         _create_issue(hass, err.kind, str(err))
+        # The install did not land: never fire the "updated" notification for
+        # it — the repair issue above is the user-facing signal.
+        _drop_pending_update_notify(hass)
     except Exception as err:
         _LOGGER.exception("HA-MCP in-process server: bring-up failed")
         with suppress(Exception):
             await async_teardown_server(hass)
         _create_issue(hass, "start", str(err))
+        _drop_pending_update_notify(hass)
 
 
 async def async_teardown_server(hass: HomeAssistant) -> None:
@@ -316,19 +309,26 @@ def _clear_issues(hass: HomeAssistant) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def async_check_for_update(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the entry when the channel's PyPI dist has a newer build.
+async def async_maybe_auto_update(
+    hass: HomeAssistant, entry: ConfigEntry, info: ServerVersionInfo | None
+) -> None:
+    """Reload the entry when ``info`` shows a newer build AND auto-update is on.
 
-    Registered on a periodic interval by the entry setup (:mod:`embedded_entry`).
-    Both channels are unpinned, so reloading reinstalls the newest build and
-    restarts the server — the actual upgrade happens on the reload path, not
-    here. Skips entirely when a pip-spec override is set (the user pinned a
-    specific build and opted out of auto-update).
+    Called from the :class:`~.coordinator.ServerVersionCoordinator` listener
+    registered by :mod:`embedded_entry` on every refresh (every
+    ``UPDATE_CHECK_INTERVAL``, plus once shortly after setup). The coordinator
+    itself always fetches (see its docstring) so the `update` platform entity
+    stays populated regardless of this option; only the reload decided here is
+    gated on it.
 
-    Best-effort: an expected transient — a PyPI fetch error, a timeout, or an
-    unexpected payload shape — is logged at debug and swallowed (the next
-    interval retries). Genuine bugs propagate per the repo's no-silent-failure
-    convention.
+    Skips entirely when: auto-update is off, a pip-spec override is set,
+    either version is unknown (``info`` may still be ``None`` — the
+    coordinator's ``data`` type before its first successful refresh), or a
+    bring-up is still in flight (below).
+
+    Best-effort: an incomparable version string (AwesomeVersionException) is
+    logged at debug and skipped; the next refresh retries. Genuine bugs
+    propagate per the repo's no-silent-failure convention.
     """
     if not bool(entry.options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)):
         # Auto-update turned off: stay on the currently-installed version.
@@ -338,43 +338,134 @@ async def async_check_for_update(hass: HomeAssistant, entry: ConfigEntry) -> Non
     if override and override != DEFAULT_PIP_SPEC:
         return
 
-    channel = str(entry.options.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
-    dist = DIST_NAME_DEV if channel == CHANNEL_DEV else DIST_NAME_STABLE
-
-    try:
-        session = async_get_clientsession(hass)
-        async with asyncio.timeout(_PYPI_TIMEOUT_SECONDS):
-            async with session.get(PYPI_JSON_URL.format(dist=dist)) as resp:
-                resp.raise_for_status()
-                payload = await resp.json()
-        latest = payload["info"]["version"]
-    except (ClientError, TimeoutError, KeyError, ValueError) as err:
-        _LOGGER.debug("HA-MCP auto-update check skipped for %s: %s", dist, err)
+    if info is None or info.installed is None or info.latest is None:
+        # Nothing to compare (not installed yet, or the PyPI fetch failed /
+        # was skipped) - the bring-up path installs the newest build itself.
         return
 
-    installed = await hass.async_add_executor_job(_installed_dist_version, dist)
-    if installed is None:
-        # Not installed yet (the first bring-up may still be running) — nothing
-        # to compare; the bring-up path installs the newest build itself.
+    bringup_task = hass.data.get(DOMAIN, {}).get(DATA_BRINGUP_TASK)
+    if bringup_task is not None and not bringup_task.done():
+        # The coordinator's first refresh runs shortly after setup, while the
+        # background bring-up (embedded_entry.async_setup_server_entry) may
+        # still be installing the package for the first time. Reloading here
+        # would cancel that in-flight install (async_unload_server_entry
+        # cancels the bring-up task on unload) and can loop: the reload's own
+        # bring-up starts a fresh install that the NEXT refresh could again
+        # interrupt.
         return
 
     try:
-        newer = AwesomeVersion(latest) > AwesomeVersion(installed)
+        newer = AwesomeVersion(info.latest) > AwesomeVersion(info.installed)
     except AwesomeVersionException as err:
         # Incomparable version strategies (e.g. a non-semver build string) — the
         # only expected failure here. Real bugs (TypeError, etc.) propagate.
         _LOGGER.debug("HA-MCP auto-update version compare failed: %s", err)
         return
 
-    if newer:
-        _LOGGER.info(
-            "HA-MCP server update available on the %s channel (%s -> %s); "
-            "reloading the entry to install it.",
-            channel,
-            installed,
-            latest,
-        )
+    if not newer:
+        return
+
+    channel = channel_for_dist(info.dist)
+    _LOGGER.info(
+        "HA-MCP server update available on the %s channel (%s -> %s); "
+        "reloading the entry to install it.",
+        channel,
+        info.installed,
+        info.latest,
+    )
+    # The "updated" notification must wait for the reloaded entry's bring-up to
+    # actually install and start the new build — async_reload returns when
+    # entry SETUP finishes, while the pip install still runs in the background
+    # and can fail (review finding). Leave a marker for bring-up to pop:
+    # notification on success (_async_finish_update_cycle), silent drop on
+    # failure (the package/start repair issues cover that path).
+    hass.data.setdefault(DOMAIN, {})[DATA_PENDING_UPDATE_NOTIFY] = {
+        "old": info.installed
+    }
+    try:
         await hass.config_entries.async_reload(entry.entry_id)
+    except Exception:
+        # A raising reload leaves no repair issue behind (those are filed by
+        # bring-up, which never ran), so this ERROR log is the only signal —
+        # it must not be swallowed or left at debug (review finding). The next
+        # coordinator refresh retries the whole cycle.
+        _drop_pending_update_notify(hass)
+        _LOGGER.exception(
+            "HA-MCP auto-update reload failed (%s -> %s on the %s channel)",
+            info.installed,
+            info.latest,
+            channel,
+        )
+
+
+def _drop_pending_update_notify(hass: HomeAssistant) -> None:
+    """Drop the deferred update-notification marker without notifying."""
+    hass.data.get(DOMAIN, {}).pop(DATA_PENDING_UPDATE_NOTIFY, None)
+
+
+async def _async_finish_update_cycle(hass: HomeAssistant) -> None:
+    """Refresh the version entity and fire the deferred update notification.
+
+    Runs at the end of a fully successful bring-up. Both halves belong exactly
+    here (review findings): the freshly installed version is only knowable once
+    the install landed — without a refresh the `update` entity keeps showing a
+    stale "update available" for up to UPDATE_CHECK_INTERVAL after a successful
+    install — and the notification deferred by async_maybe_auto_update must
+    only fire for an install that actually happened. Advisory: a failure here
+    must never fail the (already running) server, so it is logged visibly and
+    swallowed. No reload loop: the refresh's listener re-enters
+    async_maybe_auto_update, which no-ops on the still-running bring-up task.
+    """
+    domain_data = hass.data.get(DOMAIN, {})
+    coordinator = domain_data.get(DATA_UPDATE_COORDINATOR)
+    try:
+        if coordinator is not None:
+            await coordinator.async_refresh()
+    except Exception:
+        _LOGGER.warning("HA-MCP: post-install version refresh failed", exc_info=True)
+    marker = domain_data.pop(DATA_PENDING_UPDATE_NOTIFY, None)
+    if marker is None or coordinator is None or coordinator.data is None:
+        return
+    installed = coordinator.data.installed
+    old = marker.get("old")
+    if installed is None or installed == old:
+        # The reload ran but the installed version did not actually move (the
+        # install can legitimately resolve to the same build) — an "updated
+        # to" notification would be false.
+        return
+    _create_update_notification(
+        hass, channel_for_dist(coordinator.data.dist), old, installed
+    )
+
+
+def _create_update_notification(
+    hass: HomeAssistant, channel: str, old_version: str, new_version: str
+) -> None:
+    """Notify that an automatic server update installed and the server is up.
+
+    Only called from :func:`_async_finish_update_cycle` after a successful
+    bring-up, so the versions are the confirmed before/after pair, never a
+    prediction. SECURITY: same posture as ``_surface_connect_urls`` -
+    persistent notifications are visible to every authenticated Home Assistant
+    user, so this carries no secrets or connect URLs, only version numbers and
+    a public GitHub link.
+    """
+    release_url = (
+        "https://github.com/homeassistant-ai/ha-mcp/commits/master"
+        if channel == CHANNEL_DEV
+        else f"https://github.com/homeassistant-ai/ha-mcp/releases/tag/v{new_version}"
+    )
+    message = (
+        f"The HA-MCP server was automatically updated from {old_version} to "
+        f"{new_version} on the {channel} channel.\n\n"
+        f"[Release notes]({release_url})"
+    )
+    persistent_notification.async_create(
+        hass,
+        message,
+        title="HA-MCP Server updated",
+        notification_id=_UPDATE_NOTIFICATION_ID,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +544,7 @@ async def _async_check_component_compat(
             severity=ir.IssueSeverity.WARNING,
             translation_key=ISSUE_COMPONENT_OUTDATED,
             translation_placeholders={"required": required, "installed": own},
-            learn_more_url=_HACS_COMPONENT_URL,
+            learn_more_url=HACS_COMPONENT_URL,
         )
     else:
         ir.async_delete_issue(hass, DOMAIN, ISSUE_COMPONENT_OUTDATED)
