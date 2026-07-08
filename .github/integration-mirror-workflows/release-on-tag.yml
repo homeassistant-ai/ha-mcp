@@ -1,0 +1,50 @@
+name: Release on tag
+
+# Canonical copy: this file lives in the main repo (homeassistant-ai/ha-mcp)
+# at .github/integration-mirror-workflows/release-on-tag.yml and is synced
+# into the ha-mcp-integration mirror by sync-integration-mirror.yml. Do not
+# hand-edit it in the mirror -- edits are overwritten on the next sync.
+#
+# The monorepo sync pushes vX.Y.Z tags (deploy keys cannot call the GitHub
+# API to create a release directly, only push git refs -- including
+# annotated tags and, per this same sync workflow, this file). Since the
+# deploy key can't set a release body via the API either, the tag itself
+# carries the body: the sync workflow creates an ANNOTATED tag whose message
+# is the generated component release notes, and this job uses that message
+# verbatim as the release body. Tags predating this change (or any that
+# somehow end up lightweight/empty) fall back to the old generic stub so
+# behavior degrades gracefully instead of shipping a blank release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # A shallow, ref-only checkout of a tag-push event is not
+          # guaranteed to bring down the full annotated tag object (only
+          # the commit it points to) -- fetch full history and tags so the
+          # tag message is actually present locally for the next step.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Extract tag message
+        run: |
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > /tmp/notes.md
+          if ! grep -q '[^[:space:]]' /tmp/notes.md; then
+            echo "Component snapshot synced from homeassistant-ai/ha-mcp." > /tmp/notes.md
+          fi
+
+      - name: Create release for tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$VER" -F /tmp/notes.md || echo "release exists"
