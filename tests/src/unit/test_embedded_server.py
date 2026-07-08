@@ -849,7 +849,7 @@ class TestThreadEnvStaging:
         )
         captured = {}
 
-        async def _fake_serve(_token):
+        async def _fake_serve(_token, _stop_event):
             for key in (
                 "HOMEASSISTANT_URL",
                 "HOMEASSISTANT_TOKEN",
@@ -982,7 +982,7 @@ class TestThreadEnvStaging:
     def test_thread_crash_is_captured_not_raised(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
 
-        async def _boom(_token):
+        async def _boom(_token, _stop_event):
             raise RuntimeError("serve failed")
 
         monkeypatch.setattr(mgr, "_serve", _boom)
@@ -1481,11 +1481,14 @@ class TestLifecycle:
 
         assert len(loop.scheduled) == 1  # stop event scheduled threadsafe
         assert joins == [es._STOP_JOIN_TIMEOUT_SECONDS]  # bounded join
-        # Worker state fully cleared even for the orphaned thread.
+        # Worker state fully cleared even for the orphaned thread...
         assert mgr._thread is None
         assert mgr._loop is None
         assert mgr._stop_event is None
         assert mgr._thread_exc is None
+        # ...but the zombie itself is REMEMBERED so the next start skips
+        # the module purge while it may still be importing.
+        assert mgr._orphaned_thread is not None
 
     async def test_stop_survives_loop_closing_race(self, tmp_path):
         # The loop can close between is_closed() and call_soon_threadsafe
@@ -1632,3 +1635,61 @@ class TestRunningVersionStalenessWarning:
             mgr._thread.join(timeout=2)
 
         assert "restart Home Assistant" not in caplog.text
+
+
+class TestPurgeSkippedWhileOrphanAlive:
+    """A wedged old worker must block the module purge, not crash it.
+
+    Live-found on QEMU-slow HAOS: a cold import outlived both the
+    readiness timeout and the stop-join budget; purging sys.modules
+    under the still-importing zombie corrupted its import and the next
+    bring-up never came up.
+    """
+
+    def _start_kwargs(self, mgr, monkeypatch, purges):
+        monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: purges.append(True))
+
+    async def test_purge_skipped_when_orphan_still_alive(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _AliveThread:
+            def is_alive(self):
+                return True
+
+        mgr._orphaned_thread = _AliveThread()
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == []
+        assert "Skipping the ha_mcp module purge" in caplog.text
+        assert mgr._orphaned_thread is not None  # still tracked
+
+    async def test_purge_resumes_once_orphan_died(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _DeadThread:
+            def is_alive(self):
+                return False
+
+        mgr._orphaned_thread = _DeadThread()
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+        assert mgr._orphaned_thread is None  # bookkeeping cleared
