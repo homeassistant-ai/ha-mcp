@@ -78,6 +78,7 @@ def test_advanced_section_values_are_in_known_set() -> None:
         "tools_surface",
         "sidecar",
         "beta_codemode",
+        "developer",
     }
     seen = {row[3] for row in ADVANCED_SETTINGS_FIELDS}
     bad = seen - known

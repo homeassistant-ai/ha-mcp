@@ -470,6 +470,7 @@ src/ha_mcp/
 
 **Namespace prefixes**: An optional `<namespace>_` prefix between `ha_` and the verb is allowed for grouped tool families that share a domain. The full shape becomes `ha_<namespace>_<verb>_<noun>`:
 - `ha_config_<verb>_<noun>` — config-management tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_remove_automation`, `ha_config_delete_dashboard`)
+- `ha_dev_<verb>_<noun>` — developer-mode tools (`ha_dev_manage_server`, `ha_dev_manage_settings`); registered only when the `enable_dev_mode` setting is on (Developer section at the bottom of the web settings UI's Server Settings tab)
 
 **Accepted exceptions**: A small set of tools name a single, distinct operation where forcing a `<verb>_<noun>` shape would read worse than the natural name. These are accepted as-is and should not be flagged:
 - `ha_restart`, `ha_reload_core`, `ha_eval_template`
