@@ -20,6 +20,7 @@ from fastmcp.tools import tool
 from pydantic import Field
 
 from .._version import get_version, is_dev_version, is_embedded, is_running_in_addon
+from ..client.rest_client import HomeAssistantAPIError
 from ..errors import ErrorCode, create_error_response
 from .helpers import (
     exception_to_structured_error,
@@ -115,7 +116,13 @@ async def find_server_config_entry(
             continue
         try:
             flow = await client.start_options_flow(entry_id)
-        except Exception as exc:  # probe is best-effort per entry
+        except HomeAssistantAPIError as exc:
+            # This entry's flow can't open (e.g. an entry type without an
+            # options flow) — skip it and keep probing. Connection/auth
+            # errors deliberately propagate: swallowing them here would
+            # make a broken connection indistinguishable from "no server
+            # entry exists" and steer the caller toward reinstalling a
+            # component that is already running.
             logger.debug("Options-flow probe failed for %s: %s", entry_id, exc)
             continue
         schema = flow.get("data_schema") or []
@@ -430,8 +437,9 @@ class DevTools:
         env/file/addon origins.
 
         Caveats: changed values persist to the server's override file
-        (or the add-on options via Supervisor) but only take effect
-        after a server restart (ha_dev_manage_server action="restart").
+        (or the add-on options via Supervisor) but most settings only
+        take effect after a server restart (ha_dev_manage_server
+        action="restart").
         Env-pinned settings are read-only until the env var is unset.
         This can flip security-sensitive flags; treat with the same
         care as editing the web UI.
@@ -686,9 +694,11 @@ class DevTools:
         as a PR tarball, and restarting the server so config or code
         changes take effect.
 
-        Caveats: update_source and restart interrupt this MCP
-        connection — in embedded/add-on mode the reply arrives just
-        before the server goes down, and reinstalls can take minutes.
+        Caveats: restart interrupts this MCP connection in embedded and
+        add-on deployments (the reply arrives just before the server
+        goes down); update_source only self-interrupts in embedded mode
+        — elsewhere it reloads the separate in-process server entry
+        without dropping this connection. Reinstalls can take minutes.
         update_source requires the ha_mcp_tools component's in-process
         server entry; restart supports embedded and add-on deployments
         only (standalone processes must be restarted externally).
@@ -750,9 +760,11 @@ class DevTools:
                     "channel": options.get(_OPT_CHANNEL),
                     "pip_spec": options.get(_OPT_PIP_SPEC),
                 }
-        except ToolError:
-            raise
         except Exception as exc:
+            # Best-effort probe: a failure here (including the ToolError the
+            # entry discovery raises on a config_entries/get failure) must
+            # degrade the info report to a warning, mirroring the HA-version
+            # probe above — not hard-fail the whole diagnostic.
             warnings.append(f"Could not inspect component server entry: {exc}")
         result: dict[str, Any] = {"success": True, "data": data}
         if warnings:

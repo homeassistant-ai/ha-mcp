@@ -153,14 +153,22 @@ def _instance_identity() -> dict[str, Any]:
 
 
 def _format_version_value(diagnostic_info: dict[str, Any]) -> str:
-    """Render the version for report surfaces, flagging a stale worker."""
+    """Render the version for report surfaces, flagging a stale worker.
+
+    A failed installed-version probe must stay distinguishable from
+    "checked, versions match" — otherwise the exact stale-worker
+    condition this field exists to expose disappears whenever the probe
+    itself hiccups.
+    """
     running = diagnostic_info.get("ha_mcp_version", "Unknown")
+    installed = diagnostic_info.get("installed_version")
     if diagnostic_info.get("version_mismatch"):
-        installed = diagnostic_info.get("installed_version")
         return (
             f"{running} (running) — {installed} is installed; "
             "restart to finish applying the update"
         )
+    if installed is None:
+        return f"{running} (installed-on-disk version could not be verified)"
     return str(running)
 
 
@@ -527,7 +535,7 @@ def _build_formatted_report(
         "=== ha-mcp Bug Report Info ===",
         "",
         f"ha-mcp Version: {_format_version_value(diagnostic_info)}",
-        f"Custom Component: {diagnostic_info.get('component_version') or 'not installed'}",
+        f"Custom Component: {diagnostic_info.get('component_version') or 'not detected (not installed, or probe failed)'}",
         f"Installation Method: {diagnostic_info['installation_method']}",
         f"MCP Transport: {mcp_transport}",
         f"MCP Client: {_format_client_info_for_template(client_info)}",
@@ -1177,7 +1185,7 @@ ha_call_service(domain="light", service="turn_on", entity_id="light.example")
 ## 🔧 Environment
 
 - **ha-mcp Version:** {_format_version_value(diagnostic_info)}
-- **Custom Component:** {diagnostic_info.get("component_version") or "not installed"}
+- **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
@@ -1342,7 +1350,7 @@ def _generate_agent_behavior_template(
 ## 📊 Environment
 
 - **ha-mcp Version:** {_format_version_value(diagnostic_info)}
-- **Custom Component:** {diagnostic_info.get("component_version") or "not installed"}
+- **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_

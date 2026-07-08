@@ -1593,7 +1593,11 @@ class TestDeploymentAndVersionDiagnostics:
 
         assert (
             _format_version_value(
-                {"ha_mcp_version": "7.11.0", "version_mismatch": False}
+                {
+                    "ha_mcp_version": "7.11.0",
+                    "installed_version": "7.11.0",
+                    "version_mismatch": False,
+                }
             )
             == "7.11.0"
         )
@@ -1628,3 +1632,42 @@ class TestDeploymentAndVersionDiagnostics:
         client = MagicMock()
         client.call_service = AsyncMock(side_effect=Exception("service not found"))
         assert await BugReportTools(client)._detect_component_version() is None
+
+
+class TestVersionRenderingHonesty:
+    """Probe failures must stay distinguishable from healthy results."""
+
+    def test_unverified_installed_version_is_visible(self):
+        from ha_mcp.tools.tools_bug_report import _format_version_value
+
+        rendered = _format_version_value(
+            {
+                "ha_mcp_version": "7.11.0",
+                "installed_version": None,
+                "version_mismatch": False,
+            }
+        )
+        assert "could not be verified" in rendered
+
+    async def test_report_carries_version_and_instance_fields(self):
+        # End-to-end composition: the tool's diagnostic_info must include
+        # the new fields even when every probe degrades.
+        from unittest.mock import AsyncMock, MagicMock
+
+        from ha_mcp.tools.tools_bug_report import BugReportTools
+
+        client = MagicMock()
+        client.get_config = AsyncMock(side_effect=Exception("down"))
+        client.call_service = AsyncMock(side_effect=Exception("down"))
+        result = await BugReportTools(client).ha_report_issue(tool_call_count=1)
+        info = result["diagnostic_info"]
+        assert "installed_version" in info
+        assert "version_mismatch" in info
+        assert info["component_version"] is None
+        assert info["instance"]["instance_id"]
+        # The rendered report keeps the probe failure visible instead of
+        # claiming the component is absent.
+        assert (
+            "not detected (not installed, or probe failed)"
+            in (result["formatted_report"])
+        )

@@ -358,3 +358,154 @@ class TestManageServer:
         sched.assert_called_once()
         assert result["data"]["mode"] == "addon"
         assert result["data"]["scheduled"] is True
+
+
+class TestMergeFileOverrideGuards:
+    """The settings-write path must refuse to clobber unreadable state."""
+
+    async def test_set_refuses_corrupt_override_file(self):
+        _override_file_path().write_text("not json {{{")
+        with pytest.raises(ToolError, match="not valid"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="log_level", value="DEBUG"
+            )
+        # The corrupt file is preserved for inspection, not overwritten.
+        assert _override_file_path().read_text() == "not json {{{"
+
+    async def test_set_refuses_unreadable_override_file(self):
+        _override_file_path().write_text("{}")
+        from pathlib import Path
+
+        with (
+            patch.object(Path, "read_text", side_effect=OSError("boom")),
+            pytest.raises(ToolError, match="refusing to overwrite"),
+        ):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="log_level", value="DEBUG"
+            )
+
+
+class TestManageSettingsAddonOrigin:
+    """Add-on-origin fields route through Supervisor, not the file."""
+
+    @pytest.fixture(autouse=True)
+    def _addon_mode(self, monkeypatch):
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        reset_global_settings()
+
+    async def test_set_routes_via_supervisor(self, monkeypatch):
+        from ha_mcp import settings_ui
+
+        calls: list[dict] = []
+
+        async def _fake_merge(verify_ssl, changes):
+            calls.append(changes)
+            return True, None
+
+        monkeypatch.setattr(
+            settings_ui, "_supervisor_merge_and_post_options", _fake_merge
+        )
+        result = await DevTools(MagicMock()).ha_dev_manage_settings(
+            action="set", setting="enable_tool_search", value=True
+        )
+        assert result["data"]["mode"] == "addon"
+        assert calls == [{"enable_tool_search": True}]
+        # Nothing lands in the override file on the addon path.
+        assert not _override_file_path().exists()
+
+    async def test_set_surfaces_supervisor_rejection(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from ha_mcp import settings_ui
+
+        async def _fake_merge(verify_ssl, changes):
+            return False, SimpleNamespace(message="schema says no")
+
+        monkeypatch.setattr(
+            settings_ui, "_supervisor_merge_and_post_options", _fake_merge
+        )
+        with pytest.raises(ToolError, match="Supervisor rejected"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="enable_tool_search", value=True
+            )
+
+    async def test_reset_rejects_addon_managed(self):
+        with pytest.raises(ToolError, match="add-on"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="reset", setting="enable_tool_search"
+            )
+
+
+class TestManageSettingsValueEdgeCases:
+    async def test_set_rejects_null_byte_string(self):
+        with pytest.raises(ToolError, match="null byte"):
+            await DevTools(MagicMock()).ha_dev_manage_settings(
+                action="set", setting="mcp_server_name", value="a\x00b"
+            )
+
+
+class TestServerEntryDiscoveryErrors:
+    """Probe failures must surface as what they are (issue #1780 review)."""
+
+    async def test_ws_failure_raises_tool_error(self):
+        client = _mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "ws down"}
+        )
+        with pytest.raises(ToolError, match="config_entries/get failed"):
+            await DevTools(client).ha_dev_manage_server(
+                action="update_source", channel="dev"
+            )
+
+    async def test_connection_error_propagates_not_masked(self):
+        # A dead connection must NOT read as "no server entry exists" —
+        # that told users to reinstall a component that was running.
+        from ha_mcp.client.rest_client import HomeAssistantConnectionError
+
+        client = _mock_client(entries=[{"entry_id": "server-e"}])
+        client.start_options_flow = AsyncMock(
+            side_effect=HomeAssistantConnectionError("conn refused")
+        )
+        with pytest.raises(ToolError) as excinfo:
+            await DevTools(client).ha_dev_manage_server(
+                action="update_source", channel="dev"
+            )
+        assert "server entry" not in str(excinfo.value)
+
+    async def test_api_error_skips_entry_and_keeps_probing(self):
+        from ha_mcp.client.rest_client import HomeAssistantAPIError
+
+        client = _mock_client(
+            entries=[{"entry_id": "tools-e"}, {"entry_id": "server-e"}],
+            flows=[HomeAssistantAPIError("no options"), dict(_SERVER_FLOW)],
+        )
+        result = await DevTools(client).ha_dev_manage_server(action="info")
+        entry = result["data"]["component_server_entry"]
+        assert entry and entry["entry_id"] == "server-e"
+
+    async def test_restart_embedded_errors_without_entry(self, monkeypatch):
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        client = _mock_client(entries=[])
+        with pytest.raises(ToolError, match="server entry"):
+            await DevTools(client).ha_dev_manage_server(action="restart")
+
+
+class TestServerInfoDegradation:
+    """info is best-effort: probe failures become warnings, not failures."""
+
+    async def test_warns_when_ha_version_unavailable(self):
+        client = _mock_client()
+        client.get_config = AsyncMock(side_effect=Exception("api down"))
+        result = await DevTools(client).ha_dev_manage_server(action="info")
+        assert result["success"] is True
+        assert any("HA version" in w for w in result["warnings"])
+
+    async def test_warns_when_entry_probe_fails(self):
+        client = _mock_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": False, "error": "ws down"}
+        )
+        result = await DevTools(client).ha_dev_manage_server(action="info")
+        assert result["success"] is True
+        assert any("component server entry" in w for w in result["warnings"])
+        assert result["data"]["server_version"]

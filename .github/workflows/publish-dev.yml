@@ -60,7 +60,10 @@ jobs:
           # add-on here), so all surfaces report one dev version. run_number
           # was per-workflow, which is how the add-on drifted ~300 builds
           # behind the PyPI counter and made version reports incomparable.
-          DEV_VERSION="${BASE_VERSION}.dev$(git rev-list --count HEAD)"
+          # Count origin/master (not HEAD): a workflow_dispatch on an older
+          # ref would otherwise mint a LOWER number that collides with an
+          # existing dev release and clobbers it.
+          DEV_VERSION="${BASE_VERSION}.dev$(git rev-list --count origin/master)"
 
           echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT

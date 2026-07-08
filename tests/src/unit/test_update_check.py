@@ -457,3 +457,15 @@ class TestUpdateCommandHint:
         hint = update_command_hint("7.9.0")
         assert "Add-ons" in hint
         assert "pip install" not in hint and "docker pull" not in hint
+
+
+class TestEmbeddedUpdateHint:
+    def test_embedded_hint_points_to_update_entity(self, monkeypatch):
+        # Embedded wins even though the HA core container also carries a
+        # SUPERVISOR_TOKEN — same precedence bug class as the install-method
+        # detector fixed in the same PR.
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        hint = update_command_hint("7.11.0")
+        assert "update entity" in hint
+        assert "pip install" not in hint

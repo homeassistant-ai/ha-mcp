@@ -646,12 +646,9 @@ class EmbeddedServerManager:
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        # The event is created HERE and handed to _serve as a local — the
-        # worker must never re-read it from self mid-flight: async_stop
-        # clears the published references after a join timeout, and a
-        # wedged-in-import worker reading them back would crash (live-found
-        # on QEMU-slow HAOS). Publishing to self is one-way, for
-        # async_stop's signaling only.
+        # Created here and handed to _serve as a LOCAL; publishing to self
+        # is one-way, for async_stop's signaling only — see async_stop's
+        # zombie-thread comment for why the worker must never re-read it.
         stop_event = asyncio.Event()
         self._loop = loop
         self._stop_event = stop_event

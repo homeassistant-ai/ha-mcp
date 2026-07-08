@@ -41,7 +41,7 @@ shared libraries already loaded by the HA process are not reloaded.
 | ------ | ------------- |
 | `list` | Returns the full server-settings matrix (the same fields as the web UI's Server Settings tab) with each value's origin: `env` (pinned, read-only), `file` (override file), `addon` (Supervisor-managed), or `default`. |
 | `set` | Validates and persists one setting through the same override layer the web UI uses. Env-pinned settings are refused; beta sub-flags still require the beta master to be on. |
-| `reset` | Removes one setting's override-file entry, returning it to its env/default value. |
+| `reset` | Removes one setting's override-file entry, returning it to its default. Refused for env-pinned and add-on-managed settings, like `set`. |
 
 Changes persist immediately but — like the web UI — most settings only take
 effect after a restart (`ha_dev_manage_server` `restart`).

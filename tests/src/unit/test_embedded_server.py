@@ -1693,3 +1693,43 @@ class TestPurgeSkippedWhileOrphanAlive:
 
         assert purges == [True]
         assert mgr._orphaned_thread is None  # bookkeeping cleared
+
+
+class TestServeRunningVersionCapture:
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self):
+        # _thread_main stages HA_MCP_CONFIG_DIR/HA_MCP_EMBEDDED into
+        # os.environ; snapshot + restore so the flags never leak into
+        # unrelated suites on this worker.
+        keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        saved = {k: os.environ.get(k) for k in keys}
+        for key in keys:
+            os.environ.pop(key, None)
+        yield
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_serve_captures_imported_version(self, tmp_path, monkeypatch):
+        # The staleness feature hinges on this one line: the worker must
+        # stash the __version__ of the ha_mcp it ACTUALLY imported.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                raise _StopServe
+
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+        sys.modules["ha_mcp"].__version__ = "9.8.7"
+
+        mgr._thread_main("tok")
+
+        assert mgr._running_version == "9.8.7"
+        assert isinstance(mgr._thread_exc, _StopServe)
