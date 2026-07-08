@@ -20,31 +20,30 @@ import secrets
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from homeassistant.core import HomeAssistant
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, callback
 
 from .const import (
     DATA_BRINGUP_TASK,
     DATA_LAST_OPTIONS,
     DATA_SECRET_PATH,
+    DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
     DOMAIN,
     OPT_REGENERATE_SECRETS,
     OPT_SECRET_PATH_OVERRIDE,
     OPT_WEBHOOK_ID_OVERRIDE,
-    UPDATE_CHECK_INTERVAL,
 )
 
-# NOTE: embedded_setup (and its embedded_server / mcp_webhook chain) is imported
-# lazily inside the entry lifecycle functions below, not at module top level. It
-# pulls in aiohttp and several homeassistant.* submodules (auth, requirements,
-# util.package, components.http/webhook) that the entry-point wiring here never
-# touches directly, so a top-level import would make importing this package
-# require that whole stack — breaking hermetic unit tests that stub only the
-# modules they use.
+# NOTE: embedded_setup / coordinator (and their embedded_server / mcp_webhook
+# chain) are imported lazily inside the entry lifecycle functions below, not at
+# module top level. They pull in aiohttp and several homeassistant.* submodules
+# (auth, requirements, util.package, components.http/webhook) that the
+# entry-point wiring here never touches directly, so a top-level import would
+# make importing this package require that whole stack — breaking hermetic unit
+# tests that stub only the modules they use.
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from homeassistant.config_entries import ConfigEntry
 
 
@@ -60,9 +59,8 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     """
     # Imported lazily (see the import note) so the aiohttp / auth / requirements
     # chain is pulled in only when an entry is actually set up.
-    from homeassistant.helpers.event import async_track_time_interval
-
-    from .embedded_setup import async_bring_up_server, async_check_for_update
+    from .coordinator import ServerVersionCoordinator
+    from .embedded_setup import async_bring_up_server, async_maybe_auto_update
     from .ui_panel import async_register_ui_panel
 
     _ensure_secrets(hass, entry)
@@ -78,6 +76,17 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # entry.data, and those writes must not self-reload.
     domain_data[DATA_LAST_OPTIONS] = dict(entry.options)
 
+    # Server-version visibility + automatic updates (issue #1760): the
+    # coordinator polls PyPI on its own UPDATE_CHECK_INTERVAL regardless of the
+    # auto_update option, backing the `update` platform entity forwarded below.
+    # Its listener forwards every refresh to async_maybe_auto_update, which
+    # decides whether to actually reload. Created and stored BEFORE the
+    # bring-up task: bring-up's success path (_async_finish_update_cycle)
+    # refreshes this coordinator, so it must already be in hass.data whenever
+    # that task runs.
+    coordinator = ServerVersionCoordinator(hass, entry)
+    domain_data[DATA_UPDATE_COORDINATOR] = coordinator
+
     task = entry.async_create_background_task(
         hass, async_bring_up_server(hass, entry), f"{DOMAIN}_bring_up"
     )
@@ -85,29 +94,49 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
-    # Periodic channel auto-update: poll PyPI for a newer server build and reload
-    # the entry (which reinstalls + restarts) when one is published, so a
-    # long-running instance tracks its channel without a manual restart. The
-    # check self-skips for a pip-spec override and before the first install, so
-    # registering it here (independent of bring-up completing) is safe. Cleaned
-    # up on unload via the returned cancel callback.
-    async def _scheduled_update_check(now: datetime) -> None:
-        await async_check_for_update(hass, entry)
+    @callback
+    def _on_version_update() -> None:
+        # A reload must never run synchronously from inside this listener
+        # callback: it would unload the UPDATE platform this very coordinator
+        # drives (forwarded below), tearing the coordinator down mid-callback.
+        #
+        # hass-owned, NOT entry.async_create_background_task: entry background
+        # tasks are cancelled by the very unload that async_maybe_auto_update's
+        # reload performs, so an entry-owned task would cancel itself mid-reload
+        # and leave the entry unloaded without ever setting back up (server down
+        # until restart). The interval-timer wiring this replaces ran its checks
+        # as plain hass jobs for the same reason.
+        hass.async_create_background_task(
+            async_maybe_auto_update(hass, entry, coordinator.data),
+            f"{DOMAIN}_server_auto_update",
+        )
 
-    entry.async_on_unload(
-        async_track_time_interval(hass, _scheduled_update_check, UPDATE_CHECK_INTERVAL)
+    entry.async_on_unload(coordinator.async_add_listener(_on_version_update))
+
+    # Background, not awaited: entry setup must not block on a PyPI round-trip
+    # (this is why async_config_entry_first_refresh is NOT used here). The
+    # coordinator reschedules itself on UPDATE_CHECK_INTERVAL after this first
+    # refresh completes.
+    entry.async_create_background_task(
+        hass, coordinator.async_refresh(), f"{DOMAIN}_server_version_refresh"
     )
+
+    await hass.config_entries.async_forward_entry_setups(entry, [Platform.UPDATE])
     return True
 
 
 async def async_unload_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Stop the server + ingress webhook (reload-safe; keeps the provisioned token).
 
-    Cancels the bring-up task first so a still-in-flight install/start is torn
-    down before the explicit teardown runs.
+    Unloads the UPDATE platform first so the coordinator's entity is torn down
+    before the coordinator itself is popped from hass.data, then cancels the
+    bring-up task so a still-in-flight install/start is torn down before the
+    explicit teardown runs.
     """
     from .embedded_setup import async_teardown_server  # lazy (see import note)
     from .ui_panel import async_unregister_ui_panel
+
+    await hass.config_entries.async_unload_platforms(entry, [Platform.UPDATE])
 
     domain_data = hass.data.get(DOMAIN, {})
     task = domain_data.pop(DATA_BRINGUP_TASK, None)
@@ -119,6 +148,7 @@ async def async_unload_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     await async_teardown_server(hass)
     async_unregister_ui_panel(hass)
     domain_data.pop(DATA_LAST_OPTIONS, None)
+    domain_data.pop(DATA_UPDATE_COORDINATOR, None)
     return True
 
 

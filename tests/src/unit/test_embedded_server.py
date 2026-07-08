@@ -32,6 +32,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CHANNEL_STABLE,
     DATA_ACCESS_TOKEN,
     DATA_LAST_PIP_SPEC,
+    DATA_PENDING_INSTALL_VERSION,
     DATA_REFRESH_TOKEN_ID,
     DATA_SECRET_PATH,
     DATA_SERVER_USER_ID,
@@ -597,6 +598,113 @@ class TestEnsurePackage:
 
         await mgr._async_ensure_package()
         uninstall.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Pending-install marker (issue #1760): the update entity's Install button
+# ---------------------------------------------------------------------------
+
+
+class TestPendingInstallMarker:
+    async def test_pinned_to_pending_version_regardless_of_auto_update(
+        self, tmp_path, monkeypatch
+    ):
+        # auto_update ON (default): the pending marker still forces a PINNED
+        # install, not the unpinned, auto-updating channel spec.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.8.0"},
+        )
+        install_pkg = MagicMock(return_value=True)
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.8.0")
+        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
+
+        await mgr._async_ensure_package()
+
+        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.8.0"
+        install_pkg.assert_called_once()
+        assert install_pkg.call_args.args[0] == f"{DIST_NAME_STABLE}==7.8.0"
+
+    async def test_pinned_to_pending_version_overrides_auto_update_off_repin(
+        self, tmp_path, monkeypatch
+    ):
+        # auto_update OFF would normally re-pin to the CURRENTLY installed
+        # version (the whole reason the marker exists — see async_install's
+        # docstring: a bare reload would otherwise be a no-op). The pending
+        # marker must win over that re-pin.
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_AUTO_UPDATE: False},
+            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.9.0"},
+        )
+        install_pkg = MagicMock(return_value=True)
+        monkeypatch.setattr(es, "install_package", install_pkg)
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        # Currently-installed version differs from the requested pending one -
+        # proves the marker, not the auto-update-off re-pin, decided the spec.
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.8.0")
+        monkeypatch.setattr(es, "_installed_dist_version", lambda dist: "7.8.0")
+        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
+
+        await mgr._async_ensure_package()
+
+        assert mgr._pip_spec == f"{DIST_NAME_STABLE}==7.9.0"
+
+    async def test_explicit_override_wins_over_pending_marker(
+        self, tmp_path, monkeypatch
+    ):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={OPT_PIP_SPEC: "ha-mcp==7.5.0"},
+            data={
+                DATA_SECRET_PATH: "/p",
+                DATA_PENDING_INSTALL_VERSION: "7.9.0",
+                DATA_LAST_PIP_SPEC: "ha-mcp==7.5.0",
+            },
+        )
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.5.0")
+
+        await mgr._async_ensure_package()
+
+        assert mgr._pip_spec == "ha-mcp==7.5.0"
+
+    async def test_marker_cleared_after_successful_install(self, tmp_path, monkeypatch):
+        mgr, _hass, entry = _manager(
+            tmp_path,
+            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.9.0"},
+        )
+        monkeypatch.setattr(es, "install_package", MagicMock(return_value=True))
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "7.9.0")
+        monkeypatch.setattr(es, "_dist_installed", lambda name: False)
+        monkeypatch.setattr(es, "_uninstall_distribution", MagicMock())
+
+        await mgr._async_ensure_package()
+
+        assert DATA_PENDING_INSTALL_VERSION not in entry.data
+
+    async def test_marker_cleared_even_when_install_fails(self, tmp_path, monkeypatch):
+        # Review finding: the marker is consumed BEFORE the install attempt
+        # (one-shot means one ATTEMPT, not "until it succeeds"). Clearing only
+        # on success would let a marker for a failing version re-pin every
+        # later reload - including the periodic auto-update ones - to that
+        # same broken version, looping the failure forever.
+        mgr, _hass, entry = _manager(
+            tmp_path,
+            data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.9.0"},
+        )
+        monkeypatch.setattr(es, "install_package", MagicMock(return_value=False))
+        monkeypatch.setattr(es, "pip_kwargs", lambda cfg: {})
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: None)
+
+        with pytest.raises(es.EmbeddedServerError):
+            await mgr._async_ensure_package()
+
+        assert DATA_PENDING_INSTALL_VERSION not in entry.data
 
 
 class TestDistHelpers:

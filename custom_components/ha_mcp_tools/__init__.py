@@ -1771,6 +1771,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     (issue #1527). A missing ``entry_type`` means ``tools`` so pre-existing
     entries keep working across the component update with no migration.
     """
+    # Lazy import (matches the embedded chain's own convention in
+    # embedded_entry.py): keeps homeassistant.const's import surface out of
+    # every hermetic unit test that merely imports this package, not just the
+    # ones that actually call async_setup_entry.
+    from .install_source_check import async_schedule_install_source_check
+
+    # Runs for BOTH entry types: HACS delivers the component as a whole, not
+    # just the server entry, so a legacy-repo install needs detecting either way.
+    async_schedule_install_source_check(hass)
+
     if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SERVER:
         from .embedded_entry import async_setup_server_entry
 
