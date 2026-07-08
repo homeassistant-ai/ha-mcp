@@ -169,6 +169,10 @@ class EmbeddedServerManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
         self._thread_exc: BaseException | None = None
+        # A worker that refused to die within the stop-join timeout (e.g.
+        # wedged in a slow cold import). Tracked so the next start can skip
+        # the module purge while it might still be importing.
+        self._orphaned_thread: threading.Thread | None = None
         # ha_mcp.__version__ as imported by the CURRENT worker thread (stashed
         # by _serve). Compared against the installed distribution after start
         # to detect a stale-code worker (see _purge_ha_mcp_modules).
@@ -211,7 +215,24 @@ class EmbeddedServerManager:
         # observed live: options saves reinstalled the package, the web UI
         # footer showed the new on-disk version, yet the serving worker kept
         # reporting the version it was first imported with).
-        _purge_ha_mcp_modules()
+        #
+        # SKIPPED while an orphaned worker may still be importing: ripping
+        # entries out of sys.modules under a live importer corrupts its
+        # import in progress (seen on QEMU-slow HAOS, where a cold import
+        # can outlive both the readiness timeout and the stop-join budget).
+        # The post-start staleness check below surfaces the consequence
+        # (old code possibly serving) instead.
+        orphan = self._orphaned_thread
+        if orphan is not None and not orphan.is_alive():
+            self._orphaned_thread = orphan = None
+        if orphan is None:
+            _purge_ha_mcp_modules()
+        else:
+            _LOGGER.warning(
+                "Skipping the ha_mcp module purge: a previous worker thread "
+                "is still shutting down. The new worker may serve the "
+                "previously imported code until Home Assistant restarts."
+            )
 
         self._thread_exc = None
         self._thread = threading.Thread(
@@ -273,6 +294,11 @@ class EmbeddedServerManager:
                 "leaving it to terminate with the process.",
                 _STOP_JOIN_TIMEOUT_SECONDS,
             )
+            # Remember the zombie: the next start must not purge modules
+            # while this thread may still be importing them. The worker
+            # holds its own loop/stop-event as locals, so clearing the
+            # published references below cannot crash it.
+            self._orphaned_thread = thread
         self._thread = None
         self._loop = None
         self._stop_event = None
@@ -616,10 +642,17 @@ class EmbeddedServerManager:
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        # The event is created HERE and handed to _serve as a local — the
+        # worker must never re-read it from self mid-flight: async_stop
+        # clears the published references after a join timeout, and a
+        # wedged-in-import worker reading them back would crash (live-found
+        # on QEMU-slow HAOS). Publishing to self is one-way, for
+        # async_stop's signaling only.
+        stop_event = asyncio.Event()
         self._loop = loop
-        self._stop_event = asyncio.Event()
+        self._stop_event = stop_event
         try:
-            loop.run_until_complete(self._serve(access_token))
+            loop.run_until_complete(self._serve(access_token, stop_event))
         except Exception as err:
             self._thread_exc = err
             _LOGGER.exception("HA-MCP in-process server thread crashed")
@@ -643,7 +676,7 @@ class EmbeddedServerManager:
                     )
             loop.close()
 
-    async def _serve(self, access_token: str) -> None:
+    async def _serve(self, access_token: str, stop_event: asyncio.Event) -> None:
         """Build the ha-mcp server and run it until a stop is signaled.
 
         Mirrors the CLI HTTP runner in ``ha_mcp.__main__`` without importing it
@@ -778,8 +811,7 @@ class EmbeddedServerManager:
         )
         uv_server = uvicorn.Server(config)
 
-        assert self._stop_event is not None
-        stop_task = asyncio.create_task(self._stop_event.wait())
+        stop_task = asyncio.create_task(stop_event.wait())
         async with server.mcp._lifespan_manager():
             serve_task = asyncio.create_task(uv_server.serve())
             done, _pending = await asyncio.wait(
@@ -866,13 +898,12 @@ def _purge_ha_mcp_modules() -> None:
     purged = [
         name for name in sys.modules if name == "ha_mcp" or name.startswith("ha_mcp.")
     ]
+    if not purged:
+        return
     for name in purged:
         sys.modules.pop(name, None)
     importlib.invalidate_caches()
-    if purged:
-        _LOGGER.debug(
-            "Purged %d cached ha_mcp module(s) before worker start", len(purged)
-        )
+    _LOGGER.debug("Purged %d cached ha_mcp module(s) before worker start", len(purged))
 
 
 def _installed_ha_mcp_version() -> str | None:
