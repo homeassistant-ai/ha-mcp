@@ -93,6 +93,9 @@ _TOP_LEVEL_ELEMENT_IDS = [
     "advOperations",
     "advToolsSurface",
     "advDiagnostics",
+    # Developer section (issue #1775) — bottom of panel-server; hosts the
+    # dev-mode toggle whose enable path is confirm()-gated.
+    "advDeveloper",
     # Beta features dedicated container — beta
     # master + sub-flags render here, NOT into featuresBody, so the
     # dangerous block sits at the bottom of panel-server.
@@ -2238,6 +2241,73 @@ class TestBetaBlockRendersAtBottom:
         assert result.broadcasts_of_type("restart-required"), (
             "no restart-required cross-tab broadcast"
         )
+
+    def test_dev_mode_toggle_enable_is_confirm_gated(
+        self, settings_script: str
+    ) -> None:
+        """Enabling the dev-mode toggle (issue #1775) must pass a
+        confirm() gate: declining reverts the checkbox and saves
+        nothing; accepting fires exactly one auto-save POST."""
+        adv_field = {
+            "field": "enable_dev_mode",
+            "env_var": "HAMCP_ENABLE_DEV_MODE",
+            "value": False,
+            "type": "bool",
+            "section": "developer",
+            "origin": "default",
+            "editable": True,
+        }
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/advanced": {
+                "status": 200,
+                "json": {"fields": [adv_field], "is_addon": False},
+                "responses": [
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                    {"status": 200, "json": {"applied": {"enable_dev_mode": True}}},
+                    {"status": 200, "json": {"fields": [adv_field], "is_addon": False}},
+                ],
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const cb = document.querySelector(
+                '#advDeveloper input[data-adv-field="enable_dev_mode"]');
+              document.body.setAttribute('data-rendered', String(!!cb));
+              // Decline the warning: the toggle must revert and no save fires.
+              window.confirm = () => false;
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 1200));
+              document.body.setAttribute('data-declined-state', String(cb.checked));
+              // Accept the warning: the save proceeds.
+              window.confirm = () => true;
+              cb.checked = true;
+              cb.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 1500));
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-rendered="true"' in result.dom, (
+            "enable_dev_mode row did not render into #advDeveloper"
+        )
+        assert 'data-declined-state="false"' in result.dom, (
+            "declining the confirm() must revert the dev-mode checkbox"
+        )
+        posts = [
+            f
+            for f in result.fetches
+            if "/api/settings/advanced" in f["url"] and f["method"] == "POST"
+        ]
+        assert len(posts) == 1, (
+            f"expected exactly one save POST (declined change must not "
+            f"save), got {len(posts)}: {result.fetches}"
+        )
+        assert json.loads(posts[0]["body"]).get("enable_dev_mode") is True
 
     def test_advanced_field_autosave_error_shows_error_toast(
         self, settings_script: str

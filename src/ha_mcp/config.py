@@ -256,6 +256,15 @@ class Settings(BaseSettings):
         "", alias="HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL"
     )
 
+    # Developer mode (issue #1775) — registers the hidden ha_dev_* tools
+    # (server update/restart, direct settings editing). Deliberately NOT a
+    # beta flag: it is a development aid, not a feature preview, and must
+    # not ride the beta master gate. The toggle renders in its own
+    # "Developer" section at the very bottom of the web UI's Server
+    # Settings tab; it is intentionally absent from the add-on config
+    # schemas so it stays out of the add-on Configuration page.
+    enable_dev_mode: bool = Field(False, alias="HAMCP_ENABLE_DEV_MODE")
+
     # Code Mode — sandboxed Python execution via pydantic-monty.
     # Provides an "escape hatch" tool (ha_manage_custom_tool) that lets LLMs write
     # custom one-off Python code when no existing tool covers the request.
@@ -556,6 +565,7 @@ AdvancedSection = Literal[
     "tools_surface",
     "sidecar",
     "beta_codemode",
+    "developer",
 ]
 
 
@@ -814,6 +824,12 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
         "beta_codemode",
         True,
     ),
+    # Developer mode (issue #1775). Lives in ADVANCED_SETTINGS_FIELDS —
+    # not FEATURE_FLAG_FIELDS — so it renders in its own "Developer"
+    # section at the very bottom of the Server Settings tab instead of
+    # among the feature toggles, and stays independent of the beta
+    # master gate.
+    AdvancedField("enable_dev_mode", "HAMCP_ENABLE_DEV_MODE", bool, "developer", True),
 )
 
 
