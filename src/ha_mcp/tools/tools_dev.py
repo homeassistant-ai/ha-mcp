@@ -80,6 +80,90 @@ def _spawn_background(coro: Any) -> None:
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
+async def find_server_config_entry(
+    client: Any,
+) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+    """Find the ha_mcp_tools in-process "server" config entry.
+
+    Probes each ``ha_mcp_tools`` entry's options flow: the server entry's
+    flow is a form whose schema carries the ``pip_spec`` field; the tools
+    (services) entry's flow aborts immediately. Returns
+    ``(entry_id, open_flow, current_options)`` with the options flow left
+    OPEN (callers must submit or abort it), or ``None`` when no server
+    entry exists. ``current_options`` maps schema field names to their
+    defaults — i.e. the entry's current option values.
+
+    Module-level (not a DevTools method) so the settings UI's embedded
+    restart handler can share it.
+    """
+    response = await client.send_websocket_message(
+        {"type": "config_entries/get", "domain": COMPONENT_DOMAIN}
+    )
+    if not response.get("success"):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"config_entries/get failed: {response.get('error')}",
+                suggestions=["Check the Home Assistant WebSocket connection"],
+            )
+        )
+    result = response.get("result", [])
+    entries = result if isinstance(result, list) else []
+    for entry in entries:
+        entry_id = entry.get("entry_id")
+        if not entry_id:
+            continue
+        try:
+            flow = await client.start_options_flow(entry_id)
+        except Exception as exc:  # probe is best-effort per entry
+            logger.debug("Options-flow probe failed for %s: %s", entry_id, exc)
+            continue
+        schema = flow.get("data_schema") or []
+        fields: dict[str, Any] = {
+            str(item["name"]): item.get("default")
+            for item in schema
+            if isinstance(item, dict) and item.get("name")
+        }
+        if flow.get("type") == "form" and _OPT_PIP_SPEC in fields:
+            return str(entry_id), flow, fields
+        # Not the server entry — close the probe flow if one opened.
+        await abort_options_flow_quietly(client, flow)
+    return None
+
+
+async def abort_options_flow_quietly(client: Any, flow: dict[str, Any]) -> None:
+    """Abort an open options flow, ignoring failures."""
+    flow_id = flow.get("flow_id")
+    if not flow_id:
+        return
+    try:
+        await client.abort_options_flow(flow_id)
+    except Exception as exc:
+        logger.debug("Options-flow abort failed: %s", exc)
+
+
+def schedule_deferred_entry_reload(client: Any, entry_id: str) -> None:
+    """Reload a config entry after the response-flush delay, fire-and-forget.
+
+    Self-restart path for the embedded server: the reload tears down the
+    very worker answering the current request, so it must not run until the
+    response has flushed. Failures can only be logged — there is no caller
+    left to answer.
+    """
+
+    async def _reload() -> None:
+        await asyncio.sleep(_SELF_ACTION_FLUSH_DELAY_S)
+        try:
+            await client._request(
+                "POST", f"/config/config_entries/entry/{entry_id}/reload"
+            )
+            logger.info("Deferred reload of entry %s requested", entry_id)
+        except Exception:
+            logger.exception("Deferred config-entry reload failed")
+
+    _spawn_background(_reload())
+
+
 class DevTools:
     """Developer-mode tools for server introspection, update, and settings."""
 
@@ -290,72 +374,6 @@ class DevTools:
 
     # ----- server-entry helpers -----
 
-    async def _list_component_entries(self) -> list[dict[str, Any]]:
-        """List the ha_mcp_tools config entries via the WebSocket API."""
-        response = await self._client.send_websocket_message(
-            {"type": "config_entries/get", "domain": COMPONENT_DOMAIN}
-        )
-        if not response.get("success"):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"config_entries/get failed: {response.get('error')}",
-                    suggestions=["Check the Home Assistant WebSocket connection"],
-                )
-            )
-        result = response.get("result", [])
-        return result if isinstance(result, list) else []
-
-    async def _find_server_entry(
-        self,
-    ) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
-        """Find the component's in-process "server" entry.
-
-        Probes each ``ha_mcp_tools`` entry's options flow: the server
-        entry's flow is a form whose schema carries the ``pip_spec``
-        field; the tools (services) entry's flow aborts immediately.
-        Returns ``(entry_id, open_flow, current_options)`` with the
-        options flow left OPEN (callers must submit or abort it), or
-        ``None`` when no server entry exists. ``current_options`` maps
-        schema field names to their defaults — i.e. the entry's
-        current option values.
-        """
-        for entry in await self._list_component_entries():
-            entry_id = entry.get("entry_id")
-            if not entry_id:
-                continue
-            try:
-                flow = await self._client.start_options_flow(entry_id)
-            except Exception as exc:  # probe is best-effort per entry
-                logger.debug("Options-flow probe failed for %s: %s", entry_id, exc)
-                continue
-            schema = flow.get("data_schema") or []
-            fields: dict[str, Any] = {
-                str(item["name"]): item.get("default")
-                for item in schema
-                if isinstance(item, dict) and item.get("name")
-            }
-            if flow.get("type") == "form" and _OPT_PIP_SPEC in fields:
-                return entry_id, flow, fields
-            # Not the server entry — close the probe flow if one opened.
-            flow_id = flow.get("flow_id")
-            if flow_id:
-                try:
-                    await self._client.abort_options_flow(flow_id)
-                except Exception as exc:
-                    logger.debug("Probe-flow abort failed: %s", exc)
-        return None
-
-    async def _abort_flow_quietly(self, flow: dict[str, Any]) -> None:
-        """Abort an open options flow, ignoring failures."""
-        flow_id = flow.get("flow_id")
-        if not flow_id:
-            return
-        try:
-            await self._client.abort_options_flow(flow_id)
-        except Exception as exc:
-            logger.debug("Options-flow abort failed: %s", exc)
-
     async def _delayed_submit_options(
         self, flow_id: str, user_input: dict[str, Any]
     ) -> None:
@@ -373,17 +391,6 @@ class DevTools:
             logger.info("Deferred options submit result: %s", result.get("type"))
         except Exception:
             logger.exception("Deferred options-flow submit failed")
-
-    async def _delayed_entry_reload(self, entry_id: str) -> None:
-        """Reload a config entry after the response-flush delay."""
-        await asyncio.sleep(_SELF_ACTION_FLUSH_DELAY_S)
-        try:
-            await self._client._request(
-                "POST", f"/config/config_entries/entry/{entry_id}/reload"
-            )
-            logger.info("Deferred reload of entry %s requested", entry_id)
-        except Exception:
-            logger.exception("Deferred config-entry reload failed")
 
     # ----- tools -----
 
@@ -731,12 +738,12 @@ class DevTools:
         except Exception as exc:
             warnings.append(f"Could not read HA version: {exc}")
         try:
-            found = await self._find_server_entry()
+            found = await find_server_config_entry(self._client)
             if found is None:
                 data["component_server_entry"] = None
             else:
                 entry_id, flow, options = found
-                await self._abort_flow_quietly(flow)
+                await abort_options_flow_quietly(self._client, flow)
                 data["component_server_entry"] = {
                     "entry_id": entry_id,
                     "channel": options.get(_OPT_CHANNEL),
@@ -778,7 +785,7 @@ class DevTools:
                 )
             )
 
-        found = await self._find_server_entry()
+        found = await find_server_config_entry(self._client)
         if found is None:
             raise_tool_error(
                 create_error_response(
@@ -859,7 +866,7 @@ class DevTools:
 
     async def _restart_server(self) -> dict[str, Any]:
         if is_embedded():
-            found = await self._find_server_entry()
+            found = await find_server_config_entry(self._client)
             if found is None:
                 raise_tool_error(
                     create_error_response(
@@ -870,8 +877,8 @@ class DevTools:
                     )
                 )
             entry_id, flow, _options = found
-            await self._abort_flow_quietly(flow)
-            _spawn_background(self._delayed_entry_reload(entry_id))
+            await abort_options_flow_quietly(self._client, flow)
+            schedule_deferred_entry_reload(self._client, entry_id)
             return {
                 "success": True,
                 "data": {

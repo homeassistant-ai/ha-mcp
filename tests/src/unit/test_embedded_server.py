@@ -1579,6 +1579,9 @@ class TestRunningVersionStalenessWarning:
             mgr, "_async_provision_token", AsyncMock(return_value="tok")
         )
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        # Stub the module purge: letting it run for real would drop every
+        # live ha_mcp module and poison later tests in this process.
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "9.9.9")
 
@@ -1608,6 +1611,9 @@ class TestRunningVersionStalenessWarning:
             mgr, "_async_provision_token", AsyncMock(return_value="tok")
         )
         monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        # Stub the module purge: letting it run for real would drop every
+        # live ha_mcp module and poison later tests in this process.
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
         monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
         monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "1.1.1")
 

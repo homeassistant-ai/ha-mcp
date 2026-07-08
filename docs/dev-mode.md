@@ -30,6 +30,10 @@ The flag is intentionally absent from the add-on Configuration page.
 `update_source` makes PR testing a one-call operation on an in-process
 server install: point the pip spec at the PR tarball, wait for the reinstall,
 reconnect, and verify with `info`. No extra repos or add-on rebuilds needed.
+Server-code updates apply on the entry reload itself (component >= 1.0.1
+purges the module cache per worker start); a change that needs *newer
+third-party dependencies* still wants a Home Assistant core restart, since
+shared libraries already loaded by the HA process are not reloaded.
 
 ### `ha_dev_manage_settings`
 

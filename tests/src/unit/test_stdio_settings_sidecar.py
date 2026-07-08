@@ -1272,3 +1272,88 @@ class TestVisibilityHandlers:
     def test_put_rejects_invalid_payload(self, tmp_data_dir: Path) -> None:
         resp = self._client().put("/api/visibility/config", json={"version": "abc"})
         assert resp.status_code == 400
+
+
+class TestEmbeddedRestart:
+    """The restart endpoint reloads the server config entry in embedded mode."""
+
+    def _post_restart(self, server, monkeypatch, recorder):
+        from starlette.routing import Route
+
+        from ha_mcp.tools import tools_dev
+
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setattr(tools_dev, "schedule_deferred_entry_reload", recorder)
+        handlers = build_settings_handlers(server=server)
+        app = Starlette(
+            routes=[
+                Route(
+                    "/api/settings/restart",
+                    handlers["restart_addon"],
+                    methods=["POST"],
+                )
+            ]
+        )
+        return TestClient(app).post("/api/settings/restart")
+
+    def test_embedded_restart_schedules_entry_reload(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        server = MagicMock()
+        server.client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": [{"entry_id": "server-e"}]}
+        )
+        server.client.start_options_flow = AsyncMock(
+            return_value={
+                "type": "form",
+                "flow_id": "f1",
+                "data_schema": [{"name": "pip_spec", "default": ""}],
+            }
+        )
+        server.client.abort_options_flow = AsyncMock(return_value={})
+        scheduled: list[tuple] = []
+        resp = self._post_restart(
+            server, monkeypatch, lambda client, entry_id: scheduled.append(entry_id)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        assert scheduled == ["server-e"]
+        # The probe flow must not be left open.
+        server.client.abort_options_flow.assert_awaited_once_with("f1")
+
+    def test_embedded_restart_500_when_entry_missing(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        server = MagicMock()
+        server.client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        scheduled: list[tuple] = []
+        resp = self._post_restart(
+            server, monkeypatch, lambda client, entry_id: scheduled.append(entry_id)
+        )
+        assert resp.status_code == 500
+        assert scheduled == []
+
+
+class TestSettingsInfoDeploymentMode:
+    def test_sidecar_mode_reported(self):
+        from starlette.routing import Route
+
+        handlers = build_settings_handlers(server=None, is_sidecar=True)
+        app = Starlette(routes=[Route("/api/settings/info", handlers["settings_info"])])
+        resp = TestClient(app).get("/api/settings/info")
+        assert resp.status_code == 200
+        assert resp.json()["deployment_mode"] == "sidecar"
+
+    def test_embedded_mode_reported(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from starlette.routing import Route
+
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        handlers = build_settings_handlers(server=MagicMock())
+        app = Starlette(routes=[Route("/api/settings/info", handlers["settings_info"])])
+        resp = TestClient(app).get("/api/settings/info")
+        assert resp.status_code == 200
+        assert resp.json()["deployment_mode"] == "embedded"

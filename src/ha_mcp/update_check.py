@@ -42,6 +42,7 @@ from ._version import (
     get_supervisor_base_url,
     get_version,
     is_dev_version,
+    is_embedded,
     is_running_in_addon,
 )
 from .stdio_settings_sidecar import _TRUTHY  # shared HA_MCP_DISABLE_* truthy set
@@ -246,6 +247,14 @@ def _running_in_docker() -> bool:
 
 def update_command_hint(current: str) -> str:
     """Return a deployment- and channel-aware one-liner for how to upgrade."""
+    if is_embedded():
+        # In-process (custom component) server: the component's update
+        # entity / auto-update installs new builds; the entry reload (or
+        # the settings UI's Restart button) applies them.
+        return (
+            "Update via the HA-MCP Server update entity (Settings -> "
+            "Devices & Services -> HA-MCP), or reload the integration."
+        )
     if is_running_in_addon():
         # Add-on users update through the Supervisor UI, not pip/docker.
         return "Update from Settings -> Add-ons -> Home Assistant MCP Server."

@@ -4387,3 +4387,50 @@ class TestVisibilitySettingsTab:
         assert 'data-areas="garage"' in result.dom  # edit preserved
         assert 'data-role="alert"' in result.dom
         assert "another tab or session" in result.dom
+
+
+class TestEmbeddedRestartButton:
+    """Embedded deployments get a relabeled restart button (issue #1778)."""
+
+    def test_embedded_mode_shows_relabeled_restart_button(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/settings/info": {
+                "status": 200,
+                "json": {
+                    "instance_id": "baseline-id",
+                    "deployment_mode": "embedded",
+                    "is_addon": False,
+                    "is_sidecar": False,
+                    "version": "7.11.0",
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 300));
+              const btn = document.getElementById('restartBtn');
+              document.body.setAttribute('data-btn-hidden',
+                String(btn.style.display === 'none'));
+              document.body.setAttribute('data-btn-label', btn.textContent);
+              document.body.setAttribute('data-notice-head',
+                document.getElementById('restartNoticeText')
+                  .textContent.trim().slice(0, 80));
+            """,
+        )
+        _assert_clean_init(result)
+        assert 'data-btn-hidden="false"' in result.dom, (
+            "restart button must be visible in embedded mode"
+        )
+        assert "Restart HA-MCP Server" in result.dom, (
+            "embedded mode must relabel the restart button"
+        )
+        m = re.search(r'data-notice-head="([^"]*)"', result.dom)
+        assert m and "Restart HA-MCP Server" in m.group(1), (
+            f"embedded restart-notice copy missing; got {m.group(1) if m else None}"
+        )
