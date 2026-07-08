@@ -90,8 +90,12 @@ _LOGGER = logging.getLogger(__name__)
 _ACCESS_TOKEN_TTL = timedelta(days=3650)
 
 # Readiness probe: how long to wait for the server thread to accept a loopback
-# TCP connection before declaring the start failed.
-_READY_TIMEOUT_SECONDS = 30.0
+# TCP connection before declaring the start failed. Generous on purpose: a
+# cold import of the fastmcp tree takes 1-3s on real hardware but has been
+# observed to exceed 30s on QEMU-emulated HAOS (the e2e lane), and a single
+# readiness timeout fails the bring-up outright — there is no retry. Real
+# deployments only pay this budget on the failure path.
+_READY_TIMEOUT_SECONDS = 90.0
 _READY_POLL_INTERVAL_SECONDS = 0.5
 
 # How long to wait for the worker thread to exit on stop before giving up and
@@ -895,8 +899,12 @@ def _purge_ha_mcp_modules() -> None:
     shared with the rest of Home Assistant), so a dependency-version change
     still needs an HA core restart.
     """
+    # Snapshot the keys: sys.modules can be mutated by concurrent imports on
+    # other threads mid-iteration (HA core is heavily threaded).
     purged = [
-        name for name in sys.modules if name == "ha_mcp" or name.startswith("ha_mcp.")
+        name
+        for name in list(sys.modules)
+        if name == "ha_mcp" or name.startswith("ha_mcp.")
     ]
     if not purged:
         return

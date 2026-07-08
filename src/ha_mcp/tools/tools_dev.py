@@ -335,7 +335,8 @@ class DevTools:
         async with _get_override_file_lock():
             existing: dict[str, Any] = {}
             try:
-                existing_raw = path.read_text()
+                # Executor thread: file I/O must not block the event loop.
+                existing_raw = await asyncio.to_thread(path.read_text)
             except FileNotFoundError:
                 existing_raw = None
             except OSError as exc:
@@ -370,7 +371,7 @@ class DevTools:
                     existing.pop(key, None)
                 else:
                     existing[key] = val
-            _atomic_write_json(path, existing)
+            await asyncio.to_thread(_atomic_write_json, path, existing)
 
     # ----- server-entry helpers -----
 
