@@ -12,6 +12,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from aiohttp import ClientError
 from awesomeversion import AwesomeVersion, AwesomeVersionException
 from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
 from homeassistant.exceptions import HomeAssistantError
@@ -20,6 +21,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    DATA_BRINGUP_TASK,
     DATA_PENDING_INSTALL_VERSION,
     DATA_UPDATE_COORDINATOR,
     DEFAULT_AUTO_UPDATE,
@@ -28,6 +30,7 @@ from .const import (
     OPT_AUTO_UPDATE,
 )
 from .coordinator import ServerVersionCoordinator
+from .embedded_server import _installed_dist_version
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -146,8 +149,17 @@ class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEnti
                     continue
                 if installed < version <= latest:
                     notes.append((version, str(release.get("body") or "")))
-        except Exception as err:
+        except (ClientError, TimeoutError) as err:
+            # Expected transients (GitHub unreachable, rate-limited, slow) —
+            # quiet; the dialog falls back to release_url.
             _LOGGER.debug("HA-MCP release-notes fetch failed: %s", err)
+            return None
+        except Exception:
+            # An unexpected payload shape (TypeError/AttributeError in the
+            # parse loop) is a bug or a GitHub API change — logged visibly per
+            # the repo's convention (review finding), still degrading to the
+            # release_url fallback rather than breaking the update dialog.
+            _LOGGER.warning("HA-MCP release-notes fetch failed", exc_info=True)
             return None
 
         if not notes:
@@ -163,20 +175,48 @@ class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEnti
         With auto-update off, ``_resolve_pip_spec`` pins the install to the
         currently-installed version, so a bare reload would just reinstall the
         same build. The one-shot pending-install marker overrides that pin for
-        this single reload; embedded_server clears it once the install lands.
+        this single reload; embedded_server clears it when it consumes it (one
+        marker buys one attempt). The reload only completes entry SETUP — the
+        pip install runs in the reloaded entry's background bring-up — so this
+        waits for that bring-up and verifies the requested version actually
+        landed; returning at reload time would report success for an install
+        that can still fail (review finding).
         """
+        data = self.coordinator.data
         target = version or self.latest_version
         if target is None:
             raise HomeAssistantError("No target version available to install.")
         # Broad except is intentional here (unlike this repo's usual narrow
         # convention): async_install feeds Home Assistant's update UI, which
         # expects a HomeAssistantError for ANY failure rather than an opaque
-        # traceback in the install dialog.
+        # traceback in the install dialog. Logged with traceback first so a
+        # genuine bug still reaches the log (review finding).
         try:
             new_data = {**self._entry.data, DATA_PENDING_INSTALL_VERSION: target}
             self.hass.config_entries.async_update_entry(self._entry, data=new_data)
             await self.hass.config_entries.async_reload(self._entry.entry_id)
+            # The reloaded entry's bring-up task does the actual install; it
+            # contains its own failures (files repair issues instead of
+            # raising), so awaiting it tells us the attempt is over, not that
+            # it worked — the version read below is the success check.
+            bringup = self.hass.data.get(DOMAIN, {}).get(DATA_BRINGUP_TASK)
+            if bringup is not None:
+                await bringup
+            installed: str | None = None
+            if data is not None:
+                installed = await self.hass.async_add_executor_job(
+                    _installed_dist_version, data.dist
+                )
         except Exception as err:
+            _LOGGER.exception("HA-MCP server update install failed")
             raise HomeAssistantError(
                 f"Could not install the HA-MCP server update: {err}"
             ) from err
+        # Outside the broad except: these raises must reach the UI as-is, not
+        # get re-wrapped into the generic message.
+        if data is not None and installed != target:
+            raise HomeAssistantError(
+                f"The HA-MCP server update to {target} did not complete "
+                f"(installed: {installed or 'none'}). See Settings > Repairs "
+                "for the failure details."
+            )

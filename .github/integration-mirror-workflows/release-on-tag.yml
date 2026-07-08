@@ -36,7 +36,16 @@ jobs:
 
       - name: Extract tag message
         run: |
-          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > /tmp/notes.md
+          # A lightweight tag has no message of its own — %(contents) on one
+          # falls through to the pointed-to COMMIT's message, so an emptiness
+          # check cannot detect it (review finding). Check the tag object's
+          # actual type instead: only a real annotated tag ("tag" object)
+          # carries the generated release notes; anything else gets the stub.
+          if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = "tag" ]; then
+            git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > /tmp/notes.md
+          else
+            : > /tmp/notes.md
+          fi
           if ! grep -q '[^[:space:]]' /tmp/notes.md; then
             echo "Component snapshot synced from homeassistant-ai/ha-mcp." > /tmp/notes.md
           fi
@@ -46,5 +55,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VER="${GITHUB_REF_NAME#v}"
+          # Check existence explicitly instead of `|| echo "release exists"`:
+          # that pattern treated EVERY create failure (auth, rate limit, bad
+          # notes file) as already-exists and reported green with no release
+          # published (review finding). Now only a genuine duplicate no-ops;
+          # a real create failure fails the job visibly.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release exists"
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "$VER" -F /tmp/notes.md || echo "release exists"
+            --title "$VER" -F /tmp/notes.md

@@ -120,6 +120,26 @@ class TestUpdateData:
         assert session.get_urls == [coord.PYPI_JSON_URL.format(dist=DIST_NAME_DEV)]
         assert info.dist == DIST_NAME_DEV
 
+    async def test_options_re_read_on_every_refresh(self, monkeypatch):
+        # entry.options is read fresh inside _async_update_data on every call
+        # (not cached at __init__/construction time) - a channel switch made
+        # between two refreshes must be picked up by the very next one.
+        hass = _make_hass()
+        entry = _make_entry()
+        session = _FakeSession(
+            _FakeResp({"info": {"version": "7.10.0"}}),
+        )
+        _patch_session(monkeypatch, session)
+        monkeypatch.setattr(coord, "_installed_dist_version", lambda dist: "7.9.0")
+        coordinator = coord.ServerVersionCoordinator(hass, entry)
+
+        first = await coordinator._async_update_data()
+        entry.options[OPT_CHANNEL] = CHANNEL_DEV
+        second = await coordinator._async_update_data()
+
+        assert first.dist == DIST_NAME_STABLE
+        assert second.dist == DIST_NAME_DEV
+
     async def test_not_installed_yet_still_fetches_latest(self, monkeypatch):
         # Visibility must not depend on the package being installed yet - the
         # entity should show "latest available" even before the first install.

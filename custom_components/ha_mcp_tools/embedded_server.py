@@ -64,7 +64,6 @@ from .const import (
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
-    DEV_PIP_SPEC,
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
     DOMAIN,
@@ -77,6 +76,7 @@ from .const import (
     SERVER_CONFIG_SUBDIR,
     SERVER_TOKEN_CLIENT_NAME,
     SERVER_USER_NAME,
+    dist_for_channel,
 )
 
 if TYPE_CHECKING:
@@ -147,9 +147,11 @@ class EmbeddedServerManager:
         self._pip_spec_override: str = (
             raw_pip_spec if raw_pip_spec and raw_pip_spec != DEFAULT_PIP_SPEC else ""
         )
-        # Auto-update toggle (default on). Off pins a non-override channel to the
-        # currently-installed version and disables the periodic check. Read
-        # before _resolve_pip_spec, which consults it.
+        # Auto-update toggle (default on). Off pins a non-override channel to
+        # the currently-installed version; the periodic PyPI check keeps
+        # running either way (it feeds the update entity — issue #1760), only
+        # the automatic reload is gated on this. Read before
+        # _resolve_pip_spec, which consults it.
         self._auto_update: bool = bool(
             options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)
         )
@@ -293,7 +295,7 @@ class EmbeddedServerManager:
         """
         if self._pip_spec_override:
             return self._pip_spec_override
-        dist = DEV_PIP_SPEC if self._channel == CHANNEL_DEV else DIST_NAME_STABLE
+        dist = dist_for_channel(self._channel)
         if not self._auto_update and installed_version is not None:
             return f"{dist}=={installed_version}"
         return dist
@@ -353,13 +355,21 @@ class EmbeddedServerManager:
         pending_version = str(
             self._entry.data.get(DATA_PENDING_INSTALL_VERSION) or ""
         ).strip()
-        target_dist = DEV_PIP_SPEC if self._channel == CHANNEL_DEV else DIST_NAME_STABLE
+        target_dist = dist_for_channel(self._channel)
         if not self._pip_spec_override and pending_version:
             # Pin to the requested version. Its own value differs from
             # stored_spec below (that is the whole point of the marker), which
             # already forces the force-install branch further down — no
             # separate fast-path handling needed here.
+            #
+            # Consumed HERE, before the install attempt: one-shot means one
+            # ATTEMPT, not "until it succeeds". If it were cleared only on
+            # success, a marker for a failing version would re-pin every later
+            # reload — including the periodic auto-update ones — to that same
+            # broken version, looping the failure forever while auto-update
+            # looks on (review finding).
             self._pip_spec = f"{target_dist}=={pending_version}"
+            self._clear_pending_install_marker()
         elif not self._pip_spec_override and not self._auto_update:
             # Re-pin an auto-update-off channel to its TARGET distribution's
             # installed version, read off-loop (the __init__ value was the bare
@@ -401,7 +411,6 @@ class EmbeddedServerManager:
         _LOGGER.info("HA-MCP in-process server package ready (version %s)", version)
         if stored_spec != self._pip_spec:
             self._store_installed_spec()
-        self._clear_pending_install_marker()
 
     async def _async_process_requirements_fast(self) -> None:
         """Fast path: let HA's requirements manager satisfy the override spec."""
@@ -478,9 +487,10 @@ class EmbeddedServerManager:
     def _clear_pending_install_marker(self) -> None:
         """Clear the update entity's one-shot pending-install marker.
 
-        Called unconditionally after every successful install (not just a
-        pending-version one) so a marker left over from an interrupted attempt
-        can never linger and silently re-pin a later, unrelated install.
+        Called at CONSUME time in :meth:`_async_ensure_package`, before the
+        install attempt runs: the marker buys exactly one attempt. Clearing
+        only on success would let a marker for a failing version re-pin every
+        later reload to that broken version (review finding).
         """
         if DATA_PENDING_INSTALL_VERSION not in self._entry.data:
             return

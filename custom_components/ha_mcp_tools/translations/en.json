@@ -76,7 +76,7 @@
         },
         "legacy_hacs_source": {
             "title": "Component installed from the legacy repository",
-            "description": "HACS is tracking the main ha-mcp server repository for this component, so HACS shows the server's version numbers (7.x) and the server's release notes here instead of the component's own (0.x). Updates keep working, but stay mislabeled this way. To fix: remove this repository from HACS (your integration settings and config entries are kept), add homeassistant-ai/ha-mcp-integration as a custom repository, reinstall the component from it, and restart Home Assistant."
+            "description": "HACS is tracking the main ha-mcp server repository for this component, so HACS shows the server's version numbers (7.x) and the server's release notes here instead of the component's own (1.x). Updates keep working, but stay mislabeled this way. To fix: remove this repository from HACS (your integration settings and config entries are kept), add homeassistant-ai/ha-mcp-integration as a custom repository, reinstall the component from it, and restart Home Assistant."
         }
     },
     "selector": {

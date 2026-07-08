@@ -76,20 +76,23 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # entry.data, and those writes must not self-reload.
     domain_data[DATA_LAST_OPTIONS] = dict(entry.options)
 
+    # Server-version visibility + automatic updates (issue #1760): the
+    # coordinator polls PyPI on its own UPDATE_CHECK_INTERVAL regardless of the
+    # auto_update option, backing the `update` platform entity forwarded below.
+    # Its listener forwards every refresh to async_maybe_auto_update, which
+    # decides whether to actually reload. Created and stored BEFORE the
+    # bring-up task: bring-up's success path (_async_finish_update_cycle)
+    # refreshes this coordinator, so it must already be in hass.data whenever
+    # that task runs.
+    coordinator = ServerVersionCoordinator(hass, entry)
+    domain_data[DATA_UPDATE_COORDINATOR] = coordinator
+
     task = entry.async_create_background_task(
         hass, async_bring_up_server(hass, entry), f"{DOMAIN}_bring_up"
     )
     domain_data[DATA_BRINGUP_TASK] = task
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
-
-    # Server-version visibility + automatic updates (issue #1760): the
-    # coordinator polls PyPI on its own UPDATE_CHECK_INTERVAL regardless of the
-    # auto_update option, backing the `update` platform entity forwarded below.
-    # Its listener forwards every refresh to async_maybe_auto_update, which
-    # decides whether to actually reload.
-    coordinator = ServerVersionCoordinator(hass, entry)
-    domain_data[DATA_UPDATE_COORDINATOR] = coordinator
 
     @callback
     def _on_version_update() -> None:

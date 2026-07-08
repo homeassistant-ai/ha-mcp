@@ -18,9 +18,11 @@ install()
 
 import custom_components.ha_mcp_tools.update as upd  # noqa: E402
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
+    DATA_BRINGUP_TASK,
     DATA_PENDING_INSTALL_VERSION,
     DIST_NAME_DEV,
     DIST_NAME_STABLE,
+    DOMAIN,
     OPT_AUTO_UPDATE,
 )
 
@@ -48,6 +50,20 @@ def _make_entity(coordinator=None, entry=None) -> upd.ServerUpdateEntity:
     coordinator = coordinator or _make_coordinator(_info())
     entry = entry or _make_entry()
     return upd.ServerUpdateEntity(coordinator, entry)
+
+
+def _make_install_hass(*, bringup=None, installed_version=None) -> MagicMock:
+    """A hass wired for async_install's post-reload flow: awaits the bring-up
+    task (if any) then reads the installed version via the executor."""
+    hass = MagicMock(name="hass")
+    hass.config_entries.async_reload = AsyncMock()
+    hass.data = {DOMAIN: {DATA_BRINGUP_TASK: bringup}}
+
+    async def _executor(_func, *_args):
+        return installed_version
+
+    hass.async_add_executor_job = AsyncMock(side_effect=_executor)
+    return hass
 
 
 class TestProperties:
@@ -128,6 +144,14 @@ class TestProperties:
         assert entity.supported_features & upd.UpdateEntityFeature.INSTALL
         assert not (entity.supported_features & upd.UpdateEntityFeature.RELEASE_NOTES)
 
+    def test_release_url_none_when_coordinator_data_absent(self):
+        entity = _make_entity(coordinator=_make_coordinator(None))
+        assert entity.release_url is None
+
+    def test_supported_features_install_only_when_coordinator_data_absent(self):
+        entity = _make_entity(coordinator=_make_coordinator(None))
+        assert entity.supported_features == upd.UpdateEntityFeature.INSTALL
+
 
 class _FakeResp:
     def __init__(self, payload, *, raise_exc=None):
@@ -197,6 +221,26 @@ class TestReleaseNotes:
 
         assert await entity.async_release_notes() is None
 
+    async def test_malformed_payload_returns_none_and_logs_warning(
+        self, monkeypatch, caplog
+    ):
+        import logging
+
+        # A list of bare strings instead of release dicts - .get() on a str
+        # raises AttributeError, an unexpected-shape bug/API-change, not a
+        # transient - must hit the broad except and log at WARNING.
+        session = _FakeSession(_FakeResp(["not", "a", "release", "dict"]))
+        monkeypatch.setattr(
+            upd, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        entity = _make_entity(coordinator=_make_coordinator(_info()))
+
+        with caplog.at_level(logging.WARNING):
+            notes = await entity.async_release_notes()
+
+        assert notes is None
+        assert "release-notes fetch failed" in caplog.text
+
     async def test_no_qualifying_releases_returns_none(self, monkeypatch):
         session = _FakeSession(_FakeResp([{"tag_name": "v1.0.0", "body": "x"}]))
         monkeypatch.setattr(
@@ -212,9 +256,8 @@ class TestReleaseNotes:
 class TestAsyncInstall:
     async def test_writes_pending_marker_and_reloads(self):
         entry = _make_entry(data={"existing": "kept"})
-        hass = MagicMock(name="hass")
-        hass.config_entries.async_reload = AsyncMock()
-        coordinator = _make_coordinator(_info(latest="1.2.0"))
+        hass = _make_install_hass(installed_version="1.2.0")
+        coordinator = _make_coordinator(_info(dist=DIST_NAME_STABLE, latest="1.2.0"))
         entity = _make_entity(coordinator=coordinator, entry=entry)
         entity.hass = hass
 
@@ -227,9 +270,8 @@ class TestAsyncInstall:
 
     async def test_no_version_falls_back_to_latest(self):
         entry = _make_entry()
-        hass = MagicMock(name="hass")
-        hass.config_entries.async_reload = AsyncMock()
-        coordinator = _make_coordinator(_info(latest="1.3.0"))
+        hass = _make_install_hass(installed_version="1.3.0")
+        coordinator = _make_coordinator(_info(dist=DIST_NAME_STABLE, latest="1.3.0"))
         entity = _make_entity(coordinator=coordinator, entry=entry)
         entity.hass = hass
 
@@ -258,3 +300,33 @@ class TestAsyncInstall:
 
         with pytest.raises(upd.HomeAssistantError):
             await entity.async_install("1.2.0", backup=False)
+
+    async def test_version_mismatch_after_install_raises_naming_target(self):
+        # The reload only completes entry SETUP; the executor read below is the
+        # actual success check (review finding) - a version that landed
+        # different from the target must surface as a failure naming it.
+        entry = _make_entry()
+        hass = _make_install_hass(installed_version="1.1.0")  # target was 1.2.0
+        coordinator = _make_coordinator(_info(dist=DIST_NAME_STABLE, latest="1.2.0"))
+        entity = _make_entity(coordinator=coordinator, entry=entry)
+        entity.hass = hass
+
+        with pytest.raises(upd.HomeAssistantError, match=r"1\.2\.0"):
+            await entity.async_install("1.2.0", backup=False)
+
+    async def test_async_update_entry_raising_wrapped_and_logged(self, caplog):
+        import logging
+
+        entry = _make_entry()
+        hass = _make_install_hass(installed_version="1.2.0")
+        hass.config_entries.async_update_entry = MagicMock(
+            side_effect=RuntimeError("entry store boom")
+        )
+        coordinator = _make_coordinator(_info(dist=DIST_NAME_STABLE, latest="1.2.0"))
+        entity = _make_entity(coordinator=coordinator, entry=entry)
+        entity.hass = hass
+
+        with caplog.at_level(logging.ERROR), pytest.raises(upd.HomeAssistantError):
+            await entity.async_install("1.2.0", backup=False)
+
+        assert "install failed" in caplog.text

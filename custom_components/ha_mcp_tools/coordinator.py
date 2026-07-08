@@ -21,16 +21,14 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
-    CHANNEL_DEV,
     DEFAULT_CHANNEL,
     DEFAULT_PIP_SPEC,
-    DIST_NAME_DEV,
-    DIST_NAME_STABLE,
     DOMAIN,
     OPT_CHANNEL,
     OPT_PIP_SPEC,
     PYPI_JSON_URL,
     UPDATE_CHECK_INTERVAL,
+    dist_for_channel,
 )
 from .embedded_server import _installed_dist_version
 
@@ -86,7 +84,7 @@ class ServerVersionCoordinator(DataUpdateCoordinator[ServerVersionInfo]):
         """
         options = self._entry.options
         channel = str(options.get(OPT_CHANNEL) or DEFAULT_CHANNEL)
-        dist = DIST_NAME_DEV if channel == CHANNEL_DEV else DIST_NAME_STABLE
+        dist = dist_for_channel(channel)
         installed = await self.hass.async_add_executor_job(
             _installed_dist_version, dist
         )

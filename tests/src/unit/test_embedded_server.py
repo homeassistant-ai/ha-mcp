@@ -687,7 +687,12 @@ class TestPendingInstallMarker:
 
         assert DATA_PENDING_INSTALL_VERSION not in entry.data
 
-    async def test_marker_not_cleared_when_install_fails(self, tmp_path, monkeypatch):
+    async def test_marker_cleared_even_when_install_fails(self, tmp_path, monkeypatch):
+        # Review finding: the marker is consumed BEFORE the install attempt
+        # (one-shot means one ATTEMPT, not "until it succeeds"). Clearing only
+        # on success would let a marker for a failing version re-pin every
+        # later reload - including the periodic auto-update ones - to that
+        # same broken version, looping the failure forever.
         mgr, _hass, entry = _manager(
             tmp_path,
             data={DATA_SECRET_PATH: "/p", DATA_PENDING_INSTALL_VERSION: "7.9.0"},
@@ -699,7 +704,7 @@ class TestPendingInstallMarker:
         with pytest.raises(es.EmbeddedServerError):
             await mgr._async_ensure_package()
 
-        assert entry.data[DATA_PENDING_INSTALL_VERSION] == "7.9.0"
+        assert DATA_PENDING_INSTALL_VERSION not in entry.data
 
 
 class TestDistHelpers:

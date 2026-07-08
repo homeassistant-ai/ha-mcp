@@ -34,7 +34,9 @@ _REAL_SURFACE_CONNECT_URLS = esetup._surface_connect_urls
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     DATA_BRINGUP_TASK,
     DATA_MANAGER,
+    DATA_PENDING_UPDATE_NOTIFY,
     DATA_SECRET_PATH,
+    DATA_UPDATE_COORDINATOR,
     DATA_WEBHOOK_ID,
     DEFAULT_PIP_SPEC,
     DIST_NAME_DEV,
@@ -216,6 +218,34 @@ class TestBringUp:
 
         fake_manager.async_stop.assert_awaited_once()  # partial state torn down
         esetup.ir.async_create_issue.assert_not_called()  # cancellation isn't a fault
+
+    async def test_package_failure_drops_pending_update_marker(self, fake_manager):
+        # The install did not land: the deferred "updated" notification must
+        # never fire for it - the repair issue is the user-facing signal.
+        hass = _make_hass()
+        hass.data[DOMAIN] = {DATA_PENDING_UPDATE_NOTIFY: {"old": "7.9.0"}}
+        entry = _make_entry()
+        fake_manager.async_start.side_effect = esetup.EmbeddedServerError(
+            "pip failed", kind="package"
+        )
+
+        await esetup.async_bring_up_server(hass, entry)
+
+        assert DATA_PENDING_UPDATE_NOTIFY not in hass.data[DOMAIN]
+
+    async def test_cancelled_bringup_keeps_pending_update_marker(self, fake_manager):
+        # Deliberately NOT dropped on cancellation: this bring-up never ran (the
+        # entry was unloaded before it started), so the marker belongs to
+        # whichever bring-up runs next, not to this cancelled attempt.
+        hass = _make_hass()
+        hass.data[DOMAIN] = {DATA_PENDING_UPDATE_NOTIFY: {"old": "7.9.0"}}
+        entry = _make_entry()
+        fake_manager.async_start.side_effect = asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await esetup.async_bring_up_server(hass, entry)
+
+        assert hass.data[DOMAIN][DATA_PENDING_UPDATE_NOTIFY] == {"old": "7.9.0"}
 
 
 class TestTeardown:
@@ -526,7 +556,10 @@ class TestMaybeAutoUpdate:
         installed="7.9.0", latest="7.10.0", dist=DIST_NAME_STABLE
     )
 
-    async def test_newer_version_reloads_and_notifies(self, monkeypatch):
+    async def test_newer_version_reloads_and_sets_pending_marker(self, monkeypatch):
+        # The notification no longer fires here - it's deferred to
+        # _async_finish_update_cycle, which only runs after the reloaded
+        # entry's bring-up actually confirms the install landed.
         hass = _make_async_hass()
         entry = _make_entry()
         notif = MagicMock()
@@ -535,13 +568,30 @@ class TestMaybeAutoUpdate:
         await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
 
         hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
-        notif.assert_called_once()
-        message = notif.call_args.kwargs.get("message") or notif.call_args.args[1]
-        assert "7.9.0" in message
-        assert "7.10.0" in message
-        assert notif.call_args.kwargs.get("notification_id") == (
-            esetup._UPDATE_NOTIFICATION_ID
-        )
+        assert hass.data[DOMAIN][DATA_PENDING_UPDATE_NOTIFY] == {"old": "7.9.0"}
+        notif.assert_not_called()
+
+    async def test_info_none_does_not_reload_or_set_marker(self, monkeypatch):
+        hass = _make_async_hass()
+        entry = _make_entry()
+
+        await esetup.async_maybe_auto_update(hass, entry, None)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+        assert DATA_PENDING_UPDATE_NOTIFY not in hass.data.get(DOMAIN, {})
+
+    async def test_reload_failure_drops_marker_and_logs(self, monkeypatch, caplog):
+        import logging
+
+        hass = _make_async_hass()
+        hass.config_entries.async_reload = AsyncMock(side_effect=RuntimeError("boom"))
+        entry = _make_entry()
+
+        with caplog.at_level(logging.ERROR):
+            await esetup.async_maybe_auto_update(hass, entry, self._NEWER)  # no raise
+
+        assert DATA_PENDING_UPDATE_NOTIFY not in hass.data.get(DOMAIN, {})
+        assert "reload failed" in caplog.text
 
     async def test_equal_version_does_not_reload(self, monkeypatch):
         hass = _make_async_hass()
@@ -639,20 +689,133 @@ class TestMaybeAutoUpdate:
 
         hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
 
-    async def test_dev_channel_notification_links_commit_history(self, monkeypatch):
+
+# ---------------------------------------------------------------------------
+# _async_finish_update_cycle (post-bring-up refresh + deferred notification)
+# ---------------------------------------------------------------------------
+
+
+class TestFinishUpdateCycle:
+    def _fake_coordinator(self, *, data, refresh_side_effect=None):
+        coordinator = MagicMock(name="coordinator")
+        coordinator.data = data
+
+        async def _refresh():
+            if refresh_side_effect is not None:
+                raise refresh_side_effect
+            return None
+
+        coordinator.async_refresh = AsyncMock(side_effect=_refresh)
+        return coordinator
+
+    async def test_marker_and_newer_install_fires_notification(self, monkeypatch):
         hass = _make_async_hass()
-        entry = _make_entry()
+        hass.data[DOMAIN] = {
+            DATA_PENDING_UPDATE_NOTIFY: {"old": "7.9.0"},
+            DATA_UPDATE_COORDINATOR: self._fake_coordinator(
+                data=ServerVersionInfo(
+                    installed="7.10.0", latest="7.10.0", dist=DIST_NAME_STABLE
+                )
+            ),
+        }
         notif = MagicMock()
         monkeypatch.setattr(esetup.persistent_notification, "async_create", notif)
-        info = ServerVersionInfo(
-            installed="7.9.0.dev1", latest="7.10.0.dev1", dist=DIST_NAME_DEV
+
+        await esetup._async_finish_update_cycle(hass)
+
+        hass.data[DOMAIN][DATA_UPDATE_COORDINATOR].async_refresh.assert_awaited_once()
+        assert DATA_PENDING_UPDATE_NOTIFY not in hass.data[DOMAIN]
+        notif.assert_called_once()
+        message = notif.call_args.kwargs.get("message") or notif.call_args.args[1]
+        assert "7.9.0" in message
+        assert "7.10.0" in message
+        assert "releases/tag/v7.10.0" in message
+        assert notif.call_args.kwargs.get("notification_id") == (
+            esetup._UPDATE_NOTIFICATION_ID
         )
 
-        await esetup.async_maybe_auto_update(hass, entry, info)
+    async def test_dev_channel_notification_links_commit_history(self, monkeypatch):
+        hass = _make_async_hass()
+        hass.data[DOMAIN] = {
+            DATA_PENDING_UPDATE_NOTIFY: {"old": "7.9.0.dev1"},
+            DATA_UPDATE_COORDINATOR: self._fake_coordinator(
+                data=ServerVersionInfo(
+                    installed="7.10.0.dev1", latest="7.10.0.dev1", dist=DIST_NAME_DEV
+                )
+            ),
+        }
+        notif = MagicMock()
+        monkeypatch.setattr(esetup.persistent_notification, "async_create", notif)
+
+        await esetup._async_finish_update_cycle(hass)
 
         message = notif.call_args.kwargs.get("message") or notif.call_args.args[1]
         assert "github.com/homeassistant-ai/ha-mcp/commits/master" in message
         assert "releases/tag" not in message
+
+    async def test_no_marker_refreshes_but_does_not_notify(self, monkeypatch):
+        hass = _make_async_hass()
+        coordinator = self._fake_coordinator(
+            data=ServerVersionInfo(
+                installed="7.10.0", latest="7.10.0", dist=DIST_NAME_STABLE
+            )
+        )
+        hass.data[DOMAIN] = {DATA_UPDATE_COORDINATOR: coordinator}
+        notif = MagicMock()
+        monkeypatch.setattr(esetup.persistent_notification, "async_create", notif)
+
+        await esetup._async_finish_update_cycle(hass)
+
+        coordinator.async_refresh.assert_awaited_once()
+        notif.assert_not_called()
+
+    async def test_installed_unchanged_consumes_marker_no_notify(self, monkeypatch):
+        # A reload can legitimately resolve to the same build (e.g. already
+        # the newest) - an "updated to" notification would be false.
+        hass = _make_async_hass()
+        hass.data[DOMAIN] = {
+            DATA_PENDING_UPDATE_NOTIFY: {"old": "7.9.0"},
+            DATA_UPDATE_COORDINATOR: self._fake_coordinator(
+                data=ServerVersionInfo(
+                    installed="7.9.0", latest="7.9.0", dist=DIST_NAME_STABLE
+                )
+            ),
+        }
+        notif = MagicMock()
+        monkeypatch.setattr(esetup.persistent_notification, "async_create", notif)
+
+        await esetup._async_finish_update_cycle(hass)
+
+        assert DATA_PENDING_UPDATE_NOTIFY not in hass.data[DOMAIN]
+        notif.assert_not_called()
+
+    async def test_missing_coordinator_consumes_marker_no_crash(self, monkeypatch):
+        hass = _make_async_hass()
+        hass.data[DOMAIN] = {DATA_PENDING_UPDATE_NOTIFY: {"old": "7.9.0"}}
+        notif = MagicMock()
+        monkeypatch.setattr(esetup.persistent_notification, "async_create", notif)
+
+        await esetup._async_finish_update_cycle(hass)  # must not raise
+
+        assert DATA_PENDING_UPDATE_NOTIFY not in hass.data[DOMAIN]
+        notif.assert_not_called()
+
+    async def test_refresh_failure_is_swallowed_and_logged(self, monkeypatch, caplog):
+        import logging
+
+        hass = _make_async_hass()
+        coordinator = self._fake_coordinator(
+            data=ServerVersionInfo(
+                installed="7.9.0", latest="7.9.0", dist=DIST_NAME_STABLE
+            ),
+            refresh_side_effect=RuntimeError("boom"),
+        )
+        hass.data[DOMAIN] = {DATA_UPDATE_COORDINATOR: coordinator}
+
+        with caplog.at_level(logging.WARNING):
+            await esetup._async_finish_update_cycle(hass)  # must not raise
+
+        assert "version refresh failed" in caplog.text
 
 
 # ---------------------------------------------------------------------------
