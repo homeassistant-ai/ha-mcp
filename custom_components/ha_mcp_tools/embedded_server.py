@@ -54,6 +54,7 @@ from .const import (
     CHANNEL_DEV,
     DATA_ACCESS_TOKEN,
     DATA_LAST_PIP_SPEC,
+    DATA_PENDING_INSTALL_VERSION,
     DATA_REFRESH_TOKEN_ID,
     DATA_SECRET_PATH,
     DATA_SERVER_USER_ID,
@@ -336,6 +337,11 @@ class EmbeddedServerManager:
         pinned reinstall a no-op (breaking a dev→stable downgrade) and the reported
         version ambiguous.
 
+        A one-shot pending-install marker (:data:`DATA_PENDING_INSTALL_VERSION`,
+        set by the update entity's Install button — issue #1760) overrides both
+        the unpinned-channel and auto-update-off pinning above for this single
+        install, regardless of the ``auto_update`` option.
+
         Never imports ``ha_mcp`` in this (main) process — that happens only inside
         the worker thread.
         """
@@ -344,19 +350,27 @@ class EmbeddedServerManager:
             _installed_ha_mcp_version
         )
 
-        # Re-pin an auto-update-off channel to its TARGET distribution's
-        # installed version, read off-loop (the __init__ value was the bare
-        # dist to avoid a blocking read on the event loop). Reading the target
-        # dist specifically — not whichever dist happens to be present — keeps a
-        # cross-channel switch correct: the previous channel's dist is still
-        # installed at this point (removal happens below), so a whichever-present
-        # read would pin the new dist to a version that does not exist for it and
-        # fail the install. Nothing of the target channel installed yet => None
-        # => stays unpinned and installs the newest once.
-        if not self._pip_spec_override and not self._auto_update:
-            target_dist = (
-                DEV_PIP_SPEC if self._channel == CHANNEL_DEV else DIST_NAME_STABLE
-            )
+        pending_version = str(
+            self._entry.data.get(DATA_PENDING_INSTALL_VERSION) or ""
+        ).strip()
+        target_dist = DEV_PIP_SPEC if self._channel == CHANNEL_DEV else DIST_NAME_STABLE
+        if not self._pip_spec_override and pending_version:
+            # Pin to the requested version. Its own value differs from
+            # stored_spec below (that is the whole point of the marker), which
+            # already forces the force-install branch further down — no
+            # separate fast-path handling needed here.
+            self._pip_spec = f"{target_dist}=={pending_version}"
+        elif not self._pip_spec_override and not self._auto_update:
+            # Re-pin an auto-update-off channel to its TARGET distribution's
+            # installed version, read off-loop (the __init__ value was the bare
+            # dist to avoid a blocking read on the event loop). Reading the
+            # target dist specifically — not whichever dist happens to be
+            # present — keeps a cross-channel switch correct: the previous
+            # channel's dist is still installed at this point (removal happens
+            # below), so a whichever-present read would pin the new dist to a
+            # version that does not exist for it and fail the install. Nothing
+            # of the target channel installed yet => None => stays unpinned and
+            # installs the newest once.
             pin_version = await self._hass.async_add_executor_job(
                 _installed_dist_version, target_dist
             )
@@ -387,6 +401,7 @@ class EmbeddedServerManager:
         _LOGGER.info("HA-MCP in-process server package ready (version %s)", version)
         if stored_spec != self._pip_spec:
             self._store_installed_spec()
+        self._clear_pending_install_marker()
 
     async def _async_process_requirements_fast(self) -> None:
         """Fast path: let HA's requirements manager satisfy the override spec."""
@@ -459,6 +474,19 @@ class EmbeddedServerManager:
         new_data = {**self._entry.data, DATA_LAST_PIP_SPEC: self._pip_spec}
         if new_data != dict(self._entry.data):
             self._hass.config_entries.async_update_entry(self._entry, data=new_data)
+
+    def _clear_pending_install_marker(self) -> None:
+        """Clear the update entity's one-shot pending-install marker.
+
+        Called unconditionally after every successful install (not just a
+        pending-version one) so a marker left over from an interrupted attempt
+        can never linger and silently re-pin a later, unrelated install.
+        """
+        if DATA_PENDING_INSTALL_VERSION not in self._entry.data:
+            return
+        new_data = dict(self._entry.data)
+        new_data.pop(DATA_PENDING_INSTALL_VERSION, None)
+        self._hass.config_entries.async_update_entry(self._entry, data=new_data)
 
     # -- token provisioning ------------------------------------------------
 

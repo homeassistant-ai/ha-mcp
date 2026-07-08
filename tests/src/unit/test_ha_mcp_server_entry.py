@@ -52,6 +52,8 @@ def _make_hass() -> MagicMock:
 
     hass.config_entries.async_update_entry = MagicMock(side_effect=_update_entry)
     hass.config_entries.async_reload = AsyncMock()
+    hass.config_entries.async_forward_entry_setups = AsyncMock()
+    hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
     return hass
 
 
@@ -60,7 +62,18 @@ def _make_entry(*, options=None, data=None) -> MagicMock:
     entry.entry_id = "entry-1"
     entry.options = {} if options is None else dict(options)
     entry.data = {} if data is None else dict(data)
-    entry.async_create_background_task = MagicMock(return_value="BRINGUP_TASK")
+
+    def _create_background_task(hass, coro, name):
+        # issue #1760: async_setup_server_entry now ALSO schedules the
+        # coordinator's initial version refresh as a real coroutine here (a
+        # second call, alongside the bring-up). This suite doesn't exercise
+        # coordinator behavior, so just close it to avoid an unawaited-
+        # coroutine warning rather than actually running it.
+        if asyncio.iscoroutine(coro):
+            coro.close()
+        return "BRINGUP_TASK"
+
+    entry.async_create_background_task = MagicMock(side_effect=_create_background_task)
     entry.add_update_listener = MagicMock(return_value="UNSUB")
     entry.async_on_unload = MagicMock()
     return entry
@@ -164,15 +177,20 @@ class TestSetupEntry:
         domain_data = hass.data[DOMAIN]
         # Options snapshot taken so data writes don't self-reload.
         assert domain_data[DATA_LAST_OPTIONS] == {"server_port": 9584}
-        # Bring-up scheduled as a config-entry background task and stored.
-        entry.async_create_background_task.assert_called_once()
+        # Bring-up AND the coordinator's initial version refresh are both
+        # scheduled as config-entry background tasks (issue #1760).
+        assert entry.async_create_background_task.call_count == 2
         assert domain_data[DATA_BRINGUP_TASK] == "BRINGUP_TASK"
-        # Reload-on-options-change listener AND the periodic auto-update interval
-        # are both registered under async_on_unload for cleanup.
+        # Reload-on-options-change listener AND the coordinator's auto-update
+        # listener are both registered under async_on_unload for cleanup.
         entry.add_update_listener.assert_called_once_with(pkg._async_options_updated)
         unload_args = [c.args[0] for c in entry.async_on_unload.call_args_list]
         assert "UNSUB" in unload_args  # options-change listener unsub
-        assert len(unload_args) == 2  # + the auto-update interval cancel callback
+        assert len(unload_args) == 2  # + the coordinator listener unsub
+        # The update platform entity is forwarded (issue #1760).
+        hass.config_entries.async_forward_entry_setups.assert_awaited_once_with(
+            entry, [pkg.Platform.UPDATE]
+        )
 
 
 class TestUnloadEntry:

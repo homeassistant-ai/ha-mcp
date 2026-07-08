@@ -262,6 +262,12 @@ DATA_ACCESS_TOKEN = "access_token"
 # pre-release test channel) force an actual reinstall on the next start instead
 # of hitting the requirements manager's is-installed shortcut.
 DATA_LAST_PIP_SPEC = "last_pip_spec"
+# One-shot marker set by the update entity's Install button (issue #1760):
+# with auto-update off, EmbeddedServerManager._resolve_pip_spec pins the
+# channel to the CURRENTLY installed version, so a bare reload would just
+# reinstall the same build. This pins the next install to a specific version
+# regardless of auto_update; embedded_server clears it once that install lands.
+DATA_PENDING_INSTALL_VERSION = "pending_install_version"
 
 # hass.data[DOMAIN] sub-keys for the server runtime. Distinct from the tools
 # entry's sub-keys ("caller_token" / "allowed_paths") so both entry types can
@@ -273,6 +279,9 @@ DATA_BRINGUP_TASK = "bringup_task"
 # on a genuine options change — the background bring-up persists ids/token/pip
 # spec to entry.data, and those writes must not trigger a self-reload.
 DATA_LAST_OPTIONS = "last_options"
+# The ServerVersionCoordinator instance backing the `update` platform entity
+# (issue #1760) — stored so the platform's async_setup_entry can retrieve it.
+DATA_UPDATE_COORDINATOR = "update_coordinator"
 
 # Webhook auth modes (mirrors the webhook-proxy add-on's default posture).
 WEBHOOK_AUTH_NONE = "none"  # secret webhook URL is the shared secret (default)
@@ -309,6 +318,14 @@ SERVER_USER_NAME = "HA-MCP Server"
 # namespace (mirrors the webhook-proxy add-on's /api/mcp_proxy/oauth base).
 OAUTH_BASE = "/api/ha_mcp_tools/oauth"
 
+# HACS "add repository" deep link for the custom component. Shared learn_more_url
+# for every repair issue that ends with "install/reinstall the component via
+# HACS" (the component-outdated issue and the legacy-HACS-source issue below).
+HACS_COMPONENT_URL = (
+    "https://my.home-assistant.io/redirect/hacs_repository/"
+    "?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration"
+)
+
 # Repair-issue ids surfaced when server bring-up fails.
 ISSUE_PACKAGE_FAILED = "server_package_install_failed"
 ISSUE_START_FAILED = "server_start_failed"
@@ -318,3 +335,11 @@ ISSUE_START_FAILED = "server_start_failed"
 # the server expects; this points the user at the HACS component update
 # (non-blocking).
 ISSUE_COMPONENT_OUTDATED = "component_outdated"
+# Repair issue surfaced when HACS is tracking the MAIN ha-mcp server repo for
+# this component (the pre-mirror install path — issue #1760). That install
+# keeps working (HACS downloads the repo snapshot at the release tag, which
+# contains the component), but HACS shows the SERVER's version numbers and
+# release notes, not the component's own; HACS has no repository-migration
+# mechanism, so this only self-resolves if the user re-adds the dedicated
+# mirror (homeassistant-ai/ha-mcp-integration).
+ISSUE_LEGACY_HACS_SOURCE = "legacy_hacs_source"

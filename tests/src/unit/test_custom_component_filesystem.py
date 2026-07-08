@@ -20,7 +20,11 @@ sys.modules["homeassistant.components"] = MagicMock()
 sys.modules["homeassistant.components.persistent_notification"] = MagicMock()
 sys.modules["homeassistant.config"] = MagicMock()
 sys.modules["homeassistant.config_entries"] = MagicMock()
-sys.modules["homeassistant.core"] = MagicMock()
+# setdefault (not =): other test modules stub homeassistant.core with a real
+# `callback` identity function (production code decorates real closures with
+# it - a clobbered auto-mock attribute would silently replace them). This
+# file doesn't care what's already there, only that something importable is.
+sys.modules.setdefault("homeassistant.core", MagicMock())
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
 sys.modules["homeassistant.helpers.storage"] = MagicMock()

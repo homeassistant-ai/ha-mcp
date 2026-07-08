@@ -1,0 +1,182 @@
+"""Update platform for the in-process server package (issue #1760).
+
+Exposes one ``update`` entity per "server" config entry for the ha-mcp server
+package it runs in-process, backed by :class:`~.coordinator.ServerVersionCoordinator`.
+The entity stays populated whether or not automatic updates are on - see the
+coordinator's docstring for why.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import TYPE_CHECKING, Any
+
+from awesomeversion import AwesomeVersion, AwesomeVersionException
+from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import (
+    DATA_PENDING_INSTALL_VERSION,
+    DATA_UPDATE_COORDINATOR,
+    DEFAULT_AUTO_UPDATE,
+    DIST_NAME_DEV,
+    DOMAIN,
+    OPT_AUTO_UPDATE,
+)
+from .coordinator import ServerVersionCoordinator
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+_LOGGER = logging.getLogger(__name__)
+
+# GitHub releases API for the release-notes surface (stable channel only - the
+# dev channel has no tagged releases, see release_url / supported_features).
+_RELEASES_URL = (
+    "https://api.github.com/repos/homeassistant-ai/ha-mcp/releases?per_page=30"
+)
+_RELEASE_NOTES_TIMEOUT_SECONDS = 15
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+) -> None:
+    """Add the single server-package update entity for this config entry."""
+    coordinator: ServerVersionCoordinator = hass.data[DOMAIN][DATA_UPDATE_COORDINATOR]
+    async_add_entities([ServerUpdateEntity(coordinator, entry)])
+
+
+class ServerUpdateEntity(CoordinatorEntity[ServerVersionCoordinator], UpdateEntity):
+    """Update entity for the ha-mcp server package the "server" entry runs."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "server_update"
+
+    def __init__(
+        self, coordinator: ServerVersionCoordinator, entry: ConfigEntry
+    ) -> None:
+        """Bind to the coordinator and the owning config entry."""
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_server_update"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Group under one device per config entry; sw_version = installed."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name="HA-MCP Server",
+            manufacturer="homeassistant-ai",
+            model="ha-mcp (in-process server)",
+            sw_version=self.installed_version,
+            configuration_url="https://github.com/homeassistant-ai/ha-mcp",
+        )
+
+    @property
+    def installed_version(self) -> str | None:
+        """Return the installed server-package version, or None if unknown."""
+        data = self.coordinator.data
+        return data.installed if data is not None else None
+
+    @property
+    def latest_version(self) -> str | None:
+        """Return the newest PyPI version, or None if unknown/unresolvable."""
+        data = self.coordinator.data
+        return data.latest if data is not None else None
+
+    @property
+    def auto_update(self) -> bool:
+        """Reflect the entry's automatic-update option."""
+        return bool(self._entry.options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE))
+
+    @property
+    def release_url(self) -> str | None:
+        """Stable: the tagged GitHub release. Dev: the commit history (no tags)."""
+        data = self.coordinator.data
+        if data is None:
+            return None
+        if data.dist == DIST_NAME_DEV:
+            return "https://github.com/homeassistant-ai/ha-mcp/commits/master"
+        if data.latest is None:
+            return None
+        return f"https://github.com/homeassistant-ai/ha-mcp/releases/tag/v{data.latest}"
+
+    @property
+    def supported_features(self) -> UpdateEntityFeature:
+        """RELEASE_NOTES only on the stable channel — dev builds have no tags."""
+        features = UpdateEntityFeature.INSTALL
+        data = self.coordinator.data
+        if data is not None and data.dist != DIST_NAME_DEV:
+            features |= UpdateEntityFeature.RELEASE_NOTES
+        return features
+
+    async def async_release_notes(self) -> str | None:
+        """Concatenate GitHub release bodies between installed and latest.
+
+        Advisory-only (same reasoning as embedded_setup's
+        _async_check_component_compat): a GitHub fetch failure, rate limit, or
+        unexpected payload shape must degrade to None - the UI then falls back
+        to :attr:`release_url` - rather than break the update dialog.
+        """
+        data = self.coordinator.data
+        if data is None or data.installed is None or data.latest is None:
+            return None
+
+        try:
+            installed = AwesomeVersion(data.installed)
+            latest = AwesomeVersion(data.latest)
+            session = async_get_clientsession(self.hass)
+            async with asyncio.timeout(_RELEASE_NOTES_TIMEOUT_SECONDS):
+                async with session.get(_RELEASES_URL) as resp:
+                    resp.raise_for_status()
+                    releases = await resp.json()
+
+            notes: list[tuple[AwesomeVersion, str]] = []
+            for release in releases:
+                tag = str(release.get("tag_name") or "").removeprefix("v")
+                try:
+                    version = AwesomeVersion(tag)
+                except AwesomeVersionException:
+                    continue
+                if installed < version <= latest:
+                    notes.append((version, str(release.get("body") or "")))
+        except Exception as err:
+            _LOGGER.debug("HA-MCP release-notes fetch failed: %s", err)
+            return None
+
+        if not notes:
+            return None
+        notes.sort(key=lambda item: item[0], reverse=True)
+        return "\n\n---\n\n".join(body for _, body in notes)
+
+    async def async_install(
+        self, version: str | None, backup: bool, **kwargs: Any
+    ) -> None:
+        """Reinstall pinned to ``version`` (or the latest known build).
+
+        With auto-update off, ``_resolve_pip_spec`` pins the install to the
+        currently-installed version, so a bare reload would just reinstall the
+        same build. The one-shot pending-install marker overrides that pin for
+        this single reload; embedded_server clears it once the install lands.
+        """
+        target = version or self.latest_version
+        if target is None:
+            raise HomeAssistantError("No target version available to install.")
+        # Broad except is intentional here (unlike this repo's usual narrow
+        # convention): async_install feeds Home Assistant's update UI, which
+        # expects a HomeAssistantError for ANY failure rather than an opaque
+        # traceback in the install dialog.
+        try:
+            new_data = {**self._entry.data, DATA_PENDING_INSTALL_VERSION: target}
+            self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+            await self.hass.config_entries.async_reload(self._entry.entry_id)
+        except Exception as err:
+            raise HomeAssistantError(
+                f"Could not install the HA-MCP server update: {err}"
+            ) from err

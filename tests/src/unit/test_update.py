@@ -1,0 +1,260 @@
+"""Unit tests for the ``update`` platform (issue #1760).
+
+Covers the entity's properties (installed/latest/auto_update/release_url per
+channel, supported_features per channel) and ``async_install``'s pending-marker
+write + reload. Home Assistant / aiohttp are stubbed via ``_embedded_stubs``.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from ._embedded_stubs import install
+
+install()
+
+import custom_components.ha_mcp_tools.update as upd  # noqa: E402
+from custom_components.ha_mcp_tools.const import (  # noqa: E402
+    DATA_PENDING_INSTALL_VERSION,
+    DIST_NAME_DEV,
+    DIST_NAME_STABLE,
+    OPT_AUTO_UPDATE,
+)
+
+
+def _info(*, installed="1.0.0", latest="1.1.0", dist=DIST_NAME_STABLE):
+    return SimpleNamespace(installed=installed, latest=latest, dist=dist)
+
+
+def _make_coordinator(data=None) -> MagicMock:
+    coordinator = MagicMock(name="coordinator")
+    coordinator.data = data
+    coordinator.hass = MagicMock(name="hass")
+    return coordinator
+
+
+def _make_entry(*, options=None, data=None) -> MagicMock:
+    entry = MagicMock(name="entry")
+    entry.entry_id = "entry-1"
+    entry.options = {} if options is None else dict(options)
+    entry.data = {} if data is None else dict(data)
+    return entry
+
+
+def _make_entity(coordinator=None, entry=None) -> upd.ServerUpdateEntity:
+    coordinator = coordinator or _make_coordinator(_info())
+    entry = entry or _make_entry()
+    return upd.ServerUpdateEntity(coordinator, entry)
+
+
+class TestProperties:
+    def test_unique_id_and_entity_name(self):
+        entity = _make_entity(entry=_make_entry())
+        assert entity._attr_unique_id == "entry-1_server_update"
+        assert entity._attr_has_entity_name is True
+        assert entity._attr_translation_key == "server_update"
+
+    def test_installed_and_latest_version(self):
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(installed="1.0.0", latest="1.2.0"))
+        )
+        assert entity.installed_version == "1.0.0"
+        assert entity.latest_version == "1.2.0"
+
+    def test_versions_none_when_coordinator_data_absent(self):
+        entity = _make_entity(coordinator=_make_coordinator(None))
+        assert entity.installed_version is None
+        assert entity.latest_version is None
+
+    def test_device_info_sw_version_is_installed_version(self):
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(installed="1.0.0")),
+            entry=_make_entry(),
+        )
+        info = entity.device_info
+        assert info["sw_version"] == "1.0.0"
+        assert info["identifiers"] == {("ha_mcp_tools", "entry-1")}
+        assert info["name"] == "HA-MCP Server"
+
+    @pytest.mark.parametrize(
+        "option_value, default_used, expected",
+        [
+            (True, False, True),
+            (False, False, False),
+            (None, True, True),
+        ],
+    )
+    def test_auto_update_reflects_entry_option(
+        self, option_value, default_used, expected
+    ):
+        options = {} if default_used else {OPT_AUTO_UPDATE: option_value}
+        entity = _make_entity(entry=_make_entry(options=options))
+        assert entity.auto_update is expected
+
+    def test_release_url_stable_channel(self):
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(latest="1.2.0", dist=DIST_NAME_STABLE))
+        )
+        assert entity.release_url == (
+            "https://github.com/homeassistant-ai/ha-mcp/releases/tag/v1.2.0"
+        )
+
+    def test_release_url_stable_channel_none_when_latest_unknown(self):
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(latest=None, dist=DIST_NAME_STABLE))
+        )
+        assert entity.release_url is None
+
+    def test_release_url_dev_channel_is_commit_history(self):
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(latest=None, dist=DIST_NAME_DEV))
+        )
+        assert entity.release_url == (
+            "https://github.com/homeassistant-ai/ha-mcp/commits/master"
+        )
+
+    def test_supported_features_stable_includes_release_notes(self):
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(dist=DIST_NAME_STABLE))
+        )
+        assert entity.supported_features & upd.UpdateEntityFeature.INSTALL
+        assert entity.supported_features & upd.UpdateEntityFeature.RELEASE_NOTES
+
+    def test_supported_features_dev_excludes_release_notes(self):
+        entity = _make_entity(coordinator=_make_coordinator(_info(dist=DIST_NAME_DEV)))
+        assert entity.supported_features & upd.UpdateEntityFeature.INSTALL
+        assert not (entity.supported_features & upd.UpdateEntityFeature.RELEASE_NOTES)
+
+
+class _FakeResp:
+    def __init__(self, payload, *, raise_exc=None):
+        self._payload = payload
+        self._raise_exc = raise_exc
+
+    def raise_for_status(self):
+        if self._raise_exc is not None:
+            raise self._raise_exc
+
+    async def json(self):
+        return self._payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeSession:
+    def __init__(self, resp):
+        self._resp = resp
+
+    def get(self, _url):
+        return self._resp
+
+
+class TestReleaseNotes:
+    async def test_concatenates_bodies_between_installed_and_latest(self, monkeypatch):
+        releases = [
+            {"tag_name": "v1.3.0", "body": "too new"},
+            {"tag_name": "v1.2.0", "body": "second"},
+            {"tag_name": "v1.1.0", "body": "first"},
+            {"tag_name": "v1.0.0", "body": "already installed"},
+        ]
+        session = _FakeSession(_FakeResp(releases))
+        monkeypatch.setattr(
+            upd, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(installed="1.0.0", latest="1.2.0"))
+        )
+
+        notes = await entity.async_release_notes()
+
+        assert notes is not None
+        assert "second" in notes
+        assert "first" in notes
+        assert "too new" not in notes
+        assert "already installed" not in notes
+        # Newest first.
+        assert notes.index("second") < notes.index("first")
+
+    async def test_no_coordinator_data_returns_none(self):
+        entity = _make_entity(coordinator=_make_coordinator(None))
+        assert await entity.async_release_notes() is None
+
+    async def test_fetch_failure_returns_none(self, monkeypatch):
+        # async_release_notes is advisory-only and catches broadly (any
+        # network/parsing error), so any exception type demonstrates the gate.
+        session = _FakeSession(_FakeResp(None, raise_exc=RuntimeError("boom")))
+        monkeypatch.setattr(
+            upd, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        entity = _make_entity(coordinator=_make_coordinator(_info()))
+
+        assert await entity.async_release_notes() is None
+
+    async def test_no_qualifying_releases_returns_none(self, monkeypatch):
+        session = _FakeSession(_FakeResp([{"tag_name": "v1.0.0", "body": "x"}]))
+        monkeypatch.setattr(
+            upd, "async_get_clientsession", MagicMock(return_value=session)
+        )
+        entity = _make_entity(
+            coordinator=_make_coordinator(_info(installed="1.0.0", latest="1.0.0"))
+        )
+
+        assert await entity.async_release_notes() is None
+
+
+class TestAsyncInstall:
+    async def test_writes_pending_marker_and_reloads(self):
+        entry = _make_entry(data={"existing": "kept"})
+        hass = MagicMock(name="hass")
+        hass.config_entries.async_reload = AsyncMock()
+        coordinator = _make_coordinator(_info(latest="1.2.0"))
+        entity = _make_entity(coordinator=coordinator, entry=entry)
+        entity.hass = hass
+
+        await entity.async_install("1.2.0", backup=False)
+
+        updated_data = hass.config_entries.async_update_entry.call_args.kwargs["data"]
+        assert updated_data[DATA_PENDING_INSTALL_VERSION] == "1.2.0"
+        assert updated_data["existing"] == "kept"  # existing entry.data preserved
+        hass.config_entries.async_reload.assert_awaited_once_with("entry-1")
+
+    async def test_no_version_falls_back_to_latest(self):
+        entry = _make_entry()
+        hass = MagicMock(name="hass")
+        hass.config_entries.async_reload = AsyncMock()
+        coordinator = _make_coordinator(_info(latest="1.3.0"))
+        entity = _make_entity(coordinator=coordinator, entry=entry)
+        entity.hass = hass
+
+        await entity.async_install(None, backup=False)
+
+        updated_data = hass.config_entries.async_update_entry.call_args.kwargs["data"]
+        assert updated_data[DATA_PENDING_INSTALL_VERSION] == "1.3.0"
+
+    async def test_no_target_version_raises_home_assistant_error(self):
+        entry = _make_entry()
+        hass = MagicMock(name="hass")
+        coordinator = _make_coordinator(_info(latest=None))
+        entity = _make_entity(coordinator=coordinator, entry=entry)
+        entity.hass = hass
+
+        with pytest.raises(upd.HomeAssistantError):
+            await entity.async_install(None, backup=False)
+
+    async def test_reload_failure_wrapped_in_home_assistant_error(self):
+        entry = _make_entry()
+        hass = MagicMock(name="hass")
+        hass.config_entries.async_reload = AsyncMock(side_effect=RuntimeError("boom"))
+        coordinator = _make_coordinator(_info(latest="1.2.0"))
+        entity = _make_entity(coordinator=coordinator, entry=entry)
+        entity.hass = hass
+
+        with pytest.raises(upd.HomeAssistantError):
+            await entity.async_install("1.2.0", backup=False)

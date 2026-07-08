@@ -32,7 +32,7 @@ import custom_components.ha_mcp_tools.embedded_setup as esetup  # noqa: E402
 _REAL_SURFACE_CONNECT_URLS = esetup._surface_connect_urls
 
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
-    CHANNEL_DEV,
+    DATA_BRINGUP_TASK,
     DATA_MANAGER,
     DATA_SECRET_PATH,
     DATA_WEBHOOK_ID,
@@ -44,11 +44,11 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     ISSUE_PACKAGE_FAILED,
     ISSUE_START_FAILED,
     OPT_AUTO_UPDATE,
-    OPT_CHANNEL,
     OPT_PIP_SPEC,
     OPT_WEBHOOK_AUTH,
     WEBHOOK_AUTH_HA,
 )
+from custom_components.ha_mcp_tools.coordinator import ServerVersionInfo  # noqa: E402
 
 
 def _make_hass() -> MagicMock:
@@ -500,7 +500,7 @@ class TestBuildConnectUrls:
 
 
 # ---------------------------------------------------------------------------
-# Periodic channel auto-update check
+# Automatic-update decision (given a ServerVersionInfo from the coordinator)
 # ---------------------------------------------------------------------------
 
 
@@ -511,147 +511,148 @@ def _make_async_hass() -> MagicMock:
     return hass
 
 
-class _FakeResp:
-    """aiohttp response stand-in: an async context manager with json/raise."""
+class _FakeTask:
+    """Stand-in for the bring-up ``asyncio.Task`` — only ``.done()`` is read."""
 
-    def __init__(self, payload, *, raise_exc=None):
-        self._payload = payload
-        self._raise_exc = raise_exc
+    def __init__(self, *, done: bool) -> None:
+        self._done = done
 
-    def raise_for_status(self):
-        if self._raise_exc is not None:
-            raise self._raise_exc
-
-    async def json(self):
-        return self._payload
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
+    def done(self) -> bool:
+        return self._done
 
 
-class _FakeSession:
-    """aiohttp ClientSession stand-in recording the URLs fetched."""
+class TestMaybeAutoUpdate:
+    _NEWER = ServerVersionInfo(
+        installed="7.9.0", latest="7.10.0", dist=DIST_NAME_STABLE
+    )
 
-    def __init__(self, resp):
-        self._resp = resp
-        self.get_urls: list[str] = []
-
-    def get(self, url):
-        self.get_urls.append(url)
-        return self._resp
-
-
-class TestAutoUpdateCheck:
-    def _patch_session(self, monkeypatch, session):
-        monkeypatch.setattr(
-            esetup, "async_get_clientsession", MagicMock(return_value=session)
-        )
-
-    async def test_newer_version_reloads_entry(self, monkeypatch):
+    async def test_newer_version_reloads_and_notifies(self, monkeypatch):
         hass = _make_async_hass()
         entry = _make_entry()
-        session = _FakeSession(_FakeResp({"info": {"version": "7.10.0"}}))
-        self._patch_session(monkeypatch, session)
-        monkeypatch.setattr(esetup, "_installed_dist_version", lambda dist: "7.9.0")
+        notif = MagicMock()
+        monkeypatch.setattr(esetup.persistent_notification, "async_create", notif)
 
-        await esetup.async_check_for_update(hass, entry)
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
 
-        # Stable channel fetched, and the newer build triggers a reload.
-        assert session.get_urls == [esetup.PYPI_JSON_URL.format(dist=DIST_NAME_STABLE)]
         hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+        notif.assert_called_once()
+        message = notif.call_args.kwargs.get("message") or notif.call_args.args[1]
+        assert "7.9.0" in message
+        assert "7.10.0" in message
+        assert notif.call_args.kwargs.get("notification_id") == (
+            esetup._UPDATE_NOTIFICATION_ID
+        )
 
     async def test_equal_version_does_not_reload(self, monkeypatch):
         hass = _make_async_hass()
         entry = _make_entry()
-        session = _FakeSession(_FakeResp({"info": {"version": "7.9.0"}}))
-        self._patch_session(monkeypatch, session)
-        monkeypatch.setattr(esetup, "_installed_dist_version", lambda dist: "7.9.0")
-
-        await esetup.async_check_for_update(hass, entry)
-
-        hass.config_entries.async_reload.assert_not_awaited()
-
-    async def test_dev_channel_fetches_dev_dist(self, monkeypatch):
-        hass = _make_async_hass()
-        entry = _make_entry(options={OPT_CHANNEL: CHANNEL_DEV})
-        session = _FakeSession(_FakeResp({"info": {"version": "7.10.0.dev1"}}))
-        self._patch_session(monkeypatch, session)
-        monkeypatch.setattr(
-            esetup, "_installed_dist_version", lambda dist: "7.9.0.dev1"
+        info = ServerVersionInfo(
+            installed="7.9.0", latest="7.9.0", dist=DIST_NAME_STABLE
         )
 
-        await esetup.async_check_for_update(hass, entry)
-
-        assert session.get_urls == [esetup.PYPI_JSON_URL.format(dist=DIST_NAME_DEV)]
-
-    async def test_network_error_is_swallowed(self, monkeypatch):
-        # A PyPI fetch failure must not raise and must not reload — the next
-        # interval retries.
-        hass = _make_async_hass()
-        entry = _make_entry()
-        resp = _FakeResp(None, raise_exc=esetup.ClientError("boom"))
-        session = _FakeSession(resp)
-        self._patch_session(monkeypatch, session)
-        installed = MagicMock(return_value="7.9.0")
-        monkeypatch.setattr(esetup, "_installed_dist_version", installed)
-
-        await esetup.async_check_for_update(hass, entry)
+        await esetup.async_maybe_auto_update(hass, entry, info)
 
         hass.config_entries.async_reload.assert_not_awaited()
-        installed.assert_not_called()  # bailed before reading the installed version
 
-    async def test_override_skips_pypi_entirely(self, monkeypatch):
-        # An explicit pip-spec override opts out of auto-update: no PyPI call.
-        hass = _make_async_hass()
-        entry = _make_entry(options={OPT_PIP_SPEC: "ha-mcp==7.8.0"})
-        get_session = MagicMock()
-        monkeypatch.setattr(esetup, "async_get_clientsession", get_session)
-
-        await esetup.async_check_for_update(hass, entry)
-
-        get_session.assert_not_called()
-        hass.config_entries.async_reload.assert_not_awaited()
-
-    async def test_auto_update_off_skips_pypi_entirely(self, monkeypatch):
-        # Auto-update toggled off: no PyPI call, no reload (stay on installed).
+    async def test_auto_update_off_does_not_reload(self, monkeypatch):
         hass = _make_async_hass()
         entry = _make_entry(options={OPT_AUTO_UPDATE: False})
-        get_session = MagicMock()
-        monkeypatch.setattr(esetup, "async_get_clientsession", get_session)
 
-        await esetup.async_check_for_update(hass, entry)
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
 
-        get_session.assert_not_called()
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_override_does_not_reload(self, monkeypatch):
+        hass = _make_async_hass()
+        entry = _make_entry(options={OPT_PIP_SPEC: "ha-mcp==7.8.0"})
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
         hass.config_entries.async_reload.assert_not_awaited()
 
     async def test_default_pip_spec_value_is_not_an_override(self, monkeypatch):
         # The default pip-spec ("ha-mcp") stored verbatim still means "no
-        # override" — the check must run, not skip.
+        # override" - the reload must run, not skip.
         hass = _make_async_hass()
         entry = _make_entry(options={OPT_PIP_SPEC: DEFAULT_PIP_SPEC})
-        session = _FakeSession(_FakeResp({"info": {"version": "7.10.0"}}))
-        self._patch_session(monkeypatch, session)
-        monkeypatch.setattr(esetup, "_installed_dist_version", lambda dist: "7.9.0")
 
-        await esetup.async_check_for_update(hass, entry)
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
 
         hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
 
-    async def test_not_installed_yet_does_not_reload(self, monkeypatch):
-        # Before the first install completes there is no version to compare;
-        # the check must not reload (the bring-up installs the newest itself).
+    async def test_unknown_installed_version_does_not_reload(self, monkeypatch):
         hass = _make_async_hass()
         entry = _make_entry()
-        session = _FakeSession(_FakeResp({"info": {"version": "7.10.0"}}))
-        self._patch_session(monkeypatch, session)
-        monkeypatch.setattr(esetup, "_installed_dist_version", lambda dist: None)
+        info = ServerVersionInfo(installed=None, latest="7.10.0", dist=DIST_NAME_STABLE)
 
-        await esetup.async_check_for_update(hass, entry)
+        await esetup.async_maybe_auto_update(hass, entry, info)
 
         hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_unknown_latest_version_does_not_reload(self, monkeypatch):
+        hass = _make_async_hass()
+        entry = _make_entry()
+        info = ServerVersionInfo(installed="7.9.0", latest=None, dist=DIST_NAME_STABLE)
+
+        await esetup.async_maybe_auto_update(hass, entry, info)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_version_compare_failure_does_not_reload(self, monkeypatch):
+        # Incomparable version strategies (AwesomeVersionException) must not
+        # raise or reload; the next refresh retries.
+        hass = _make_async_hass()
+        entry = _make_entry()
+        info = ServerVersionInfo(
+            installed="not-a-version",
+            latest="also-not-a-version",
+            dist=DIST_NAME_STABLE,
+        )
+        monkeypatch.setattr(
+            esetup,
+            "AwesomeVersion",
+            MagicMock(side_effect=esetup.AwesomeVersionException("bad version")),
+        )
+
+        await esetup.async_maybe_auto_update(hass, entry, info)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_bringup_in_flight_does_not_reload(self, monkeypatch):
+        # The coordinator's first refresh can land while the background
+        # bring-up (first pip install) is still running — reloading here would
+        # cancel it mid-install.
+        hass = _make_async_hass()
+        hass.data[DOMAIN] = {DATA_BRINGUP_TASK: _FakeTask(done=False)}
+        entry = _make_entry()
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_not_awaited()
+
+    async def test_bringup_done_allows_reload(self, monkeypatch):
+        hass = _make_async_hass()
+        hass.data[DOMAIN] = {DATA_BRINGUP_TASK: _FakeTask(done=True)}
+        entry = _make_entry()
+
+        await esetup.async_maybe_auto_update(hass, entry, self._NEWER)
+
+        hass.config_entries.async_reload.assert_awaited_once_with(entry.entry_id)
+
+    async def test_dev_channel_notification_links_commit_history(self, monkeypatch):
+        hass = _make_async_hass()
+        entry = _make_entry()
+        notif = MagicMock()
+        monkeypatch.setattr(esetup.persistent_notification, "async_create", notif)
+        info = ServerVersionInfo(
+            installed="7.9.0.dev1", latest="7.10.0.dev1", dist=DIST_NAME_DEV
+        )
+
+        await esetup.async_maybe_auto_update(hass, entry, info)
+
+        message = notif.call_args.kwargs.get("message") or notif.call_args.args[1]
+        assert "github.com/homeassistant-ai/ha-mcp/commits/master" in message
+        assert "releases/tag" not in message
 
 
 # ---------------------------------------------------------------------------
