@@ -46,13 +46,21 @@ jobs:
       short_sha: ${{ steps.version.outputs.short_sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history: the dev version number is the commit count.
+          fetch-depth: 0
 
       - name: Generate dev version
         id: version
         run: |
           BASE_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          DEV_VERSION="${BASE_VERSION}.dev${{ github.run_number }}"
+          # dev N = commit count on master: the same commit produces the SAME
+          # number in every workflow (PyPI/Docker in publish-dev, the dev
+          # add-on here), so all surfaces report one dev version. run_number
+          # was per-workflow, which is how the add-on drifted ~300 builds
+          # behind the PyPI counter and made version reports incomparable.
+          DEV_VERSION="${BASE_VERSION}.dev$(git rev-list --count HEAD)"
 
           echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
