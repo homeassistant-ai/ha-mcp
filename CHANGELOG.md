@@ -3,6 +3,53 @@
 <!-- version list -->
 
 
+## v7.11.0 (2026-07-08)
+
+### Added
+
+- Server update entity, auto-update notifications, and real HACS release notes (#1760)
+  ([#1776](https://github.com/homeassistant-ai/ha-mcp/pull/1776))
+
+### Fixed
+
+- Show the browser landing page on the in-process server's MCP endpoint
+  ([#1774](https://github.com/homeassistant-ai/ha-mcp/pull/1774))
+- Surface WebSocket close to tool calls instead of hanging
+  ([#1773](https://github.com/homeassistant-ai/ha-mcp/pull/1773))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 7.10.0.dev481 [skip ci]
+  ([`e2c28a4`](https://github.com/homeassistant-ai/ha-mcp/commit/e2c28a41b77db12f343d2b208972142e3f9007c6))
+- **addon**: Publish dev addon version 7.10.0.dev480 [skip ci]
+  ([`d7f9c00`](https://github.com/homeassistant-ai/ha-mcp/commit/d7f9c001cb6aa0e6ca1fc53fb0f4b81131b82877))
+- **deps**: Update src/ha_mcp/resources/skills-vendor digest to 5c023ed
+  ([#1771](https://github.com/homeassistant-ai/ha-mcp/pull/1771))
+- **addon**: Publish dev addon version 7.10.0.dev479 [skip ci]
+  ([`559d4ef`](https://github.com/homeassistant-ai/ha-mcp/commit/559d4efa342cfb760a830e49fe1153fcee893407))
+- **addon**: Publish dev addon version 7.10.0.dev478 [skip ci]
+  ([`68d5cf1`](https://github.com/homeassistant-ai/ha-mcp/commit/68d5cf18e8735b5b201d98421ff2eaea45ea3a92))
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.11.27
+  ([#1772](https://github.com/homeassistant-ai/ha-mcp/pull/1772))
+- **addon**: Publish version 7.10.0 [skip ci]
+  ([`ada29d0`](https://github.com/homeassistant-ai/ha-mcp/commit/ada29d06e2fdbee70ddf1090d41b5e1963a042a2))
+
+### Continuous Integration
+
+- **security**: Pin third-party actions & verify release binaries (#1762)
+  ([#1770](https://github.com/homeassistant-ai/ha-mcp/pull/1770))
+- Route untrusted PR branch name through env in hotfix workflows
+  ([#1769](https://github.com/homeassistant-ai/ha-mcp/pull/1769))
+- Tag the HACS mirror on workflow_run after SemVer Release, not the release event
+  ([#1761](https://github.com/homeassistant-ai/ha-mcp/pull/1761))
+</details>
+
+
 ## v7.10.0 (2026-07-06)
 
 ### Added
