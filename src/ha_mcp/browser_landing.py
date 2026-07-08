@@ -21,7 +21,7 @@ import weakref
 from typing import Any, Protocol
 
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 
 logger = logging.getLogger(__name__)
 
@@ -134,5 +134,37 @@ def register_browser_landing(mcp_instance: CustomRouteServer, path: str) -> bool
             # session termination), even though this deployment uses stateless mode.
             headers={"Allow": "POST, DELETE"},
         )
+
+    return True
+
+
+# /healthz is registered at most once per MCP instance (weakly, matching the
+# landing-page bookkeeping above: the in-process server rebuilds FastMCP on
+# config-entry reload, so dedup must be per instance, not process-global).
+_registered_healthz: weakref.WeakSet[CustomRouteServer] = weakref.WeakSet()
+
+HEALTHZ_PATH = "/healthz"
+
+
+def register_healthz(mcp_instance: CustomRouteServer) -> bool:
+    """Register a GET ``/healthz`` liveness route answering 200 with JSON.
+
+    Lets uptime monitors, blackbox probes, and load balancers confirm the HTTP
+    server is alive without knowing the MCP path. Standard-mode HTTP/SSE
+    authenticates by URL-path secrecy (SECURITY.md -> Threat Model), so this
+    route is opt-in (``MCP_HEALTHZ`` env var, checked by the caller) and the
+    response body deliberately does not echo the MCP path.
+
+    Returns True if the route was newly registered, False if this instance
+    already had one (idempotent per instance).
+    """
+    if mcp_instance in _registered_healthz:
+        logger.warning("register_healthz: already registered, skipping")
+        return False
+    _registered_healthz.add(mcp_instance)
+
+    @mcp_instance.custom_route(HEALTHZ_PATH, methods=["GET"])
+    async def _healthz(_: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "server": "ha-mcp"})
 
     return True

@@ -38,6 +38,9 @@ from pydantic import ValidationError as PydanticValidationError  # noqa: E402
 from ha_mcp.browser_landing import (  # noqa: E402
     register_browser_landing as _register_landing_route,
 )
+from ha_mcp.browser_landing import (  # noqa: E402
+    register_healthz as _register_healthz_route,
+)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -465,6 +468,8 @@ class ProbeAccessLogFilter(logging.Filter):
         path = str(raw_path).split("?", 1)[0].rstrip("/") or "/"
         if status == 404 and path == "/favicon.ico":
             return False  # browser favicon auto-request — pure noise
+        if status == 200 and path == "/healthz":
+            return False  # opt-in liveness probe (register_healthz) — pure noise
         # By-design probe 405 on the MCP path; the handler logs an annotated line
         # instead. This trusts that the landing route is the only GET/HEAD responder
         # on the MCP path (true today). Kept in SSE mode (drop_mcp_405=False), where
@@ -964,6 +969,16 @@ async def _run_http_with_graceful_shutdown(
     )
 
 
+def _healthz_enabled() -> bool:
+    """True when MCP_HEALTHZ opts in to the unauthenticated /healthz route.
+
+    Off by default: standard mode authenticates by URL-path secrecy, and an
+    always-on liveness route would confirm to any scanner that ha-mcp is
+    listening. Operators running their own monitoring set MCP_HEALTHZ=true.
+    """
+    return os.getenv("MCP_HEALTHZ", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def register_browser_landing(
     mcp_instance: "FastMCP | _DeferredMCP",
     path: str,
@@ -1039,6 +1054,8 @@ def _run_http_server(transport: str, default_port: int = 8086) -> None:
     # SSE transport answers GET with 200 (the event stream), so a GET->405 there
     # would be a real fault, not a benign probe — keep its access log intact.
     register_browser_landing(_get_mcp(), path, quiet_probe_log=transport != "sse")
+    if _healthz_enabled():
+        _register_healthz_route(_get_mcp())
     register_settings_routes(_get_mcp(), _get_server(), secret_path=path)
     _log_settings_url(host, port, path)
 
@@ -1190,6 +1207,8 @@ async def _run_oauth_server(
 
     logger.info("Server created with OAuthProxyClient")
     register_browser_landing(mcp, path)
+    if _healthz_enabled():
+        _register_healthz_route(mcp)
 
     from ha_mcp.settings_ui import register_settings_routes
 
