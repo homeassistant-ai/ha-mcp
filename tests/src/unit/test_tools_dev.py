@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.config import _reset_global_settings, get_global_settings
+from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools import tools_dev
 from ha_mcp.tools.tools_dev import (
     FEATURE_FLAG,
@@ -33,10 +33,10 @@ def _isolated_env(tmp_path, monkeypatch):
     monkeypatch.delenv("HA_MCP_EMBEDDED", raising=False)
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     get_data_dir.cache_clear()
-    _reset_global_settings()
+    reset_global_settings()
     yield
     get_data_dir.cache_clear()
-    _reset_global_settings()
+    reset_global_settings()
 
 
 def _override_file_path():
@@ -64,7 +64,7 @@ class TestRegistrationGating:
 
     def test_flag_enabled_via_env(self, monkeypatch):
         monkeypatch.setenv(FEATURE_FLAG, "true")
-        _reset_global_settings()
+        reset_global_settings()
         assert is_dev_mode_enabled() is True
 
     def test_register_noop_when_disabled(self):
@@ -74,7 +74,7 @@ class TestRegistrationGating:
 
     def test_register_adds_tools_when_enabled(self, monkeypatch):
         monkeypatch.setenv(FEATURE_FLAG, "true")
-        _reset_global_settings()
+        reset_global_settings()
         mcp = MagicMock()
         register_dev_tools(mcp, MagicMock())
         registered = {call.args[0].__name__ for call in mcp.add_tool.call_args_list}
@@ -83,7 +83,7 @@ class TestRegistrationGating:
     def test_flag_persisted_via_override_file(self):
         """The web-UI toggle path: value in feature_flags.json, no env var."""
         _override_file_path().write_text(json.dumps({"enable_dev_mode": True}))
-        _reset_global_settings()
+        reset_global_settings()
         assert is_dev_mode_enabled() is True
 
 
@@ -103,7 +103,7 @@ class TestManageSettings:
 
     async def test_list_masks_token(self, dev_tools, monkeypatch):
         monkeypatch.setenv("HOMEASSISTANT_TOKEN", "super-secret-token")
-        _reset_global_settings()
+        reset_global_settings()
         result = await dev_tools.ha_dev_manage_settings(action="list")
         rows = {r["setting"]: r for r in result["data"]["settings"]}
         assert rows["homeassistant_token"]["value"] == "*****"
@@ -129,7 +129,7 @@ class TestManageSettings:
 
     async def test_set_rejects_env_locked(self, dev_tools, monkeypatch):
         monkeypatch.setenv("LOG_LEVEL", "INFO")
-        _reset_global_settings()
+        reset_global_settings()
         with pytest.raises(ToolError, match="locked by env"):
             await dev_tools.ha_dev_manage_settings(
                 action="set", setting="log_level", value="DEBUG"
@@ -211,7 +211,7 @@ class TestManageSettings:
 
     async def test_reset_rejects_env_pinned(self, dev_tools, monkeypatch):
         monkeypatch.setenv("LOG_LEVEL", "INFO")
-        _reset_global_settings()
+        reset_global_settings()
         with pytest.raises(ToolError, match="env var"):
             await dev_tools.ha_dev_manage_settings(action="reset", setting="log_level")
 
@@ -350,7 +350,7 @@ class TestManageServer:
 
     async def test_restart_addon_schedules_supervisor_restart(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
-        _reset_global_settings()
+        reset_global_settings()
         with patch("ha_mcp.settings_ui._schedule_supervisor_self_restart") as sched:
             result = await DevTools(_mock_client()).ha_dev_manage_server(
                 action="restart"
