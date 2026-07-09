@@ -9,6 +9,12 @@ real MCP protocol over ``POST /api/webhook/<id>`` — ``initialize`` → ``tools
 → one read-only tool call — asserting a Streamable-HTTP response parses and the
 full tool inventory is present.
 
+Also proves the conversation-agent LLM API (#1745) for real: the bring-up
+registered it inside HA (log assertion), and the exact client stack
+``llm_api.py`` uses — mcp SDK streamable-HTTP session + ``convert_to_voluptuous``
+— works against the real server and the REAL tool-schema catalog with zero
+conversion failures.
+
 This uses a DEDICATED, module-scoped container (not the shared session one): the
 always-on server would otherwise runtime-install the whole fastmcp tree and run a
 server thread in every e2e session. It only runs on the testcontainer backend and
@@ -29,6 +35,7 @@ Strategy notes:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import shutil
@@ -237,8 +244,10 @@ def _initialize(base_url: str) -> tuple[bool, str | None]:
 def embedded_ha():
     """Boot a dedicated HA container running the in-process MCP server entry.
 
-    Yields ``(base_url, session_id)`` once the in-process MCP server has installed
-    itself, started, and registered its ingress webhook.
+    Yields ``(base_url, session_id, config_path)`` once the in-process MCP
+    server has installed itself, started, and registered its ingress webhook.
+    ``config_path`` is the bind-mounted /config dir — the LLM-API test reads
+    ``home-assistant.log`` from it to prove the registration ran inside HA.
     """
     if not _docker_available():
         pytest.skip("Docker is not available for the embedded-server e2e")
@@ -297,7 +306,7 @@ def embedded_ha():
                 "in-process MCP server did not become reachable via its webhook within "
                 f"{_READY_TIMEOUT_S}s. Container logs:\n{logs}"
             )
-        yield base_url, session_id
+        yield base_url, session_id, config_path
     finally:
         with contextlib.suppress(Exception):
             container.stop()
@@ -305,7 +314,7 @@ def embedded_ha():
 
 class TestEmbeddedServerEndToEnd:
     def test_initialize_and_list_tools(self, embedded_ha):
-        base_url, session_id = embedded_ha
+        base_url, session_id, _config = embedded_ha
         resp = _mcp_post(
             base_url,
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
@@ -322,7 +331,7 @@ class TestEmbeddedServerEndToEnd:
         assert "ha_get_state" in names
 
     def test_read_only_tool_call(self, embedded_ha):
-        base_url, session_id = embedded_ha
+        base_url, session_id, _config = embedded_ha
         resp = _mcp_post(
             base_url,
             {
@@ -341,3 +350,87 @@ class TestEmbeddedServerEndToEnd:
         assert "result" in parsed, parsed
         # The tool ran against the real HA instance and returned content.
         assert parsed["result"].get("content"), parsed
+
+    def test_llm_api_registered_inside_ha(self, embedded_ha):
+        """The bring-up registered the toolset as an LLM API in the REAL HA.
+
+        The unit tier fakes ``homeassistant.helpers.llm``; this asserts the
+        real ``llm.async_register_api`` call succeeded inside a real Home
+        Assistant core — via the INFO line ``async_register_llm_api`` logs on
+        success (llm_api.py notes this test asserts on that message). The
+        webhook becoming reachable races the registration by a few seconds
+        (registration runs right after webhook bring-up and imports the mcp
+        SDK on the executor first), so the log is polled briefly.
+        """
+        _base_url, _session_id, config_path = embedded_ha
+        log_file = config_path / "home-assistant.log"
+        needle = "Registered the HA-MCP toolset as LLM API"
+        deadline = time.monotonic() + 60
+        log_text = ""
+        while time.monotonic() < deadline:
+            if log_file.exists():
+                log_text = log_file.read_text(encoding="utf-8", errors="replace")
+                if needle in log_text:
+                    return
+            time.sleep(2)
+        assert needle in log_text, (
+            "LLM API registration line not found in home-assistant.log; "
+            f"tail:\n{log_text[-3000:]}"
+        )
+
+    async def test_llm_api_client_path_full_catalog(self, embedded_ha):
+        """Drive the LLM API's real client stack against the real server.
+
+        ``llm_api.py`` cannot be imported here (its module-level
+        ``homeassistant.*`` imports need a running HA), so this makes the
+        exact same calls it makes, with the real SDK, against the real
+        server: streamable-HTTP session -> ``initialize`` (whose
+        ``instructions`` become the API prompt) -> ``tools/list`` ->
+        ``convert_to_voluptuous`` on EVERY tool's schema -> one read-only
+        ``call_tool`` dumped the way ``HaMcpTool.async_call`` returns it.
+
+        The zero-conversion-failures assertion is the point: at runtime an
+        unconvertible schema is skipped per-tool with only a warning, so a
+        systemic ``voluptuous_openapi`` incompatibility with the real
+        catalog would silently shrink the toolset — this test fails loudly
+        instead.
+        """
+        from mcp.client.session import ClientSession
+        from mcp.client.streamable_http import streamable_http_client
+        from voluptuous_openapi import convert_to_voluptuous
+
+        base_url, _session_id, _config = embedded_ha
+        url = f"{base_url}/api/webhook/{_WEBHOOK_ID}"
+
+        async with asyncio.timeout(120):
+            async with (
+                streamable_http_client(url=url) as (read_stream, write_stream, _),
+                ClientSession(read_stream, write_stream) as session,
+            ):
+                init = await session.initialize()
+                # The server ships real instructions; the LLM API uses them
+                # as the api_prompt (fallback prompt should stay dead code).
+                assert init.instructions and len(init.instructions) > 50
+
+                listed = await session.list_tools()
+                assert len(listed.tools) > 60, (
+                    f"expected the full tool inventory, got {len(listed.tools)}"
+                )
+
+                failures = []
+                for tool in listed.tools:
+                    try:
+                        convert_to_voluptuous(tool.inputSchema)
+                    except Exception as err:  # collecting, not suppressing
+                        failures.append(f"{tool.name}: {err!r}")
+                assert not failures, (
+                    "convert_to_voluptuous failed for "
+                    f"{len(failures)}/{len(listed.tools)} tools — these would "
+                    "be silently skipped from every conversation turn:\n"
+                    + "\n".join(failures)
+                )
+
+                call = await session.call_tool("ha_get_state", {"entity_id": "sun.sun"})
+                dumped = call.model_dump(exclude_unset=True, exclude_none=True)
+                assert dumped.get("content"), dumped
+                assert not dumped.get("isError"), dumped

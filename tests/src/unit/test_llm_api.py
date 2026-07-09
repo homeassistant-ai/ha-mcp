@@ -419,3 +419,55 @@ class TestToolCall:
                 llm_api.llm.ToolInput("ha_search", {}),
                 llm_api.llm.LLMContext(),
             )
+
+
+class TestPreRenameSdkFallback:
+    async def test_falls_back_to_deprecated_client_name(self, monkeypatch):
+        # A pip-spec override can install an older ha-mcp whose fastmcp pins
+        # a pre-rename mcp SDK: mcp.client.streamable_http then exposes only
+        # streamablehttp_client. _mcp_session must import-fall-back to it and
+        # wire the session identically. Faked at the sys.modules level so the
+        # REAL import selection in _mcp_session runs (the other tests patch
+        # _mcp_session wholesale and never exercise it).
+        import sys
+        from types import ModuleType
+
+        opened: dict[str, Any] = {}
+
+        @asynccontextmanager
+        async def _old_name_client(url):
+            opened["url"] = url
+            yield "read-stream", "write-stream", lambda: None
+
+        fake_transport = ModuleType("mcp.client.streamable_http")
+        fake_transport.streamablehttp_client = _old_name_client  # type: ignore[attr-defined]
+        # Deliberately NO streamable_http_client attribute.
+
+        class _FakeClientSession:
+            def __init__(self, read_stream, write_stream):
+                opened["streams"] = (read_stream, write_stream)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+            async def initialize(self):
+                return SimpleNamespace(instructions="from old SDK")
+
+        fake_session_mod = ModuleType("mcp.client.session")
+        fake_session_mod.ClientSession = _FakeClientSession  # type: ignore[attr-defined]
+
+        monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", fake_transport)
+        monkeypatch.setitem(sys.modules, "mcp.client.session", fake_session_mod)
+
+        async with llm_api._mcp_session("http://127.0.0.1:9584/private_x") as (
+            session,
+            init,
+        ):
+            assert isinstance(session, _FakeClientSession)
+            assert init.instructions == "from old SDK"
+
+        assert opened["url"] == "http://127.0.0.1:9584/private_x"
+        assert opened["streams"] == ("read-stream", "write-stream")

@@ -210,6 +210,10 @@ dev = [
     # Real voluptuous for the config-flow tests (the component's
     # config_flow imports it; HA provides it at runtime, tests need it here).
     "voluptuous>=0.15.2",
+    # Real voluptuous-openapi for the embedded e2e LLM-API test: it converts
+    # the REAL tool-schema catalog exactly like llm_api.py does at runtime
+    # (HA core provides it at runtime; unit tests stub it).
+    "voluptuous-openapi>=0.4.1",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
     "lefthook>=1.10.0",

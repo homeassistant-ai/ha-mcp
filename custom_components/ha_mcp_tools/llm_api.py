@@ -310,6 +310,9 @@ async def async_register_llm_api(
             exc_info=True,
         )
         return
+    # The embedded e2e (test_llm_api_registered_inside_ha) asserts on this
+    # message to prove the registration ran inside a real HA — keep the
+    # "Registered the HA-MCP toolset as LLM API" prefix stable.
     _LOGGER.info(
         "Registered the HA-MCP toolset as LLM API %r — select it in a "
         "conversation agent's settings to chat with it (text or voice)",
