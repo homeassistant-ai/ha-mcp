@@ -91,6 +91,37 @@ the webhook and panel paths. All connect URLs — the webhook forms and, wheneve
 direct access is on, the direct URL — are listed on the entry's Configure
 screen and in the Home Assistant log.
 
+## Chat with the toolset from Home Assistant (conversation agents / voice)
+
+While the server is running, its full toolset is also registered as a Home
+Assistant **LLM API** named after the entry ("HA-MCP Server"). Any
+conversation agent — OpenAI, Google Generative AI, Anthropic, Ollama, or any
+other integration that supports LLM APIs — can select it, with the LLM of
+your choice, cloud or local:
+
+1. Add a conversation-agent integration (for a fully local setup: **Ollama**).
+2. In that agent's settings, under **Control Home Assistant**, select
+   **HA-MCP Server** (alongside or instead of the built-in Assist API).
+3. Talk to the agent from the **Assist chat** dialog, the companion apps, or a
+   **voice satellite** whose pipeline uses that agent — "create an automation
+   that turns off the lights when everyone leaves" now runs through the
+   ha-mcp tools.
+
+Notes:
+
+- No MCP client, external URL, or token is involved: the agent reaches the
+  server over loopback inside Home Assistant.
+- Home Assistant conversation agents cap tool iterations per turn (around
+  ten), so a very complex build may need a follow-up prompt to continue.
+- Pick a model that handles many tools well; small local models can struggle
+  with the full catalog. You can trim the exposed tools from the HA-MCP
+  settings panel (tool enable/disable).
+
+**Security:** the toolset runs with the server's admin access — file access,
+configuration changes, restarts. Selecting it on an agent hands that power to
+everyone who can talk to that agent, including anyone within earshot of a
+voice satellite using it. Keep it off pipelines where that is not intended.
+
 ## Settings panel ("HA-MCP" in the sidebar)
 
 While a server entry is running, the integration adds an **HA-MCP** panel

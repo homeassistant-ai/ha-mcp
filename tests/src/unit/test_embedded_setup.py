@@ -111,6 +111,8 @@ def _spy(monkeypatch):
     surfacing to spies (the connect-URL tests restore the real surfacing)."""
     monkeypatch.setattr(esetup, "async_register_webhook", AsyncMock())
     monkeypatch.setattr(esetup, "async_unregister_webhook", AsyncMock())
+    monkeypatch.setattr(esetup, "async_register_llm_api", AsyncMock())
+    monkeypatch.setattr(esetup, "async_unregister_llm_api", MagicMock())
     monkeypatch.setattr(esetup.ir, "async_create_issue", MagicMock())
     monkeypatch.setattr(esetup.ir, "async_delete_issue", MagicMock())
     monkeypatch.setattr(esetup, "_surface_connect_urls", MagicMock())
@@ -128,6 +130,11 @@ class TestBringUp:
         esetup._surface_connect_urls.assert_called_once()
         assert isinstance(hass.data[DOMAIN][DATA_MANAGER], fake_manager)
         esetup.ir.async_create_issue.assert_not_called()
+        # Conversation-agent LLM API (#1745): registered with the running
+        # server's port + secret path.
+        kwargs = esetup.async_register_llm_api.await_args.kwargs
+        assert kwargs["port"] == 9584
+        assert kwargs["secret_path"] == "/private_x"
 
     async def test_success_clears_stale_repair_issues(self, fake_manager):
         # Review gap: a successful bring-up must clear BOTH repair-issue ids
@@ -184,6 +191,7 @@ class TestBringUp:
         fake_manager.async_stop.assert_awaited_once()  # teardown ran
         assert DATA_MANAGER not in hass.data.get(DOMAIN, {})
         esetup.async_register_webhook.assert_not_awaited()
+        esetup.async_register_llm_api.assert_not_awaited()
         # The failure kind selects the package-install repair issue.
         assert esetup.ir.async_create_issue.call_args.args[2] == ISSUE_PACKAGE_FAILED
 
@@ -258,6 +266,7 @@ class TestTeardown:
         await esetup.async_teardown_server(hass)
 
         esetup.async_unregister_webhook.assert_awaited()
+        esetup.async_unregister_llm_api.assert_called()
         fake_manager.async_stop.assert_awaited_once()
         assert DATA_MANAGER not in hass.data.get(DOMAIN, {})
         # A reload must keep the provisioned token.

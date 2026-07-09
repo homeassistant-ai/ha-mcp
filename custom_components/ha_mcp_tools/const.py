@@ -313,6 +313,9 @@ DATA_UPDATE_COORDINATOR = "update_coordinator"
 # finding on #1760). Bring-up pops it: notification on success, silent drop on
 # failure (the package/start repair issues cover that path).
 DATA_PENDING_UPDATE_NOTIFY = "pending_update_notify"
+# Unregister callback for the conversation-agent LLM API (#1745), stored by
+# the bring-up success path and invoked (idempotently) by teardown.
+DATA_LLM_API_UNSUB = "llm_api_unsub"
 
 # Webhook auth modes (mirrors the webhook-proxy add-on's default posture).
 WEBHOOK_AUTH_NONE = "none"  # secret webhook URL is the shared secret (default)

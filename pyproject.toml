@@ -102,6 +102,9 @@ module = [
     "awesomeversion",
     "yarl",
     "voluptuous",
+    # Ships with HA core at runtime (helpers.llm schema conversion, #1745);
+    # not installed in this dev environment.
+    "voluptuous_openapi",
     "jsonschema",
     "requests",
     "requests.*",
