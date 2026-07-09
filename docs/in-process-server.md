@@ -146,7 +146,11 @@ unpinned: an entry reload or a Home Assistant restart always reinstalls the
 newest build of the selected channel, and on top of that the component checks
 PyPI for a newer build every 6 hours and reloads the entry automatically when
 one is published — so a long-running instance picks up releases without a
-restart. Each automatic update also raises a notification naming the old and
+restart. The reload applies the new server code immediately (component >=
+1.0.1 reloads the module cache per worker start); only updates that require
+newer *third-party dependencies* still need a Home Assistant core restart.
+The web settings UI's **Restart HA-MCP Server** button performs the same
+entry reload. Each automatic update also raises a notification naming the old and
 new version, with a link to the release notes. Turn **Automatic server
 updates** off to freeze the server on the version currently installed:
 reloads/restarts keep that exact version until you turn it back on or install

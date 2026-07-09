@@ -1561,3 +1561,113 @@ class TestBugReportNewIdentityFields:
         # hallucination bait we removed.
         for vendor in ("Claude, Gemini", "Gemini, GPT", "GPT, Llama"):
             assert vendor not in instructions
+
+
+class TestDeploymentAndVersionDiagnostics:
+    """Embedded detection + running-vs-installed reporting (issue #1778)."""
+
+    def test_embedded_detected_before_docker_and_addon(self, monkeypatch):
+        from ha_mcp.tools.tools_bug_report import _detect_installation_method
+
+        # The HA core container carries BOTH /.dockerenv and (on HAOS) a
+        # SUPERVISOR_TOKEN, so embedded must win outright.
+        monkeypatch.setenv("HA_MCP_EMBEDDED", "1")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "t")
+        assert _detect_installation_method() == "embedded"
+
+    def test_format_version_value_flags_stale_worker(self):
+        from ha_mcp.tools.tools_bug_report import _format_version_value
+
+        rendered = _format_version_value(
+            {
+                "ha_mcp_version": "7.10.0.dev779",
+                "installed_version": "7.11.0",
+                "version_mismatch": True,
+            }
+        )
+        assert "7.10.0.dev779 (running)" in rendered
+        assert "7.11.0 is installed" in rendered
+
+    def test_format_version_value_plain_when_matched(self):
+        from ha_mcp.tools.tools_bug_report import _format_version_value
+
+        assert (
+            _format_version_value(
+                {
+                    "ha_mcp_version": "7.11.0",
+                    "installed_version": "7.11.0",
+                    "version_mismatch": False,
+                }
+            )
+            == "7.11.0"
+        )
+
+    def test_instance_identity_shape(self):
+        from ha_mcp.tools.tools_bug_report import _instance_identity
+
+        identity = _instance_identity()
+        assert identity["instance_id"]
+        assert identity["started_at"] > 0
+        assert identity["uptime_seconds"] >= 0
+
+    async def test_component_version_probe_reads_service_response(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from ha_mcp.tools.tools_bug_report import BugReportTools
+
+        client = MagicMock()
+        client.call_service = AsyncMock(
+            return_value={"service_response": {"version": "1.0.1"}}
+        )
+        assert await BugReportTools(client)._detect_component_version() == "1.0.1"
+        client.call_service.assert_awaited_once_with(
+            "ha_mcp_tools", "get_caller_token", {}, return_response=True
+        )
+
+    async def test_component_version_probe_none_when_component_missing(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from ha_mcp.tools.tools_bug_report import BugReportTools
+
+        client = MagicMock()
+        client.call_service = AsyncMock(side_effect=Exception("service not found"))
+        assert await BugReportTools(client)._detect_component_version() is None
+
+
+class TestVersionRenderingHonesty:
+    """Probe failures must stay distinguishable from healthy results."""
+
+    def test_unverified_installed_version_is_visible(self):
+        from ha_mcp.tools.tools_bug_report import _format_version_value
+
+        rendered = _format_version_value(
+            {
+                "ha_mcp_version": "7.11.0",
+                "installed_version": None,
+                "version_mismatch": False,
+            }
+        )
+        assert "could not be verified" in rendered
+
+    async def test_report_carries_version_and_instance_fields(self):
+        # End-to-end composition: the tool's diagnostic_info must include
+        # the new fields even when every probe degrades.
+        from unittest.mock import AsyncMock, MagicMock
+
+        from ha_mcp.tools.tools_bug_report import BugReportTools
+
+        client = MagicMock()
+        client.get_config = AsyncMock(side_effect=Exception("down"))
+        client.call_service = AsyncMock(side_effect=Exception("down"))
+        result = await BugReportTools(client).ha_report_issue(tool_call_count=1)
+        info = result["diagnostic_info"]
+        assert "installed_version" in info
+        assert "version_mismatch" in info
+        assert info["component_version"] is None
+        assert info["instance"]["instance_id"]
+        # The rendered report keeps the probe failure visible instead of
+        # claiming the component is absent.
+        assert (
+            "not detected (not installed, or probe failed)"
+            in (result["formatted_report"])
+        )

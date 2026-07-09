@@ -161,7 +161,7 @@
   <button class="tab" data-panel="entity-visibility" role="tab" id="tab-entity-visibility" aria-controls="panel-entity-visibility" aria-selected="false" tabindex="-1">Entity Visibility</button>
   <button class="tab" data-panel="accessibility" role="tab" id="tab-accessibility" aria-controls="panel-accessibility" aria-selected="false" tabindex="-1">Accessibility</button>
 </div>
-<div class="restart-notice" id="restartNotice">
+<div class="restart-notice" id="restartNotice" role="status" aria-live="polite">
   <span class="restart-notice-text" id="restartNoticeText">
     ⚠ Changes saved. Restart HA-MCP for them to take effect. On next
     startup, HA-MCP fully removes disabled tools from the MCP tool list.
@@ -265,6 +265,12 @@
             title="Permanently disables the settings UI: stops this server AND writes ~/.ha-mcp/settings_ui_disabled so it does not respawn on future ha-mcp launches. Delete that file to re-enable."
     >Permanently disable settings server</button>
   </div>
+
+  <!-- Developer section sits at the ABSOLUTE bottom of the panel by
+       design (issue #1775): the dev-mode toggle registers hidden
+       ha_dev_* tools and should not be obvious to casual users. -->
+  <h2 class="adv-section-title beta-section-title">Developer</h2>
+  <div id="advDeveloper" class="adv-section"></div>
 </div>
 <div class="panel" id="panel-backups" role="tabpanel" aria-labelledby="tab-backups" tabindex="0">
   <div class="backup-state" id="backupState">Loading backup state…</div>

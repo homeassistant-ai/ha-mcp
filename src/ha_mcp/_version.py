@@ -30,6 +30,18 @@ def get_version() -> str:
     """
     if override := os.environ.get("HA_MCP_BUILD_VERSION"):
         return override
+    # Prefer the distribution that actually OWNS the installed ha_mcp package.
+    # Both channel dists (ha-mcp / ha-mcp-dev) can leave metadata behind — an
+    # interrupted channel switch, a best-effort uninstall that failed — and a
+    # fixed name order then reports the leftover dist's version instead of the
+    # one whose files are really installed.
+    try:
+        owners = importlib.metadata.packages_distributions().get("ha_mcp", [])
+        unique = sorted(set(owners))
+        if len(unique) == 1:
+            return importlib.metadata.version(unique[0])
+    except Exception as exc:
+        logger.debug("packages_distributions probe failed: %s", exc)
     for pkg_name in ("ha-mcp", "ha-mcp-dev"):
         try:
             return importlib.metadata.version(pkg_name)

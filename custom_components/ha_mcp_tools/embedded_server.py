@@ -90,8 +90,12 @@ _LOGGER = logging.getLogger(__name__)
 _ACCESS_TOKEN_TTL = timedelta(days=3650)
 
 # Readiness probe: how long to wait for the server thread to accept a loopback
-# TCP connection before declaring the start failed.
-_READY_TIMEOUT_SECONDS = 30.0
+# TCP connection before declaring the start failed. Generous on purpose: a
+# cold import of the fastmcp tree takes 1-3s on real hardware but has been
+# observed to exceed 30s on QEMU-emulated HAOS (the e2e lane), and a single
+# readiness timeout fails the bring-up outright — there is no retry. Real
+# deployments only pay this budget on the failure path.
+_READY_TIMEOUT_SECONDS = 90.0
 _READY_POLL_INTERVAL_SECONDS = 0.5
 
 # How long to wait for the worker thread to exit on stop before giving up and
@@ -169,6 +173,14 @@ class EmbeddedServerManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
         self._thread_exc: BaseException | None = None
+        # A worker that refused to die within the stop-join timeout (e.g.
+        # wedged in a slow cold import). Tracked so the next start can skip
+        # the module purge while it might still be importing.
+        self._orphaned_thread: threading.Thread | None = None
+        # ha_mcp.__version__ as imported by the CURRENT worker thread (stashed
+        # by _serve). Compared against the installed distribution after start
+        # to detect a stale-code worker (see _purge_ha_mcp_modules).
+        self._running_version: str | None = None
 
     @property
     def port(self) -> int:
@@ -199,6 +211,33 @@ class EmbeddedServerManager:
         access_token = await self._async_provision_token()
         await self._hass.async_add_executor_job(self._prepare_config_dir)
 
+        # Drop cached ha_mcp modules so the worker imports the code that is on
+        # disk NOW. Without this, a reload after a pip install keeps serving
+        # the OLD code forever: all workers are threads of the one HA core
+        # process, and Python resolves ``import ha_mcp`` from sys.modules —
+        # installs only took effect after a full HA core restart (issue
+        # observed live: options saves reinstalled the package, the web UI
+        # footer showed the new on-disk version, yet the serving worker kept
+        # reporting the version it was first imported with).
+        #
+        # SKIPPED while an orphaned worker may still be importing: ripping
+        # entries out of sys.modules under a live importer corrupts its
+        # import in progress (seen on QEMU-slow HAOS, where a cold import
+        # can outlive both the readiness timeout and the stop-join budget).
+        # The post-start staleness check below surfaces the consequence
+        # (old code possibly serving) instead.
+        orphan = self._orphaned_thread
+        if orphan is not None and not orphan.is_alive():
+            self._orphaned_thread = orphan = None
+        if orphan is None:
+            _purge_ha_mcp_modules()
+        else:
+            _LOGGER.warning(
+                "Skipping the ha_mcp module purge: a previous worker thread "
+                "is still shutting down. The new worker may serve the "
+                "previously imported code until Home Assistant restarts."
+            )
+
         self._thread_exc = None
         self._thread = threading.Thread(
             target=self._thread_main,
@@ -209,6 +248,25 @@ class EmbeddedServerManager:
         self._thread.start()
 
         await self._async_wait_until_ready()
+
+        # Belt-and-braces staleness check: the worker stashed the
+        # ha_mcp.__version__ it actually imported; if that disagrees with the
+        # installed distribution the purge did not fully take (e.g. a stray
+        # import of ha_mcp outside the worker re-cached old modules) and only
+        # an HA core restart applies the update — say so instead of serving
+        # old code silently.
+        if self._running_version:
+            installed = await self._hass.async_add_executor_job(
+                _installed_ha_mcp_version
+            )
+            if installed and installed != self._running_version:
+                _LOGGER.warning(
+                    "HA-MCP in-process server is running version %s but "
+                    "version %s is installed; restart Home Assistant to "
+                    "finish applying the update.",
+                    self._running_version,
+                    installed,
+                )
 
     async def async_stop(self) -> None:
         """Signal the worker thread to shut down and join it (bounded).
@@ -240,10 +298,16 @@ class EmbeddedServerManager:
                 "leaving it to terminate with the process.",
                 _STOP_JOIN_TIMEOUT_SECONDS,
             )
+            # Remember the zombie: the next start must not purge modules
+            # while this thread may still be importing them. The worker
+            # holds its own loop/stop-event as locals, so clearing the
+            # published references below cannot crash it.
+            self._orphaned_thread = thread
         self._thread = None
         self._loop = None
         self._stop_event = None
         self._thread_exc = None
+        self._running_version = None
 
     async def async_revoke_credentials(self) -> None:
         """Revoke the provisioned refresh token and remove the server's user.
@@ -582,10 +646,14 @@ class EmbeddedServerManager:
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        # Created here and handed to _serve as a LOCAL; publishing to self
+        # is one-way, for async_stop's signaling only — see async_stop's
+        # zombie-thread comment for why the worker must never re-read it.
+        stop_event = asyncio.Event()
         self._loop = loop
-        self._stop_event = asyncio.Event()
+        self._stop_event = stop_event
         try:
-            loop.run_until_complete(self._serve(access_token))
+            loop.run_until_complete(self._serve(access_token, stop_event))
         except Exception as err:
             self._thread_exc = err
             _LOGGER.exception("HA-MCP in-process server thread crashed")
@@ -609,7 +677,7 @@ class EmbeddedServerManager:
                     )
             loop.close()
 
-    async def _serve(self, access_token: str) -> None:
+    async def _serve(self, access_token: str, stop_event: asyncio.Event) -> None:
         """Build the ha-mcp server and run it until a stop is signaled.
 
         Mirrors the CLI HTTP runner in ``ha_mcp.__main__`` without importing it
@@ -620,6 +688,11 @@ class EmbeddedServerManager:
         # the server (and its settings singleton) is built. Keeping the token out
         # of os.environ is the whole point of the in-process channel.
         import ha_mcp.config as _hamcp_config
+
+        # Record which code generation this worker actually imported — the
+        # post-start staleness check in async_start compares it against the
+        # installed distribution.
+        self._running_version = getattr(sys.modules.get("ha_mcp"), "__version__", None)
 
         # Drop any settings singleton cached by a PREVIOUS start in this same
         # Python process: an entry reload must re-read the override files
@@ -739,8 +812,7 @@ class EmbeddedServerManager:
         )
         uv_server = uvicorn.Server(config)
 
-        assert self._stop_event is not None
-        stop_task = asyncio.create_task(self._stop_event.wait())
+        stop_task = asyncio.create_task(stop_event.wait())
         async with server.mcp._lifespan_manager():
             serve_task = asyncio.create_task(uv_server.serve())
             done, _pending = await asyncio.wait(
@@ -810,6 +882,33 @@ class EmbeddedServerManager:
         with suppress(OSError, TimeoutError):
             await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
         return True
+
+
+def _purge_ha_mcp_modules() -> None:
+    """Drop every cached ``ha_mcp`` module so the next import loads fresh code.
+
+    The in-process server runs as a thread of the HA core Python process, and
+    Python resolves imports from the process-wide ``sys.modules`` cache — so
+    after a pip install the next worker would silently reuse the OLD code
+    unless the cache is purged first. Safe here because ``ha_mcp`` is pure
+    Python and is only ever imported inside the (currently stopped) worker
+    thread; third-party dependencies are deliberately NOT purged (they are
+    shared with the rest of Home Assistant), so a dependency-version change
+    still needs an HA core restart.
+    """
+    # Snapshot the keys: sys.modules can be mutated by concurrent imports on
+    # other threads mid-iteration (HA core is heavily threaded).
+    purged = [
+        name
+        for name in list(sys.modules)
+        if name == "ha_mcp" or name.startswith("ha_mcp.")
+    ]
+    if not purged:
+        return
+    for name in purged:
+        sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+    _LOGGER.debug("Purged %d cached ha_mcp module(s) before worker start", len(purged))
 
 
 def _installed_ha_mcp_version() -> str | None:

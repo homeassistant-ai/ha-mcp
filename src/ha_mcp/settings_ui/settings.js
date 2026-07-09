@@ -217,6 +217,22 @@ async function applyInfoChrome() {
           'Desktop. Restarting the App (add-on) alone does not refresh your ' +
           'client\'s cached tool list.';
       }
+    } else if (info.deployment_mode === 'embedded') {
+      // In-process (custom component) server: the restart endpoint reloads
+      // the server config entry, which reinstalls-if-newer and swaps the
+      // worker onto the freshly installed code.
+      const rbtn = document.getElementById('restartBtn');
+      rbtn.style.display = '';
+      rbtn.textContent = 'Restart HA-MCP Server';
+      if (noticeEl) {
+        noticeEl.textContent =
+          '⚠ Changes saved. Click "Restart HA-MCP Server" (reloads the ' +
+          'in-process server integration) for them to take effect. ' +
+          'Disabled tools will be fully removed from the MCP tool list on ' +
+          'next startup. Then refresh the tool list in your AI client — ' +
+          'e.g. refresh tool list on claude.ai, re-add or refresh the ' +
+          'connector in ChatGPT, or close and reopen Claude Desktop.';
+      }
     } else if (info.is_sidecar) {
       if (noticeEl) {
         noticeEl.textContent =
@@ -414,7 +430,7 @@ async function _runRestartReloadCycle(previousInstanceId) {
 async function restartAddon() {
   if (restartInProgress) return;
   const btn = document.getElementById('restartBtn');
-  if (!confirm('Restart the App (add-on) now? The page will reload automatically once the App (add-on) is back online.')) return;
+  if (!confirm('Restart HA-MCP now? The page will reload automatically once it is back online.')) return;
   restartInProgress = true;
   btn.disabled = true;
   btn.textContent = 'Restarting…';
@@ -2946,6 +2962,7 @@ const ADVANCED_FIELD_META = {
   code_mode_max_invocations: { label: "Code-mode max invocations",    help: "API/tool-call cap per sandbox run. Restart required." },
   code_mode_saved_tools_path:{ label: "Saved-tools path",              help: "JSON file where ha_manage_custom_tool persists saved tools across restarts. Restart required." },
   sidecar_pin_port:    { label: "Settings UI sidecar port",    help: "0 = a new free port each restart (default); set 1024–65535 to pin a fixed port so the settings URL stays stable across restarts. Falls back to a free port if the pinned one is busy. Restart required." },
+  enable_dev_mode:     { label: "Developer mode",               help: "⚠ DANGER: registers hidden developer tools (ha_dev_manage_server, ha_dev_manage_settings) that let AI agents change server settings and replace the running server version (e.g. install a PR build). For development and testing only. Restart required." },
 };
 
 // Fields that require an MCP-host restart to take effect when changed
@@ -2974,6 +2991,9 @@ const ADVANCED_RESTART_REQUIRED = new Set([
   // The sidecar binds its port once at spawn (run_main), so changing the
   // pin needs a restart to respawn the sidecar on the new port.
   "sidecar_pin_port",
+  // Dev-mode tools register at startup; toggling needs a restart to
+  // (un)register them.
+  "enable_dev_mode",
 ]);
 
 let _advancedFields = [];
@@ -3039,6 +3059,7 @@ async function loadAdvancedSettings() {
   renderAdvancedSection('advToolsSurface', bySection.tools_surface || []);
   renderAdvancedSection('advDiagnostics', bySection.diagnostics || []);
   renderAdvancedSection('advSidecar', bySection.sidecar || []);
+  renderAdvancedSection('advDeveloper', bySection.developer || []);
   applySidecarAvailability(data.is_stdio !== false);
   // Re-render feature flags so the code_mode sub-numerics show up
   // beneath enable_code_mode (race: loadFeatureFlags may have run
@@ -3138,6 +3159,19 @@ function renderAdvancedSection(containerId, fields) {
       const fname = input.dataset.advField;
       const f = _advancedFields.find(x => x.field === fname);
       if (!f) return;
+      // Dev mode arms tools that can rewrite server settings and swap
+      // the running server version — confirm before enabling, matching
+      // the stopSidecar / restart danger-action convention.
+      if (fname === 'enable_dev_mode' && input.checked && !confirm(
+        '⚠ Enable developer mode?\n\n'
+        + 'After the next restart, hidden developer tools are exposed to '
+        + 'connected AI agents. They can change server settings and '
+        + 'replace the running server version. Only enable this for '
+        + 'development and testing.'
+      )) {
+        input.checked = false;
+        return;
+      }
       let v;
       if (input.type === 'checkbox') v = input.checked;
       else if (input.type === 'number') v = (f.type === 'float') ? parseFloat(input.value) : parseInt(input.value, 10);

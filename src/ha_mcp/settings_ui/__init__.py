@@ -27,7 +27,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
-from .._version import get_version, is_running_in_addon
+from .._version import get_version, is_embedded, is_running_in_addon
 from ..backup_manager import get_backup_manager
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import (
@@ -1502,6 +1502,62 @@ def build_settings_handlers(
         )
 
     async def _restart_addon(request: Request) -> JSONResponse:
+        # Embedded (in-process custom-component server): "restart" means
+        # reloading the ha_mcp_tools server config entry. Checked before the
+        # Supervisor path — the HA core container carries SUPERVISOR_TOKEN,
+        # but the Supervisor add-on API is not ours to call from here, and
+        # post-reload the new worker imports the freshly installed code
+        # (the manager purges the module cache per start).
+        if server is not None and is_embedded():
+            from ..tools.tools_dev import (
+                abort_options_flow_quietly,
+                find_server_config_entry,
+                schedule_deferred_entry_reload,
+            )
+
+            try:
+                found = await find_server_config_entry(server.client)
+            except Exception as exc:
+                # A discovery FAILURE is not "entry not found" — masking a
+                # WS/connection hiccup as not-found steers users toward
+                # reinstalling a running component. Also: the restart JS
+                # treats any 5xx as "restart in flight" and starts its
+                # poll-reload cycle, so a restart that was never initiated
+                # must answer BELOW 500.
+                logger.warning("Embedded restart: entry discovery failed: %s", exc)
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.CONNECTION_FAILED,
+                        "Could not reach Home Assistant to locate the "
+                        f"in-process server's config entry: {exc}",
+                        suggestions=[
+                            "Retry once Home Assistant is responsive",
+                        ],
+                    ),
+                    status_code=409,
+                )
+            if found is None:
+                return JSONResponse(
+                    create_error_response(
+                        ErrorCode.INTERNAL_ERROR,
+                        "Could not locate the in-process server's config "
+                        "entry to reload",
+                        suggestions=[
+                            "Reload the HA-MCP integration from Settings > "
+                            "Devices & Services instead",
+                        ],
+                    ),
+                    # Below 500 on purpose: no restart was initiated, and the
+                    # restart JS interprets 5xx as restart-in-flight.
+                    status_code=409,
+                )
+            entry_id, flow, _options = found
+            await abort_options_flow_quietly(server.client, flow)
+            schedule_deferred_entry_reload(server.client, entry_id)
+            return JSONResponse(
+                {"success": True, "message": "In-process server reload scheduled"}
+            )
+
         # The sidecar process (server is None) has no Supervisor context
         # and no live server settings — refuse cleanly. The HTTP modes
         # that do pass a server still go through the SUPERVISOR_TOKEN
@@ -1628,14 +1684,27 @@ def build_settings_handlers(
         # either channel; standalone Docker / uvx falls back to the
         # installed package's metadata.
         try:
-            version = get_version()
+            # Executor: get_version's distribution-ownership scan reads
+            # metadata for every installed package — too heavy for the
+            # event loop on an endpoint the restart cycle polls.
+            version = await asyncio.to_thread(get_version)
         except Exception:  # pragma: no cover — defensive only
             logger.warning("get_version() raised; omitting version from info")
             version = None
+        # ``deployment_mode`` reuses the bug-report detector so the UI and
+        # ha_report_issue can never disagree about where the server runs —
+        # the embedded (in-process custom component) server would otherwise
+        # read as plain "docker" here (/.dockerenv exists in the HA core
+        # container).
+        from ..tools.tools_bug_report import _detect_installation_method
+
         return JSONResponse(
             {
                 "is_addon": addon,
                 "is_sidecar": is_sidecar,
+                "deployment_mode": (
+                    "sidecar" if is_sidecar else _detect_installation_method()
+                ),
                 "instance_id": _PROCESS_INSTANCE_ID,
                 "started_at": _PROCESS_STARTED_AT,
                 "version": version,

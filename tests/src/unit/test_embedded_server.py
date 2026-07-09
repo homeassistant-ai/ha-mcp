@@ -849,7 +849,7 @@ class TestThreadEnvStaging:
         )
         captured = {}
 
-        async def _fake_serve(_token):
+        async def _fake_serve(_token, _stop_event):
             for key in (
                 "HOMEASSISTANT_URL",
                 "HOMEASSISTANT_TOKEN",
@@ -982,7 +982,7 @@ class TestThreadEnvStaging:
     def test_thread_crash_is_captured_not_raised(self, tmp_path, monkeypatch):
         mgr, _hass, _entry = _manager(tmp_path)
 
-        async def _boom(_token):
+        async def _boom(_token, _stop_event):
             raise RuntimeError("serve failed")
 
         monkeypatch.setattr(mgr, "_serve", _boom)
@@ -1422,6 +1422,7 @@ class TestLifecycle:
             "_async_wait_until_ready",
             AsyncMock(side_effect=lambda: calls.append("ready")),
         )
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: calls.append("purge"))
         # Replace the thread body so no real ha_mcp import happens.
         started = []
         monkeypatch.setattr(mgr, "_thread_main", lambda token: started.append(token))
@@ -1430,7 +1431,10 @@ class TestLifecycle:
         if mgr._thread is not None:
             mgr._thread.join(timeout=2)
 
-        assert calls == ["ensure", "token", "dir", "ready"]
+        # The module purge must land between the pip install (so the fresh
+        # code is on disk) and the thread spawn (so the worker's import
+        # resolves from disk, not the process-wide module cache).
+        assert calls == ["ensure", "token", "dir", "purge", "ready"]
         assert started == ["tok"]
 
     async def test_stop_without_start_is_noop(self, tmp_path):
@@ -1477,11 +1481,14 @@ class TestLifecycle:
 
         assert len(loop.scheduled) == 1  # stop event scheduled threadsafe
         assert joins == [es._STOP_JOIN_TIMEOUT_SECONDS]  # bounded join
-        # Worker state fully cleared even for the orphaned thread.
+        # Worker state fully cleared even for the orphaned thread...
         assert mgr._thread is None
         assert mgr._loop is None
         assert mgr._stop_event is None
         assert mgr._thread_exc is None
+        # ...but the zombie itself is REMEMBERED so the next start skips
+        # the module purge while it may still be importing.
+        assert mgr._orphaned_thread is not None
 
     async def test_stop_survives_loop_closing_race(self, tmp_path):
         # The loop can close between is_closed() and call_soon_threadsafe
@@ -1517,3 +1524,212 @@ class TestLifecycle:
         mgr, _hass, _entry = _manager(tmp_path)
         mgr._prepare_config_dir()
         assert os.path.isdir(mgr._config_dir)
+
+
+class TestPurgeHaMcpModules:
+    """The stale-worker fix: cached ha_mcp modules are dropped per start.
+
+    Regression guard for the live-found bug where an entry reload
+    reinstalled the package but the new worker silently reused the OLD
+    code from ``sys.modules`` — updates only took effect after a full HA
+    core restart.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _preserve_real_modules(self):
+        """Restore any genuinely imported ha_mcp modules after each test.
+
+        Other unit tests in the same pytest session import the real
+        ``ha_mcp``; purging it here without restoring would change module
+        identity for everything that runs afterwards.
+        """
+        saved = {
+            name: mod
+            for name, mod in sys.modules.items()
+            if name == "ha_mcp" or name.startswith("ha_mcp.")
+        }
+        yield
+        sys.modules.update(saved)
+
+    def test_purges_only_ha_mcp_modules(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "ha_mcp", ModuleType("ha_mcp"))
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ModuleType("ha_mcp.config"))
+        unrelated = ModuleType("ha_mcp_other")
+        monkeypatch.setitem(sys.modules, "ha_mcp_other", unrelated)
+
+        es._purge_ha_mcp_modules()
+
+        assert "ha_mcp" not in sys.modules
+        assert "ha_mcp.config" not in sys.modules
+        # Prefix match must not swallow lookalike top-level names.
+        assert sys.modules["ha_mcp_other"] is unrelated
+
+    def test_noop_when_nothing_cached(self):
+        for name in [
+            n for n in list(sys.modules) if n == "ha_mcp" or n.startswith("ha_mcp.")
+        ]:
+            sys.modules.pop(name)
+        es._purge_ha_mcp_modules()  # must not raise
+
+
+class TestRunningVersionStalenessWarning:
+    async def test_start_warns_when_running_version_stale(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        # Stub the module purge: letting it run for real would drop every
+        # live ha_mcp module and poison later tests in this process.
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "9.9.9")
+
+        def _ready_with_stale_worker():
+            # Deterministic stand-in for the _serve stash: the worker
+            # imported an older generation than what pip just installed.
+            mgr._running_version = "1.1.1"
+
+        monkeypatch.setattr(
+            mgr,
+            "_async_wait_until_ready",
+            AsyncMock(side_effect=_ready_with_stale_worker),
+        )
+
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert "running version 1.1.1" in caplog.text
+        assert "restart Home Assistant" in caplog.text
+
+    async def test_start_quiet_when_versions_match(self, tmp_path, monkeypatch, caplog):
+        mgr, _hass, _entry = _manager(tmp_path)
+        monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        # Stub the module purge: letting it run for real would drop every
+        # live ha_mcp module and poison later tests in this process.
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: None)
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        monkeypatch.setattr(es, "_installed_ha_mcp_version", lambda: "1.1.1")
+
+        def _ready_with_current_worker():
+            mgr._running_version = "1.1.1"
+
+        monkeypatch.setattr(
+            mgr,
+            "_async_wait_until_ready",
+            AsyncMock(side_effect=_ready_with_current_worker),
+        )
+
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert "restart Home Assistant" not in caplog.text
+
+
+class TestPurgeSkippedWhileOrphanAlive:
+    """A wedged old worker must block the module purge, not crash it.
+
+    Live-found on QEMU-slow HAOS: a cold import outlived both the
+    readiness timeout and the stop-join budget; purging sys.modules
+    under the still-importing zombie corrupted its import and the next
+    bring-up never came up.
+    """
+
+    def _start_kwargs(self, mgr, monkeypatch, purges):
+        monkeypatch.setattr(mgr, "_async_ensure_package", AsyncMock())
+        monkeypatch.setattr(
+            mgr, "_async_provision_token", AsyncMock(return_value="tok")
+        )
+        monkeypatch.setattr(mgr, "_prepare_config_dir", lambda: None)
+        monkeypatch.setattr(mgr, "_async_wait_until_ready", AsyncMock())
+        monkeypatch.setattr(mgr, "_thread_main", lambda token: None)
+        monkeypatch.setattr(es, "_purge_ha_mcp_modules", lambda: purges.append(True))
+
+    async def test_purge_skipped_when_orphan_still_alive(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _AliveThread:
+            def is_alive(self):
+                return True
+
+        mgr._orphaned_thread = _AliveThread()
+        with caplog.at_level("WARNING"):
+            await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == []
+        assert "Skipping the ha_mcp module purge" in caplog.text
+        assert mgr._orphaned_thread is not None  # still tracked
+
+    async def test_purge_resumes_once_orphan_died(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(tmp_path)
+        purges: list[bool] = []
+        self._start_kwargs(mgr, monkeypatch, purges)
+
+        class _DeadThread:
+            def is_alive(self):
+                return False
+
+        mgr._orphaned_thread = _DeadThread()
+        await mgr.async_start()
+        if mgr._thread is not None:
+            mgr._thread.join(timeout=2)
+
+        assert purges == [True]
+        assert mgr._orphaned_thread is None  # bookkeeping cleared
+
+
+class TestServeRunningVersionCapture:
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self):
+        # _thread_main stages HA_MCP_CONFIG_DIR/HA_MCP_EMBEDDED into
+        # os.environ; snapshot + restore so the flags never leak into
+        # unrelated suites on this worker.
+        keys = ("HA_MCP_CONFIG_DIR", "HA_MCP_EMBEDDED")
+        saved = {k: os.environ.get(k) for k in keys}
+        for key in keys:
+            os.environ.pop(key, None)
+        yield
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def test_serve_captures_imported_version(self, tmp_path, monkeypatch):
+        # The staleness feature hinges on this one line: the worker must
+        # stash the __version__ of the ha_mcp it ACTUALLY imported.
+        mgr, _hass, _entry = _manager(
+            tmp_path, options={OPT_SERVER_URL: "http://ha.local:8123"}
+        )
+
+        class _StopServe(Exception):
+            pass
+
+        class _FakeMcp:
+            def http_app(self, path, stateless_http):
+                raise _StopServe
+
+        _stub_ha_mcp_surface(monkeypatch, mcp=_FakeMcp())
+        sys.modules["ha_mcp"].__version__ = "9.8.7"
+
+        mgr._thread_main("tok")
+
+        assert mgr._running_version == "9.8.7"
+        assert isinstance(mgr._thread_exc, _StopServe)

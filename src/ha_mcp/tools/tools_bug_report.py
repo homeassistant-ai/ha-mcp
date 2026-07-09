@@ -5,11 +5,14 @@ This module provides a tool to collect diagnostic information and guide users
 on how to create effective bug reports.
 """
 
+import asyncio
+import importlib
 import logging
 import os
 import platform
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote_plus
@@ -21,7 +24,7 @@ from pydantic import Field
 
 from ha_mcp import __version__
 
-from .._version import is_running_in_addon
+from .._version import get_version, is_embedded, is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
 from ..utils.usage_logger import (
@@ -72,21 +75,28 @@ def _detect_installation_method() -> str:
     """
     Detect how ha-mcp was installed.
 
-    Returns one of: pyinstaller, addon, docker, git, pypi, unknown
+    Returns one of: pyinstaller, embedded, addon, docker, git, pypi, unknown
     """
     # 1. PyInstaller binary
     if getattr(sys, "frozen", False):
         return "pyinstaller"
 
-    # 2. Home Assistant Add-on (has supervisor token)
+    # 2. In-process server inside HA core (the ha_mcp_tools custom
+    #    component's "server" entry). Checked BEFORE the docker probe: the
+    #    HA core container carries /.dockerenv, so without this branch
+    #    embedded installs misreport as plain docker.
+    if is_embedded():
+        return "embedded"
+
+    # 3. Home Assistant Add-on (has supervisor token)
     if is_running_in_addon():
         return "addon"
 
-    # 3. Docker container (non-addon)
+    # 4. Docker container (non-addon)
     if Path("/.dockerenv").exists():
         return "docker"
 
-    # 4. Git clone - check for .git directory relative to package
+    # 5. Git clone - check for .git directory relative to package
     try:
         # Go up from tools_bug_report.py -> tools -> ha_mcp -> src -> project_root
         project_root = Path(__file__).parent.parent.parent.parent
@@ -97,7 +107,7 @@ def _detect_installation_method() -> str:
         # fall through to the next detection heuristic.
         pass
 
-    # 5. PyPI install - marker file exists in package
+    # 6. PyPI install - marker file exists in package
     try:
         marker_path = Path(__file__).parent.parent / "_pypi_marker"
         if marker_path.exists():
@@ -107,8 +117,60 @@ def _detect_installation_method() -> str:
         # fall through to the default "unknown" result.
         pass
 
-    # 6. Default - unknown
+    # 7. Default - unknown
     return "unknown"
+
+
+def _detect_installed_version() -> str | None:
+    """Return the ha-mcp version installed ON DISK right now.
+
+    ``__version__`` is frozen when the process first imports ha_mcp, so after
+    an in-place update the running process keeps reporting the old version
+    while the disk already carries the new one. Reporting both (plus
+    ``version_mismatch``) turns a "which server am I talking to" hunt into a
+    single tool call.
+    """
+    try:
+        importlib.invalidate_caches()
+        return get_version()
+    except Exception as e:
+        logger.info("Installed-version probe failed: %s", e)
+        return None
+
+
+def _instance_identity() -> dict[str, Any]:
+    """Return process identity (id, start time, uptime).
+
+    Mirrors the ``/api/settings/info`` fields so a report and the web UI can
+    be matched to the same (or different) server process.
+    """
+    from ..settings_ui import _PROCESS_INSTANCE_ID, _PROCESS_STARTED_AT
+
+    return {
+        "instance_id": _PROCESS_INSTANCE_ID,
+        "started_at": _PROCESS_STARTED_AT,
+        "uptime_seconds": round(time.time() - _PROCESS_STARTED_AT, 1),
+    }
+
+
+def _format_version_value(diagnostic_info: dict[str, Any]) -> str:
+    """Render the version for report surfaces, flagging a stale worker.
+
+    A failed installed-version probe must stay distinguishable from
+    "checked, versions match" — otherwise the exact stale-worker
+    condition this field exists to expose disappears whenever the probe
+    itself hiccups.
+    """
+    running = diagnostic_info.get("ha_mcp_version", "Unknown")
+    installed = diagnostic_info.get("installed_version")
+    if diagnostic_info.get("version_mismatch"):
+        return (
+            f"{running} (running) — {installed} is installed; "
+            "restart to finish applying the update"
+        )
+    if installed is None:
+        return f"{running} (installed-on-disk version could not be verified)"
+    return str(running)
 
 
 def _detect_platform() -> dict[str, str]:
@@ -473,7 +535,8 @@ def _build_formatted_report(
     report_lines = [
         "=== ha-mcp Bug Report Info ===",
         "",
-        f"ha-mcp Version: {diagnostic_info['ha_mcp_version']}",
+        f"ha-mcp Version: {_format_version_value(diagnostic_info)}",
+        f"Custom Component: {diagnostic_info.get('component_version') or 'not detected (not installed, or probe failed)'}",
         f"Installation Method: {diagnostic_info['installation_method']}",
         f"MCP Transport: {mcp_transport}",
         f"MCP Client: {_format_client_info_for_template(client_info)}",
@@ -517,6 +580,27 @@ def _build_formatted_report(
 class BugReportTools:
     def __init__(self, client: Any) -> None:
         self._client = client
+
+    async def _detect_component_version(self) -> str | None:
+        """Read the ha_mcp_tools custom component's version, best-effort.
+
+        Uses the component's ``get_caller_token`` bootstrap service, whose
+        response carries the manifest version (the same field the filesystem
+        tools' version gate reads). Returns None when the component is not
+        installed or the call fails — the report path must never break on it.
+        """
+        try:
+            resp = await self._client.call_service(
+                "ha_mcp_tools", "get_caller_token", {}, return_response=True
+            )
+            payload = (
+                resp.get("service_response", resp) if isinstance(resp, dict) else {}
+            )
+            version = payload.get("version") if isinstance(payload, dict) else None
+            return str(version) if version else None
+        except Exception as e:
+            logger.info("Component version probe failed: %s", e)
+            return None
 
     @tool(
         name="ha_report_issue",
@@ -592,9 +676,17 @@ class BugReportTools:
         config_toggles = _get_config_toggles()
         mcp_transport = _detect_mcp_transport()
         client_info = _extract_client_info(ctx)
+        installed_version = await asyncio.to_thread(_detect_installed_version)
+        component_version = await self._detect_component_version()
 
         diagnostic_info: dict[str, Any] = {
             "ha_mcp_version": __version__,
+            "installed_version": installed_version,
+            "version_mismatch": bool(
+                installed_version and installed_version != __version__
+            ),
+            "component_version": component_version,
+            "instance": _instance_identity(),
             "installation_method": install_method,
             "platform": platform_info,
             "mcp_transport": mcp_transport,
@@ -1093,7 +1185,8 @@ ha_call_service(domain="light", service="turn_on", entity_id="light.example")
 
 ## 🔧 Environment
 
-- **ha-mcp Version:** {diagnostic_info.get("ha_mcp_version", "Unknown")}
+- **ha-mcp Version:** {_format_version_value(diagnostic_info)}
+- **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
@@ -1257,7 +1350,8 @@ def _generate_agent_behavior_template(
 
 ## 📊 Environment
 
-- **ha-mcp Version:** {diagnostic_info.get("ha_mcp_version", "Unknown")}
+- **ha-mcp Version:** {_format_version_value(diagnostic_info)}
+- **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
