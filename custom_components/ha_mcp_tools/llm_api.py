@@ -69,13 +69,28 @@ _FALLBACK_API_PROMPT = (
     "configuration."
 )
 
-# The exception surface of one loopback MCP exchange, used by both the
-# tool-list fetch and tool calls. The SDK's transport context managers raise
-# ExceptionGroup (anyio task groups); OSError covers a refused/dropped loopback
-# connect; TimeoutError comes from our asyncio.timeout budget. httpx errors are
-# subclasses of Exception with no stable import here (httpx arrives with the
-# SDK), so they surface wrapped inside the ExceptionGroup.
-_TRANSPORT_ERRORS = (TimeoutError, OSError, ExceptionGroup)
+
+def _transport_errors() -> tuple[type[BaseException], ...]:
+    """Return the exception surface of one loopback MCP exchange.
+
+    Used as the ``except`` target by both the tool-list fetch and tool calls
+    (an ``except`` expression is evaluated at exception time, so the lazy
+    imports below have already succeeded by then). The SDK's transport
+    context managers raise ExceptionGroup (anyio task groups); OSError covers
+    a refused/dropped loopback connect; TimeoutError comes from our
+    asyncio.timeout budget. httpx errors and protocol-level McpError can also
+    escape a session call UNWRAPPED (HA core's mcp integration catches both
+    the same way), but neither class is importable at module level — both
+    arrive with the runtime-installed server package — hence this function
+    instead of a module constant.
+    """
+    errors: tuple[type[BaseException], ...] = (TimeoutError, OSError, ExceptionGroup)
+    try:
+        import httpx
+        from mcp import McpError
+    except ImportError:  # pragma: no cover - SDK-less builds never open a session
+        return errors
+    return (*errors, httpx.HTTPError, McpError)
 
 
 def _import_mcp_sdk() -> None:
@@ -164,7 +179,7 @@ class HaMcpTool(llm.Tool):
                 result = await session.call_tool(
                     tool_input.tool_name, tool_input.tool_args
                 )
-        except _TRANSPORT_ERRORS as err:
+        except _transport_errors() as err:
             raise HomeAssistantError(
                 f"Error calling the HA-MCP tool {tool_input.tool_name}: {err}"
             ) from err
@@ -196,7 +211,7 @@ class HaMcpLlmApi(llm.API):
                 _mcp_session(self.server_url) as (session, init_result),
             ):
                 list_result = await session.list_tools()
-        except _TRANSPORT_ERRORS as err:
+        except _transport_errors() as err:
             raise HomeAssistantError(
                 f"Could not reach the in-process HA-MCP server: {err}"
             ) from err

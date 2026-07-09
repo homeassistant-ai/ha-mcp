@@ -291,3 +291,48 @@ class TestToolCall:
                 llm_api.llm.ToolInput("ha_search", {}),
                 llm_api.llm.LLMContext(),
             )
+
+    async def test_unwrapped_httpx_error_is_mapped(self, monkeypatch):
+        # httpx errors do NOT inherit from OSError and can escape a session
+        # call unwrapped (Gemini review finding on #1782); they must map to
+        # HomeAssistantError like every other transport failure.
+        import httpx
+
+        _fake_session(monkeypatch, raise_on_open=httpx.ConnectError("refused"))
+
+        with pytest.raises(llm_api.HomeAssistantError, match="ha_search"):
+            await self._tool().async_call(
+                _make_hass(),
+                llm_api.llm.ToolInput("ha_search", {}),
+                llm_api.llm.LLMContext(),
+            )
+
+    async def test_protocol_mcperror_is_mapped(self, monkeypatch):
+        # Protocol-level JSON-RPC errors surface as McpError (HA core's mcp
+        # integration maps these the same way).
+        from mcp import McpError
+        from mcp.types import ErrorData
+
+        _fake_session(
+            monkeypatch,
+            raise_on_open=McpError(ErrorData(code=-32000, message="boom")),
+        )
+
+        with pytest.raises(llm_api.HomeAssistantError, match="ha_search"):
+            await self._tool().async_call(
+                _make_hass(),
+                llm_api.llm.ToolInput("ha_search", {}),
+                llm_api.llm.LLMContext(),
+            )
+
+    async def test_non_transport_bug_propagates(self, monkeypatch):
+        # A genuine bug (TypeError, ValueError, ...) must NOT be swallowed
+        # into a friendly transport message — it should surface as itself.
+        _fake_session(monkeypatch, raise_on_open=ValueError("a bug"))
+
+        with pytest.raises(ValueError, match="a bug"):
+            await self._tool().async_call(
+                _make_hass(),
+                llm_api.llm.ToolInput("ha_search", {}),
+                llm_api.llm.LLMContext(),
+            )
