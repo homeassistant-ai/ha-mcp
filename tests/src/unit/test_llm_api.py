@@ -138,6 +138,39 @@ class TestRegistrationLifecycle:
             "http://127.0.0.1:9999/private_y"
         )
 
+    @pytest.mark.parametrize(
+        "exc_factory",
+        [
+            lambda: llm_api.HomeAssistantError("duplicate id"),
+            lambda: RuntimeError("unexpected"),
+        ],
+        ids=["homeassistanterror", "unexpected-exception"],
+    )
+    async def test_registration_failure_is_contained(
+        self, monkeypatch, caplog, exc_factory
+    ):
+        # "Never raises" must be literal: anything escaping this function
+        # lands in the bring-up's outer `except Exception`, which tears the
+        # ALREADY-RUNNING server down and files a "start" repair issue for a
+        # cosmetic failure (review findings on #1782). Both the expected
+        # HomeAssistantError and an arbitrary exception must be contained.
+        monkeypatch.setattr(llm_api, "_import_mcp_sdk", lambda: None)
+        hass = _make_hass()
+        exc = exc_factory()
+
+        def _raise(*_args):
+            raise exc
+
+        monkeypatch.setattr(llm_api.llm, "async_register_api", _raise)
+
+        with caplog.at_level(logging.WARNING):
+            await llm_api.async_register_llm_api(
+                hass, _make_entry(), port=9584, secret_path="/private_x"
+            )
+
+        assert DATA_LLM_API_UNSUB not in hass.data.get(DOMAIN, {})
+        assert "Could not register the HA-MCP LLM API" in caplog.text
+
     async def test_missing_sdk_skips_registration(self, monkeypatch, caplog):
         # The mcp client SDK arrives with the runtime-installed server
         # package; a build without it must skip the feature with a warning,
@@ -241,6 +274,19 @@ class TestApiInstance:
         with pytest.raises(llm_api.HomeAssistantError, match="Could not reach"):
             await _make_api(hass).async_get_api_instance(llm_api.llm.LLMContext())
 
+    async def test_group_wrapped_bug_propagates_from_list(self, monkeypatch):
+        # The SDK's task groups wrap in-session failures indiscriminately —
+        # a group carrying a genuine bug must NOT be relabeled as "could not
+        # reach the server" (review finding on #1782).
+        hass = _make_hass()
+        _fake_session(
+            monkeypatch,
+            raise_on_open=ExceptionGroup("boom", [ValueError("a bug")]),
+        )
+
+        with pytest.raises(ExceptionGroup):
+            await _make_api(hass).async_get_api_instance(llm_api.llm.LLMContext())
+
 
 class TestToolCall:
     def _tool(self) -> Any:
@@ -331,6 +377,43 @@ class TestToolCall:
         _fake_session(monkeypatch, raise_on_open=ValueError("a bug"))
 
         with pytest.raises(ValueError, match="a bug"):
+            await self._tool().async_call(
+                _make_hass(),
+                llm_api.llm.ToolInput("ha_search", {}),
+                llm_api.llm.LLMContext(),
+            )
+
+    @pytest.mark.parametrize(
+        "group",
+        [
+            lambda: ExceptionGroup("boom", [ValueError("a bug")]),
+            lambda: ExceptionGroup("boom", [OSError("refused"), ValueError("a bug")]),
+            lambda: ExceptionGroup(
+                "outer", [ExceptionGroup("inner", [TypeError("a bug")])]
+            ),
+        ],
+        ids=["bug-only", "mixed-transport-and-bug", "nested-group-bug"],
+    )
+    async def test_group_wrapped_bug_propagates(self, monkeypatch, group):
+        # anyio task groups wrap whatever failed inside them — a group is a
+        # transport failure only when EVERY leaf is one. Any genuine bug in
+        # the group (even nested, even alongside real transport errors) must
+        # propagate with its traceback instead of being remapped (review
+        # finding on #1782).
+        _fake_session(monkeypatch, raise_on_open=group())
+
+        with pytest.raises(ExceptionGroup):
+            await self._tool().async_call(
+                _make_hass(),
+                llm_api.llm.ToolInput("ha_search", {}),
+                llm_api.llm.LLMContext(),
+            )
+
+    async def test_slow_tool_call_times_out_as_homeassistanterror(self, monkeypatch):
+        _fake_session(monkeypatch, call_result=MagicMock(), delay=0.2)
+        monkeypatch.setattr(llm_api, "_CALL_TOOL_TIMEOUT_SECONDS", 0.01)
+
+        with pytest.raises(llm_api.HomeAssistantError, match="ha_search"):
             await self._tool().async_call(
                 _make_hass(),
                 llm_api.llm.ToolInput("ha_search", {}),

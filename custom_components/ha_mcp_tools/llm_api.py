@@ -32,8 +32,9 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
@@ -70,27 +71,50 @@ _FALLBACK_API_PROMPT = (
 )
 
 
-def _transport_errors() -> tuple[type[BaseException], ...]:
-    """Return the exception surface of one loopback MCP exchange.
+def _transport_error_leaves() -> tuple[type[BaseException], ...]:
+    """Return the non-group exception classes a loopback exchange can raise.
 
-    Used as the ``except`` target by both the tool-list fetch and tool calls
-    (an ``except`` expression is evaluated at exception time, so the lazy
-    imports below have already succeeded by then). The SDK's transport
-    context managers raise ExceptionGroup (anyio task groups); OSError covers
-    a refused/dropped loopback connect; TimeoutError comes from our
-    asyncio.timeout budget. httpx errors and protocol-level McpError can also
-    escape a session call UNWRAPPED (HA core's mcp integration catches both
-    the same way), but neither class is importable at module level — both
-    arrive with the runtime-installed server package — hence this function
-    instead of a module constant.
+    OSError covers a refused/dropped loopback connect; TimeoutError comes
+    from our asyncio.timeout budget. httpx errors and protocol-level McpError
+    can also escape a session call UNWRAPPED (HA core's mcp integration
+    catches both the same way), but neither class is importable at module
+    level — both arrive with the runtime-installed server package — hence a
+    function instead of a module constant.
     """
-    errors: tuple[type[BaseException], ...] = (TimeoutError, OSError, ExceptionGroup)
+    errors: tuple[type[BaseException], ...] = (TimeoutError, OSError)
     try:
         import httpx
         from mcp import McpError
     except ImportError:  # pragma: no cover - SDK-less builds never open a session
         return errors
     return (*errors, httpx.HTTPError, McpError)
+
+
+def _transport_errors() -> tuple[type[BaseException], ...]:
+    """Return the ``except`` target for one loopback MCP exchange.
+
+    Evaluated at exception time (an ``except`` expression is), so the lazy
+    imports in :func:`_transport_error_leaves` have already succeeded by
+    then. Includes ExceptionGroup because the SDK's anyio task groups wrap
+    in-session failures — but a caught group must still pass
+    :func:`_is_transport_failure` before being mapped to a friendly error,
+    or a genuine bug that happened inside the task group would be relabeled
+    as a transport failure (review finding).
+    """
+    return (*_transport_error_leaves(), ExceptionGroup)
+
+
+def _is_transport_failure(err: BaseException) -> bool:
+    """Return True when ``err`` is purely a transport failure.
+
+    A group counts only when EVERY leaf (nested groups included) is a
+    transport error: a group carrying any non-transport member is a genuine
+    bug that must propagate with its loud traceback instead of being
+    remapped to a "could not reach the server" message.
+    """
+    if isinstance(err, ExceptionGroup):
+        return all(_is_transport_failure(exc) for exc in err.exceptions)
+    return isinstance(err, _transport_error_leaves())
 
 
 def _import_mcp_sdk() -> None:
@@ -155,7 +179,7 @@ class HaMcpTool(llm.Tool):
         self,
         name: str,
         description: str | None,
-        parameters: Any,
+        parameters: vol.Schema,
         server_url: str,
     ) -> None:
         """Store the converted schema and the loopback endpoint."""
@@ -180,6 +204,8 @@ class HaMcpTool(llm.Tool):
                     tool_input.tool_name, tool_input.tool_args
                 )
         except _transport_errors() as err:
+            if not _is_transport_failure(err):
+                raise
             raise HomeAssistantError(
                 f"Error calling the HA-MCP tool {tool_input.tool_name}: {err}"
             ) from err
@@ -212,6 +238,8 @@ class HaMcpLlmApi(llm.API):
             ):
                 list_result = await session.list_tools()
         except _transport_errors() as err:
+            if not _is_transport_failure(err):
+                raise
             raise HomeAssistantError(
                 f"Could not reach the in-process HA-MCP server: {err}"
             ) from err
@@ -250,33 +278,38 @@ async def async_register_llm_api(
 ) -> None:
     """Register the running server's toolset as an LLM API (advisory).
 
-    Called from the bring-up success path. Never raises: the server itself is
-    already running, and a missing LLM API must not undo that — failures are
-    logged and the feature is simply absent until the next (re)load.
+    Called from the bring-up success path. Never raises — and that has to be
+    literal, not aspirational: any exception escaping here lands in the
+    bring-up's outer ``except Exception``, which tears the already-running
+    server down and files a "start" repair issue for what is a cosmetic
+    failure (review finding). Hence the broad containment: whatever goes
+    wrong is logged and the feature is simply absent until the next (re)load.
+    Cancellation (a BaseException) still propagates.
     """
-    if not await async_probe_mcp_sdk(hass):
-        return
-
-    # Re-registration guard: a bring-up after a teardown that could not run
-    # (or a duplicate bring-up) must replace the stale registration, not fail.
-    async_unregister_llm_api(hass)
-
-    api = HaMcpLlmApi(
-        hass=hass,
-        id=f"{DOMAIN}-{entry.entry_id}",
-        name=entry.title,
-        server_url=f"http://127.0.0.1:{port}{secret_path}",
-    )
     try:
+        if not await async_probe_mcp_sdk(hass):
+            return
+
+        # Re-registration guard: a bring-up after a teardown that could not
+        # run (or a duplicate bring-up) must replace the stale registration,
+        # not fail on the duplicate id.
+        async_unregister_llm_api(hass)
+
+        api = HaMcpLlmApi(
+            hass=hass,
+            id=f"{DOMAIN}-{entry.entry_id}",
+            name=entry.title,
+            server_url=f"http://127.0.0.1:{port}{secret_path}",
+        )
         unsub = llm.async_register_api(hass, api)
-    except HomeAssistantError:
+        hass.data.setdefault(DOMAIN, {})[DATA_LLM_API_UNSUB] = unsub
+    except Exception:
         _LOGGER.warning(
             "Could not register the HA-MCP LLM API; conversation agents will "
             "not see the toolset until the entry is reloaded",
             exc_info=True,
         )
         return
-    hass.data.setdefault(DOMAIN, {})[DATA_LLM_API_UNSUB] = unsub
     _LOGGER.info(
         "Registered the HA-MCP toolset as LLM API %r — select it in a "
         "conversation agent's settings to chat with it (text or voice)",
