@@ -27,7 +27,13 @@ on:
       - "scripts/build_mirror_readme.py"
       - ".github/integration-mirror-workflows/**"
   workflow_run:
-    workflows: ["SemVer Release"]
+    # Both stable-release paths must tag the mirror: a hotfix that bumps the
+    # component version otherwise leaves HACS users stuck on the old tag
+    # (the push-triggered snapshot copies code to the mirror's main but only
+    # this workflow_run leg creates the version tag). The tag step is
+    # idempotent (skips when the manifest version is already tagged), so a
+    # hotfix without a component change is a harmless no-op.
+    workflows: ["SemVer Release", "Hotfix Release"]
     types: [completed]
   workflow_dispatch:
 
