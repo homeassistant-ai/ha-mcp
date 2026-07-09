@@ -15,10 +15,19 @@ on:
 permissions:
   contents: read
 
-# Prevent overlapping runs if multiple tool PRs merge in quick succession
+# Shared group for every workflow that pushes to master (hotfix-release,
+# semver-release, addon-publish-dev): a doc-sync push landing while
+# semantic-release is mid-run aborts the release un-retryably ("Upstream
+# branch ... has changed"), so master writers must not overlap. This also
+# keeps sync runs from overlapping each other. cancel-in-progress must be
+# false: a running release must never be cancelled by a doc sync.
 concurrency:
-  group: sync-tool-docs
-  cancel-in-progress: true
+  group: master-write
+  cancel-in-progress: false
+  # queue: max keeps every queued run waiting FIFO. The default single-slot
+  # queue evicts the OLDER pending run when a new one queues, which could
+  # silently drop a queued release behind a bot push.
+  queue: max
 
 jobs:
   sync-tools-json:
@@ -62,18 +71,26 @@ jobs:
         git commit -m "chore(internal): sync tool docs after merge [skip ci]"
         # master can advance between this job's checkout and its push whenever
         # any unrelated PR merges in the same window, which rejects a bare push
-        # as a non-fast-forward (the concurrency group only serialises sync runs
-        # against each other, not against ordinary merges). Rebase onto the
-        # latest master and retry before giving up. cancel-in-progress guarantees
-        # no competing sync run, so the only thing to rebase over is unrelated
-        # commits that do not touch the generated files — never a conflict.
+        # as a non-fast-forward (the master-write concurrency group only
+        # serialises the workflows in the group, not ordinary merges). Rebase
+        # onto the latest master and retry before giving up. The group
+        # guarantees no competing sync run, so the only thing to rebase over
+        # is unrelated commits that do not touch the generated files — never
+        # a conflict.
         for attempt in 1 2 3 4 5; do
           if git push; then
             echo "Synced tool docs (attempt ${attempt})."
             exit 0
           fi
           echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
-          git pull --rebase origin master
+          # A conflicted/failed rebase leaves rebase-in-progress state and the
+          # remaining attempts would fail for a misleading reason — abort and
+          # surface the real error instead.
+          git pull --rebase origin master || {
+            git rebase --abort 2>/dev/null || true
+            echo "::error::Rebase onto origin/master failed; aborting retries."
+            exit 1
+          }
         done
         echo "::error::Could not push tool-doc sync after 5 attempts."
         exit 1

@@ -219,9 +219,6 @@ dev = [
 # Semantic versioning configuration
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-version_variables = [
-    "src/ha_mcp/__init__.py:__version__",
-]
 build_command = """
 pip install uv && uv lock
 git add uv.lock

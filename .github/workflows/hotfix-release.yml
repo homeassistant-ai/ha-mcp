@@ -7,6 +7,20 @@ on:
     types: [closed]
     branches: [master, main]
 
+# Serialize with every other workflow that pushes to master (sync-tool-docs,
+# addon-publish-dev, semver-release). semantic-release's internal push aborts
+# hard when origin/master moves mid-run ("Upstream branch ... has changed") and
+# that abort is not retryable from inside the action, so the only safe fix is
+# to keep master writers from overlapping. cancel-in-progress stays false: a
+# queued release must run, not be cancelled.
+concurrency:
+  group: master-write
+  cancel-in-progress: false
+  # queue: max keeps every queued run waiting FIFO. The default single-slot
+  # queue evicts the OLDER pending run when a new one queues, which could
+  # silently drop a queued release behind a bot push.
+  queue: max
+
 env:
   PYTHON_VERSION: "3.13"
 
@@ -28,46 +42,38 @@ jobs:
       issues: write
 
     steps:
-    - name: Checkout merged hotfix on master
+    - name: Checkout master tip
       uses: actions/checkout@v7
       with:
-        # Check out the merge commit so the workspace matches master's history;
-        # then attach to a local master branch below. python-semantic-release
-        # matches the active branch against [tool.semantic_release].branch
-        # in pyproject.toml — a detached HEAD checkout (e.g., of head.sha)
-        # fails silently with "Detached HEAD state cannot match any release
-        # groups; no release will be made", which is what broke PR #1090.
-        ref: ${{ github.event.pull_request.merge_commit_sha }}
+        # Check out master BY NAME, not the event's frozen merge_commit_sha:
+        # a named branch ref gives an attached local master branch, which
+        # python-semantic-release matches against [tool.semantic_release].branch
+        # (a detached HEAD checkout of a bare SHA "cannot match any release
+        # groups", which is what broke PR #1090). Using the live tip also folds
+        # in any [skip ci] bot commits that landed right after the merge and —
+        # unlike the pinned SHA — lets a re-run of a failed release recover
+        # instead of aborting forever on "Upstream branch ... has changed".
+        ref: master
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Attach to master branch locally
-      run: git checkout -B master HEAD
-
-    - name: Validate hotfix is based on stable
+    - name: Require stable tag exists
       run: |
-        # Get the stable tag (moving tag that points to latest stable)
-        if ! git rev-parse stable &>/dev/null; then
-          echo "::error::No 'stable' tag found. Cannot validate hotfix base."
+        # Hotfix ORIGIN (branch based on the stable tag, not master) is validated
+        # PRE-merge in pr-validate-hotfix.yml, which checks out the unmerged
+        # branch head. Doing it here is impossible: post-merge HEAD is master's
+        # tip, and because master is never rewritten, `stable` is ALWAYS an
+        # ancestor of it — so `merge-base --is-ancestor stable HEAD` can never
+        # fail. The former ancestor check here was therefore dead code. The one
+        # thing still worth guarding is that `stable` exists at all: a hotfix
+        # must have been based on it, and the release below repoints it. (This
+        # missing-tag guard is not redundant with pr-validate-hotfix.yml, which
+        # only warns-and-skips when the tag is absent.)
+        if ! git rev-parse -q --verify refs/tags/stable >/dev/null; then
+          echo "::error::No 'stable' tag found — a hotfix must be based on the stable release."
           exit 1
         fi
-
-        STABLE_COMMIT=$(git rev-parse stable)
-        HOTFIX_BASE=$(git merge-base $STABLE_COMMIT HEAD)
-
-        # The hotfix should be based on or after the stable tag
-        if git merge-base --is-ancestor $STABLE_COMMIT HEAD; then
-          echo "✓ Hotfix is based on stable tag"
-        else
-          # Check if stable is ancestor of hotfix base
-          if git merge-base --is-ancestor $HOTFIX_BASE $STABLE_COMMIT; then
-            echo "✓ Hotfix is based on a commit at or before stable"
-          else
-            echo "::error::Hotfix contains commits from master that are not in stable release"
-            echo "Hotfix must be branched from the 'stable' tag"
-            exit 1
-          fi
-        fi
+        echo "✓ stable tag present"
 
     - name: Run semantic-release
       id: semantic
@@ -111,7 +117,24 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add homeassistant-addon/CHANGELOG.md
         git diff --staged --quiet || git commit -m "chore(addon): sync changelog for Home Assistant add-on [skip ci]"
-        git push origin HEAD:master
+        # Master can advance between checkout and this push (bot commits from
+        # other workflows); retry with a rebase instead of failing the release.
+        # Mirrors the loop in sync-tool-docs.yml.
+        for attempt in 1 2 3 4 5; do
+          if git push origin HEAD:master; then
+            echo "Synced addon changelog (attempt ${attempt})."
+            exit 0
+          fi
+          echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
+          # Abort a conflicted rebase so later attempts fail for the real reason.
+          git pull --rebase origin master || {
+            git rebase --abort 2>/dev/null || true
+            echo "::error::Rebase onto origin/master failed; aborting retries."
+            exit 1
+          }
+        done
+        echo "::error::Could not push addon changelog sync after 5 attempts."
+        exit 1
 
     - name: Update stable git tag
       if: steps.semantic.outputs.released == 'true'
