@@ -101,7 +101,12 @@ jobs:
                 exit 0
               fi
               echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
-              git pull --rebase origin master
+              # Abort a conflicted rebase so later attempts fail for the real reason.
+              git pull --rebase origin master || {
+                git rebase --abort 2>/dev/null || true
+                echo "::error::Rebase onto origin/master failed; aborting retries."
+                exit 1
+              }
             done
             echo "::error::Could not push addon config.yaml update after 5 attempts."
             exit 1

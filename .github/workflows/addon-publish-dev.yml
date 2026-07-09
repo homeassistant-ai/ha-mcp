@@ -25,6 +25,10 @@ permissions:
 concurrency:
   group: master-write
   cancel-in-progress: false
+  # queue: max keeps every queued run waiting FIFO. The default single-slot
+  # queue evicts the OLDER pending run when a new one queues, which could
+  # silently drop a queued release behind a bot push.
+  queue: max
 
 jobs:
   # Skip if commit is from semantic-release
