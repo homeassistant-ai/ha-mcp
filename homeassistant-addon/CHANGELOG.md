@@ -3,6 +3,36 @@
 <!-- version list -->
 
 
+## v7.12.0 (2026-07-09)
+
+### Added
+
+- Dev mode tools, embedded server update fixes, and version diagnosability
+  ([#1780](https://github.com/homeassistant-ai/ha-mcp/pull/1780))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 7.11.0.dev1828 [skip ci]
+  ([`c945d8a`](https://github.com/homeassistant-ai/ha-mcp/commit/c945d8a3b75ccc960eeee32450f8cc7e018262eb))
+- **addon**: Publish dev addon version 7.11.0.dev1825 [skip ci]
+  ([`ff1dcbf`](https://github.com/homeassistant-ai/ha-mcp/commit/ff1dcbf3c8b95c605c18d504b07fe676d5603786))
+- Sync tool docs after merge [skip ci]
+  ([`9c63441`](https://github.com/homeassistant-ai/ha-mcp/commit/9c63441645494114f0f615dd3b05f9f2e62ae5db))
+- **addon**: Publish version 7.11.0 [skip ci]
+  ([`2913104`](https://github.com/homeassistant-ai/ha-mcp/commit/2913104bf706adccc53c06a2c31e82deb82479bc))
+
+### Continuous Integration
+
+- Fix release push race and hotfix mirror tagging
+  ([#1781](https://github.com/homeassistant-ai/ha-mcp/pull/1781))
+</details>
+
+
 ## v7.11.0 (2026-07-08)
 
 ### Added
