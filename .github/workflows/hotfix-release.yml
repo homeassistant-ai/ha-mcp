@@ -57,30 +57,23 @@ jobs:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Validate hotfix is based on stable
+    - name: Require stable tag exists
       run: |
-        # Get the stable tag (moving tag that points to latest stable)
-        if ! git rev-parse stable &>/dev/null; then
-          echo "::error::No 'stable' tag found. Cannot validate hotfix base."
+        # Hotfix ORIGIN (branch based on the stable tag, not master) is validated
+        # PRE-merge in pr-validate-hotfix.yml, which checks out the unmerged
+        # branch head. Doing it here is impossible: post-merge HEAD is master's
+        # tip, and because master is never rewritten, `stable` is ALWAYS an
+        # ancestor of it — so `merge-base --is-ancestor stable HEAD` can never
+        # fail. The former ancestor check here was therefore dead code. The one
+        # thing still worth guarding is that `stable` exists at all: a hotfix
+        # must have been based on it, and the release below repoints it. (This
+        # missing-tag guard is not redundant with pr-validate-hotfix.yml, which
+        # only warns-and-skips when the tag is absent.)
+        if ! git rev-parse -q --verify refs/tags/stable >/dev/null; then
+          echo "::error::No 'stable' tag found — a hotfix must be based on the stable release."
           exit 1
         fi
-
-        STABLE_COMMIT=$(git rev-parse stable)
-        HOTFIX_BASE=$(git merge-base $STABLE_COMMIT HEAD)
-
-        # The hotfix should be based on or after the stable tag
-        if git merge-base --is-ancestor $STABLE_COMMIT HEAD; then
-          echo "✓ Hotfix is based on stable tag"
-        else
-          # Check if stable is ancestor of hotfix base
-          if git merge-base --is-ancestor $HOTFIX_BASE $STABLE_COMMIT; then
-            echo "✓ Hotfix is based on a commit at or before stable"
-          else
-            echo "::error::Hotfix contains commits from master that are not in stable release"
-            echo "Hotfix must be branched from the 'stable' tag"
-            exit 1
-          fi
-        fi
+        echo "✓ stable tag present"
 
     - name: Run semantic-release
       id: semantic
