@@ -37,8 +37,27 @@ on:
     types: [completed]
   workflow_dispatch:
 
+# Serialize mirror syncs. A real hotfix that touches the component triggers
+# BOTH legs — the master push (paths) and the workflow_run — nearly at once,
+# and both clone the mirror and push to main; without serialization the second
+# push is a non-fast-forward rejection that fails the job before it can tag.
+# queue: max keeps a queued release-tag run from being evicted by a later push
+# run (requires cancel-in-progress: false).
+concurrency:
+  group: mirror-sync
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   sync:
+    # workflow_run fires for EVERY completed run of the listed workflows —
+    # including the SKIPPED Hotfix Release that every non-hotfix PR merge
+    # produces (the release job is `if`-guarded) and odd-week / no-change
+    # SemVer runs. Only proceed for a SUCCESSFUL release run; push and manual
+    # dispatch (where workflow_run is absent) always run.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
