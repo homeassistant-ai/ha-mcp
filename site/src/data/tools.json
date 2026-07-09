@@ -874,6 +874,66 @@
     "source_file": "tools_resources.py"
   },
   {
+    "name": "ha_dev_manage_server",
+    "title": "Manage MCP Server (dev)",
+    "description": "Manage the running ha-mcp server itself (developer mode).\n\nWhen NOT to use: to restart Home Assistant use ha_restart; to\nupdate HA add-ons or HACS packages use ha_manage_addon /\nha_manage_hacs.\n\nWhen to use: development/testing workflows — inspecting how this\nserver is deployed, switching the in-process (custom component)\nserver to another release channel or an arbitrary pip spec such\nas a PR tarball, and restarting the server so config or code\nchanges take effect.\n\nCaveats: restart interrupts this MCP connection in embedded and\nadd-on deployments (the reply arrives just before the server\ngoes down); update_source only self-interrupts in embedded mode\n— elsewhere it reloads the separate in-process server entry\nwithout dropping this connection. Reinstalls can take minutes.\nupdate_source requires the ha_mcp_tools component's in-process\nserver entry; restart supports embedded and add-on deployments\nonly (standalone processes must be restarted externally).\n\nEXAMPLES:\nha_dev_manage_server(\"info\")\nha_dev_manage_server(\"update_source\", channel=\"dev\")\nha_dev_manage_server(\"update_source\", pip_spec=\"https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz\")\nha_dev_manage_server(\"restart\")",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "type": "Annotated[Literal['info', 'update_source', 'restart'], Field(description='info: deployment/version report; update_source: point the in-process server at a channel or pip spec and reinstall; restart: restart this server')]"
+        },
+        "channel": {
+          "type": "Annotated[str | None, Field(default=None, description=\"Release channel for update_source: 'stable' or 'dev'\")]",
+          "default": null
+        },
+        "pip_spec": {
+          "type": "Annotated[str | None, Field(default=None, description='Explicit pip requirement for update_source — a version pin (ha-mcp==7.9.0) or a GitHub tarball URL such as https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/<PR>/head.tar.gz. Empty string clears the override.')]",
+          "default": null
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true
+    },
+    "tags": [
+      "Developer"
+    ],
+    "source_file": "tools_dev.py"
+  },
+  {
+    "name": "ha_dev_manage_settings",
+    "title": "Manage Server Settings (dev)",
+    "description": "Manage ha-mcp server settings directly (developer mode).\n\nWhen NOT to use: for HA entity/automation configuration use the\nha_config_* tools; for enabling/disabling individual MCP tools\nuse the web settings UI (Tools tab).\n\nWhen to use: reading or changing the server's own settings (the\nsame matrix as the web UI's Server Settings tab) during\ndevelopment/testing — feature flags, advanced fields, and their\nenv/file/addon origins.\n\nCaveats: changed values persist to the server's override file\n(or the add-on options via Supervisor) but most settings only\ntake effect after a server restart (ha_dev_manage_server\naction=\"restart\").\nEnv-pinned settings are read-only until the env var is unset.\nThis can flip security-sensitive flags; treat with the same\ncare as editing the web UI.\n\nEXAMPLES:\nha_dev_manage_settings(\"list\")\nha_dev_manage_settings(\"set\", setting=\"log_level\", value=\"DEBUG\")\nha_dev_manage_settings(\"reset\", setting=\"log_level\")",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "type": "Annotated[Literal['list', 'set', 'reset'], Field(description='list all settings, set one value, or reset one override')]"
+        },
+        "setting": {
+          "type": "Annotated[str | None, Field(default=None, description='Setting name (required for set/reset)')]",
+          "default": null
+        },
+        "value": {
+          "type": "Annotated[bool | int | float | str | None, Field(default=None, description='New value (required for set)')]",
+          "default": null
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "annotations": {
+      "destructiveHint": true
+    },
+    "tags": [
+      "Developer"
+    ],
+    "source_file": "tools_dev.py"
+  },
+  {
     "name": "ha_get_device",
     "title": "Get Device (incl. Zigbee/ZHA/Z2M, Z-Wave and Matter)",
     "description": "Get device information with pagination, including Zigbee (ZHA/Z2M) and Z-Wave JS devices.\n\nWithout device_id/entity_id: Lists devices with optional filters and pagination.\nWith device_id or entity_id: Returns full detail for that specific device.\n\n**List devices (paginated):**\n- First page: ha_get_device()\n- Next page: ha_get_device(offset=50)\n- By area: ha_get_device(area_id=\"living_room\")\n- By integration: ha_get_device(integration=\"zigbee2mqtt\")\n- Full details in list: ha_get_device(detail_level=\"full\", limit=10)\n\n**Single device lookup (always full detail):**\n- By device_id: ha_get_device(device_id=\"abc123\")\n- By entity_id: ha_get_device(entity_id=\"light.living_room\")\n\n**Zigbee:** integration=\"zha\" or \"zigbee2mqtt\". Returns ieee_address, radio metrics.\n**Z-Wave:** integration=\"zwave_js\". Returns node_id, node_status.\n**Matter:** integration=\"matter\". Returns node_diagnostics (network type,\nreachability, IPs, fabrics). For management use ha_manage_radio.",
