@@ -17,6 +17,16 @@ on:
 permissions:
   contents: read
 
+# Serialize with every other workflow that pushes to master (sync-tool-docs,
+# addon-publish-dev, hotfix-release). semantic-release's internal push aborts
+# hard when origin/master moves mid-run ("Upstream branch ... has changed") and
+# that abort is not retryable from inside the action, so the only safe fix is
+# to keep master writers from overlapping. cancel-in-progress stays false: a
+# queued release must run, not be cancelled.
+concurrency:
+  group: master-write
+  cancel-in-progress: false
+
 env:
   PYTHON_VERSION: "3.13"
 
@@ -177,7 +187,19 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add homeassistant-addon/CHANGELOG.md
         git diff --staged --quiet || git commit -m "chore(addon): sync changelog for Home Assistant add-on [skip ci]"
-        git push
+        # Master can advance between checkout and this push (bot commits from
+        # other workflows); retry with a rebase instead of failing the release.
+        # Mirrors the loop in sync-tool-docs.yml.
+        for attempt in 1 2 3 4 5; do
+          if git push; then
+            echo "Synced addon changelog (attempt ${attempt})."
+            exit 0
+          fi
+          echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
+          git pull --rebase origin master
+        done
+        echo "::error::Could not push addon changelog sync after 5 attempts."
+        exit 1
 
 
     - name: Update stable git tag

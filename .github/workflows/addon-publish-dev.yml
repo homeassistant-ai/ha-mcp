@@ -18,6 +18,14 @@ env:
 permissions:
   contents: read
 
+# Serialize with every other workflow that pushes to master (this one pushes
+# the dev add-on config bump via _update-addon-config.yml): a push landing
+# while a release workflow's semantic-release is mid-run aborts that release
+# un-retryably ("Upstream branch ... has changed").
+concurrency:
+  group: master-write
+  cancel-in-progress: false
+
 jobs:
   # Skip if commit is from semantic-release
   check-skip:

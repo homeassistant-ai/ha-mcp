@@ -7,6 +7,16 @@ on:
     types: [closed]
     branches: [master, main]
 
+# Serialize with every other workflow that pushes to master (sync-tool-docs,
+# addon-publish-dev, semver-release). semantic-release's internal push aborts
+# hard when origin/master moves mid-run ("Upstream branch ... has changed") and
+# that abort is not retryable from inside the action, so the only safe fix is
+# to keep master writers from overlapping. cancel-in-progress stays false: a
+# queued release must run, not be cancelled.
+concurrency:
+  group: master-write
+  cancel-in-progress: false
+
 env:
   PYTHON_VERSION: "3.13"
 
@@ -28,21 +38,20 @@ jobs:
       issues: write
 
     steps:
-    - name: Checkout merged hotfix on master
+    - name: Checkout master tip
       uses: actions/checkout@v7
       with:
-        # Check out the merge commit so the workspace matches master's history;
-        # then attach to a local master branch below. python-semantic-release
-        # matches the active branch against [tool.semantic_release].branch
-        # in pyproject.toml — a detached HEAD checkout (e.g., of head.sha)
-        # fails silently with "Detached HEAD state cannot match any release
-        # groups; no release will be made", which is what broke PR #1090.
-        ref: ${{ github.event.pull_request.merge_commit_sha }}
+        # Check out master BY NAME, not the event's frozen merge_commit_sha:
+        # a named branch ref gives an attached local master branch, which
+        # python-semantic-release matches against [tool.semantic_release].branch
+        # (a detached HEAD checkout of a bare SHA "cannot match any release
+        # groups", which is what broke PR #1090). Using the live tip also folds
+        # in any [skip ci] bot commits that landed right after the merge and —
+        # unlike the pinned SHA — lets a re-run of a failed release recover
+        # instead of aborting forever on "Upstream branch ... has changed".
+        ref: master
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Attach to master branch locally
-      run: git checkout -B master HEAD
 
     - name: Validate hotfix is based on stable
       run: |
@@ -111,7 +120,19 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add homeassistant-addon/CHANGELOG.md
         git diff --staged --quiet || git commit -m "chore(addon): sync changelog for Home Assistant add-on [skip ci]"
-        git push origin HEAD:master
+        # Master can advance between checkout and this push (bot commits from
+        # other workflows); retry with a rebase instead of failing the release.
+        # Mirrors the loop in sync-tool-docs.yml.
+        for attempt in 1 2 3 4 5; do
+          if git push origin HEAD:master; then
+            echo "Synced addon changelog (attempt ${attempt})."
+            exit 0
+          fi
+          echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
+          git pull --rebase origin master
+        done
+        echo "::error::Could not push addon changelog sync after 5 attempts."
+        exit 1
 
     - name: Update stable git tag
       if: steps.semantic.outputs.released == 'true'

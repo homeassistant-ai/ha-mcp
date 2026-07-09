@@ -92,6 +92,17 @@ jobs:
             echo "No changes to config.yaml, skipping commit"
           else
             git commit -m "chore(addon): ${{ inputs.commit_message_prefix }} $VERSION [skip ci]"
-            git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:master
-            echo "✓ Updated addon config.yaml to $VERSION"
+            # Master can advance between this job's checkout and its push
+            # (bot commits from other workflows); retry with a rebase instead
+            # of failing the publish. Mirrors the loop in sync-tool-docs.yml.
+            for attempt in 1 2 3 4 5; do
+              if git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:master; then
+                echo "✓ Updated addon config.yaml to $VERSION (attempt ${attempt})"
+                exit 0
+              fi
+              echo "Push rejected on attempt ${attempt}; rebasing onto origin/master and retrying."
+              git pull --rebase origin master
+            done
+            echo "::error::Could not push addon config.yaml update after 5 attempts."
+            exit 1
           fi

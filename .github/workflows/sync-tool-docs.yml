@@ -15,10 +15,17 @@ on:
 permissions:
   contents: read
 
-# Prevent overlapping runs if multiple tool PRs merge in quick succession
+# Shared group for every workflow that pushes to master (hotfix-release,
+# semver-release, addon-publish-dev): a doc-sync push landing while
+# semantic-release is mid-run aborts the release un-retryably ("Upstream
+# branch ... has changed"), so master writers must not overlap. This also
+# keeps sync runs from overlapping each other. cancel-in-progress must be
+# false — cancelling a queued RELEASE to run a doc sync would drop the
+# release; a dropped doc sync self-heals on the next merge or via
+# workflow_dispatch, so it queues instead.
 concurrency:
-  group: sync-tool-docs
-  cancel-in-progress: true
+  group: master-write
+  cancel-in-progress: false
 
 jobs:
   sync-tools-json:
