@@ -562,10 +562,6 @@ class ServiceTools:
             self._raise_unexpected_call_service_error(
                 error, domain=domain, service=service, entity_id=entity_id
             )
-            return (
-                None  # unreachable: _raise_unexpected_call_service_error always raises
-            )
-        return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
         name="ha_get_operation_status",
