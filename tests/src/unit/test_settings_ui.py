@@ -3215,12 +3215,16 @@ class TestBetaMasterGateInSave:
 
     @pytest.mark.asyncio
     async def test_save_features_rejects_beta_subflag_when_master_off(
-        self, monkeypatch
+        self, monkeypatch, tmp_path
     ):
         """POST {enable_yaml_config_editing: true} while master is off → 409."""
         from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
         from ha_mcp.settings_ui import build_settings_handlers
+        from ha_mcp.utils.data_paths import get_data_dir
 
+        get_data_dir.cache_clear()
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        get_data_dir.cache_clear()
         for _fname, ename, _ftype in FEATURE_FLAG_FIELDS:
             monkeypatch.delenv(ename, raising=False)
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
