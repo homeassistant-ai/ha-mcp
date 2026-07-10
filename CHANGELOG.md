@@ -3,6 +3,30 @@
 <!-- version list -->
 
 
+## v7.12.3 (2026-07-10)
+
+### Fixed
+
+- Sidebar settings panel 503s forever when webhook access is disabled
+  ([#1806](https://github.com/homeassistant-ai/ha-mcp/pull/1806))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish version 7.12.2 [skip ci]
+  ([`51f4ae5`](https://github.com/homeassistant-ai/ha-mcp/commit/51f4ae5ffc6d35c9bcfa92b20965b533c064c78e))
+
+### Continuous Integration
+
+- Gate the mirror version tag on the release job, not the whole run
+  ([#1805](https://github.com/homeassistant-ai/ha-mcp/pull/1805))
+</details>
+
+
 ## v7.12.2 (2026-07-10)
 
 ### Fixed
