@@ -342,9 +342,12 @@ class UtilityTools:
             response = [
                 e
                 for e in response
-                if search_lower in str(e.get("name", "")).lower()
-                or search_lower in str(e.get("message", "")).lower()
-                or search_lower in str(e.get("entity_id", "")).lower()
+                if isinstance(e, dict)
+                and (
+                    search_lower in str(e.get("name", "")).lower()
+                    or search_lower in str(e.get("message", "")).lower()
+                    or search_lower in str(e.get("entity_id", "")).lower()
+                )
             ]
             filters_applied["search"] = search
         return response, filters_applied

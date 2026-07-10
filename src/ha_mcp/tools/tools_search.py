@@ -716,7 +716,7 @@ def _match_exact_search_entity(
     is_hidden = entity_id in hidden_ids
     if is_hidden and not include_hidden:
         return None
-    attributes = entity.get("attributes", {})
+    attributes = entity.get("attributes") or {}
     friendly_name = attributes.get("friendly_name", entity_id)
     domain = entity_id.split(".")[0] if "." in entity_id else ""
 
