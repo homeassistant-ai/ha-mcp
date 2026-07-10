@@ -17,7 +17,7 @@ from ha_mcp.tools.tools_filesystem import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_settings_singleton():
+def _reset_settings_singleton(tmp_path, monkeypatch):
     """Reset the cached ``Settings`` between tests.
 
     ``is_filesystem_tools_enabled()`` reads through
@@ -26,10 +26,20 @@ def _reset_settings_singleton():
     via ``patch.dict(os.environ, ...)`` need the cache invalidated
     or every test after the first sees a stale value frozen at
     import time.
+
+    Also isolates ``get_data_dir`` to a tmp dir: ``get_global_settings()``
+    reads a real ``feature_flags.json`` under the resolved data dir (e.g.
+    ``~/.ha-mcp`` on a dev machine), so without this a locally-toggled beta
+    flag silently overrides what these tests expect to see.
     """
+    from ha_mcp.utils.data_paths import get_data_dir
+
+    get_data_dir.cache_clear()
+    monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
     _reset_global_settings()
     yield
     _reset_global_settings()
+    get_data_dir.cache_clear()
 
 
 class TestFeatureFlag:

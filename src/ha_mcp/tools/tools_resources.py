@@ -10,7 +10,7 @@ See: https://github.com/homeassistant-ai/ha-mcp/issues/266
 
 import base64
 import logging
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -379,6 +379,46 @@ class ResourceTools:
             return await self._set_inline_resource(content, resource_type, resource_id)
         return await self._set_url_resource(url, resource_type, resource_id)
 
+    def _raise_ha_config_yaml_misroute(
+        self, detected_yaml: str, resource_type: str
+    ) -> NoReturn:
+        """Raise the structured error for HA-config YAML misrouted as inline resource content."""
+        right_tool = _HA_CONFIG_YAML_MARKERS[detected_yaml]
+        suggestions = ["This tool stores Lovelace JavaScript/CSS resources only"]
+        if right_tool:
+            suggestions.insert(
+                0,
+                f"For `{detected_yaml}:` configuration, use {right_tool} instead",
+            )
+        elif detected_yaml == "scene":
+            suggestions.insert(
+                0,
+                "Scene configuration tools are tracked in #995; "
+                "until they ship, scenes can only be created via the HA UI",
+            )
+        else:
+            suggestions.insert(
+                0,
+                f"No direct tool exists for `{detected_yaml}:` config; "
+                "configure it via the HA UI or YAML packages",
+            )
+        raise_tool_error(
+            create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message=(
+                    f"Content starts with HA-configuration YAML "
+                    f"(`{detected_yaml}:`) — this tool only accepts Lovelace "
+                    f"JavaScript or CSS resources, not Home Assistant config "
+                    f"(see issue #1072)."
+                ),
+                context={
+                    "detected_marker": f"{detected_yaml}:",
+                    "resource_type": resource_type,
+                },
+                suggestions=suggestions,
+            )
+        )
+
     async def _set_inline_resource(
         self,
         content: str,
@@ -412,41 +452,7 @@ class ResourceTools:
         # module, creating orphaned, unreachable entities. See #1072.
         detected_yaml = _detect_ha_config_yaml(content)
         if detected_yaml is not None:
-            right_tool = _HA_CONFIG_YAML_MARKERS[detected_yaml]
-            suggestions = ["This tool stores Lovelace JavaScript/CSS resources only"]
-            if right_tool:
-                suggestions.insert(
-                    0,
-                    f"For `{detected_yaml}:` configuration, use {right_tool} instead",
-                )
-            elif detected_yaml == "scene":
-                suggestions.insert(
-                    0,
-                    "Scene configuration tools are tracked in #995; "
-                    "until they ship, scenes can only be created via the HA UI",
-                )
-            else:
-                suggestions.insert(
-                    0,
-                    f"No direct tool exists for `{detected_yaml}:` config; "
-                    "configure it via the HA UI or YAML packages",
-                )
-            raise_tool_error(
-                create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=(
-                        f"Content starts with HA-configuration YAML "
-                        f"(`{detected_yaml}:`) — this tool only accepts Lovelace "
-                        f"JavaScript or CSS resources, not Home Assistant config "
-                        f"(see issue #1072)."
-                    ),
-                    context={
-                        "detected_marker": f"{detected_yaml}:",
-                        "resource_type": resource_type,
-                    },
-                    suggestions=suggestions,
-                )
-            )
+            self._raise_ha_config_yaml_misroute(detected_yaml, resource_type)
 
         content_bytes = content.encode("utf-8")
         content_size = len(content_bytes)

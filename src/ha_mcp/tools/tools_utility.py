@@ -9,7 +9,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NoReturn
 
 from fastmcp.exceptions import ToolError
 from pydantic import Field
@@ -327,6 +327,83 @@ class UtilityTools:
             f"To get the next page, use: ha_get_logs({param_str})"
         )
 
+    @staticmethod
+    def _filter_logbook_by_search(
+        response: Any, search: str | None
+    ) -> tuple[Any, dict[str, str]]:
+        """Filter logbook entries by search term across name/message/entity_id.
+
+        Returns the (possibly filtered) response and a filters_applied dict
+        recording which filters were used.
+        """
+        filters_applied: dict[str, str] = {}
+        if search and isinstance(response, list):
+            search_lower = search.lower()
+            response = [
+                e
+                for e in response
+                if isinstance(e, dict)
+                and (
+                    search_lower in str(e.get("name", "")).lower()
+                    or search_lower in str(e.get("message", "")).lower()
+                    or search_lower in str(e.get("entity_id", "")).lower()
+                )
+            ]
+            filters_applied["search"] = search
+        return response, filters_applied
+
+    @staticmethod
+    def _paginate_logbook_entries(
+        response: Any,
+        offset_int: int,
+        effective_limit: int,
+        order: Literal["newest", "oldest"],
+    ) -> tuple[Any, int, bool]:
+        """Slice logbook entries into the requested page.
+
+        HA's /logbook returns entries oldest-first. Takes a window from
+        the end for newest-first (default), or from the start for
+        oldest-first, with offset paging deeper in the chosen order.
+        """
+        total_entries = len(response) if isinstance(response, list) else 1
+
+        if isinstance(response, list):
+            if order == "newest":
+                end = total_entries - offset_int
+                start = max(end - effective_limit, 0)
+                paginated_entries = (
+                    list(reversed(response[start:end])) if end > 0 else []
+                )
+            else:
+                paginated_entries = response[offset_int : offset_int + effective_limit]
+            has_more = offset_int + len(paginated_entries) < total_entries
+        else:
+            paginated_entries = response
+            has_more = False
+
+        return paginated_entries, total_entries, has_more
+
+    @staticmethod
+    def _logbook_error_suggestions(error_str: str) -> list[str]:
+        """Build remediation suggestions for a logbook fetch failure.
+
+        Adds server-crash-specific guidance when the error indicates a 500
+        (heavy query causing HA to fail) on top of the general tips.
+        """
+        if "500" in error_str:
+            return [
+                "The query returned too many results causing a server error (500).",
+                "This often happens with very active entities or long time periods.",
+                "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
+                "Add a specific 'entity_id' filter to narrow down results",
+                "If debugging an automation, filter by that automation's entity_id",
+                "Use ha_bug_report tool to check Home Assistant logs for crash details",
+            ]
+        return [
+            "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
+            "Add a specific 'entity_id' filter to narrow down results",
+        ]
+
     async def _get_logbook(
         self,
         hours_back: int = 1,
@@ -356,38 +433,11 @@ class UtilityTools:
                 entity_id=entity_id, start_time=start_timestamp, end_time=end_time
             )
 
-            filters_applied: dict[str, str] = {}
-            if search and isinstance(response, list):
-                search_lower = search.lower()
-                response = [
-                    e
-                    for e in response
-                    if search_lower in str(e.get("name", "")).lower()
-                    or search_lower in str(e.get("message", "")).lower()
-                    or search_lower in str(e.get("entity_id", "")).lower()
-                ]
-                filters_applied["search"] = search
+            response, filters_applied = self._filter_logbook_by_search(response, search)
 
-            total_entries = len(response) if isinstance(response, list) else 1
-
-            if isinstance(response, list):
-                # HA's /logbook returns entries oldest-first. Take a window from
-                # the end for newest-first (default), or from the start for
-                # oldest-first, with offset paging deeper in the chosen order.
-                if order == "newest":
-                    end = total_entries - offset_int
-                    start = max(end - effective_limit, 0)
-                    paginated_entries = (
-                        list(reversed(response[start:end])) if end > 0 else []
-                    )
-                else:
-                    paginated_entries = response[
-                        offset_int : offset_int + effective_limit
-                    ]
-                has_more = offset_int + len(paginated_entries) < total_entries
-            else:
-                paginated_entries = response
-                has_more = False
+            paginated_entries, total_entries, has_more = self._paginate_logbook_entries(
+                response, offset_int, effective_limit, order
+            )
 
             # In compact mode, strip entries to essential fields only.
             # This prevents full attribute dictionaries from exhausting
@@ -433,29 +483,12 @@ class UtilityTools:
         except ToolError:
             raise
         except Exception as e:
-            error_str = str(e)
-            suggestions = [
-                "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
-                "Add a specific 'entity_id' filter to narrow down results",
-            ]
-
-            # Detect 500 errors (server crash from heavy query)
-            if "500" in error_str:
-                suggestions = [
-                    "The query returned too many results causing a server error (500).",
-                    "This often happens with very active entities or long time periods.",
-                    "Try reducing 'hours_back' parameter (e.g., from 24 to 1 hour)",
-                    "Add a specific 'entity_id' filter to narrow down results",
-                    "If debugging an automation, filter by that automation's entity_id",
-                    "Use ha_bug_report tool to check Home Assistant logs for crash details",
-                ]
-
             exception_to_structured_error(
                 e,
                 context={
                     "period": f"{hours_back_int} hours back from {end_dt.isoformat()}",
                 },
-                suggestions=suggestions,
+                suggestions=self._logbook_error_suggestions(str(e)),
             )
             raise  # unreachable: exception_to_structured_error always raises
 
@@ -884,6 +917,60 @@ class UtilityTools:
             "Re-create the LLAT if it has expired or been revoked",
         ]
 
+    def _handle_system_service_api_error(
+        self, e: HomeAssistantAPIError, service: str
+    ) -> NoReturn:
+        """Raise a structured error for a Supervisor per-service-logs failure.
+
+        Branches on HTTP status: 403 (role/permission, addon vs. non-addon
+        remediation differs), 404 (service not exposed on this HA OS
+        version), else falls through to a generic Supervisor-error message.
+        """
+        status = getattr(e, "status_code", None)
+        if status == 403:
+            # In-addon: Supervisor returns 403 when the addon's hassio_role
+            # is below 'manager'. Non-addon: HA Core's hassio proxy returns
+            # 403 when the LLA's user lacks admin — completely different
+            # remediation. Branch on the gate accordingly.
+            if is_running_in_addon():
+                suggestions = [
+                    "Addon's hassio_role must be 'manager' or higher to "
+                    + "read /<service>/logs",
+                    "Verify the addon was reinstalled after the role bump "
+                    + "took effect",
+                ]
+            else:
+                suggestions = [
+                    "The Long-Lived Access Token must belong to a user "
+                    + "with admin privileges",
+                    "Generate a new LLAT under an admin account and set "
+                    + "HOMEASSISTANT_TOKEN to it",
+                ]
+            exception_to_structured_error(
+                e,
+                context={"source": "system_service", "slug": service},
+                suggestions=suggestions,
+            )
+        if status == 404:
+            exception_to_structured_error(
+                e,
+                context={"source": "system_service", "slug": service},
+                suggestions=[
+                    f"Service '{service}' not found at "
+                    f"http://supervisor/{service}/logs — Supervisor may "
+                    "not expose it on this HA OS version",
+                    f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}",
+                ],
+            )
+        exception_to_structured_error(
+            e,
+            context={"source": "system_service", "slug": service},
+            suggestions=[
+                f"Supervisor returned an error for /{service}/logs",
+                "Ensure Supervisor is available (HA OS or Supervised install)",
+            ],
+        )
+
     async def _get_system_service_log(
         self,
         service: str,
@@ -965,50 +1052,7 @@ class UtilityTools:
                 suggestions=self._addon_auth_error_suggestions(),
             )
         except HomeAssistantAPIError as e:
-            status = getattr(e, "status_code", None)
-            if status == 403:
-                # In-addon: Supervisor returns 403 when the addon's hassio_role
-                # is below 'manager'. Non-addon: HA Core's hassio proxy returns
-                # 403 when the LLA's user lacks admin — completely different
-                # remediation. Branch on the gate accordingly.
-                if is_running_in_addon():
-                    suggestions = [
-                        "Addon's hassio_role must be 'manager' or higher to "
-                        + "read /<service>/logs",
-                        "Verify the addon was reinstalled after the role bump "
-                        + "took effect",
-                    ]
-                else:
-                    suggestions = [
-                        "The Long-Lived Access Token must belong to a user "
-                        + "with admin privileges",
-                        "Generate a new LLAT under an admin account and set "
-                        + "HOMEASSISTANT_TOKEN to it",
-                    ]
-                exception_to_structured_error(
-                    e,
-                    context={"source": "system_service", "slug": service},
-                    suggestions=suggestions,
-                )
-            if status == 404:
-                exception_to_structured_error(
-                    e,
-                    context={"source": "system_service", "slug": service},
-                    suggestions=[
-                        f"Service '{service}' not found at "
-                        f"http://supervisor/{service}/logs — Supervisor may "
-                        "not expose it on this HA OS version",
-                        f"Allowed services: {', '.join(sorted(SYSTEM_SERVICE_SLUGS))}",
-                    ],
-                )
-            exception_to_structured_error(
-                e,
-                context={"source": "system_service", "slug": service},
-                suggestions=[
-                    f"Supervisor returned an error for /{service}/logs",
-                    "Ensure Supervisor is available (HA OS or Supervised install)",
-                ],
-            )
+            self._handle_system_service_api_error(e, service)
         except (
             HomeAssistantConnectionError,
             TimeoutError,

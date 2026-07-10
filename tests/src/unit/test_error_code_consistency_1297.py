@@ -422,23 +422,9 @@ class TestDeleteDashboardNotFoundSurfacesAvailableIds:
 
     @pytest.fixture
     def delete_tool(self, mock_client):
-        from ha_mcp.tools.tools_config_dashboards import (
-            register_config_dashboard_tools,
-        )
+        from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
-        mcp = MagicMock()
-        registered: dict[str, Any] = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                registered[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        register_config_dashboard_tools(mcp, mock_client)
-        return registered["ha_config_delete_dashboard"]
+        return DashboardConfigTools(mock_client).ha_config_delete_dashboard
 
     async def test_missing_dashboard_surfaces_available_dashboard_ids(
         self, delete_tool, mock_client

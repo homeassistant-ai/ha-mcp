@@ -159,6 +159,83 @@ class McpComponentTools:
         return result
 
     @staticmethod
+    async def _resolve_repo_id_with_retry(
+        ws_client: Any, existing_repo: dict[str, Any]
+    ) -> str:
+        """Resolve the repo ID, re-adding once if the first registration wait times out.
+
+        A freshly-added repo can miss the first registration budget on a
+        loaded runner or slow GitHub; on that timeout, re-add to re-nudge
+        HACS and wait once more before surfacing the failure. Best-effort: a
+        genuinely stuck add still fails on the retry. A repo that already had
+        an ID is a real failure, not a slow add, so it is re-raised
+        immediately.
+        """
+        try:
+            return await McpComponentTools._resolve_repo_id(ws_client, existing_repo)
+        except ToolError:
+            if existing_repo.get("id"):
+                raise
+            logger.warning(
+                "HACS repo registration timed out; re-adding %s and retrying once",
+                MCP_TOOLS_REPO,
+            )
+            await McpComponentTools._add_repo_to_hacs(ws_client)
+            return await McpComponentTools._resolve_repo_id(ws_client, None)
+
+    @staticmethod
+    async def _download_component_with_retry(
+        ws_client: Any, repo_id: str
+    ) -> dict[str, Any]:
+        """Download the component via HACS, retrying transient failures with backoff.
+
+        HACS' download often returns a generic "Command failed: Unknown
+        error" on transient GitHub hiccups (rate-limit, tarball stream
+        interruption). Retry the download with exponential backoff so a
+        one-shot transient doesn't surface as an installation failure to the
+        caller. ``send_command`` raises ``HomeAssistantCommandError`` on
+        ``success: False`` responses, so the retry catches that specific
+        class -- programming bugs / connection errors propagate normally.
+        """
+        logger.info(f"Installing {MCP_TOOLS_REPO} (ID: {repo_id})")
+        max_attempts = 3
+        backoff_seconds = 2.0
+        last_error: HomeAssistantCommandError | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                download_response: dict[str, Any] = await ws_client.send_command(
+                    "hacs/repository/download",
+                    repository=repo_id,
+                )
+                return download_response
+            except HomeAssistantCommandError as e:
+                last_error = e
+                if attempt < max_attempts:
+                    wait_for = backoff_seconds * (2 ** (attempt - 1))
+                    logger.warning(
+                        "hacs/repository/download attempt %d/%d failed (%s); "
+                        "retrying in %.1fs",
+                        attempt,
+                        max_attempts,
+                        e,
+                        wait_for,
+                    )
+                    await asyncio.sleep(wait_for)
+
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to download repository after {max_attempts} "
+                f"attempts: {last_error}",
+                suggestions=[
+                    "Check HACS logs for errors",
+                    "Verify GitHub is accessible",
+                    "HACS may be rate-limited; wait a minute and retry",
+                ],
+            )
+        )
+
+    @staticmethod
     def _handle_restart(result: dict[str, Any], restart_error: Exception) -> None:
         """Handle restart errors, distinguishing expected connection drops from real failures."""
         if any(
@@ -254,73 +331,9 @@ class McpComponentTools:
             if not existing_repo:
                 existing_repo = await self._add_repo_to_hacs(ws_client)
 
-            # Resolve the repo ID. A freshly-added repo can miss the first
-            # registration budget on a loaded runner or slow GitHub; on that
-            # timeout, re-add to re-nudge HACS and wait once more before
-            # surfacing the failure. Best-effort: a genuinely stuck add still
-            # fails on the retry. A repo that already had an ID is a real
-            # failure, not a slow add, so it is re-raised immediately.
-            try:
-                repo_id = await self._resolve_repo_id(ws_client, existing_repo)
-            except ToolError:
-                if existing_repo.get("id"):
-                    raise
-                logger.warning(
-                    "HACS repo registration timed out; re-adding %s and retrying once",
-                    MCP_TOOLS_REPO,
-                )
-                await self._add_repo_to_hacs(ws_client)
-                repo_id = await self._resolve_repo_id(ws_client, None)
+            repo_id = await self._resolve_repo_id_with_retry(ws_client, existing_repo)
 
-            logger.info(f"Installing {MCP_TOOLS_REPO} (ID: {repo_id})")
-            # HACS' download often returns a generic "Command failed:
-            # Unknown error" on transient GitHub hiccups (rate-limit,
-            # tarball stream interruption). Retry the download with
-            # exponential backoff so a one-shot transient doesn't
-            # surface as an installation failure to the caller.
-            # ``send_command`` raises ``HomeAssistantCommandError`` on
-            # ``success: False`` responses, so the retry catches that
-            # specific class — programming bugs / connection errors
-            # propagate normally.
-            max_attempts = 3
-            backoff_seconds = 2.0
-            last_error: HomeAssistantCommandError | None = None
-            download_response: dict[str, Any] | None = None
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    download_response = await ws_client.send_command(
-                        "hacs/repository/download",
-                        repository=repo_id,
-                    )
-                    last_error = None
-                    break
-                except HomeAssistantCommandError as e:
-                    last_error = e
-                    if attempt < max_attempts:
-                        wait_for = backoff_seconds * (2 ** (attempt - 1))
-                        logger.warning(
-                            "hacs/repository/download attempt %d/%d failed (%s); "
-                            "retrying in %.1fs",
-                            attempt,
-                            max_attempts,
-                            e,
-                            wait_for,
-                        )
-                        await asyncio.sleep(wait_for)
-            if last_error is not None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to download repository after {max_attempts} "
-                        f"attempts: {last_error}",
-                        suggestions=[
-                            "Check HACS logs for errors",
-                            "Verify GitHub is accessible",
-                            "HACS may be rate-limited; wait a minute and retry",
-                        ],
-                    )
-                )
-            assert download_response is not None  # narrowing for type checker
+            await self._download_component_with_retry(ws_client, repo_id)
 
             result: dict[str, Any] = {
                 "success": True,

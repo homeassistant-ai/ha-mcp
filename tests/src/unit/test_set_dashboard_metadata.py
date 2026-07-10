@@ -6,26 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_config_dashboards import register_config_dashboard_tools
+from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 
 
 class TestSetDashboardMetadataUpdate:
     """Test the metadata update path introduced by merging ha_config_update_dashboard_metadata."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
 
     @pytest.fixture
     def mock_client(self):
@@ -34,9 +19,8 @@ class TestSetDashboardMetadataUpdate:
         return client
 
     @pytest.fixture
-    def set_tool(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_config_set_dashboard"]
+    def set_tool(self, mock_client):
+        return DashboardConfigTools(mock_client).ha_config_set_dashboard
 
     def _make_dashboard_list(self, url_path: str, dashboard_id: str = "dash-1"):
         """Helper: mock existing dashboards list response."""
@@ -166,32 +150,14 @@ class TestSetDashboardListCallDedup:
     one fetch on the canonical-url_path branch) is caught here."""
 
     @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
-
-    @pytest.fixture
     def mock_client(self):
         client = MagicMock()
         client.send_websocket_message = AsyncMock()
         return client
 
     @pytest.fixture
-    def set_tool(self, mock_mcp, mock_client):
-        from ha_mcp.tools.tools_config_dashboards import register_config_dashboard_tools
-
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_config_set_dashboard"]
+    def set_tool(self, mock_client):
+        return DashboardConfigTools(mock_client).ha_config_set_dashboard
 
     @staticmethod
     def _list_call_count(mock_client) -> int:
