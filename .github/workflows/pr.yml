@@ -83,7 +83,7 @@ jobs:
     # variants: it always runs, passes when the suite was skipped (docs/website)
     # or every variant succeeded, and fails if any variant failed.
     name: E2E Validation Gate
-    needs: [changes, e2e-validation, e2e-validation-embedded]
+    needs: [changes, e2e-validation, e2e-validation-embedded, e2e-validation-update-path]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -96,12 +96,15 @@ jobs:
           fi
           container_result="${{ needs.e2e-validation.result }}"
           embedded_result="${{ needs.e2e-validation-embedded.result }}"
+          update_path_result="${{ needs.e2e-validation-update-path.result }}"
           echo "e2e-validation result: $container_result"
           echo "e2e-validation-embedded result: $embedded_result"
-          # Both the container-backend matrix AND the in-process MCP server
-          # lane must pass. Either failing wedges the required gate.
-          if [ "$container_result" != "success" ] || [ "$embedded_result" != "success" ]; then
-            echo "::error::E2E Validation did not succeed (container=$container_result, embedded=$embedded_result)."
+          echo "e2e-validation-update-path result: $update_path_result"
+          # The container-backend matrix, the in-process MCP server lane, AND
+          # the update-path lane must all pass. Any one failing wedges the
+          # required gate.
+          if [ "$container_result" != "success" ] || [ "$embedded_result" != "success" ] || [ "$update_path_result" != "success" ]; then
+            echo "::error::E2E Validation did not succeed (container=$container_result, embedded=$embedded_result, update-path=$update_path_result)."
             exit 1
           fi
 
@@ -510,6 +513,115 @@ jobs:
         echo "✅ Full E2E test suite (embedded backend) passed"
       env:
         E2E_BACKEND: "embedded"
+        HAMCP_ENV_FILE: "tests/.env.test"
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Update-path e2e lane (#1783/#1785): reproduces the in-place server update
+  # that broke on real installs. Each run parametrizes over the component source
+  # — the released ``stable`` git tag (proves a new server release won't break
+  # existing installs) AND this PR's working tree (proves the PR's own update
+  # machinery still works) — with the ha-mcp server installed from PyPI stable in
+  # both. The test then drives the in-process update that installs THIS PR's
+  # freshly built wheel over the running server — exercising the real
+  # reload/purge/restart path — and asserts the server survives. A single
+  # ubuntu-latest lane runs both scenarios serially (no -n), not the parallel
+  # suite. fetch-depth 0 is REQUIRED — the default shallow checkout omits the
+  # ``stable`` tag the stable scenario checks out from. Gated like the other e2e
+  # lanes: skips on docs/website-only PRs (needs.changes) and folds into
+  # e2e-validation-gate.
+  e2e-validation-update-path:
+    name: E2E Validation (update path)
+    needs: changes
+    # A skipped job reports Success, so a docs/website-only PR doesn't wedge the
+    # gate waiting on this lane (mirrors e2e-validation).
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    # 30m: each of the two scenarios (component@stable and component@working-tree)
+    # does a first bring-up that installs ha-mcp plus the full fastmcp dependency
+    # tree from PyPI stable before the in-process update swaps in the PR wheel. The
+    # two containers run sequentially in this one job (observed ~50s per scenario),
+    # so 30m still fits comfortably.
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: true
+        # fetch-depth 0: the update-path scenario checks the custom component
+        # out at the released ``stable`` git tag, which the default shallow
+        # checkout does not fetch.
+        fetch-depth: 0
+
+    - name: Verify stable tag is present
+      run: |
+        if ! git rev-parse --verify refs/tags/stable >/dev/null 2>&1; then
+          echo "::error::The 'stable' git tag is missing — the update-path lane checks the released component out from it. Ensure checkout uses fetch-depth: 0."
+          exit 1
+        fi
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      with:
+        cache-binary: true
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Cache HA Docker image
+      id: cache-ha-image
+      uses: actions/cache@v6
+      with:
+        path: /tmp/ha-image.tar
+        key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
+
+    - name: Load cached HA image
+      if: steps.cache-ha-image.outputs.cache-hit == 'true'
+      run: docker load -i /tmp/ha-image.tar
+
+    - name: Pull HA image (GHCR → Docker Hub fallback)
+      if: steps.cache-ha-image.outputs.cache-hit != 'true'
+      run: |
+        HA_VERSION="${HA_IMAGE_GHCR##*:}"
+        HA_IMAGE_DOCKERHUB="homeassistant/home-assistant:${HA_VERSION}"
+        for registry in "$HA_IMAGE_GHCR" "$HA_IMAGE_DOCKERHUB"; do
+          echo "Trying $registry..."
+          if docker pull "$registry"; then
+            if [ "$registry" != "$HA_IMAGE_GHCR" ]; then
+              docker tag "$registry" "$HA_IMAGE_GHCR"
+            fi
+            docker save "$HA_IMAGE_GHCR" -o /tmp/ha-image.tar
+            echo "Pulled and cached from $registry"
+            exit 0
+          fi
+          echo "Failed to pull from $registry, trying next..."
+          sleep 15
+        done
+        echo "All registries failed" && exit 1
+
+    - name: Run update-path e2e test
+      # E2E_BACKEND deliberately UNSET (container backend): the test drives its
+      # own dedicated container end to end and never touches the session
+      # backend, but conftest's autouse session fixture boots one regardless —
+      # the default container backend boots it cheaply, while
+      # E2E_BACKEND=embedded would add a wheel build + in-container preinstall
+      # of the whole fastmcp tree that nothing in this lane uses.
+      run: |
+        echo "🚀 Running the update-path e2e lane (released component + PyPI server → PR wheel)..."
+        uv run pytest tests/src/e2e/workflows/embedded/test_embedded_update_path.py \
+          -m update_path \
+          --tb=short \
+          -v
+        echo "✅ Update-path e2e lane passed"
+      env:
+        E2E_UPDATE_PATH: "1"
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
