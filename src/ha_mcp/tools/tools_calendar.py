@@ -170,6 +170,115 @@ class CalendarTools:
             )
             return None  # unreachable: exception_to_structured_error always raises
 
+    async def _create_recurring_calendar_event(
+        self,
+        entity_id: str,
+        summary: str,
+        start: str,
+        end: str,
+        description: str | None,
+        location: str | None,
+        rrule: str,
+    ) -> Any:
+        """Create a recurring calendar event series via the WebSocket API.
+
+        The ``calendar.create_event`` service schema has no rrule field --
+        recurrence is only accepted by the WebSocket command
+        ``calendar/event/create`` (see HA Core
+        ``homeassistant/components/calendar/__init__.py``), the same split
+        that forces the delete tool below onto the WebSocket API.
+        """
+        event: dict[str, Any] = {
+            "summary": summary,
+            "dtstart": start,
+            "dtend": end,
+            "rrule": rrule,
+        }
+        if description:
+            event["description"] = description
+        if location:
+            event["location"] = location
+
+        ws_client, conn_error = await get_connected_ws_client(
+            self._client.base_url,
+            self._client.token,
+            verify_ssl=self._client.verify_ssl,
+        )
+        if conn_error or ws_client is None:
+            raise_tool_error(
+                conn_error
+                or create_error_response(
+                    ErrorCode.CONNECTION_FAILED,
+                    "Failed to connect to Home Assistant WebSocket",
+                    context={"entity_id": entity_id},
+                )
+            )
+
+        try:
+            return await ws_client.send_command(
+                "calendar/event/create", entity_id=entity_id, event=event
+            )
+        finally:
+            # Guard disconnect: a transport-teardown error here would
+            # otherwise replace the original send_command exception.
+            try:
+                await ws_client.disconnect()
+            except Exception as disconnect_error:
+                logger.debug(
+                    f"WebSocket disconnect after create_event for "
+                    f"{entity_id}: {disconnect_error}"
+                )
+
+    async def _create_simple_calendar_event(
+        self,
+        entity_id: str,
+        summary: str,
+        start: str,
+        end: str,
+        description: str | None,
+        location: str | None,
+    ) -> Any:
+        """Create a one-off calendar event via the calendar.create_event service."""
+        service_data: dict[str, Any] = {
+            "entity_id": entity_id,
+            "summary": summary,
+            "start_date_time": start,
+            "end_date_time": end,
+        }
+
+        if description:
+            service_data["description"] = description
+        if location:
+            service_data["location"] = location
+
+        return await self._client.call_service("calendar", "create_event", service_data)
+
+    def _build_set_calendar_event_error_suggestions(
+        self, entity_id: str, rrule: str | None, error: Exception
+    ) -> list[str]:
+        """Build suggestions for a failed ha_config_set_calendar_event call."""
+        suggestions = [
+            f"Verify calendar entity '{entity_id}' exists and supports event creation",
+            "Check datetime format (ISO 8601)",
+            "Ensure end time is after start time",
+            "Some calendar integrations may be read-only",
+        ]
+        if rrule:
+            suggestions.insert(
+                0,
+                "Check RRULE syntax (RFC 5545, without the 'RRULE:' prefix, "
+                "e.g. 'FREQ=WEEKLY;BYDAY=MO') and that this calendar "
+                "integration supports recurring events",
+            )
+
+        error_str = str(error)
+        if "404" in error_str or "not found" in error_str.lower():
+            suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
+        if "not supported" in error_str.lower():
+            suggestions.insert(0, "This calendar does not support event creation")
+
+        return suggestions
+
     @tool(
         name="ha_config_set_calendar_event",
         tags={"Calendar"},
@@ -277,69 +386,12 @@ class CalendarTools:
                 )
 
             if rrule:
-                # The ``calendar.create_event`` service schema has no rrule
-                # field — recurrence is only accepted by the WebSocket
-                # command ``calendar/event/create`` (see HA Core
-                # ``homeassistant/components/calendar/__init__.py``), the
-                # same split that forces the delete tool below onto the
-                # WebSocket API.
-                event: dict[str, Any] = {
-                    "summary": summary,
-                    "dtstart": start,
-                    "dtend": end,
-                    "rrule": rrule,
-                }
-                if description:
-                    event["description"] = description
-                if location:
-                    event["location"] = location
-
-                ws_client, conn_error = await get_connected_ws_client(
-                    self._client.base_url,
-                    self._client.token,
-                    verify_ssl=self._client.verify_ssl,
+                result = await self._create_recurring_calendar_event(
+                    entity_id, summary, start, end, description, location, rrule
                 )
-                if conn_error or ws_client is None:
-                    raise_tool_error(
-                        conn_error
-                        or create_error_response(
-                            ErrorCode.CONNECTION_FAILED,
-                            "Failed to connect to Home Assistant WebSocket",
-                            context={"entity_id": entity_id},
-                        )
-                    )
-
-                try:
-                    result = await ws_client.send_command(
-                        "calendar/event/create", entity_id=entity_id, event=event
-                    )
-                finally:
-                    # Guard disconnect: a transport-teardown error here would
-                    # otherwise replace the original send_command exception.
-                    try:
-                        await ws_client.disconnect()
-                    except Exception as disconnect_error:
-                        logger.debug(
-                            f"WebSocket disconnect after create_event for "
-                            f"{entity_id}: {disconnect_error}"
-                        )
             else:
-                # Build service data
-                service_data: dict[str, Any] = {
-                    "entity_id": entity_id,
-                    "summary": summary,
-                    "start_date_time": start,
-                    "end_date_time": end,
-                }
-
-                if description:
-                    service_data["description"] = description
-                if location:
-                    service_data["location"] = location
-
-                # Call the calendar.create_event service
-                result = await self._client.call_service(
-                    "calendar", "create_event", service_data
+                result = await self._create_simple_calendar_event(
+                    entity_id, summary, start, end, description, location
                 )
 
             return {
@@ -362,25 +414,9 @@ class CalendarTools:
         except Exception as error:
             logger.error(f"Failed to create calendar event in {entity_id}: {error}")
 
-            suggestions = [
-                f"Verify calendar entity '{entity_id}' exists and supports event creation",
-                "Check datetime format (ISO 8601)",
-                "Ensure end time is after start time",
-                "Some calendar integrations may be read-only",
-            ]
-            if rrule:
-                suggestions.insert(
-                    0,
-                    "Check RRULE syntax (RFC 5545, without the 'RRULE:' prefix, "
-                    "e.g. 'FREQ=WEEKLY;BYDAY=MO') and that this calendar "
-                    "integration supports recurring events",
-                )
-
-            error_str = str(error)
-            if "404" in error_str or "not found" in error_str.lower():
-                suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
-            if "not supported" in error_str.lower():
-                suggestions.insert(0, "This calendar does not support event creation")
+            suggestions = self._build_set_calendar_event_error_suggestions(
+                entity_id, rrule, error
+            )
 
             exception_to_structured_error(
                 error, context={"entity_id": entity_id}, suggestions=suggestions

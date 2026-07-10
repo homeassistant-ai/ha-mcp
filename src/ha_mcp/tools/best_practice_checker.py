@@ -388,6 +388,11 @@ def _check_template_string(
     prefix AND the suggestion text adapt if a future caller passes "trigger".
     The native shapes named here (numeric_state, state, time, sun) work as
     both conditions and triggers in HA — only the noun changes.
+
+    Detection is split across three helpers (comparison/sun/is_state, time
+    patterns, then state-list/direct-state/duration) purely to keep each
+    function's branching low. They run in the same order as before and
+    share ``duration_match`` so the split is invisible to callers.
     """
     initial_count = len(warnings)
     label = position.capitalize()
@@ -400,6 +405,44 @@ def _check_template_string(
     # fires instead).
     duration_match = _RE_DURATION_MATH.search(template)
 
+    _check_template_comparison_patterns(
+        template, warnings, skill_prefix, position, label, duration_match
+    )
+    _check_template_time_patterns(template, warnings, skill_prefix, position, label)
+    _check_template_state_and_duration_patterns(
+        template, warnings, skill_prefix, position, label, duration_match
+    )
+
+    # Generic fallback: any Jinja in this logic position that didn't match
+    # a specific detector. Catches new anti-patterns (issue #1011) and
+    # reframes #695 from "enumerate bad shapes" to "surface every template
+    # in a logic position". Specific detectors above keep their tailored
+    # messages.
+    if len(warnings) == initial_count and _RE_ANY_TEMPLATE.search(template):
+        _emit(
+            warnings,
+            f"Template detected in {position} — if this maps to a native option "
+            "(`numeric_state`, `state`, `time`, `sun`, `zone`, `device`), use that "
+            "instead. Templates fail silently at runtime and bypass schema validation.",
+            skill_prefix,
+            "template-guidelines.md#when-to-avoid-templates",
+        )
+
+
+def _check_template_comparison_patterns(
+    template: str,
+    warnings: BestPracticeCheckResult,
+    skill_prefix: str | None,
+    position: str,
+    label: str,
+    duration_match: re.Match[str] | None,
+) -> None:
+    """Flag numeric-comparison, `sun.sun`, and `is_state()` template shapes.
+
+    Split out of :func:`_check_template_string` to keep its complexity low.
+    ``duration_match`` is precomputed by the caller so the numeric-comparison
+    check can suppress its suggestion when duration math is also present.
+    """
     if _RE_NUMERIC_CMP.search(template) and not duration_match:
         _emit(
             warnings,
@@ -429,6 +472,19 @@ def _check_template_string(
             skill_prefix,
             "automation-patterns.md#native-conditions",
         )
+
+
+def _check_template_time_patterns(
+    template: str,
+    warnings: BestPracticeCheckResult,
+    skill_prefix: str | None,
+    position: str,
+    label: str,
+) -> None:
+    """Flag `now().hour/minute`, weekday, and date-based template shapes.
+
+    Split out of :func:`_check_template_string` to keep its complexity low.
+    """
     if _RE_NOW_TIME.search(template):
         _emit(
             warnings,
@@ -458,6 +514,21 @@ def _check_template_string(
             skill_prefix,
             "automation-patterns.md#native-conditions",
         )
+
+
+def _check_template_state_and_duration_patterns(
+    template: str,
+    warnings: BestPracticeCheckResult,
+    skill_prefix: str | None,
+    position: str,
+    label: str,
+    duration_match: re.Match[str] | None,
+) -> None:
+    """Flag `states(...) in [...]`, direct-state-access, and duration-math shapes.
+
+    Split out of :func:`_check_template_string` to keep its complexity low.
+    ``duration_match`` is precomputed by the caller.
+    """
     if _RE_STATE_IN.search(template):
         _emit(
             warnings,
@@ -487,21 +558,6 @@ def _check_template_string(
             "template evaluation on every state change.",
             skill_prefix,
             "automation-patterns.md#native-conditions",
-        )
-
-    # Generic fallback: any Jinja in this logic position that didn't match
-    # a specific detector. Catches new anti-patterns (issue #1011) and
-    # reframes #695 from "enumerate bad shapes" to "surface every template
-    # in a logic position". Specific detectors above keep their tailored
-    # messages.
-    if len(warnings) == initial_count and _RE_ANY_TEMPLATE.search(template):
-        _emit(
-            warnings,
-            f"Template detected in {position} — if this maps to a native option "
-            "(`numeric_state`, `state`, `time`, `sun`, `zone`, `device`), use that "
-            "instead. Templates fail silently at runtime and bypass schema validation.",
-            skill_prefix,
-            "template-guidelines.md#when-to-avoid-templates",
         )
 
 
@@ -687,42 +743,21 @@ def _check_target_dict(
 def _check_triggers(
     triggers: Any, warnings: BestPracticeCheckResult, skill_prefix: str | None
 ) -> None:
-    """Check triggers for device_id and template anti-patterns."""
+    """Check triggers for device_id and template anti-patterns.
+
+    Per-trigger detection is split into focused helpers (renamed-key check,
+    deprecated-behavior check, template-trigger check, numeric_state-trigger
+    check) purely to keep this function's complexity low. They run in the
+    same order as before.
+    """
     for trigger in _as_list(triggers):
         if not isinstance(trigger, dict):
             continue
 
         platform = trigger.get("platform", trigger.get("trigger", ""))
 
-        # 2026.7 renamed purpose-specific trigger keys — old keys no longer load.
-        renamed_trigger = (
-            _RENAMED_TRIGGER_KEYS.get(platform) if isinstance(platform, str) else None
-        )
-        if renamed_trigger:
-            _emit(
-                warnings,
-                f"Trigger key `{platform}` was renamed to `{renamed_trigger}` "
-                "in HA 2026.7 and the old key no longer loads — use "
-                f"`trigger: {renamed_trigger}`.",
-                skill_prefix,
-                "automation-patterns.md#trigger-types",
-            )
-
-        # 2026.7 renamed trigger `options.behavior` values (any→each, last→all).
-        options = trigger.get("options")
-        if isinstance(options, dict):
-            behavior = options.get("behavior")
-            if isinstance(behavior, str) and behavior in _DEPRECATED_TRIGGER_BEHAVIOR:
-                _emit(
-                    warnings,
-                    f"Trigger `options.behavior: {behavior}` was renamed to "
-                    f"`{_DEPRECATED_TRIGGER_BEHAVIOR[behavior]}` in HA 2026.7 — "
-                    "the old value still loads but raises a repair issue and "
-                    "will be removed. Valid trigger values: `each`, `first`, "
-                    "`all` (conditions keep `any`/`all`).",
-                    skill_prefix,
-                    "automation-patterns.md#trigger-types",
-                )
+        _check_renamed_trigger_key(platform, warnings, skill_prefix)
+        _check_deprecated_trigger_behavior(trigger, warnings, skill_prefix)
 
         # Device trigger → prefer entity_id-based triggers
         if platform == "device":
@@ -739,71 +774,131 @@ def _check_triggers(
 
         # Template trigger — specific shapes first, generic fallback after.
         if platform == "template":
-            vt = trigger.get("value_template", "")
-            if isinstance(vt, str):
-                initial = len(warnings)
-                # See `_check_template_string`: duration math also trips the numeric
-                # comparison detector, but maps to `for:`, not `numeric_state`. Suppress
-                # the numeric_state suggestion when duration math is present.
-                duration_match = _RE_DURATION_MATH.search(vt)
-                if _RE_NUMERIC_CMP.search(vt) and not duration_match:
-                    _emit(
-                        warnings,
-                        "Trigger uses template with float/int comparison — "
-                        "use native `numeric_state` trigger instead "
-                        "(e.g., `platform: numeric_state, entity_id: sensor.temp, above: 30`).",
-                        skill_prefix,
-                        "automation-patterns.md#trigger-types",
-                    )
-                if _RE_IS_STATE.search(vt):
-                    _emit(
-                        warnings,
-                        "Trigger uses template with `is_state()` — use "
-                        "native `state` trigger instead "
-                        "(e.g., `platform: state, entity_id: light.x, to: 'on'`).",
-                        skill_prefix,
-                        "automation-patterns.md#trigger-types",
-                    )
-                if duration_match:
-                    _emit(
-                        warnings,
-                        "Trigger uses template for duration/recency check "
-                        "(`now() - X.last_changed/last_updated`) — use the native "
-                        "`for:` field on a `state` trigger instead "
-                        "(e.g., `platform: state, entity_id: binary_sensor.motion, "
-                        "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
-                        "and doesn't re-evaluate on every state change.",
-                        skill_prefix,
-                        "automation-patterns.md#trigger-types",
-                    )
-                # Generic fallback for unmatched template triggers.
-                if len(warnings) == initial and _RE_ANY_TEMPLATE.search(vt):
-                    _emit(
-                        warnings,
-                        "Trigger uses `template` platform — if this maps to a native option "
-                        "(`state`, `numeric_state`, `time`, `time_pattern`, `sun`, `zone`, "
-                        "`event`), use that instead. Native triggers are event-driven; "
-                        "template triggers re-evaluate on every state change.",
-                        skill_prefix,
-                        "automation-patterns.md#trigger-types",
-                    )
+            _check_template_trigger(trigger, warnings, skill_prefix)
 
         # numeric_state trigger: value_template can also contain duration math
         # (e.g. transforming last_changed into a seconds value for the threshold).
         if platform == "numeric_state":
-            vt = trigger.get("value_template", "")
-            if isinstance(vt, str) and _RE_DURATION_MATH.search(vt):
-                _emit(
-                    warnings,
-                    "`numeric_state` trigger uses `value_template` for duration/recency "
-                    "check (`now() - X.last_changed/last_updated`) — use the native "
-                    "`for:` field on a `state` trigger instead "
-                    "(e.g., `platform: state, entity_id: binary_sensor.motion, "
-                    "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
-                    "and doesn't re-evaluate on every state change.",
-                    skill_prefix,
-                    "automation-patterns.md#trigger-types",
-                )
+            _check_numeric_state_trigger(trigger, warnings, skill_prefix)
+
+
+def _check_renamed_trigger_key(
+    platform: Any, warnings: BestPracticeCheckResult, skill_prefix: str | None
+) -> None:
+    """Flag HA 2026.7 purpose-specific trigger key renames (old keys no longer load)."""
+    renamed_trigger = (
+        _RENAMED_TRIGGER_KEYS.get(platform) if isinstance(platform, str) else None
+    )
+    if renamed_trigger:
+        _emit(
+            warnings,
+            f"Trigger key `{platform}` was renamed to `{renamed_trigger}` "
+            "in HA 2026.7 and the old key no longer loads — use "
+            f"`trigger: {renamed_trigger}`.",
+            skill_prefix,
+            "automation-patterns.md#trigger-types",
+        )
+
+
+def _check_deprecated_trigger_behavior(
+    trigger: dict[str, Any], warnings: BestPracticeCheckResult, skill_prefix: str | None
+) -> None:
+    """Flag HA 2026.7 trigger `options.behavior` value renames (any→each, last→all)."""
+    options = trigger.get("options")
+    if not isinstance(options, dict):
+        return
+    behavior = options.get("behavior")
+    if isinstance(behavior, str) and behavior in _DEPRECATED_TRIGGER_BEHAVIOR:
+        _emit(
+            warnings,
+            f"Trigger `options.behavior: {behavior}` was renamed to "
+            f"`{_DEPRECATED_TRIGGER_BEHAVIOR[behavior]}` in HA 2026.7 — "
+            "the old value still loads but raises a repair issue and "
+            "will be removed. Valid trigger values: `each`, `first`, "
+            "`all` (conditions keep `any`/`all`).",
+            skill_prefix,
+            "automation-patterns.md#trigger-types",
+        )
+
+
+def _check_template_trigger(
+    trigger: dict[str, Any], warnings: BestPracticeCheckResult, skill_prefix: str | None
+) -> None:
+    """Check a `template` trigger's `value_template` for anti-patterns.
+
+    Split out of :func:`_check_triggers` to keep its complexity low.
+    """
+    vt = trigger.get("value_template", "")
+    if not isinstance(vt, str):
+        return
+    initial = len(warnings)
+    # See `_check_template_string`: duration math also trips the numeric
+    # comparison detector, but maps to `for:`, not `numeric_state`. Suppress
+    # the numeric_state suggestion when duration math is present.
+    duration_match = _RE_DURATION_MATH.search(vt)
+    if _RE_NUMERIC_CMP.search(vt) and not duration_match:
+        _emit(
+            warnings,
+            "Trigger uses template with float/int comparison — "
+            "use native `numeric_state` trigger instead "
+            "(e.g., `platform: numeric_state, entity_id: sensor.temp, above: 30`).",
+            skill_prefix,
+            "automation-patterns.md#trigger-types",
+        )
+    if _RE_IS_STATE.search(vt):
+        _emit(
+            warnings,
+            "Trigger uses template with `is_state()` — use "
+            "native `state` trigger instead "
+            "(e.g., `platform: state, entity_id: light.x, to: 'on'`).",
+            skill_prefix,
+            "automation-patterns.md#trigger-types",
+        )
+    if duration_match:
+        _emit(
+            warnings,
+            "Trigger uses template for duration/recency check "
+            "(`now() - X.last_changed/last_updated`) — use the native "
+            "`for:` field on a `state` trigger instead "
+            "(e.g., `platform: state, entity_id: binary_sensor.motion, "
+            "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
+            "and doesn't re-evaluate on every state change.",
+            skill_prefix,
+            "automation-patterns.md#trigger-types",
+        )
+    # Generic fallback for unmatched template triggers.
+    if len(warnings) == initial and _RE_ANY_TEMPLATE.search(vt):
+        _emit(
+            warnings,
+            "Trigger uses `template` platform — if this maps to a native option "
+            "(`state`, `numeric_state`, `time`, `time_pattern`, `sun`, `zone`, "
+            "`event`), use that instead. Native triggers are event-driven; "
+            "template triggers re-evaluate on every state change.",
+            skill_prefix,
+            "automation-patterns.md#trigger-types",
+        )
+
+
+def _check_numeric_state_trigger(
+    trigger: dict[str, Any], warnings: BestPracticeCheckResult, skill_prefix: str | None
+) -> None:
+    """Flag a `numeric_state` trigger's `value_template` used for duration math.
+
+    Split out of :func:`_check_triggers` to keep its complexity low.
+    """
+    vt = trigger.get("value_template", "")
+    if isinstance(vt, str) and _RE_DURATION_MATH.search(vt):
+        _emit(
+            warnings,
+            "`numeric_state` trigger uses `value_template` for duration/recency "
+            "check (`now() - X.last_changed/last_updated`) — use the native "
+            "`for:` field on a `state` trigger instead "
+            "(e.g., `platform: state, entity_id: binary_sensor.motion, "
+            "to: 'off', for: {minutes: 5}`). Native `for:` is event-driven "
+            "and doesn't re-evaluate on every state change.",
+            skill_prefix,
+            "automation-patterns.md#trigger-types",
+        )
 
 
 # ---------------------------------------------------------------------------
