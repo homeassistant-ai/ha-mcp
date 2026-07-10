@@ -243,6 +243,22 @@ UPDATE_CHECK_INTERVAL = timedelta(hours=6)
 # is DIST_NAME_STABLE or DIST_NAME_DEV depending on the selected channel.
 PYPI_JSON_URL = "https://pypi.org/pypi/{dist}/json"
 
+# The component manifest as it existed at a server release's git tag. Its
+# ``version`` is the component version that SHIPPED with that server build, so
+# a value newer than the running component means the release changed the
+# component too — the pre-install auto-update gate in embedded_setup holds the
+# server update until HACS delivers the component (issues #1783/#1785).
+# Tag-timing caveat: stable ``vX.Y.Z`` tags exist before the PyPI publish
+# (semantic-release pushes the tag first), but a dev ``vX.Y.Z.devN`` tag is
+# only created when its draft GitHub release is published — AFTER the binary
+# builds, minutes after PyPI already has the version. During that dev window
+# this URL 404s and the gate deliberately fails open (the registry's
+# skip-on-failure is the backstop on that channel).
+COMPONENT_MANIFEST_AT_TAG_URL = (
+    "https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/"
+    "v{version}/custom_components/ha_mcp_tools/manifest.json"
+)
+
 # Options-flow keys (stored in entry.options).
 OPT_CHANNEL = "channel"
 # Automatic server-version updates toggle (default on). When on, the channel is
@@ -366,6 +382,14 @@ ISSUE_START_FAILED = "server_start_failed"
 # the server expects; this points the user at the HACS component update
 # (non-blocking).
 ISSUE_COMPONENT_OUTDATED = "component_outdated"
+# Repair issue surfaced while an automatic server update is HELD because the
+# newer server release also shipped a newer custom component than the one
+# running (issues #1783/#1785): installing that server under the old component
+# is the combination that broke starts. Held is loud (this issue + a warning
+# log every check) and escapable — applying the HACS component update (which
+# takes an HA restart) unblocks the next check, and the update entity's
+# Install button bypasses the hold entirely.
+ISSUE_UPDATE_HELD = "server_update_held"
 # Repair issue surfaced when HACS is tracking the MAIN ha-mcp server repo for
 # this component (the pre-mirror install path — issue #1760). That install
 # keeps working (HACS downloads the repo snapshot at the release tag, which
