@@ -106,15 +106,18 @@ async def async_bring_up_server(hass: HomeAssistant, entry: ConfigEntry) -> None
         auth_mode = str(entry.options.get(OPT_WEBHOOK_AUTH, WEBHOOK_AUTH_NONE))
         secret_path = str(entry.data[DATA_SECRET_PATH])
         webhook_enabled = bool(entry.options.get(OPT_ENABLE_WEBHOOK, True))
-        if webhook_enabled:
-            await async_register_webhook(
-                hass,
-                entry,
-                port=manager.port,
-                secret_path=secret_path,
-                auth_mode=auth_mode,
-            )
-        else:
+        # Always set up the loopback forwarding config — the sidebar settings
+        # panel proxies through it (#1803); the option gates only the public
+        # webhook endpoint.
+        await async_register_webhook(
+            hass,
+            entry,
+            port=manager.port,
+            secret_path=secret_path,
+            auth_mode=auth_mode,
+            register_endpoint=webhook_enabled,
+        )
+        if not webhook_enabled:
             _LOGGER.info(
                 "Webhook access disabled by option - the server is local-only "
                 "(direct port + sidebar panel)"

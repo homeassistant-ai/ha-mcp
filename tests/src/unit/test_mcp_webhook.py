@@ -724,3 +724,52 @@ class TestRegisterWebhook:
         # No cfg present — must be a clean no-op.
         await mw.async_unregister_webhook(hass)
         await mw.async_unregister_webhook(hass)
+
+    async def test_register_endpoint_false_stores_forwarding_only(self, monkeypatch):
+        # #1803: with remote webhook access disabled, the loopback forwarding
+        # config must still be stored (the sidebar settings panel proxies
+        # through it) while NO public endpoint is registered.
+        hass = _register_hass()
+        fake_session = FakeSession()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: fake_session)
+
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+            register_endpoint=False,
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert cfg["target_url"] == "http://127.0.0.1:9584/private_x"
+        assert cfg["resource_server"] is None
+        mw.async_register.assert_not_called()
+        mw.async_unregister.assert_not_called()
+
+        # Teardown still drops the cfg and closes the session.
+        await mw.async_unregister_webhook(hass)
+        assert DATA_WEBHOOK not in hass.data[DOMAIN]
+        assert fake_session.closed is True
+
+    async def test_register_endpoint_false_skips_ha_auth_surface(self, monkeypatch):
+        # Even with ha_auth configured, a disabled endpoint must not construct
+        # the resource server or bind the discovery views — the per-request
+        # resolver would otherwise advertise a webhook that does not exist.
+        hass = _register_hass()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_HA,
+            register_endpoint=False,
+        )
+
+        cfg = hass.data[DOMAIN][DATA_WEBHOOK]
+        assert cfg["resource_server"] is None
+        hass.http.register_view.assert_not_called()
+        assert mw._active_resource_server(hass) is None

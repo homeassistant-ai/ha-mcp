@@ -502,6 +502,7 @@ async def async_register_webhook(
     port: int,
     secret_path: str,
     auth_mode: str,
+    register_endpoint: bool = True,
 ) -> None:
     """Register the ingress webhook (and, for ha_auth, the discovery views).
 
@@ -510,6 +511,11 @@ async def async_register_webhook(
     already unregistered, so the caller never leaves a half-configured endpoint
     live. ``webhook`` is a manifest dependency, so HA guarantees it is set up
     before this runs.
+
+    With ``register_endpoint=False`` (remote webhook access disabled by option)
+    no public endpoint or ha_auth surface is created; only the forwarding config
+    is stored, which same-host consumers — the sidebar settings panel proxy —
+    need to reach the loopback server (#1803).
     """
     if auth_mode not in (WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA):
         # Fail CLOSED on an unknown mode (corrupt/migrated options): refusing
@@ -529,31 +535,32 @@ async def async_register_webhook(
         "resource_server": None,
     }
 
-    try:
-        # Reload-safe: clear any leftover registration from a crashed unload
-        # before (re)registering (async_unregister is a no-op pop).
-        async_unregister(hass, webhook_id)
-        async_register(
-            hass,
-            DOMAIN,
-            _WEBHOOK_NAME,
-            webhook_id,
-            _async_handle_webhook,
-            allowed_methods=["POST", "GET"],
-        )
-        if auth_mode == WEBHOOK_AUTH_HA:
-            provider = ResourceServer(hass, webhook_id)
-            _register_metadata_views(hass)
-            cfg["resource_server"] = provider
-    except Exception:
-        # Never leave a live endpoint (or a leaked session) behind a failed
-        # auth-setup path. suppress: the ORIGINAL error must be what
-        # propagates (review finding) - a raising cleanup would mask it.
-        with suppress(Exception):
+    if register_endpoint:
+        try:
+            # Reload-safe: clear any leftover registration from a crashed unload
+            # before (re)registering (async_unregister is a no-op pop).
             async_unregister(hass, webhook_id)
-        with suppress(Exception):
-            await session.close()
-        raise
+            async_register(
+                hass,
+                DOMAIN,
+                _WEBHOOK_NAME,
+                webhook_id,
+                _async_handle_webhook,
+                allowed_methods=["POST", "GET"],
+            )
+            if auth_mode == WEBHOOK_AUTH_HA:
+                provider = ResourceServer(hass, webhook_id)
+                _register_metadata_views(hass)
+                cfg["resource_server"] = provider
+        except Exception:
+            # Never leave a live endpoint (or a leaked session) behind a failed
+            # auth-setup path. suppress: the ORIGINAL error must be what
+            # propagates (review finding) - a raising cleanup would mask it.
+            with suppress(Exception):
+                async_unregister(hass, webhook_id)
+            with suppress(Exception):
+                await session.close()
+            raise
 
     hass.data.setdefault(DOMAIN, {})[DATA_WEBHOOK] = cfg
 
