@@ -680,6 +680,71 @@ def _build_bulk_states_response(
     return response
 
 
+def _raise_gather_exceptions(
+    state_result: Any, registry_result: Any, device_result: Any
+) -> None:
+    """Re-raise fatal exceptions captured by an ``asyncio.gather(..., return_exceptions=True)``.
+
+    ``state_result`` failure is always fatal. Auth/connection errors must
+    propagate so the agent sees "your token is invalid" instead of "zero
+    entities matched". ``CancelledError`` on the registry/device results
+    comes through gather as a captured exception even when
+    ``return_exceptions=True``; it has to propagate or the canceller waits
+    forever. Other registry/device failures are tolerated by the caller (we
+    just lose the hidden filter).
+    """
+    if isinstance(state_result, BaseException):
+        raise state_result
+    if isinstance(registry_result, asyncio.CancelledError):
+        raise registry_result
+    if isinstance(device_result, asyncio.CancelledError):
+        raise device_result
+
+
+def _match_exact_search_entity(
+    entity: dict[str, Any],
+    query_lower: str,
+    domain_filter: str | None,
+    visibility_hidden: set[str],
+    hidden_ids: set[str],
+    include_hidden: bool,
+) -> dict[str, Any] | None:
+    """Score a single entity for ``_exact_match_search``, or None if it's excluded/no match."""
+    entity_id = entity.get("entity_id", "")
+    if entity_id in visibility_hidden:
+        return None
+    is_hidden = entity_id in hidden_ids
+    if is_hidden and not include_hidden:
+        return None
+    attributes = entity.get("attributes") or {}
+    friendly_name = attributes.get("friendly_name", entity_id)
+    domain = entity_id.split(".")[0] if "." in entity_id else ""
+
+    # Apply domain filter if provided
+    if domain_filter and domain != domain_filter:
+        return None
+
+    # Check for exact substring match in entity_id or friendly_name
+    if (
+        query_lower not in entity_id.lower()
+        and query_lower not in friendly_name.lower()
+    ):
+        return None
+
+    is_exact = query_lower == entity_id.lower() or query_lower == friendly_name.lower()
+    score = 100 if is_exact else 80
+    if is_hidden:
+        score = apply_hidden_penalty(score, "_hidden")
+    return {
+        "entity_id": entity_id,
+        "friendly_name": friendly_name,
+        "domain": domain,
+        "state": entity.get("state", "unknown"),
+        "score": score,
+        "match_type": "exact_match",
+    }
+
+
 async def _exact_match_search(
     client: Any,
     query: str,
@@ -714,15 +779,7 @@ async def _exact_match_search(
     state_result: Any = gather_results[0]
     registry_result: Any = gather_results[1]
     device_result: Any = gather_results[2]
-    if isinstance(state_result, BaseException):
-        raise state_result
-    # CancelledError comes through gather as a captured exception even
-    # when return_exceptions=True; it has to propagate or the canceller
-    # waits forever.
-    if isinstance(registry_result, asyncio.CancelledError):
-        raise registry_result
-    if isinstance(device_result, asyncio.CancelledError):
-        raise device_result
+    _raise_gather_exceptions(state_result, registry_result, device_result)
     all_entities = state_result
     hidden_ids = _build_hidden_ids(registry_result)
     # Opt-in visibility filter: a hard exclude (unlike the hidden_by score
@@ -740,38 +797,16 @@ async def _exact_match_search(
 
     results = []
     for entity in all_entities:
-        entity_id = entity.get("entity_id", "")
-        if entity_id in visibility_hidden:
-            continue
-        is_hidden = entity_id in hidden_ids
-        if is_hidden and not include_hidden:
-            continue
-        attributes = entity.get("attributes", {})
-        friendly_name = attributes.get("friendly_name", entity_id)
-        domain = entity_id.split(".")[0] if "." in entity_id else ""
-
-        # Apply domain filter if provided
-        if domain_filter and domain != domain_filter:
-            continue
-
-        # Check for exact substring match in entity_id or friendly_name
-        if query_lower in entity_id.lower() or query_lower in friendly_name.lower():
-            is_exact = (
-                query_lower == entity_id.lower() or query_lower == friendly_name.lower()
-            )
-            score = 100 if is_exact else 80
-            if is_hidden:
-                score = apply_hidden_penalty(score, "_hidden")
-            results.append(
-                {
-                    "entity_id": entity_id,
-                    "friendly_name": friendly_name,
-                    "domain": domain,
-                    "state": entity.get("state", "unknown"),
-                    "score": score,
-                    "match_type": "exact_match",
-                }
-            )
+        match = _match_exact_search_entity(
+            entity,
+            query_lower,
+            domain_filter,
+            visibility_hidden,
+            hidden_ids,
+            include_hidden,
+        )
+        if match is not None:
+            results.append(match)
 
     if state_filter:
         results = [r for r in results if r.get("state") == state_filter]

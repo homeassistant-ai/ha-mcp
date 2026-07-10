@@ -596,6 +596,83 @@ async def get_logger_levels(client: Any) -> dict[str, dict[str, Any]]:
     return levels
 
 
+_TIMESTAMP_METADATA_FIELDS = {
+    "last_changed",
+    "last_updated",
+    "last_reported",
+    "when",
+    "last_triggered",
+}
+
+
+async def _fetch_ha_timezone(client: Any) -> tuple[str, bool]:
+    """Fetch ``time_zone`` from ``/api/config``, falling back to UTC on failure.
+
+    Returns ``(ha_timezone, fetch_failed)``. ``fetch_failed`` is ``True`` when
+    the config fetch raised, in which case *ha_timezone* is always ``"UTC"``.
+    """
+    try:
+        config = await client.get_config()
+        return config.get("time_zone", "UTC"), False
+    except (
+        HomeAssistantConnectionError,
+        HomeAssistantAPIError,
+        HomeAssistantAuthError,
+        TimeoutError,
+        OSError,
+    ) as _tz_exc:
+        logger.warning(
+            "add_timezone_metadata: failed to fetch HA timezone config — "
+            "falling back to UTC: %s",
+            _tz_exc,
+            exc_info=True,
+        )
+        return "UTC", True
+
+
+def _resolve_local_timezone(ha_timezone: str) -> tuple[_TZInfo, str]:
+    """Resolve *ha_timezone* to a ``ZoneInfo``, falling back to UTC if unknown.
+
+    Returns ``(local_tz, ha_timezone)``. ``ha_timezone`` is normalized to
+    ``"UTC"`` when the lookup fails (tzdata package missing or bad name).
+    """
+    try:
+        return ZoneInfo(ha_timezone), ha_timezone
+    except ZoneInfoNotFoundError:
+        logger.warning(
+            "add_timezone_metadata: ZoneInfo(%r) not found "
+            "(tzdata package missing?) — falling back to UTC",
+            ha_timezone,
+        )
+        return UTC, "UTC"
+
+
+def _convert_timestamp_fields(obj: Any, local_tz: _TZInfo) -> Any:
+    """Recursively convert known timestamp fields in *obj* from UTC to *local_tz*.
+
+    Offset-aware strings are converted directly; naive strings (no offset)
+    are assumed to be UTC before conversion. Non-timestamp fields and
+    unparseable values are returned unchanged.
+    """
+    if isinstance(obj, list):
+        return [_convert_timestamp_fields(i, local_tz) for i in obj]
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k in _TIMESTAMP_METADATA_FIELDS and isinstance(v, str) and v:
+                try:
+                    parsed = datetime.fromisoformat(v)
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=UTC)
+                    out[k] = parsed.astimezone(local_tz).isoformat()
+                except (ValueError, TypeError):
+                    out[k] = v
+            else:
+                out[k] = _convert_timestamp_fields(v, local_tz)
+        return out
+    return obj
+
+
 async def add_timezone_metadata(
     client: Any, data: dict[str, Any], include_metadata: bool = True
 ) -> dict[str, Any]:
@@ -618,25 +695,7 @@ async def add_timezone_metadata(
     if not include_metadata:
         return data
 
-    ha_timezone = "UTC"
-    fetch_failed = False
-    try:
-        config = await client.get_config()
-        ha_timezone = config.get("time_zone", "UTC")
-    except (
-        HomeAssistantConnectionError,
-        HomeAssistantAPIError,
-        HomeAssistantAuthError,
-        TimeoutError,
-        OSError,
-    ) as _tz_exc:
-        fetch_failed = True
-        logger.warning(
-            "add_timezone_metadata: failed to fetch HA timezone config — "
-            "falling back to UTC: %s",
-            _tz_exc,
-            exc_info=True,
-        )
+    ha_timezone, fetch_failed = await _fetch_ha_timezone(client)
 
     if fetch_failed:
         return {
@@ -648,45 +707,8 @@ async def add_timezone_metadata(
             },
         }
 
-    try:
-        local_tz: _TZInfo = ZoneInfo(ha_timezone)
-    except ZoneInfoNotFoundError:
-        logger.warning(
-            "add_timezone_metadata: ZoneInfo(%r) not found "
-            "(tzdata package missing?) — falling back to UTC",
-            ha_timezone,
-        )
-        local_tz = UTC
-        ha_timezone = "UTC"
-
-    _TS_FIELDS = {
-        "last_changed",
-        "last_updated",
-        "last_reported",
-        "when",
-        "last_triggered",
-    }
-
-    def _convert(obj: Any) -> Any:
-        if isinstance(obj, list):
-            return [_convert(i) for i in obj]
-        if isinstance(obj, dict):
-            out = {}
-            for k, v in obj.items():
-                if k in _TS_FIELDS and isinstance(v, str) and v:
-                    try:
-                        parsed = datetime.fromisoformat(v)
-                        if parsed.tzinfo is None:
-                            parsed = parsed.replace(tzinfo=UTC)
-                        out[k] = parsed.astimezone(local_tz).isoformat()
-                    except (ValueError, TypeError):
-                        out[k] = v
-                else:
-                    out[k] = _convert(v)
-            return out
-        return obj
-
-    converted_data = _convert(data)
+    local_tz, ha_timezone = _resolve_local_timezone(ha_timezone)
+    converted_data = _convert_timestamp_fields(data, local_tz)
 
     return {
         "data": converted_data,
