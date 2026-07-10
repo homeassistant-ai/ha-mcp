@@ -358,15 +358,28 @@ class TestProxyForwarding:
 
 
 # ---------------------------------------------------------------------------
-# Module view + panel registration
+# Boot view + panel registration
 # ---------------------------------------------------------------------------
 
 
-class TestModuleView:
-    async def test_serves_javascript(self):
-        resp = await ui_panel._ModuleView().get(_make_request(hass=_make_hass()))
-        assert resp.content_type == "text/javascript"
-        assert b"customElements.define" in resp.body
+class TestBootView:
+    async def test_serves_boot_page(self):
+        resp = await ui_panel._BootView().get(_make_request(hass=_make_hass()))
+        assert resp.content_type == "text/html"
+        assert ui_panel._SESSION_URL.encode() in resp.body
+        # The script builds APP_URL as _APP_PREFIX + "settings", so only the
+        # prefix appears literally in the served body.
+        assert ui_panel._APP_PREFIX.encode() in resp.body
+        assert b"<iframe" in resp.body
+
+    def test_view_auth_model_is_pinned(self):
+        # A bare iframe GET cannot carry a bearer: the boot page and the proxy
+        # must stay public (the proxy's credential is the session cookie); the
+        # session minter must stay behind HA auth. Unit tests call the views
+        # directly, so only these assertions catch a requires_auth flip.
+        assert ui_panel._BootView.requires_auth is False
+        assert ui_panel._SessionView.requires_auth is True
+        assert ui_panel._ProxyView.requires_auth is False
 
 
 class TestPanelRegistration:
@@ -380,7 +393,10 @@ class TestPanelRegistration:
         assert hass.data[ui_panel._VIEWS_REGISTERED_KEY] is True
         panels = hass.data["_fake_frontend_panels"]
         assert ui_panel.PANEL_URL_PATH in panels
-        assert panels[ui_panel.PANEL_URL_PATH]["require_admin"] is True
+        panel = panels[ui_panel.PANEL_URL_PATH]
+        assert panel["component_name"] == "iframe"
+        assert panel["config"] == {"url": ui_panel._BOOT_URL}
+        assert panel["require_admin"] is True
 
     async def test_second_register_does_not_rebind_views(self):
         hass = _make_hass()
@@ -402,20 +418,38 @@ class TestPanelRegistration:
         assert ui_panel.PANEL_URL_PATH not in hass.data["_fake_frontend_panels"]
 
 
-class TestPanelModule:
-    def test_render_returns_component_definition(self):
-        js = ui_panel.render_panel_module()
-        assert ui_panel.PANEL_WEBCOMPONENT in js
-        assert ui_panel._SESSION_URL in js
+class TestBootPage:
+    def test_boot_page_embeds_script_and_session_url(self):
+        page = ui_panel.render_boot_page()
+        assert ui_panel._SESSION_URL in page
+        assert ui_panel.render_boot_script() in page
+
+    def test_boot_script_handles_stale_tokens_without_retry_storm(self):
+        # #1802: POSTing a stale bearer in a retry loop trips http.ban and
+        # IP-banned users from their own instance. The script must refresh an
+        # expired token before use and treat a 401 as terminal (no auto-retry).
+        js = ui_panel.render_boot_script()
+        assert "refreshAccessToken" in js
+        assert "resp.status === 401" in js
+
+    def test_app_url_sits_under_cookie_path(self):
+        # The embedded app URL must live under the session cookie's path scope
+        # or the browser never attaches the cookie and the settings app 401s.
+        # (The script concatenates _APP_PREFIX + "settings", so assert on the
+        # prefix and check the scope alignment in Python.)
+        assert ui_panel._APP_PREFIX in ui_panel.render_boot_script()
+        app_url = ui_panel._APP_PREFIX + "settings"
+        assert app_url.startswith(ui_panel._COOKIE_PATH + "/")
 
     def test_panel_config_shape(self):
         cfg = ui_panel.panel_config()
+        assert cfg["component_name"] == "iframe"
         assert cfg["frontend_url_path"] == ui_panel.PANEL_URL_PATH
         assert cfg["require_admin"] is True
-        assert cfg["module_url"] == ui_panel._MODULE_URL
+        assert cfg["config"] == {"url": ui_panel._BOOT_URL}
 
-    def test_panel_module_is_valid_javascript(self):
-        # Parse coverage for the served panel module. It cannot join the
+    def test_boot_script_is_valid_javascript(self):
+        # Parse coverage for the served boot script. It cannot join the
         # _js_harness _PY_RENDERERS set (that discovery runs without Home
         # Assistant installed, and this module imports aiohttp), so it gets its
         # own node syntax check here — skipped cleanly when node is absent.
@@ -427,7 +461,7 @@ class TestPanelModule:
         node = shutil.which("node")
         if node is None:
             pytest.skip("node is not available")
-        js = ui_panel.render_panel_module()
+        js = ui_panel.render_boot_script()
         with tempfile.NamedTemporaryFile(
             "w", suffix=".js", delete=False, encoding="utf-8"
         ) as handle:

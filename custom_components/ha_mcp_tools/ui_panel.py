@@ -7,22 +7,33 @@ add-on's "Open Web UI" experience: an admin-only sidebar panel ("HA-MCP") that
 opens that settings UI through Home Assistant's own HTTP server, so it works over
 the Nabu Casa remote URL and never exposes the loopback secret path to the browser.
 
-Auth model — a plain panel / iframe navigation is a browser GET that carries no
+The sidebar entry is a built-in ``iframe`` panel — the panel type behind
+"webpage" dashboards — NOT a custom panel. Home Assistant itself renders the
+standard header (with the sidebar menu button) around our page, so navigation
+behaves exactly like every other dashboard. The previous custom panel painted a
+bare full-height iframe with no chrome, which left iOS companion-app users with
+no way back to the HA UI: iOS has no system back button, edge swipes land inside
+the iframe where the frontend cannot see them, and the app restores the trapped
+route on every relaunch (#1795).
+
+Auth model — an iframe panel navigation is a browser GET that carries no
 ``Authorization`` header, so Home Assistant's normal ``requires_auth`` cannot gate
 it. HA's signed-path helper (:func:`homeassistant.components.http.async_sign_path`)
 is also unusable: a signature binds ONE exact path + query string, but the settings
 app issues relative ``./api/settings/*`` fetches that drop the query — each would
 land on a different, unsigned path and 401. Instead:
 
-1. A tiny custom panel runs *inside* the authenticated frontend (it receives the
-   ``hass`` object). It POSTs the logged-in user's access token to the session
-   endpoint below.
+1. The panel's iframe loads :class:`_BootView`, a tiny same-origin bootstrap
+   page (public glue, no secrets). Being same-origin with the authenticated
+   frontend, it reads the logged-in user's access token from the parent frame's
+   ``home-assistant`` root element and POSTs it to the session endpoint below.
 2. :class:`_SessionView` (``requires_auth=True``) authenticates that token the
    normal way, refuses non-admins, and returns a short-lived HttpOnly,
    SameSite=Strict session cookie scoped to the proxy path.
-3. The panel then embeds ``…/ui/app/settings`` in an iframe. The browser attaches
-   the cookie to every same-origin request under the proxy path — including the
-   settings app's relative sub-fetches — so the whole app works unchanged.
+3. The boot page then embeds ``…/ui/app/settings`` in an inner iframe. The
+   browser attaches the cookie to every same-origin request under the proxy
+   path — including the settings app's relative sub-fetches — so the whole app
+   works unchanged.
 4. :class:`_ProxyView` (``requires_auth=False`` because the iframe cannot send a
    bearer) validates that cookie against a live admin user on every request and
    forwards to the loopback settings server.
@@ -51,24 +62,23 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Sidebar panel identity. The url_path is the frontend route (…/ha-mcp); the
-# webcomponent name is the custom element the module below defines. "HA-MCP"
-# (not "MCP Server") avoids confusion with HA's official MCP Server integration.
+# Sidebar panel identity. The url_path is the frontend route (…/ha-mcp).
+# "HA-MCP" (not "MCP Server") avoids confusion with HA's official MCP Server
+# integration.
 PANEL_URL_PATH = "ha-mcp"
 PANEL_TITLE = "HA-MCP"
 PANEL_ICON = "mdi:robot-happy-outline"
-PANEL_WEBCOMPONENT = "ha-mcp-server-panel"
 
 # HTTP surface, all under one base so the session cookie can be tightly scoped.
 _UI_BASE = "/api/ha_mcp_tools/ui"
-_MODULE_URL = f"{_UI_BASE}/panel.js"
+_BOOT_URL = f"{_UI_BASE}/boot"
 _SESSION_URL = f"{_UI_BASE}/session"
 _APP_PREFIX = f"{_UI_BASE}/app/"
 _PROXY_URL = f"{_UI_BASE}/app/{{path:.*}}"
 
 # Session cookie. HttpOnly so page JS can never read it; SameSite=Strict so it
-# rides only same-origin requests (the iframe is same-origin with the frontend);
-# path-scoped to the proxy so it is never sent to the module/session endpoints.
+# rides only same-site requests (the iframe is same-origin with the frontend);
+# path-scoped to the proxy so it is never sent to the boot/session endpoints.
 _COOKIE_NAME = "ha_mcp_tools_ui_session"
 _COOKIE_PATH = f"{_UI_BASE}/app"
 
@@ -174,24 +184,25 @@ async def _session_user_is_admin(hass: HomeAssistant, token: str | None) -> bool
 # ---------------------------------------------------------------------------
 
 
-class _ModuleView(HomeAssistantView):
-    """Serve the custom-panel web component (public glue JS, no secrets).
+class _BootView(HomeAssistantView):
+    """Serve the bootstrap page the iframe panel embeds (public glue, no secrets).
 
-    ``requires_auth`` is False because the browser loads this as an ES module via
-    a plain ``import`` that cannot attach a bearer. The module contains only the
-    bootstrap that mints a session and embeds the proxied iframe.
+    ``requires_auth`` is False because the panel's iframe loads this with a plain
+    GET that cannot attach a bearer. The page contains only the bootstrap that
+    mints a session (with the token it reads from the parent frontend frame) and
+    embeds the proxied settings app.
     """
 
     requires_auth = False
     cors_allowed = False
-    url = _MODULE_URL
-    name = "ha_mcp_tools:ui:module"
+    url = _BOOT_URL
+    name = "ha_mcp_tools:ui:boot"
 
     async def get(self, request: web.Request) -> web.Response:
-        """Return the panel module JavaScript."""
+        """Return the bootstrap HTML page."""
         return web.Response(
-            body=_PANEL_JS.encode("utf-8"),
-            content_type="text/javascript",
+            body=_BOOT_HTML.encode("utf-8"),
+            content_type="text/html",
             charset="utf-8",
             headers={"Cache-Control": "no-cache"},
         )
@@ -375,32 +386,32 @@ def async_unregister_ui_panel(hass: HomeAssistant) -> None:
 
 
 def _register_views(hass: HomeAssistant) -> None:
-    """Bind the module / session / proxy views at most once per HA session."""
+    """Bind the boot / session / proxy views at most once per HA session."""
     if hass.data.get(_VIEWS_REGISTERED_KEY):
         return
-    hass.http.register_view(_ModuleView())
+    hass.http.register_view(_BootView())
     hass.http.register_view(_SessionView())
     hass.http.register_view(_ProxyView())
     hass.data[_VIEWS_REGISTERED_KEY] = True
 
 
 async def _register_panel(hass: HomeAssistant) -> None:
-    """Add the admin-only sidebar panel if it is not already present."""
-    from homeassistant.components.frontend import async_panel_exists
-    from homeassistant.components.panel_custom import async_register_panel
+    """Add the admin-only sidebar panel if it is not already present.
+
+    Registered as a built-in ``iframe`` panel (the "webpage dashboard" panel
+    type): Home Assistant renders its standard header around the page, so the
+    panel can never trap navigation the way a chrome-less custom panel did on
+    iOS (#1795).
+    """
+    from homeassistant.components.frontend import (
+        async_panel_exists,
+        async_register_built_in_panel,
+    )
 
     if async_panel_exists(hass, PANEL_URL_PATH):
         return
-    await async_register_panel(
-        hass,
-        frontend_url_path=PANEL_URL_PATH,
-        webcomponent_name=PANEL_WEBCOMPONENT,
-        sidebar_title=PANEL_TITLE,
-        sidebar_icon=PANEL_ICON,
-        module_url=_MODULE_URL,
-        embed_iframe=False,
-        require_admin=True,
-    )
+    cfg = panel_config()
+    async_register_built_in_panel(hass, cfg.pop("component_name"), **cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -434,184 +445,260 @@ class _suppress_connection_reset:
 
 
 class _suppress_all:
-    """Swallow any exception from best-effort teardown (logged by the caller)."""
+    """Swallow any Exception from best-effort teardown, logged at WARNING."""
 
     def __enter__(self) -> None:
         return None
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
-        if exc_type is not None:
-            _LOGGER.debug("HA-MCP: settings-UI panel teardown error", exc_info=exc)
-        return exc_type is not None
+        if exc_type is None or not issubclass(exc_type, Exception):
+            return False  # never swallow KeyboardInterrupt/SystemExit
+        _LOGGER.warning("HA-MCP: settings-UI panel teardown error", exc_info=exc)
+        return True
 
 
 # ---------------------------------------------------------------------------
-# Frontend module (the sidebar panel web component)
+# Bootstrap page (embedded by the built-in iframe panel)
 # ---------------------------------------------------------------------------
 #
-# Vanilla custom element (no Lit / HA-frontend imports) so it never couples to a
-# specific frontend build. Home Assistant sets ``hass`` on the element; the
-# element mints a session with the logged-in user's token, then embeds the
-# proxied settings UI. Deliberately NOT registered in _js_harness._PY_RENDERERS
+# Plain same-origin page (no Lit / HA-frontend imports) so it never couples to a
+# specific frontend build. Home Assistant's own iframe panel draws the standard
+# header around it; this page only mints the session and embeds the proxied
+# settings app. The script is a separate string so the node syntax test can
+# parse it alone. Deliberately NOT registered in _js_harness._PY_RENDERERS
 # (importing this module needs Home Assistant installed, which would break the
 # harness for every surface); coverage = the node --check syntax test plus the
 # Python-side session/proxy tests in test_ui_panel.py.
 
-_PANEL_JS = f"""
+_BOOT_JS = f"""
 const SESSION_URL = {_SESSION_URL!r};
 const APP_URL = {_APP_PREFIX!r} + "settings";
 // Re-mint at half the cookie lifetime so an open panel never expires mid-use.
 const REFRESH_MS = {_SESSION_TTL_SECONDS // 2} * 1000;
+// While the frontend is still booting (a cold start straight into this panel),
+// the parent frame has no token yet -- poll gently until it does (local reads,
+// no network). After TOKEN_HINT_AFTER misses, surface a hint but keep polling.
+const TOKEN_RETRY_MS = 1000;
+const TOKEN_HINT_AFTER = 20;
+// Transient failures (network blip, server starting/restarting) retry on
+// their own. Auth refusals (401/403) never auto-retry: every rejected bearer
+// counts as a failed login for http.ban, and a retry loop got users IP-banned
+// from their own instance (#1802).
+const RETRY_MS = 5000;
+const FETCH_TIMEOUT_MS = 15000;
 
-class HaMcpServerPanel extends HTMLElement {{
-  set hass(hass) {{
-    this._hass = hass;
-    this._start();
+const msg = document.querySelector(".msg");
+const frame = document.querySelector("iframe");
+let timer = null;
+let busy = false;
+let tokenMisses = 0;
+let authDead = false;
+
+function showMessage(text, isError) {{
+  frame.classList.add("hidden");
+  msg.classList.remove("hidden");
+  // Failure messages announce assertively (style guide: status regions switch
+  // to role=alert on the failure path); benign progress stays polite.
+  msg.setAttribute("role", isError ? "alert" : "status");
+  msg.setAttribute("aria-live", isError ? "assertive" : "polite");
+  msg.textContent = text;
+}}
+
+function transientFailure(text) {{
+  // Keep an already-working app visible through a transient blip (the iframe
+  // holds state); only surface the message while nothing is showing yet.
+  if (!timer) {{
+    showMessage(text, true);
   }}
+  setTimeout(mint, RETRY_MS);
+}}
 
-  connectedCallback() {{
-    this._render();
-    this._start();
-  }}
+function fetchWithTimeout(url, options) {{
+  // A stalled (never-settling) fetch would wedge `busy` and silently stop all
+  // future re-mints; a timeout resolves it into the retry path instead.
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, Object.assign({{ signal: controller.signal }}, options)).finally(
+    () => clearTimeout(t)
+  );
+}}
 
-  disconnectedCallback() {{
-    if (this._timer) {{
-      clearInterval(this._timer);
-      this._timer = null;
-    }}
-  }}
-
-  _render() {{
-    if (this._root) return;
-    this._root = this.attachShadow({{ mode: "open" }});
-    this._root.innerHTML = `
-      <style>
-        :host {{ display: block; height: 100%; background: var(--primary-background-color, #fafafa); }}
-        .frame {{ width: 100%; height: calc(100vh - var(--header-height, 56px)); border: 0; display: block; }}
-        .msg {{
-          padding: 24px; max-width: 640px; margin: 0 auto;
-          font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
-          color: var(--primary-text-color, #212121);
-        }}
-        .msg h2 {{ font-weight: 400; }}
-        .hidden {{ display: none; }}
-        a {{ color: var(--primary-color, #03a9f4); }}
-      </style>
-      <div class="msg" role="status" aria-live="polite">Loading the HA-MCP settings UI…</div>
-      <iframe class="frame hidden" title="HA-MCP settings"></iframe>
-    `;
-    this._msg = this._root.querySelector(".msg");
-    this._frame = this._root.querySelector("iframe");
-  }}
-
-  async _start() {{
-    // _started gates the reactive path: Home Assistant re-assigns `hass` on
-    // essentially every state change, and without this flag each push would
-    // mint a fresh session + probe the app (request spam + a new server-side
-    // session entry per event). Set only on SUCCESS so failures keep
-    // retrying on the next push; the interval timer owns steady-state
-    // refresh.
-    if (!this._hass || !this._root || this._busy || this._started) return;
-    this._busy = true;
-    try {{
-      await this._mint();
-      if (!this._timer) {{
-        this._timer = setInterval(() => this._mint(), REFRESH_MS);
-      }}
-    }} finally {{
-      this._busy = false;
-    }}
-  }}
-
-  _token() {{
-    const auth = this._hass && this._hass.auth;
+async function token() {{
+  // Same-origin parent = the authenticated HA frontend. Its root element owns
+  // the live `hass` object the frontend keeps fresh; its auth.accessToken is
+  // the same bearer the frontend itself uses. Refresh an expired token before
+  // use -- POSTing a stale bearer counts as a failed login for http.ban
+  // (#1802). A failed refresh means the sign-in itself is dead: mark it
+  // terminal rather than looping.
+  try {{
+    if (window.parent === window) return null;
+    const root = window.parent.document.querySelector("home-assistant");
+    const auth = root && root.hass && root.hass.auth;
     if (!auth) return null;
+    if (auth.expired && typeof auth.refreshAccessToken === "function") {{
+      try {{
+        await auth.refreshAccessToken();
+      }} catch (err) {{
+        authDead = true;
+        return null;
+      }}
+    }}
     return auth.accessToken || (auth.data && auth.data.access_token) || null;
+  }} catch (err) {{
+    return null; // cross-origin parent: not embedded in the HA frontend
   }}
+}}
 
-  async _mint() {{
-    const token = this._token();
-    if (!token) {{
-      this._showMessage("Not signed in to Home Assistant.");
+async function mint() {{
+  if (busy) return;
+  busy = true;
+  try {{
+    const bearer = await token();
+    if (!bearer) {{
+      if (authDead) {{
+        showMessage(
+          "The Home Assistant sign-in has expired. Reload the page to try again.",
+          true
+        );
+        return;
+      }}
+      if (window.parent === window) {{
+        showMessage("Open this page from the HA-MCP entry in the Home Assistant sidebar.");
+        return;
+      }}
+      tokenMisses += 1;
+      if (tokenMisses === TOKEN_HINT_AFTER) {{
+        showMessage(
+          "Still waiting for the Home Assistant sign-in. If this page is not " +
+            "inside the Home Assistant frontend, open it from the HA-MCP " +
+            "sidebar entry."
+        );
+      }}
+      setTimeout(mint, TOKEN_RETRY_MS);
       return;
     }}
+    tokenMisses = 0;
     let resp;
     try {{
-      resp = await fetch(SESSION_URL, {{
+      resp = await fetchWithTimeout(SESSION_URL, {{
         method: "POST",
         credentials: "same-origin",
-        headers: {{ Authorization: "Bearer " + token }},
+        headers: {{ Authorization: "Bearer " + bearer }},
       }});
     }} catch (err) {{
-      this._showMessage("Could not reach Home Assistant to open the settings UI.");
+      transientFailure("Could not reach Home Assistant to open the settings UI.");
+      return;
+    }}
+    if (resp.status === 401) {{
+      // Never loop on a rejected bearer -- see the RETRY_MS note (#1802).
+      showMessage(
+        "Home Assistant rejected the sign-in token. Reload the page to try again.",
+        true
+      );
       return;
     }}
     if (resp.status === 403) {{
-      this._showMessage("The HA-MCP settings UI is available to administrators only.");
+      showMessage("The HA-MCP settings UI is available to administrators only.", true);
       return;
     }}
     if (!resp.ok) {{
-      this._showMessage("Could not open the settings UI (HTTP " + resp.status + ").");
+      transientFailure("Could not open the settings UI (HTTP " + resp.status + ").");
       return;
     }}
-    await this._showApp();
+    await showApp();
+  }} finally {{
+    busy = false;
   }}
+}}
 
-  async _showApp() {{
-    // Probe the proxy so a not-yet-running server shows a friendly message
-    // instead of a raw 503 page inside the iframe.
-    let probe;
-    try {{
-      probe = await fetch(APP_URL, {{ credentials: "same-origin" }});
-    }} catch (err) {{
-      this._showMessage("Could not reach the in-process MCP server.");
-      return;
-    }}
-    if (probe.status === 503) {{
-      this._showMessage(
+async function showApp() {{
+  // Probe the proxy so a not-yet-running server shows a friendly message
+  // instead of a raw 503 page inside the iframe.
+  let probe;
+  try {{
+    probe = await fetchWithTimeout(APP_URL, {{ credentials: "same-origin" }});
+  }} catch (err) {{
+    transientFailure("Could not reach Home Assistant to load the settings UI.");
+    return;
+  }}
+  if (probe.status === 503) {{
+    if (!timer) {{
+      showMessage(
         "The in-process MCP server is starting or is not running yet. " +
           "This view will refresh automatically."
       );
-      setTimeout(() => this._mint(), 5000);
-      return;
     }}
-    if (!probe.ok) {{
-      this._showMessage("The settings UI returned HTTP " + probe.status + ".");
-      return;
-    }}
-    if (this._frame.getAttribute("src") !== APP_URL) {{
-      this._frame.setAttribute("src", APP_URL);
-    }}
-    this._msg.classList.add("hidden");
-    this._frame.classList.remove("hidden");
-    this._started = true;
+    setTimeout(mint, RETRY_MS);
+    return;
   }}
-
-  _showMessage(text) {{
-    this._frame.classList.add("hidden");
-    this._msg.classList.remove("hidden");
-    this._msg.textContent = text;
+  if (!probe.ok) {{
+    transientFailure("The settings UI returned HTTP " + probe.status + ".");
+    return;
+  }}
+  if (frame.getAttribute("src") !== APP_URL) {{
+    frame.setAttribute("src", APP_URL);
+  }}
+  msg.classList.add("hidden");
+  frame.classList.remove("hidden");
+  if (!timer) {{
+    timer = setInterval(mint, REFRESH_MS);
   }}
 }}
 
-if (!customElements.get({PANEL_WEBCOMPONENT!r})) {{
-  customElements.define({PANEL_WEBCOMPONENT!r}, HaMcpServerPanel);
-}}
+mint();
+"""
+
+_BOOT_HTML = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HA-MCP settings</title>
+<style>
+  html, body {{ height: 100%; margin: 0; background: #fafafa; }}
+  main {{ height: 100%; outline: none; }}
+  iframe {{ width: 100%; height: 100%; border: 0; display: block; }}
+  .msg {{
+    padding: 24px; max-width: 640px; margin: 0 auto; box-sizing: border-box;
+    font-family: Roboto, sans-serif; color: #212121;
+  }}
+  .hidden {{ display: none; }}
+  @media (prefers-color-scheme: dark) {{
+    html, body {{ background: #111111; }}
+    .msg {{ color: #e1e1e1; }}
+  }}
+</style>
+</head>
+<body>
+<main id="main-content" tabindex="-1">
+<div class="msg" role="status" aria-live="polite">Loading the HA-MCP settings UI…</div>
+<iframe class="hidden" title="HA-MCP settings"></iframe>
+</main>
+<script>
+{_BOOT_JS}
+</script>
+</body>
+</html>
 """
 
 
-def render_panel_module() -> str:
-    """Return the panel web-component module source (used by the JS-parse tests)."""
-    return _PANEL_JS
+def render_boot_script() -> str:
+    """Return the boot-page script source (used by the JS-parse tests)."""
+    return _BOOT_JS
+
+
+def render_boot_page() -> str:
+    """Return the boot-page HTML (used by the tests)."""
+    return _BOOT_HTML
 
 
 def panel_config() -> ConfigType:
-    """Return the sidebar-panel registration parameters (for assertions/tests)."""
+    """Return the sidebar-panel registration parameters (registration + tests)."""
     return {
+        "component_name": "iframe",
         "frontend_url_path": PANEL_URL_PATH,
-        "webcomponent_name": PANEL_WEBCOMPONENT,
         "sidebar_title": PANEL_TITLE,
         "sidebar_icon": PANEL_ICON,
-        "module_url": _MODULE_URL,
+        "config": {"url": _BOOT_URL},
         "require_admin": True,
     }

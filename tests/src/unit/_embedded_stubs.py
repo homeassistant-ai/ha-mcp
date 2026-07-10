@@ -397,7 +397,7 @@ def install() -> None:
         async_register=MagicMock(name="async_register"),
         async_unregister=MagicMock(name="async_unregister"),
     )
-    # frontend / panel_custom fakes for the settings-UI panel. Registration state
+    # frontend fakes for the settings-UI panel. Registration state
     # is kept in ``hass.data`` so it is isolated per test (each test builds a
     # fresh hass), unlike a module-level registry that would leak across tests.
     _FAKE_PANELS_KEY = "_fake_frontend_panels"
@@ -413,20 +413,19 @@ def install() -> None:
     ) -> None:
         _panels(hass).pop(frontend_url_path, None)
 
-    async def _async_register_panel(
-        hass: Any, *, frontend_url_path: str, **kwargs: Any
+    def _async_register_built_in_panel(
+        hass: Any, component_name: str, **kwargs: Any
     ) -> None:
-        _panels(hass)[frontend_url_path] = dict(kwargs)
+        _panels(hass)[kwargs["frontend_url_path"]] = {
+            "component_name": component_name,
+            **kwargs,
+        }
 
     setmod(
         "homeassistant.components.frontend",
         async_panel_exists=_async_panel_exists,
         async_remove_panel=_async_remove_panel,
-        async_register_built_in_panel=MagicMock(name="async_register_built_in_panel"),
-    )
-    setmod(
-        "homeassistant.components.panel_custom",
-        async_register_panel=_async_register_panel,
+        async_register_built_in_panel=_async_register_built_in_panel,
     )
 
     # Selector stubs for the options-flow dropdowns. Inert pass-through:
