@@ -49,15 +49,51 @@ concurrency:
   queue: max
 
 jobs:
+  # Decide from the TRIGGERING RUN'S JOBS whether a release actually happened.
+  # Gating on the run's overall conclusion (the old `if`) skipped the mirror
+  # tag whenever any UNRELATED leg failed — observed live on v7.12.2: the
+  # addon amd64 image build's cache flake failed the whole Hotfix Release run,
+  # this sync never fired, and HACS was left without the component 1.0.3 tag
+  # even though semantic-release had pushed the version and tag perfectly.
+  # The mirror tag depends only on the "Semantic Release" job (the name both
+  # semver-release.yml and hotfix-release.yml use), so gate on that job's
+  # conclusion instead. workflow_run fires for EVERY completed run of the
+  # listed workflows — including the all-skipped Hotfix Release that every
+  # non-hotfix PR merge produces (the release job is `if`-guarded); those
+  # conclude "success" via GitHub's skipped-jobs quirk and used to run this
+  # sync pointlessly, but the job-level check now skips them too. Push and
+  # manual dispatch (where workflow_run is absent) always proceed.
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      proceed: ${{ steps.decide.outputs.proceed }}
+    steps:
+      - name: Gate on the Semantic Release job, not the whole run
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_run" ]; then
+            echo "Push/dispatch trigger - proceeding."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          conclusion=$(gh api \
+            "repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name == "Semantic Release") | .conclusion] | first')
+          echo "Semantic Release job conclusion: ${conclusion:-<job absent>}"
+          if [ "$conclusion" = "success" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No successful release in the triggering run - skipping the mirror sync."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   sync:
-    # workflow_run fires for EVERY completed run of the listed workflows —
-    # including the SKIPPED Hotfix Release that every non-hotfix PR merge
-    # produces (the release job is `if`-guarded) and odd-week / no-change
-    # SemVer runs. Only proceed for a SUCCESSFUL release run; push and manual
-    # dispatch (where workflow_run is absent) always run.
-    if: >-
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
