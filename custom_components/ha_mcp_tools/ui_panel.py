@@ -38,9 +38,10 @@ land on a different, unsigned path and 401. Instead:
    bearer) validates that cookie against a live admin user on every request and
    forwards to the loopback settings server.
 
-The proxy reuses the ingress webhook's loopback target + aiohttp session
-(``hass.data[DOMAIN][DATA_WEBHOOK]``), so it is available exactly while the server
-is running and returns 503 otherwise.
+The proxy reuses the server's loopback forwarding config + aiohttp session
+(``hass.data[DOMAIN][DATA_WEBHOOK]`` — stored whenever the server is running,
+even when the public webhook endpoint is disabled), so it is available exactly
+while the server is running and returns 503 otherwise.
 """
 
 from __future__ import annotations

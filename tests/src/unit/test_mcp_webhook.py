@@ -744,9 +744,12 @@ class TestRegisterWebhook:
 
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert cfg["target_url"] == "http://127.0.0.1:9584/private_x"
+        assert cfg["session"] is fake_session
         assert cfg["resource_server"] is None
         mw.async_register.assert_not_called()
-        mw.async_unregister.assert_not_called()
+        # Off means off: a leftover endpoint from a crashed unload is cleared
+        # even though nothing gets (re)registered.
+        mw.async_unregister.assert_called_once_with(hass, WEBHOOK_ID)
 
         # Teardown still drops the cfg and closes the session.
         await mw.async_unregister_webhook(hass)
@@ -771,5 +774,6 @@ class TestRegisterWebhook:
 
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert cfg["resource_server"] is None
+        mw.async_register.assert_not_called()
         hass.http.register_view.assert_not_called()
         assert mw._active_resource_server(hass) is None

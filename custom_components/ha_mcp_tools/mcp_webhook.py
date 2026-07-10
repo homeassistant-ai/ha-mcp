@@ -206,8 +206,9 @@ def _active_resource_server(hass: HomeAssistant) -> ResourceServer | None:
     at registration time: aiohttp can't drop a bound view until HA restarts, so
     a remove + re-add of the config entry (which mints a NEW webhook id in the
     same HA session) would otherwise leave the views advertising the old id.
-    Returns None when no entry is live or the webhook auth mode is not ha_auth
-    — the views then 404 like an unregistered route.
+    Returns None when no entry is live, the webhook auth mode is not ha_auth,
+    or the public endpoint is disabled (local-only mode constructs no resource
+    server even under ha_auth) — the views then 404 like an unregistered route.
     """
     domain_data = hass.data.get(DOMAIN)
     if not isinstance(domain_data, dict):
@@ -513,9 +514,10 @@ async def async_register_webhook(
     before this runs.
 
     With ``register_endpoint=False`` (remote webhook access disabled by option)
-    no public endpoint or ha_auth surface is created; only the forwarding config
-    is stored, which same-host consumers — the sidebar settings panel proxy —
-    need to reach the loopback server (#1803).
+    no public endpoint or ha_auth surface is created — and any leftover endpoint
+    from a crashed unload is cleared, so off means off; only the forwarding
+    config is stored, which same-host consumers — the sidebar settings panel
+    proxy — need to reach the loopback server (#1803).
     """
     if auth_mode not in (WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA):
         # Fail CLOSED on an unknown mode (corrupt/migrated options): refusing
@@ -524,6 +526,11 @@ async def async_register_webhook(
         raise ValueError(f"Unknown webhook auth mode: {auth_mode!r}")
 
     webhook_id: str = entry.data[DATA_WEBHOOK_ID]
+    # Reload-safe and off-means-off: clear any leftover registration from a
+    # crashed unload before (re)registering — or before storing a local-only
+    # config (async_unregister is a no-op pop when nothing is registered).
+    # Runs before the session opens so a raise here cannot leak it.
+    async_unregister(hass, webhook_id)
     target_url = f"http://127.0.0.1:{port}{secret_path}"
     session = aiohttp.ClientSession(timeout=_CLIENT_TIMEOUT)
 
@@ -537,9 +544,6 @@ async def async_register_webhook(
 
     if register_endpoint:
         try:
-            # Reload-safe: clear any leftover registration from a crashed unload
-            # before (re)registering (async_unregister is a no-op pop).
-            async_unregister(hass, webhook_id)
             async_register(
                 hass,
                 DOMAIN,

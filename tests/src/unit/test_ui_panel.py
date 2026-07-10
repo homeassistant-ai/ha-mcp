@@ -231,6 +231,41 @@ class TestProxyForwarding:
         resp = await ui_panel._ProxyView().get(request, "../secrets")
         assert resp.status == 400
 
+    async def test_forwards_with_cfg_from_local_only_setup(self, monkeypatch):
+        # #1803 end-to-end at unit level: the forwarding config stored by
+        # async_register_webhook(register_endpoint=False) must be directly
+        # consumable by the panel proxy — a cfg key rename on either side of
+        # the seam would 503 the sidebar panel again with both halves' own
+        # tests still green.
+        from custom_components.ha_mcp_tools import mcp_webhook as mw
+        from custom_components.ha_mcp_tools.const import DATA_WEBHOOK_ID
+
+        upstream = FakeUpstream(
+            status=200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            body=b"<html>settings</html>",
+        )
+        session = FakeSession(upstream=upstream)
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: session)
+        hass = _make_hass(user=_make_user())
+        entry = MagicMock()
+        entry.data = {DATA_WEBHOOK_ID: "wh-seam"}
+
+        await mw.async_register_webhook(
+            hass,
+            entry,
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=mw.WEBHOOK_AUTH_NONE,
+            register_endpoint=False,
+        )
+        request = _make_request(hass=hass, cookies=_valid_cookie(hass))
+
+        resp = await ui_panel._ProxyView().get(request, "settings")
+
+        assert resp.status == 200
+        assert session.calls[0]["url"] == "http://127.0.0.1:9584/private_x/settings"
+
     async def test_forwards_page_and_passes_through_html(self):
         upstream = FakeUpstream(
             status=200,
