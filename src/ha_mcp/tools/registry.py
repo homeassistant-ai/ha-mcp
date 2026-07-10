@@ -143,7 +143,8 @@ class ToolsRegistry:
         When ``func_name`` is given, uses it directly (explicit mode); otherwise scans
         the module for an attribute matching the ``register_*_tools`` convention.
         Returns True if registered, False if no register function was found.
-        Re-raises on import or registration failure (fail-fast).
+        Re-raises on import or registration failure; ``register_all_tools``
+        contains that failure to the one module (see its docstring).
         """
         import importlib
 
@@ -169,8 +170,8 @@ class ToolsRegistry:
                 logger.warning(f"Module {module_name} has no register_*_tools function")
                 return False
 
-        except Exception as e:
-            logger.error(f"Failed to register tools from {module_name}: {e}")
+        except Exception:
+            logger.exception(f"Failed to register tools from {module_name}")
             raise
 
     def register_all_tools(self) -> None:
@@ -178,6 +179,14 @@ class ToolsRegistry:
 
         Tool modules are imported and registered only when this method is called,
         which happens after the MCP server is ready to accept connections.
+
+        A module that fails to import or register is SKIPPED (logged loudly),
+        not fatal: the in-process server auto-updates the ha-mcp package inside
+        a running Home Assistant, and a mixed old/new module generation — or a
+        module needing a newer custom component — previously took the whole
+        server down over one module (issues #1783/#1785). Only a TOTAL failure
+        (zero modules registered) still raises: a tool-less server "running"
+        would hide a genuinely broken install.
         """
         if self._modules_registered:
             logger.debug("Tools already registered, skipping")
@@ -189,23 +198,52 @@ class ToolsRegistry:
             "device_tools": self.device_tools,
         }
 
+        # tools_*.py modules by convention, then the explicit modules (those
+        # not following the convention) — each only if discovery included it
+        # (respects filtering).
+        worklist: list[tuple[str, str | None]] = [
+            (name, None)
+            for name in self._discovered_modules
+            if name not in EXPLICIT_MODULES
+        ]
+        worklist += [
+            (name, func_name)
+            for name, func_name in EXPLICIT_MODULES.items()
+            if name in self._discovered_modules
+        ]
+
         registered_count = 0
+        failed: list[tuple[str, Exception]] = []
+        for module_name, func_name in worklist:
+            try:
+                if self._import_and_register_module(module_name, kwargs, func_name):
+                    registered_count += 1
+            except Exception as e:
+                failed.append((module_name, e))
 
-        # Import and register tools_*.py modules
-        for module_name in self._discovered_modules:
-            # Skip explicit modules - handled separately
-            if module_name in EXPLICIT_MODULES:
-                continue
-            if self._import_and_register_module(module_name, kwargs):
-                registered_count += 1
-
-        # Register explicit modules (those not following tools_*.py convention)
-        # Only register if they were included in discovered modules (respects filtering)
-        for module_name, func_name in EXPLICIT_MODULES.items():
-            if module_name not in self._discovered_modules:
-                continue
-            if self._import_and_register_module(module_name, kwargs, func_name):
-                registered_count += 1
+        self._raise_or_log_registration_failures(failed, registered_count)
 
         self._modules_registered = True
         logger.info(f"Auto-discovery registered tools from {registered_count} modules")
+
+    @staticmethod
+    def _raise_or_log_registration_failures(
+        failed: list[tuple[str, Exception]], registered_count: int
+    ) -> None:
+        """Raise on a total registration failure, log a summary on a partial one."""
+        if not failed:
+            return
+        if registered_count == 0:
+            raise RuntimeError(
+                "No tool module could be registered "
+                f"({', '.join(name for name, _ in failed)} all failed); "
+                "the installed ha-mcp package is broken."
+            ) from failed[0][1]
+        logger.error(
+            "Skipped %d tool module(s) that failed to register: %s. The "
+            "server is running without their tools. If this happened right "
+            "after a package update, restart Home Assistant so every "
+            "module loads from the same package version.",
+            len(failed),
+            ", ".join(name for name, _ in failed),
+        )

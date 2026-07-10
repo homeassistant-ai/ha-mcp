@@ -67,11 +67,15 @@ def is_dev_mode_enabled() -> bool:
 
     Reads through :func:`config.get_global_settings` so the same
     env-var / override-file / default precedence path applies as
-    every other runtime-editable Settings field.
+    every other runtime-editable Settings field. ``getattr`` with a
+    False default, not attribute access: during an in-process package
+    update the cached settings singleton can predate this field
+    (issues #1783/#1785), and that stale read must mean "dev mode
+    off", never AttributeError.
     """
     from ..config import get_global_settings
 
-    return bool(get_global_settings().enable_dev_mode)
+    return bool(getattr(get_global_settings(), "enable_dev_mode", False))
 
 
 def _spawn_background(coro: Any) -> None:

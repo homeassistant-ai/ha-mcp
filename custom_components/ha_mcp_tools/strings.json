@@ -74,6 +74,10 @@
             "title": "Update the HA-MCP Custom Component via HACS",
             "description": "The installed ha-mcp server requires HA-MCP Custom Component {required} or newer, but you have {installed}. Update the component via HACS and restart Home Assistant. The server keeps running in the meantime, but some newer features may not work until the component is updated."
         },
+        "server_update_held": {
+            "title": "HA-MCP server update waiting for a component update",
+            "description": "ha-mcp server {latest} is available, but that release also updated the HA-MCP Custom Component (to {shipped}; you are running {running}). To avoid starting a server version the running component has never been tested with, the automatic server update is on hold until the component is updated.\n\nUpdate the component via HACS (open the HA-MCP Custom Component entry and use 'Update information' if no update is shown yet), then restart Home Assistant - the server update installs automatically afterwards. To install the server update anyway, press Install on the HA-MCP server update entity."
+        },
         "legacy_hacs_source": {
             "title": "Component installed from the legacy repository",
             "description": "HACS is tracking the main ha-mcp server repository for this component, so HACS shows the server's version numbers (7.x) and the server's release notes here instead of the component's own (1.x). Updates keep working, but stay mislabeled this way. To fix: remove this repository from HACS (your integration settings and config entries are kept), add homeassistant-ai/ha-mcp-integration as a custom repository, reinstall the component from it, and restart Home Assistant."
