@@ -149,10 +149,14 @@ class TestBringUp:
             esetup.ISSUE_UPDATE_HELD,
         }
 
-    async def test_local_only_skips_webhook_registration(self, fake_manager, caplog):
+    async def test_local_only_skips_endpoint_but_keeps_forwarding(
+        self, fake_manager, caplog
+    ):
         # Owner request: enable_webhook=False must never register the webhook
-        # (Nabu Casa path dead) while the server still starts; the log carries
-        # the local-only note.
+        # endpoint (Nabu Casa path dead) while the server still starts; the log
+        # carries the local-only note. The forwarding config must still be set
+        # up (register_endpoint=False) or the sidebar settings panel 503s
+        # forever (#1803).
         import logging
 
         hass = _make_hass()
@@ -162,7 +166,9 @@ class TestBringUp:
             await esetup.async_bring_up_server(hass, entry)
 
         fake_manager.async_start.assert_awaited_once()
-        esetup.async_register_webhook.assert_not_awaited()
+        esetup.async_register_webhook.assert_awaited_once()
+        kwargs = esetup.async_register_webhook.await_args.kwargs
+        assert kwargs["register_endpoint"] is False
         esetup._surface_connect_urls.assert_called_once()
         assert "local-only" in caplog.text
 
@@ -177,6 +183,7 @@ class TestBringUp:
         assert kwargs["auth_mode"] == WEBHOOK_AUTH_HA
         assert kwargs["port"] == 9584
         assert kwargs["secret_path"] == "/private_secret"
+        assert kwargs["register_endpoint"] is True
 
     async def test_package_failure_files_package_issue_and_skips_webhook(
         self, fake_manager
