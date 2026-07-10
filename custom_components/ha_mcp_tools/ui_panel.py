@@ -77,7 +77,7 @@ _APP_PREFIX = f"{_UI_BASE}/app/"
 _PROXY_URL = f"{_UI_BASE}/app/{{path:.*}}"
 
 # Session cookie. HttpOnly so page JS can never read it; SameSite=Strict so it
-# rides only same-origin requests (the iframe is same-origin with the frontend);
+# rides only same-site requests (the iframe is same-origin with the frontend);
 # path-scoped to the proxy so it is never sent to the boot/session endpoints.
 _COOKIE_NAME = "ha_mcp_tools_ui_session"
 _COOKIE_PATH = f"{_UI_BASE}/app"
@@ -445,15 +445,16 @@ class _suppress_connection_reset:
 
 
 class _suppress_all:
-    """Swallow any exception from best-effort teardown (logged by the caller)."""
+    """Swallow any Exception from best-effort teardown, logged at WARNING."""
 
     def __enter__(self) -> None:
         return None
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
-        if exc_type is not None:
-            _LOGGER.debug("HA-MCP: settings-UI panel teardown error", exc_info=exc)
-        return exc_type is not None
+        if exc_type is None or not issubclass(exc_type, Exception):
+            return False  # never swallow KeyboardInterrupt/SystemExit
+        _LOGGER.warning("HA-MCP: settings-UI panel teardown error", exc_info=exc)
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -475,29 +476,73 @@ const APP_URL = {_APP_PREFIX!r} + "settings";
 // Re-mint at half the cookie lifetime so an open panel never expires mid-use.
 const REFRESH_MS = {_SESSION_TTL_SECONDS // 2} * 1000;
 // While the frontend is still booting (a cold start straight into this panel),
-// the parent frame has no token yet -- poll gently until it does.
+// the parent frame has no token yet -- poll gently until it does (local reads,
+// no network). After TOKEN_HINT_AFTER misses, surface a hint but keep polling.
 const TOKEN_RETRY_MS = 1000;
+const TOKEN_HINT_AFTER = 20;
+// Transient failures (network blip, server starting/restarting) retry on
+// their own. Auth refusals (401/403) never auto-retry: every rejected bearer
+// counts as a failed login for http.ban, and a retry loop got users IP-banned
+// from their own instance (#1802).
+const RETRY_MS = 5000;
+const FETCH_TIMEOUT_MS = 15000;
 
 const msg = document.querySelector(".msg");
 const frame = document.querySelector("iframe");
 let timer = null;
 let busy = false;
+let tokenMisses = 0;
+let authDead = false;
 
-function showMessage(text) {{
+function showMessage(text, isError) {{
   frame.classList.add("hidden");
   msg.classList.remove("hidden");
+  // Failure messages announce assertively (style guide: status regions switch
+  // to role=alert on the failure path); benign progress stays polite.
+  msg.setAttribute("role", isError ? "alert" : "status");
+  msg.setAttribute("aria-live", isError ? "assertive" : "polite");
   msg.textContent = text;
 }}
 
-function token() {{
+function transientFailure(text) {{
+  // Keep an already-working app visible through a transient blip (the iframe
+  // holds state); only surface the message while nothing is showing yet.
+  if (!timer) {{
+    showMessage(text, true);
+  }}
+  setTimeout(mint, RETRY_MS);
+}}
+
+function fetchWithTimeout(url, options) {{
+  // A stalled (never-settling) fetch would wedge `busy` and silently stop all
+  // future re-mints; a timeout resolves it into the retry path instead.
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, Object.assign({{ signal: controller.signal }}, options)).finally(
+    () => clearTimeout(t)
+  );
+}}
+
+async function token() {{
   // Same-origin parent = the authenticated HA frontend. Its root element owns
-  // the live `hass` object (kept fresh by the frontend), which the old custom
-  // panel used to receive as a property.
+  // the live `hass` object the frontend keeps fresh; its auth.accessToken is
+  // the same bearer the frontend itself uses. Refresh an expired token before
+  // use -- POSTing a stale bearer counts as a failed login for http.ban
+  // (#1802). A failed refresh means the sign-in itself is dead: mark it
+  // terminal rather than looping.
   try {{
     if (window.parent === window) return null;
     const root = window.parent.document.querySelector("home-assistant");
     const auth = root && root.hass && root.hass.auth;
     if (!auth) return null;
+    if (auth.expired && typeof auth.refreshAccessToken === "function") {{
+      try {{
+        await auth.refreshAccessToken();
+      }} catch (err) {{
+        authDead = true;
+        return null;
+      }}
+    }}
     return auth.accessToken || (auth.data && auth.data.access_token) || null;
   }} catch (err) {{
     return null; // cross-origin parent: not embedded in the HA frontend
@@ -508,32 +553,56 @@ async function mint() {{
   if (busy) return;
   busy = true;
   try {{
-    const bearer = token();
+    const bearer = await token();
     if (!bearer) {{
+      if (authDead) {{
+        showMessage(
+          "The Home Assistant sign-in has expired. Reload the page to try again.",
+          true
+        );
+        return;
+      }}
       if (window.parent === window) {{
         showMessage("Open this page from the HA-MCP entry in the Home Assistant sidebar.");
-      }} else {{
-        setTimeout(mint, TOKEN_RETRY_MS);
+        return;
       }}
+      tokenMisses += 1;
+      if (tokenMisses === TOKEN_HINT_AFTER) {{
+        showMessage(
+          "Still waiting for the Home Assistant sign-in. If this page is not " +
+            "inside the Home Assistant frontend, open it from the HA-MCP " +
+            "sidebar entry."
+        );
+      }}
+      setTimeout(mint, TOKEN_RETRY_MS);
       return;
     }}
+    tokenMisses = 0;
     let resp;
     try {{
-      resp = await fetch(SESSION_URL, {{
+      resp = await fetchWithTimeout(SESSION_URL, {{
         method: "POST",
         credentials: "same-origin",
         headers: {{ Authorization: "Bearer " + bearer }},
       }});
     }} catch (err) {{
-      showMessage("Could not reach Home Assistant to open the settings UI.");
+      transientFailure("Could not reach Home Assistant to open the settings UI.");
+      return;
+    }}
+    if (resp.status === 401) {{
+      // Never loop on a rejected bearer -- see the RETRY_MS note (#1802).
+      showMessage(
+        "Home Assistant rejected the sign-in token. Reload the page to try again.",
+        true
+      );
       return;
     }}
     if (resp.status === 403) {{
-      showMessage("The HA-MCP settings UI is available to administrators only.");
+      showMessage("The HA-MCP settings UI is available to administrators only.", true);
       return;
     }}
     if (!resp.ok) {{
-      showMessage("Could not open the settings UI (HTTP " + resp.status + ").");
+      transientFailure("Could not open the settings UI (HTTP " + resp.status + ").");
       return;
     }}
     await showApp();
@@ -547,21 +616,23 @@ async function showApp() {{
   // instead of a raw 503 page inside the iframe.
   let probe;
   try {{
-    probe = await fetch(APP_URL, {{ credentials: "same-origin" }});
+    probe = await fetchWithTimeout(APP_URL, {{ credentials: "same-origin" }});
   }} catch (err) {{
-    showMessage("Could not reach the in-process MCP server.");
+    transientFailure("Could not reach Home Assistant to load the settings UI.");
     return;
   }}
   if (probe.status === 503) {{
-    showMessage(
-      "The in-process MCP server is starting or is not running yet. " +
-        "This view will refresh automatically."
-    );
-    setTimeout(mint, 5000);
+    if (!timer) {{
+      showMessage(
+        "The in-process MCP server is starting or is not running yet. " +
+          "This view will refresh automatically."
+      );
+    }}
+    setTimeout(mint, RETRY_MS);
     return;
   }}
   if (!probe.ok) {{
-    showMessage("The settings UI returned HTTP " + probe.status + ".");
+    transientFailure("The settings UI returned HTTP " + probe.status + ".");
     return;
   }}
   if (frame.getAttribute("src") !== APP_URL) {{
@@ -585,6 +656,7 @@ _BOOT_HTML = f"""<!doctype html>
 <title>HA-MCP settings</title>
 <style>
   html, body {{ height: 100%; margin: 0; background: #fafafa; }}
+  main {{ height: 100%; outline: none; }}
   iframe {{ width: 100%; height: 100%; border: 0; display: block; }}
   .msg {{
     padding: 24px; max-width: 640px; margin: 0 auto; box-sizing: border-box;
@@ -598,8 +670,10 @@ _BOOT_HTML = f"""<!doctype html>
 </style>
 </head>
 <body>
+<main id="main-content" tabindex="-1">
 <div class="msg" role="status" aria-live="polite">Loading the HA-MCP settings UI…</div>
 <iframe class="hidden" title="HA-MCP settings"></iframe>
+</main>
 <script>
 {_BOOT_JS}
 </script>
