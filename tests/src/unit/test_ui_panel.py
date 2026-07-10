@@ -358,15 +358,16 @@ class TestProxyForwarding:
 
 
 # ---------------------------------------------------------------------------
-# Module view + panel registration
+# Boot view + panel registration
 # ---------------------------------------------------------------------------
 
 
-class TestModuleView:
-    async def test_serves_javascript(self):
-        resp = await ui_panel._ModuleView().get(_make_request(hass=_make_hass()))
-        assert resp.content_type == "text/javascript"
-        assert b"customElements.define" in resp.body
+class TestBootView:
+    async def test_serves_boot_page(self):
+        resp = await ui_panel._BootView().get(_make_request(hass=_make_hass()))
+        assert resp.content_type == "text/html"
+        assert ui_panel._SESSION_URL.encode() in resp.body
+        assert b"<iframe" in resp.body
 
 
 class TestPanelRegistration:
@@ -380,7 +381,10 @@ class TestPanelRegistration:
         assert hass.data[ui_panel._VIEWS_REGISTERED_KEY] is True
         panels = hass.data["_fake_frontend_panels"]
         assert ui_panel.PANEL_URL_PATH in panels
-        assert panels[ui_panel.PANEL_URL_PATH]["require_admin"] is True
+        panel = panels[ui_panel.PANEL_URL_PATH]
+        assert panel["component_name"] == "iframe"
+        assert panel["config"] == {"url": ui_panel._BOOT_URL}
+        assert panel["require_admin"] is True
 
     async def test_second_register_does_not_rebind_views(self):
         hass = _make_hass()
@@ -402,20 +406,21 @@ class TestPanelRegistration:
         assert ui_panel.PANEL_URL_PATH not in hass.data["_fake_frontend_panels"]
 
 
-class TestPanelModule:
-    def test_render_returns_component_definition(self):
-        js = ui_panel.render_panel_module()
-        assert ui_panel.PANEL_WEBCOMPONENT in js
-        assert ui_panel._SESSION_URL in js
+class TestBootPage:
+    def test_boot_page_embeds_script_and_session_url(self):
+        page = ui_panel.render_boot_page()
+        assert ui_panel._SESSION_URL in page
+        assert ui_panel.render_boot_script() in page
 
     def test_panel_config_shape(self):
         cfg = ui_panel.panel_config()
+        assert cfg["component_name"] == "iframe"
         assert cfg["frontend_url_path"] == ui_panel.PANEL_URL_PATH
         assert cfg["require_admin"] is True
-        assert cfg["module_url"] == ui_panel._MODULE_URL
+        assert cfg["config"] == {"url": ui_panel._BOOT_URL}
 
-    def test_panel_module_is_valid_javascript(self):
-        # Parse coverage for the served panel module. It cannot join the
+    def test_boot_script_is_valid_javascript(self):
+        # Parse coverage for the served boot script. It cannot join the
         # _js_harness _PY_RENDERERS set (that discovery runs without Home
         # Assistant installed, and this module imports aiohttp), so it gets its
         # own node syntax check here — skipped cleanly when node is absent.
@@ -427,7 +432,7 @@ class TestPanelModule:
         node = shutil.which("node")
         if node is None:
             pytest.skip("node is not available")
-        js = ui_panel.render_panel_module()
+        js = ui_panel.render_boot_script()
         with tempfile.NamedTemporaryFile(
             "w", suffix=".js", delete=False, encoding="utf-8"
         ) as handle:
