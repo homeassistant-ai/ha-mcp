@@ -48,6 +48,14 @@ The recommended way to run ha-mcp is the **HA-MCP Custom Component**. It install
 4. Copy the connect URL from the entry's **Configure** screen (**Settings → Devices & Services → HA-MCP Custom Component → HA-MCP Server → Configure**) — it is also printed in the Home Assistant log. A notification confirms the server started and points you there.
 5. Paste that URL into your AI client — done.
 
+For Autohand Code, register the copied URL with:
+
+```bash
+autohand mcp add --transport http ha-mcp "https://your-ha-domain/api/webhook/your-webhook-id"
+```
+
+Add `--scope project` after `add` to keep the server configuration in the current project. See [Autohand Code](https://github.com/autohandai/code-cli/) for current installation and CLI details.
+
 **Connect URL.** The Configure screen gives you a Home Assistant webhook URL for remote clients — `https://<your-ha-domain>/api/webhook/<webhook-id>` through Nabu Casa or any reverse proxy already pointed at Home Assistant (locally, `http://<ha-host>:8123/api/webhook/<webhook-id>`). For clients on the same network, the server is also reachable directly at `http://<ha-ip>:9584/private_<random>`.
 
 - **Local only?** Turn off **Remote access via webhook** in the entry options — no webhook is registered at all, while the direct port and sidebar panel keep working.
