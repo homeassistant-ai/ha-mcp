@@ -28,7 +28,11 @@ pre-commit:
             run: uv run mypy src/ homeassistant-addon/ scripts/
           - name: mypy-webhook-proxy
             glob: "**/*.py"
-            run: uv run mypy homeassistant-addon-webhook-proxy/start.py homeassistant-addon-webhook-proxy-dev/start.py
+            # Two separate invocations, not one with both paths: mypy infers
+            # each file's module name from its basename, and both flavors'
+            # start.py collide ("Duplicate module named start") when checked
+            # together in one run.
+            run: uv run mypy homeassistant-addon-webhook-proxy/start.py && uv run mypy homeassistant-addon-webhook-proxy-dev/start.py
           - name: unit-tests
             glob:
               - "**/*.py"
