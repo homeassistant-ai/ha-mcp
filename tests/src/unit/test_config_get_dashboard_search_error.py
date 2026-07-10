@@ -17,27 +17,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.tools_config_dashboards import register_config_dashboard_tools
+from ha_mcp.tools.tools_config_dashboards import (
+    _LAZY_RESOLVE_TRIGGER,
+    DashboardConfigTools,
+)
 
 
 class TestConfigGetDashboardSearchErrorHandling:
     """Test ha_config_get_dashboard search mode error path does not leak internals."""
-
-    @pytest.fixture
-    def mock_mcp(self):
-        """Create a mock MCP server that captures registered tools."""
-        mcp = MagicMock()
-        self.registered_tools = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
 
     @pytest.fixture
     def mock_client(self):
@@ -49,10 +36,9 @@ class TestConfigGetDashboardSearchErrorHandling:
         return client
 
     @pytest.fixture
-    def get_dashboard_tool(self, mock_mcp, mock_client):
-        """Register tools and return the ha_config_get_dashboard function."""
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_config_get_dashboard"]
+    def get_dashboard_tool(self, mock_client):
+        """Return the ha_config_get_dashboard bound method."""
+        return DashboardConfigTools(mock_client).ha_config_get_dashboard
 
     @pytest.mark.asyncio
     async def test_error_does_not_leak_internals(self, get_dashboard_tool):
@@ -95,7 +81,6 @@ class TestConfigGetDashboardSearchErrorHandling:
     )
     async def test_different_exception_types_produce_correct_error_codes(
         self,
-        mock_mcp,
         mock_client,
         get_dashboard_tool,
         exception_cls,
@@ -127,30 +112,14 @@ class TestGetDashboardListOnlyUnexpectedShape:
     """
 
     @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
-
-    @pytest.fixture
     def mock_client(self):
         client = MagicMock()
         client.send_websocket_message = AsyncMock()
         return client
 
     @pytest.fixture
-    def get_dashboard_tool(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_config_get_dashboard"]
+    def get_dashboard_tool(self, mock_client):
+        return DashboardConfigTools(mock_client).ha_config_get_dashboard
 
     @pytest.mark.asyncio
     async def test_unexpected_shape_logs_warning_and_returns_empty_list(
@@ -185,30 +154,14 @@ class TestFindCardDisclosureWarnings:
     """
 
     @pytest.fixture
-    def mock_mcp(self):
-        mcp = MagicMock()
-        self.registered_tools: dict = {}
-
-        def tool_decorator(*args, **kwargs):
-            def wrapper(func):
-                self.registered_tools[func.__name__] = func
-                return func
-
-            return wrapper
-
-        mcp.tool = tool_decorator
-        return mcp
-
-    @pytest.fixture
     def mock_client(self):
         client = MagicMock()
         client.send_websocket_message = AsyncMock()
         return client
 
     @pytest.fixture
-    def get_dashboard_tool(self, mock_mcp, mock_client):
-        register_config_dashboard_tools(mock_mcp, mock_client)
-        return self.registered_tools["ha_config_get_dashboard"]
+    def get_dashboard_tool(self, mock_client):
+        return DashboardConfigTools(mock_client).ha_config_get_dashboard
 
     async def _search(self, tool, mock_client, config, **criteria):
         # url_path="default" → effective_url_path is None, so no lazy-resolve
@@ -292,3 +245,75 @@ class TestFindCardDisclosureWarnings:
         )
         assert isinstance(result["warnings"], list)
         assert all(isinstance(w, str) for w in result["warnings"])
+
+
+class TestResolvedUrlPathInErrorContext:
+    """An unexpected exception raised after lazy-resolve must report the
+    resolved url_path in error context, not the caller's original
+    (pre-resolve) identifier.
+
+    Regression test for the C901 decomposition of ha_config_get_dashboard:
+    splitting the mode dispatch into _get_dashboard_search_mode /
+    _get_dashboard_get_mode moved the url_path reassignment into a helper's
+    local scope, so the outer method's except-block context silently fell
+    back to reporting the unresolved identifier.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def get_dashboard_tool(self, mock_client):
+        return DashboardConfigTools(mock_client).ha_config_get_dashboard
+
+    @pytest.mark.asyncio
+    async def test_search_mode_reports_resolved_url_path(
+        self, get_dashboard_tool, mock_client, monkeypatch
+    ):
+        mock_client.send_websocket_message.side_effect = [
+            {
+                "success": False,
+                "error": {"message": f"{_LAZY_RESOLVE_TRIGGER}: internal-id"},
+            },
+            {"result": [{"id": "internal-id", "url_path": "resolved-path"}]},
+            {"result": {"views": [{"cards": []}]}},
+        ]
+        monkeypatch.setattr(
+            DashboardConfigTools,
+            "_build_search_result",
+            staticmethod(
+                lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
+            ),
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await get_dashboard_tool(url_path="internal-id", card_type="tile")
+
+        result = json.loads(str(exc_info.value))
+        assert result["url_path"] == "resolved-path"
+
+    @pytest.mark.asyncio
+    async def test_get_mode_reports_resolved_url_path(
+        self, get_dashboard_tool, mock_client, monkeypatch
+    ):
+        mock_client.send_websocket_message.side_effect = [
+            {
+                "success": False,
+                "error": {"message": f"{_LAZY_RESOLVE_TRIGGER}: internal-id"},
+            },
+            {"result": [{"id": "internal-id", "url_path": "resolved-path"}]},
+            {"result": {"views": []}},
+        ]
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_config_dashboards.compute_config_hash",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await get_dashboard_tool(url_path="internal-id")
+
+        result = json.loads(str(exc_info.value))
+        assert result["url_path"] == "resolved-path"
