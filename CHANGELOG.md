@@ -3,6 +3,30 @@
 <!-- version list -->
 
 
+## v7.12.2 (2026-07-10)
+
+### Fixed
+
+- Stop the HA-MCP sidebar panel trapping iOS navigation and tripping http.ban
+  ([#1801](https://github.com/homeassistant-ai/ha-mcp/pull/1801))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish version 7.12.1 [skip ci]
+  ([`2b77d23`](https://github.com/homeassistant-ai/ha-mcp/commit/2b77d23791dd47594ae81e61e29969691dfbf3a8))
+
+### Continuous Integration
+
+- Use the release app token for hotfix-release's master push
+  ([#1800](https://github.com/homeassistant-ai/ha-mcp/pull/1800))
+</details>
+
+
 ## v7.12.1 (2026-07-10)
 
 ### Fixed
