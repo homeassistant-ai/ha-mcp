@@ -2,6 +2,12 @@ name: Update Add-on Config Version
 
 # Reusable workflow to update addon config.yaml after Docker images are published.
 # Called from semver-release.yml, hotfix-release.yml, and addon-publish-dev.yml.
+# Also manually dispatchable: when a release run's addon leg fails AFTER the
+# images were published out-of-band (addon-publish.yml's own dispatch), this is
+# the recovery path for the config.yaml version bump — the calling release run
+# cannot be re-run with fixed workflow code (reruns pin the original commit's
+# workflows). ONLY dispatch with a version whose ghcr images actually exist:
+# config.yaml's version selects the image tag HAOS installs.
 on:
   workflow_call:
     inputs:
@@ -26,6 +32,22 @@ on:
         required: false
       RELEASE_TOKEN:
         required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to set in config.yaml (without v prefix). The ghcr addon images for this version MUST already exist.'
+        required: true
+        type: string
+      config_path:
+        description: 'Path to config.yaml to update'
+        required: false
+        type: string
+        default: 'homeassistant-addon/config.yaml'
+      commit_message_prefix:
+        description: 'Prefix for commit message'
+        required: false
+        type: string
+        default: 'publish version'
 
 jobs:
   update-addon-config:

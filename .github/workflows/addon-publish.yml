@@ -86,7 +86,13 @@ jobs:
           io.hass.type=addon
           io.hass.arch=${{ matrix.arch }}
         cache-from: type=gha,scope=${{ matrix.arch }}
-        cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+        # ignore-error: cache export is best-effort. Without it, an Actions
+        # cache-service failure fails the whole image publish — observed live
+        # on v7.12.2: "error writing layer blob: failed to reserve cache"
+        # (abandoned upload reservations from a failed attempt block
+        # re-reserving the same blob keys, so retries self-perpetuate the
+        # failure). A lost cache write only costs the next build a warm start.
+        cache-to: type=gha,mode=max,scope=${{ matrix.arch }},ignore-error=true
         build-args: |
           BUILD_VERSION=${{ steps.version.outputs.version }}
           BUILD_ARCH=${{ matrix.arch }}
