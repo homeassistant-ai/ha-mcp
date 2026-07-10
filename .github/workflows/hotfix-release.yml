@@ -26,6 +26,9 @@ env:
 
 jobs:
   semantic-release:
+    # This display name is load-bearing: sync-integration-mirror.yml's gate
+    # matches the triggering run's jobs by this exact name to decide whether a
+    # release happened. Rename it together with that gate's matcher.
     name: Semantic Release
     # Only run for merged hotfix PRs
     if: |

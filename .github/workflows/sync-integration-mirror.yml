@@ -56,13 +56,13 @@ jobs:
   # this sync never fired, and HACS was left without the component 1.0.3 tag
   # even though semantic-release had pushed the version and tag perfectly.
   # The mirror tag depends only on the "Semantic Release" job (the name both
-  # semver-release.yml and hotfix-release.yml use), so gate on that job's
-  # conclusion instead. workflow_run fires for EVERY completed run of the
-  # listed workflows — including the all-skipped Hotfix Release that every
-  # non-hotfix PR merge produces (the release job is `if`-guarded); those
-  # conclude "success" via GitHub's skipped-jobs quirk and used to run this
-  # sync pointlessly, but the job-level check now skips them too. Push and
-  # manual dispatch (where workflow_run is absent) always proceed.
+  # semver-release.yml and hotfix-release.yml use — commented as load-bearing
+  # there), so gate on that job's conclusion instead. workflow_run fires for
+  # EVERY completed run of the listed workflows; the all-skipped Hotfix
+  # Release runs that every non-hotfix PR merge produces conclude "skipped",
+  # which never satisfied the old success gate either — the job-level check
+  # keeps excluding them (a skipped Semantic Release job is not a release).
+  # Push and manual dispatch (where workflow_run is absent) always proceed.
   gate:
     runs-on: ubuntu-latest
     permissions:
@@ -80,16 +80,33 @@ jobs:
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          conclusion=$(gh api \
+          # Fail OPEN on an API error and on a missing job: the snapshot and
+          # tag steps are idempotent, so a spurious proceed is harmless, while
+          # a suppressed one strands HACS on the old component tag (the bug
+          # this gate exists to fix). An absent "Semantic Release" job means
+          # the job-name coupling with the release workflows broke (e.g. a
+          # rename) — degrade to tagging rather than silently never tagging.
+          if ! conclusion=$(gh api \
             "repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/jobs?per_page=100" \
-            --jq '[.jobs[] | select(.name == "Semantic Release") | .conclusion] | first')
-          echo "Semantic Release job conclusion: ${conclusion:-<job absent>}"
-          if [ "$conclusion" = "success" ]; then
+            --jq '[.jobs[] | select(.name == "Semantic Release") | .conclusion] | first // empty'); then
+            echo "::warning::Could not query the triggering run's jobs; failing open."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No successful release in the triggering run - skipping the mirror sync."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "Semantic Release job conclusion: ${conclusion:-<job absent>}"
+          case "$conclusion" in
+            success)
+              echo "proceed=true" >> "$GITHUB_OUTPUT"
+              ;;
+            "")
+              echo "::warning::No 'Semantic Release' job in the triggering run - the job-name coupling with the release workflows may be broken; failing open."
+              echo "proceed=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "No successful release in the triggering run - skipping the mirror sync."
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
   sync:
     needs: gate
@@ -167,10 +184,14 @@ jobs:
         # notes script emits. Idempotent: an existing tag no-ops, so a
         # release that did not change the component version simply
         # re-confirms the current tag.
-        if: >-
-          github.event_name == 'workflow_dispatch' ||
-          (github.event_name == 'workflow_run' &&
-           github.event.workflow_run.conclusion == 'success')
+        #
+        # No run-conclusion check here: the gate job already decided whether a
+        # release happened (checking workflow_run.conclusion again would
+        # re-introduce the suppressed-tag bug the gate fixes — an unrelated
+        # failed leg fails the RUN even when Semantic Release succeeded). The
+        # only event that reaches this job and must not tag is the push-leg
+        # code snapshot.
+        if: github.event_name != 'push'
         env:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
         run: |
