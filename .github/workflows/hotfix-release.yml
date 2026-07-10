@@ -42,6 +42,21 @@ jobs:
       issues: write
 
     steps:
+    # Generate GitHub App token with bypass permissions: the master ruleset
+    # ("changes must be made through a pull request") rejects pushes made with
+    # the plain GITHUB_TOKEN, which is exactly how the v7.12.1 hotfix release
+    # failed — semantic-release's version/changelog push to master came back
+    # "push declined due to repository rule violations". Mirrors the step
+    # semver-release.yml has always used for the same push.
+    - name: Generate GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ secrets.RELEASE_APP_ID }}
+        private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      # Fallback to RELEASE_TOKEN (PAT) or GITHUB_TOKEN if app credentials not configured
+      continue-on-error: true
+
     - name: Checkout master tip
       uses: actions/checkout@v7
       with:
@@ -55,7 +70,10 @@ jobs:
         # instead of aborting forever on "Upstream branch ... has changed".
         ref: master
         fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
+        # Priority: GitHub App token > RELEASE_TOKEN (PAT) > GITHUB_TOKEN.
+        # This credential persists into the repo's git config, so the later
+        # changelog-sync and stable-tag pushes in this job use it too.
+        token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
     - name: Require stable tag exists
       run: |
@@ -79,7 +97,8 @@ jobs:
       id: semantic
       uses: python-semantic-release/python-semantic-release@39dd2052f2ce8282a5d932c31d58a2ca06d2550e # v10.6.1
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
+        # Use GitHub App token with bypass permissions (see app-token step)
+        github_token: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         verbosity: "2"
         # Don't create GitHub release here - we'll create a draft below
         vcs_release: "false"
@@ -87,7 +106,7 @@ jobs:
     - name: Create draft GitHub release
       if: steps.semantic.outputs.released == 'true'
       env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
       run: |
         VERSION="${{ steps.semantic.outputs.version }}"
         TAG="v${VERSION}"
