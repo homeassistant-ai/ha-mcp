@@ -110,6 +110,33 @@ async def test_rrule_omits_unset_optional_fields_from_ws_event():
 
 
 @pytest.mark.asyncio
+async def test_rrule_forwards_explicit_empty_string_fields_to_ws_event():
+    """An explicitly-passed "" must reach HA (it clears the field there),
+    unlike an unset (None) field, which is omitted entirely."""
+    client = _make_mock_client()
+    ws = _make_mock_ws()
+
+    with patch(
+        "ha_mcp.tools.tools_calendar.get_connected_ws_client",
+        return_value=(ws, None),
+    ):
+        tools = CalendarTools(client)
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Bare recurring",
+            start="2026-06-20T09:00:00",
+            end="2026-06-20T09:30:00",
+            description="",
+            location="",
+            rrule="FREQ=MONTHLY;BYDAY=3SA",
+        )
+
+    _, kwargs = ws.send_command.await_args
+    assert kwargs["event"]["description"] == ""
+    assert kwargs["event"]["location"] == ""
+
+
+@pytest.mark.asyncio
 async def test_no_rrule_keeps_rest_service_path():
     """rrule absent → existing calendar.create_event service call, no WS."""
     client = _make_mock_client()
@@ -136,6 +163,36 @@ async def test_no_rrule_keeps_rest_service_path():
     ws_factory.assert_not_called()
     assert result["success"] is True
     assert result["event"]["rrule"] is None
+
+
+@pytest.mark.asyncio
+async def test_no_rrule_forwards_explicit_empty_string_fields_to_rest_call():
+    """Same "" vs None distinction on the non-rrule REST service path."""
+    client = _make_mock_client()
+
+    with patch("ha_mcp.tools.tools_calendar.get_connected_ws_client"):
+        tools = CalendarTools(client)
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="One-off",
+            start="2026-06-15T10:00:00",
+            end="2026-06-15T11:00:00",
+            description="",
+            location="",
+        )
+
+    client.call_service.assert_awaited_once_with(
+        "calendar",
+        "create_event",
+        {
+            "entity_id": "calendar.test",
+            "summary": "One-off",
+            "start_date_time": "2026-06-15T10:00:00",
+            "end_date_time": "2026-06-15T11:00:00",
+            "description": "",
+            "location": "",
+        },
+    )
 
 
 def _structured_error(exc: ToolError) -> dict:

@@ -194,9 +194,9 @@ class CalendarTools:
             "dtend": end,
             "rrule": rrule,
         }
-        if description:
+        if description is not None:
             event["description"] = description
-        if location:
+        if location is not None:
             event["location"] = location
 
         ws_client, conn_error = await get_connected_ws_client(
@@ -246,9 +246,9 @@ class CalendarTools:
             "end_date_time": end,
         }
 
-        if description:
+        if description is not None:
             service_data["description"] = description
-        if location:
+        if location is not None:
             service_data["location"] = location
 
         return await self._client.call_service("calendar", "create_event", service_data)
