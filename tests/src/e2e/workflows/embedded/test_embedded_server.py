@@ -160,6 +160,20 @@ def _seed_config(config_path: Path, wheel_name: str) -> None:
     )
     storage_file.write_text(json.dumps(data, indent=2))
 
+    # The seeded configuration.yaml carries no `logger:` block and this HA
+    # writes only WARNING+ to home-assistant.log (CI-observed), while the
+    # LLM-API registration proof asserts on the component's INFO success
+    # line. Raise just this component's logger, in this container's private
+    # copy of the config dir only.
+    config_yaml = config_path / "configuration.yaml"
+    config_yaml.write_text(
+        config_yaml.read_text(encoding="utf-8")
+        + "\n# e2e: surface the component's INFO lines"
+        " (test_llm_api_registered_inside_ha).\n"
+        "logger:\n  logs:\n    custom_components.ha_mcp_tools: info\n",
+        encoding="utf-8",
+    )
+
     # HA runs as uid 0 in the test image but the bind mount must be traversable.
     for path in config_path.rglob("*"):
         try:
