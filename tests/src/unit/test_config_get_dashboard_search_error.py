@@ -284,9 +284,7 @@ class TestResolvedUrlPathInErrorContext:
         monkeypatch.setattr(
             DashboardConfigTools,
             "_build_search_result",
-            staticmethod(
-                lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
-            ),
+            MagicMock(side_effect=RuntimeError("boom")),
         )
 
         with pytest.raises(ToolError) as exc_info:
@@ -309,7 +307,7 @@ class TestResolvedUrlPathInErrorContext:
         ]
         monkeypatch.setattr(
             "ha_mcp.tools.tools_config_dashboards.compute_config_hash",
-            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+            MagicMock(side_effect=RuntimeError("boom")),
         )
 
         with pytest.raises(ToolError) as exc_info:
