@@ -1668,11 +1668,8 @@ class DashboardConfigTools:
             bool,
             Field(default=True),
         ] = True,
-        # BestPracticeKey (#1779): declared so FastMCP/pydantic accepts the
-        # kwarg and schema-validating clients will send it; StrictBpsMiddleware
-        # consumes it and the tool body never reads it. Described (unlike
-        # MandatoryBPS) because it never leaks the key and clients need to know
-        # where it comes from.
+        # BestPracticeKey (#1779): consumed by StrictBpsMiddleware, never read
+        # here — see strict_bps.py for the declaration contract.
         BestPracticeKey: Annotated[
             str | None,
             Field(

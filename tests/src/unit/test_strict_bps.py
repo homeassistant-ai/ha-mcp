@@ -22,7 +22,6 @@ Covers, without a FastMCP boot:
 
 from __future__ import annotations
 
-import ast
 import importlib
 import json
 import logging
@@ -117,13 +116,30 @@ class TestStrictBpsEffective:
 # ---------------------------------------------------------------------------
 
 
+class _FakeMessage:
+    """Minimal stand-in for CallToolRequestParams supporting model_copy."""
+
+    def __init__(self, name: str, arguments: dict | None):
+        self.name = name
+        self.arguments = arguments
+
+    def model_copy(self, update: dict | None = None) -> _FakeMessage:
+        fields = {"name": self.name, "arguments": self.arguments, **(update or {})}
+        return _FakeMessage(fields["name"], fields["arguments"])
+
+
+class _FakeContext:
+    """Minimal stand-in for MiddlewareContext supporting copy(message=...)."""
+
+    def __init__(self, message: _FakeMessage):
+        self.message = message
+
+    def copy(self, **kwargs) -> _FakeContext:
+        return _FakeContext(kwargs.get("message", self.message))
+
+
 def make_context(name: str, arguments: dict | None = None):
-    msg = MagicMock()
-    msg.name = name
-    msg.arguments = arguments if arguments is not None else {}
-    ctx = MagicMock()
-    ctx.message = msg
-    return ctx
+    return _FakeContext(_FakeMessage(name, arguments if arguments is not None else {}))
 
 
 @pytest.fixture
@@ -170,15 +186,37 @@ class TestStrictBpsMiddleware:
         # scene maps to SKILL.md (its canonical first file).
         assert "SKILL.md" in body["error"]["suggestion"]
 
-    async def test_gated_with_correct_key_passes(self, strict_on):
+    async def test_gated_with_correct_key_passes_and_strips_key(self, strict_on):
         mw = StrictBpsMiddleware()
         call_next = AsyncMock(return_value="ok")
         ctx = make_context(
-            "ha_config_set_automation", {"BestPracticeKey": STRICT_BPS_ACK_KEY}
+            "ha_config_set_automation",
+            {"config": {"alias": "x"}, "BestPracticeKey": STRICT_BPS_ACK_KEY},
         )
         result = await mw.on_call_tool(ctx, call_next)
         assert result == "ok"
         call_next.assert_awaited_once()
+        # The gate consumes the key: the forwarded context must not carry it
+        # (it would otherwise churn the policy middleware's approval
+        # args-hash and leak into downstream logging), while every other
+        # argument passes through untouched.
+        forwarded = call_next.await_args.args[0]
+        assert STRICT_BPS_KEY_PARAM not in forwarded.message.arguments
+        assert forwarded.message.arguments == {"config": {"alias": "x"}}
+
+    async def test_strict_off_still_strips_stale_key(self, strict_off):
+        """A client habitually sending the key while strict is off must not
+        leak it downstream either — hash-stable across strict toggles."""
+        mw = StrictBpsMiddleware()
+        call_next = AsyncMock(return_value="ok")
+        ctx = make_context(
+            "ha_config_set_automation",
+            {"config": {}, "BestPracticeKey": STRICT_BPS_ACK_KEY},
+        )
+        result = await mw.on_call_tool(ctx, call_next)
+        assert result == "ok"
+        forwarded = call_next.await_args.args[0]
+        assert STRICT_BPS_KEY_PARAM not in forwarded.message.arguments
 
     async def test_non_gated_tool_passes_without_key(self, strict_on):
         """A non-gated tool is never blocked, even with strict effective."""
@@ -213,20 +251,43 @@ class TestStrictBpsMiddleware:
 # ---------------------------------------------------------------------------
 
 
-def _function_params(tree: ast.AST, func_name: str) -> set[str]:
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
-            and node.name == func_name
-        ):
-            args = node.args
-            all_args = (
-                list(args.args)
-                + list(args.kwonlyargs)
-                + list(getattr(args, "posonlyargs", []))
-            )
-            return {a.arg for a in all_args}
-    return set()
+def _registered_tools_in_module(module) -> dict[str, object]:
+    """Map registered tool name -> bound method for every ``@tool``-decorated
+    method on the module's own classes.
+
+    Uses the ``__fastmcp__`` metadata the decorator attaches — the SAME
+    registered ``name=`` the live server publishes — so a tool rename that
+    forgets ``STRICT_BPS_GATED_TOOLS`` fails here instead of silently
+    un-gating the tool (the map keys are matched against
+    ``context.message.name`` at call time).
+    """
+    import inspect
+
+    found: dict[str, object] = {}
+    for cls in vars(module).values():
+        if not (inspect.isclass(cls) and cls.__module__ == module.__name__):
+            continue
+        tool_attrs = {
+            attr_name: meta.name
+            for attr_name, member in vars(cls).items()
+            if (meta := getattr(member, "__fastmcp__", None)) is not None
+            and getattr(meta, "name", None)
+        }
+        if not tool_attrs:
+            # Skip non-tool classes (TypedDicts etc.) — some don't even
+            # support inspect.signature().
+            continue
+        required = [
+            p
+            for p in inspect.signature(cls).parameters.values()
+            if p.default is inspect.Parameter.empty
+            and p.kind
+            not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        ]
+        instance = cls(*[MagicMock() for _ in required])
+        for attr_name, registered_name in tool_attrs.items():
+            found[registered_name] = getattr(instance, attr_name)
+    return found
 
 
 def test_gated_tools_set_matches_expected_six():
@@ -235,6 +296,8 @@ def test_gated_tools_set_matches_expected_six():
 
 @pytest.mark.parametrize("tool_name", sorted(STRICT_BPS_GATED_TOOLS))
 def test_gated_tool_declares_key_and_maps_first_canonical_file(tool_name: str):
+    from fastmcp.tools import Tool
+
     module_name, const_name = GATED_TOOL_MODULES[tool_name]
     module = importlib.import_module(f"ha_mcp.tools.{module_name}")
 
@@ -244,13 +307,23 @@ def test_gated_tool_declares_key_and_maps_first_canonical_file(tool_name: str):
         f"equal {const_name}[0] ({canonical_files[0]!r})"
     )
 
-    assert module.__file__ is not None
-    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-    params = _function_params(tree, tool_name)
-    assert STRICT_BPS_KEY_PARAM in params, (
-        f"{tool_name} in {module_name} must declare a {STRICT_BPS_KEY_PARAM} "
-        f"parameter so FastMCP accepts the middleware's acknowledgment kwarg"
+    registered = _registered_tools_in_module(module)
+    assert tool_name in registered, (
+        f"{tool_name} is in STRICT_BPS_GATED_TOOLS but no @tool method in "
+        f"{module_name} registers that name — a rename must update the gate map "
+        f"or strict mode silently stops covering the tool"
     )
+
+    # Derive the REAL pydantic schema the server publishes for this tool and
+    # pin that the acknowledgment kwarg survives derivation with its
+    # description — this is the layer schema-validating clients see.
+    tool = Tool.from_function(registered[tool_name], name=tool_name)
+    props = tool.parameters.get("properties", {})
+    assert STRICT_BPS_KEY_PARAM in props, (
+        f"{tool_name} must declare {STRICT_BPS_KEY_PARAM} so FastMCP accepts "
+        f"the middleware's acknowledgment kwarg and clients can send it"
+    )
+    assert "description" in props[STRICT_BPS_KEY_PARAM]
 
 
 # ---------------------------------------------------------------------------

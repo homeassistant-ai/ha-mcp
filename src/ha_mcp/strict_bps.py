@@ -154,10 +154,12 @@ def _raise_bps_ack_required_error(name: str) -> NoReturn:
 class StrictBpsMiddleware(Middleware):
     """Block gated write tools that lack the acknowledgment key.
 
-    No-op passthrough unless strict mode is effective AND the called tool
-    is one of ``STRICT_BPS_GATED_TOOLS``. Consults the live flags per call
-    (via :func:`strict_bps_effective`), so toggling strict mode is
-    restart-free like ``read_only_mode``.
+    Passthrough for every tool outside ``STRICT_BPS_GATED_TOOLS``. For the
+    gated tools it always consumes (strips) the ``BestPracticeKey`` argument,
+    and blocks the call when strict mode is effective and the supplied key
+    was missing or wrong. Consults the live flags per call (via
+    :func:`strict_bps_effective`), so toggling strict mode is restart-free
+    like ``read_only_mode``.
 
     Proxied calls (``ha_call_write_tool`` etc.) re-enter the middleware
     chain with the REAL tool name after the proxy dispatches (see
@@ -170,12 +172,23 @@ class StrictBpsMiddleware(Middleware):
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
         name = context.message.name
-        if name not in STRICT_BPS_GATED_TOOLS or not strict_bps_effective():
+        if name not in STRICT_BPS_GATED_TOOLS:
             return await call_next(context)
 
-        if (context.message.arguments or {}).get(STRICT_BPS_KEY_PARAM) != (
-            STRICT_BPS_ACK_KEY
-        ):
+        # The gate is the ONLY reader of BestPracticeKey: strip it before
+        # dispatch (whether or not strict mode is on) so the constant never
+        # reaches the tool body, the policy middleware's approval args-hash
+        # (where it would churn remembered approvals across strict toggles),
+        # or downstream logging.
+        args = context.message.arguments or {}
+        supplied = args.get(STRICT_BPS_KEY_PARAM)
+        if STRICT_BPS_KEY_PARAM in args:
+            stripped = {k: v for k, v in args.items() if k != STRICT_BPS_KEY_PARAM}
+            context = context.copy(
+                message=context.message.model_copy(update={"arguments": stripped})
+            )
+
+        if strict_bps_effective() and supplied != STRICT_BPS_ACK_KEY:
             logger.info("strict-BPS mode blocked keyless write to %s", name)
             _raise_bps_ack_required_error(name)
 

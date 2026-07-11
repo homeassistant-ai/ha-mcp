@@ -504,24 +504,40 @@
 
   .feature-row.beta-master-row { font-weight: 600; padding-top: 20px; border-top: 2px solid var(--border); margin-top: 8px; }
   .feature-row.beta-master-row .feature-help { font-weight: 400; }
-  .feature-row.beta-sub { padding-left: 32px; position: relative; }
-  .feature-row.beta-sub::before { content: ""; position: absolute; left: 12px; top: 0; bottom: 0; width: 2px; background: var(--border); }
-  .feature-row.beta-sub.dimmed { opacity: 0.38; }
-  .feature-row.beta-sub.dimmed input { cursor: not-allowed; }
-  .feature-row.codemode-sub { padding-left: 56px; position: relative; }
-  .feature-row.codemode-sub::before { content: ""; position: absolute; left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
-  .feature-row.codemode-sub.dimmed { opacity: 0.38; }
-  .feature-row.codemode-sub.dimmed input { cursor: not-allowed; }
-  .feature-row.yaml-packages-sub { padding-left: 56px; position: relative; }
-  .feature-row.yaml-packages-sub::before { content: ""; position: absolute; left: 36px; top: 0; bottom: 0; width: 2px; background: var(--border); }
-  .feature-row.yaml-packages-sub.dimmed { opacity: 0.38; }
-  .feature-row.yaml-packages-sub.dimmed input { cursor: not-allowed; }
-  /* Strict-mode row nests one level under the non-beta enable_mandatory_bps
-     row, so it uses the same 32px indent / 12px guide bar as .beta-sub. */
-  .feature-row.mandatory-bps-sub { padding-left: 32px; position: relative; }
-  .feature-row.mandatory-bps-sub::before { content: ""; position: absolute; left: 12px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  /* Nested sub-flag rows share one guide-bar treatment; only the indent
+     depth differs (see the depth-1 / depth-2 blocks below). */
+  .feature-row.beta-sub,
+  .feature-row.codemode-sub,
+  .feature-row.yaml-packages-sub,
+  .feature-row.mandatory-bps-sub { position: relative; }
+  .feature-row.beta-sub::before,
+  .feature-row.codemode-sub::before,
+  .feature-row.yaml-packages-sub::before,
+  .feature-row.mandatory-bps-sub::before {
+    content: ""; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--border);
+  }
+  .feature-row.beta-sub.dimmed,
+  .feature-row.codemode-sub.dimmed,
+  .feature-row.yaml-packages-sub.dimmed,
   .feature-row.mandatory-bps-sub.dimmed { opacity: 0.38; }
+  .feature-row.beta-sub.dimmed input,
+  .feature-row.codemode-sub.dimmed input,
+  .feature-row.yaml-packages-sub.dimmed input,
   .feature-row.mandatory-bps-sub.dimmed input { cursor: not-allowed; }
+
+  /* Depth 1 — nested directly under a top-level toggle (beta-sub under the
+     master; strict-mode under the non-beta enable_mandatory_bps row). */
+  .feature-row.beta-sub,
+  .feature-row.mandatory-bps-sub { padding-left: 32px; }
+  .feature-row.beta-sub::before,
+  .feature-row.mandatory-bps-sub::before { left: 12px; }
+
+  /* Depth 2 — nested under a beta-sub parent (yaml packages under
+     enable_yaml_config_editing; code-mode numerics under enable_code_mode). */
+  .feature-row.codemode-sub,
+  .feature-row.yaml-packages-sub { padding-left: 56px; }
+  .feature-row.codemode-sub::before,
+  .feature-row.yaml-packages-sub::before { left: 36px; }
 
   /* ── ADVANCED SETTINGS ───────────────────────────────────────────────── */
   .adv-section-title {

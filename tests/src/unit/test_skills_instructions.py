@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ._symlink_support import symlink_or_skip
+
 
 @pytest.fixture
 def server():
@@ -815,7 +817,7 @@ class TestSymlinkRejection:
         # Symlink pointing outside the skill dir (worst case).
         outside_target = tmp_path / "outside.md"
         outside_target.write_text("# Outside\n")
-        (skill / "evil.md").symlink_to(outside_target)
+        symlink_or_skip(skill / "evil.md", outside_target)
 
         return tmp_path
 

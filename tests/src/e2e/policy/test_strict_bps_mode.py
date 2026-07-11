@@ -36,6 +36,7 @@ from ..utilities.assertions import (
     safe_call_tool,
     tool_error_to_result,
 )
+from ..utilities.entity_finders import find_test_light_entity
 
 _BEST_PRACTICES_SKILL = "home-assistant-best-practices"
 _AUTOMATION_PATTERNS_REF = "references/automation-patterns.md"
@@ -97,14 +98,17 @@ async def strict_disabled_mcp(ha_container_with_fresh_config, monkeypatch, tmp_p
     get_data_dir.cache_clear()
 
 
-async def _find_test_light(client: Client) -> str:
-    search = await client.call_tool(
-        "ha_search", {"query": "light", "domain_filter": "light", "limit": 5}
-    )
-    data = parse_mcp_result(search)
-    results = data.get("entities", [])
-    assert results, "no light entities found in test HA instance"
-    return results[0]["entity_id"]
+# Minimal plausible arguments per gated tool for the blocked-path loop —
+# the gate raises BEFORE tool-argument validation, so these only need to be
+# schema-shaped enough for the client to send them.
+_GATED_TOOL_MINIMAL_ARGS: dict[str, dict[str, Any]] = {
+    "ha_config_set_automation": {"config": {"alias": "x"}},
+    "ha_config_set_script": {"script_id": "x", "config": {"sequence": []}},
+    "ha_config_set_scene": {"scene_id": "x", "config": {"entities": {}}},
+    "ha_config_set_helper": {"helper_type": "input_boolean", "name": "x"},
+    "ha_config_set_dashboard": {"url_path": "x", "config": {"views": []}},
+    "ha_config_set_yaml": {"yaml_path": "automations.yaml", "content": "[]"},
+}
 
 
 def _automation_config(name: str, light: str) -> dict[str, Any]:
@@ -135,7 +139,7 @@ async def _expect_bps_blocked(
 @pytest.mark.asyncio
 async def test_keyless_write_blocked_with_structured_error(strict_bps_mcp):
     client, _server = strict_bps_mcp
-    light = await _find_test_light(client)
+    light = await find_test_light_entity(client)
     config = _automation_config("Strict BPS Keyless E2E", light)
 
     body = await _expect_bps_blocked(
@@ -167,7 +171,7 @@ async def test_skill_guide_publishes_ack_key(strict_bps_mcp):
 @pytest.mark.asyncio
 async def test_write_with_key_succeeds(strict_bps_mcp):
     client, _server = strict_bps_mcp
-    light = await _find_test_light(client)
+    light = await find_test_light_entity(client)
     config = _automation_config("Strict BPS WithKey E2E", light)
 
     result = await safe_call_tool(
@@ -179,9 +183,19 @@ async def test_write_with_key_succeeds(strict_bps_mcp):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", sorted(_GATED_TOOL_MINIMAL_ARGS))
+async def test_every_gated_tool_blocked_keyless(strict_bps_mcp, tool_name):
+    """The gate covers all six tools through the real registered surface —
+    not just the automation tool the happy-path tests exercise. The block
+    fires before tool-argument validation, so nothing is created."""
+    client, _server = strict_bps_mcp
+    await _expect_bps_blocked(client, tool_name, _GATED_TOOL_MINIMAL_ARGS[tool_name])
+
+
+@pytest.mark.asyncio
 async def test_keyless_write_succeeds_when_strict_disabled(strict_disabled_mcp):
     client, _server = strict_disabled_mcp
-    light = await _find_test_light(client)
+    light = await find_test_light_entity(client)
     config = _automation_config("Strict BPS Disabled E2E", light)
 
     result = await safe_call_tool(

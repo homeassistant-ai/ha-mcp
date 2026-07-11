@@ -3122,7 +3122,7 @@ class TestStrictMandatoryBpsSubFlagNesting:
                         ),
                     },
                     # Strict mode is NON-beta, so it is absent from
-                    # beta_sub_flags; renderMandatoryBpsSubRows nests it
+                    # beta_sub_flags; renderSubFlagRows nests it
                     # under enable_mandatory_bps instead.
                     "beta_sub_flags": [],
                 },

@@ -19,7 +19,7 @@ import os
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Container
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, NotRequired, TypedDict
 
@@ -1248,6 +1248,50 @@ def _schedule_supervisor_self_restart(
     task.add_done_callback(_BACKGROUND_RESTART_TASKS.discard)
 
 
+def _reject_child_flags_without_parent(
+    raw_flags: dict[str, Any],
+    parent_field: str,
+    parent_default: bool,
+    child_fields: Container[str],
+    message: Callable[[list[str]], str],
+    suggestions: list[str],
+) -> JSONResponse | None:
+    """Reject a feature-flag save that enables child flags while their
+    parent stays off after the merge.
+
+    A child flag is only valid when ``parent_field`` is truthy AFTER the
+    merge. The post-merge parent is derived from the payload (if present),
+    else the live ``Settings`` value, else ``parent_default`` — the same
+    value the runtime gate will see. A child turned truthy against an
+    off parent would be forced back off at runtime, so reject it now
+    rather than let the user learn the save was a no-op at next startup.
+    Turning the parent off alone is NOT rejected: children absent from the
+    payload keep their persisted value and the runtime gate handles them.
+
+    Returns a 409 ``JSONResponse`` — ``message`` receives every offending
+    child, which is also echoed in ``context["rejected"]`` — or ``None``
+    when there is nothing to reject.
+    """
+    rejected = [k for k in raw_flags if k in child_fields and bool(raw_flags[k])]
+    effective_parent = bool(
+        raw_flags.get(
+            parent_field,
+            getattr(get_global_settings(), parent_field, parent_default),
+        )
+    )
+    if rejected and not effective_parent:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message(rejected),
+                suggestions=suggestions,
+                context={"rejected": rejected},
+            ),
+            status_code=409,
+        )
+    return None
+
+
 def build_settings_handlers(
     server: HomeAssistantSmartMCPServer | None,
     *,
@@ -1943,14 +1987,11 @@ def build_settings_handlers(
                 status_code=400,
             )
 
-        # Master beta-gate check: a sub-flag write is only valid
-        # when the master ``enable_beta_features`` is on AFTER the
-        # merge. Derive the post-merge master from the payload (if
-        # present), otherwise fall back to the live ``Settings`` value.
-        # Reject sub-flag writes that try to enable a beta when the
-        # resulting master state would still be off — the runtime gate
-        # would force them False anyway and the user should know the
-        # save was a no-op rather than learning at next startup.
+        # Master beta-gate check: a beta sub-flag may only be enabled
+        # when the master ``enable_beta_features`` is on AFTER the merge
+        # (see ``_reject_child_flags_without_parent`` for the post-merge
+        # derivation and why a parent-off-only save is not rejected). All
+        # offending sub-flags are listed in the rejection.
         #
         # Applied in BOTH standalone and addon mode.
         # The earlier "skip in addon mode" carve-out existed because
@@ -1959,88 +2000,63 @@ def build_settings_handlers(
         # one-cycle legacy bridge. On dev addon, start.py writes the
         # master env var from the schema-bound options key. On stable
         # addon, the master is not in schema and the standalone
-        # web-UI master path remains the gate (the gate read below
+        # web-UI master path remains the gate (the gate read
         # falls through to the override-file value). Either way the
         # gate is sound to apply uniformly.
         from ..config import (
             BETA_FEATURE_FIELDS as _BETA_SUB,
         )
 
-        effective_master = bool(
-            raw_flags.get(
-                "enable_beta_features",
-                getattr(get_global_settings(), "enable_beta_features", False),
-            )
+        beta_rejection = _reject_child_flags_without_parent(
+            raw_flags,
+            "enable_beta_features",
+            False,
+            _BETA_SUB,
+            lambda rejected: (
+                "Cannot enable beta sub-flag(s) "
+                f"{', '.join(rejected)} while the master "
+                "'Enable beta features' toggle is off. Include "
+                "enable_beta_features=true in the same save, or "
+                "flip the master on first."
+            ),
+            [
+                "Include enable_beta_features=true in the same save "
+                + "payload as the sub-flag(s).",
+                "Or turn on the master 'Enable beta features' toggle "
+                + "first, then enable the sub-flag(s).",
+            ],
         )
-        beta_sub_writes = [
-            k for k in raw_flags if k in _BETA_SUB and bool(raw_flags[k])
-        ]
-        if beta_sub_writes and not effective_master:
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    (
-                        "Cannot enable beta sub-flag(s) "
-                        f"{', '.join(beta_sub_writes)} while the master "
-                        "'Enable beta features' toggle is off. Include "
-                        "enable_beta_features=true in the same save, or "
-                        "flip the master on first."
-                    ),
-                    suggestions=[
-                        "Include enable_beta_features=true in the same save "
-                        + "payload as the sub-flag(s).",
-                        "Or turn on the master 'Enable beta features' toggle "
-                        + "first, then enable the sub-flag(s).",
-                    ],
-                    context={"rejected": beta_sub_writes},
-                ),
-                status_code=409,
-            )
+        if beta_rejection is not None:
+            return beta_rejection
 
         # Strict-mandatory-BPS dependency gate: strict mode
         # (``enable_strict_mandatory_bps``) is a child of
         # ``enable_mandatory_bps`` and is inert unless the parent is on.
-        # Mirrors the beta-master gate above: derive the post-merge parent
-        # from the payload (if present), otherwise fall back to the live
-        # ``Settings`` value, and reject a payload that tries to turn strict
-        # on while the resulting parent state would be off — the runtime gate
-        # would force strict False anyway, so the user should learn the save
-        # was a no-op now rather than at next startup. Turning the parent off
-        # alone is NOT rejected here (strict absent from the payload): its
-        # persisted value is preserved and the runtime gate handles it, same
-        # as the beta sub-flags.
-        effective_mandatory_bps = bool(
-            raw_flags.get(
-                "enable_mandatory_bps",
-                getattr(get_global_settings(), "enable_mandatory_bps", True),
-            )
+        # Same post-merge derivation and no-parent-off-rejection as the
+        # beta gate above (see ``_reject_child_flags_without_parent``).
+        strict_rejection = _reject_child_flags_without_parent(
+            raw_flags,
+            "enable_mandatory_bps",
+            True,
+            ("enable_strict_mandatory_bps",),
+            lambda _rejected: (
+                "Cannot enable strict best-practices mode "
+                "('enable_strict_mandatory_bps') while the parent "
+                "'Attach best-practice skills on writes' "
+                "(enable_mandatory_bps) toggle is off. Strict mode is "
+                "a child of that toggle and has no effect without it. "
+                "Include enable_mandatory_bps=true in the same save, or "
+                "turn the parent on first."
+            ),
+            [
+                "Include enable_mandatory_bps=true in the same save "
+                + "payload as enable_strict_mandatory_bps.",
+                "Or turn on the parent 'Attach best-practice skills on "
+                + "writes' toggle first, then enable strict mode.",
+            ],
         )
-        strict_write = "enable_strict_mandatory_bps" in raw_flags and bool(
-            raw_flags["enable_strict_mandatory_bps"]
-        )
-        if strict_write and not effective_mandatory_bps:
-            return JSONResponse(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    (
-                        "Cannot enable strict best-practices mode "
-                        "('enable_strict_mandatory_bps') while the parent "
-                        "'Attach best-practice skills on writes' "
-                        "(enable_mandatory_bps) toggle is off. Strict mode is "
-                        "a child of that toggle and has no effect without it. "
-                        "Include enable_mandatory_bps=true in the same save, or "
-                        "turn the parent on first."
-                    ),
-                    suggestions=[
-                        "Include enable_mandatory_bps=true in the same save "
-                        + "payload as enable_strict_mandatory_bps.",
-                        "Or turn on the parent 'Attach best-practice skills on "
-                        + "writes' toggle first, then enable strict mode.",
-                    ],
-                    context={"rejected": ["enable_strict_mandatory_bps"]},
-                ),
-                status_code=409,
-            )
+        if strict_rejection is not None:
+            return strict_rejection
 
         # Build the validated override dict. Reject unknown fields and
         # env-locked fields up front so the user gets a precise error

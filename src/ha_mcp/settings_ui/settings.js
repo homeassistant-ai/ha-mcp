@@ -1617,7 +1617,7 @@ let BETA_SUB_FLAGS = new Set();
 // Sub-flags of ``enable_yaml_config_editing`` (confirm-flow toggle +
 // per-key packages gates). They ARE in BETA_SUB_FLAGS (it mirrors
 // config.BETA_FEATURE_FIELDS verbatim), but the main render pass skips
-// them via the includes() guard below, and renderYamlPackagesSubRows
+// them via the includes() guard below, and renderSubFlagRows
 // re-renders them nested beneath their parent — so they never appear
 // as standalone beta-sub rows.
 const YAML_PACKAGES_SUB_FLAGS = [
@@ -1631,7 +1631,7 @@ const YAML_PACKAGES_SUB_FLAGS = [
 // Unlike YAML_PACKAGES_SUB_FLAGS this is NON-beta — it is NOT in
 // BETA_SUB_FLAGS and its only gate is the parent toggle. The main
 // render pass skips it via the includes() guard below, and
-// renderMandatoryBpsSubRows re-renders it nested beneath its parent so
+// renderSubFlagRows re-renders it nested beneath its parent so
 // it never appears as a standalone top-level row.
 const MANDATORY_BPS_SUB_FLAGS = [
   'enable_strict_mandatory_bps',
@@ -1747,11 +1747,11 @@ function renderFeatureFlags(flags) {
     const f = flags[fieldName];
     if (!f) return;
     // Skip yaml-packages sub-rows in the main pass — they're rendered
-    // by renderYamlPackagesSubRows below right after their parent so
+    // by renderSubFlagRows below right after their parent so
     // the nesting reads in source order.
     if (YAML_PACKAGES_SUB_FLAGS.includes(fieldName)) return;
     // Same for the strict-mode sub-row — rendered by
-    // renderMandatoryBpsSubRows right after its enable_mandatory_bps parent.
+    // renderSubFlagRows right after its enable_mandatory_bps parent.
     if (MANDATORY_BPS_SUB_FLAGS.includes(fieldName)) return;
     const meta = FEATURE_META[fieldName];
     const isMaster = fieldName === 'enable_beta_features';
@@ -1893,14 +1893,20 @@ function renderFeatureFlags(flags) {
     // itself is off.
     if (fieldName === 'enable_yaml_config_editing') {
       const parentOn = !!f.value;
-      renderYamlPackagesSubRows(flags, targetBody, masterOn, parentOn);
+      renderSubFlagRows(flags, targetBody, YAML_PACKAGES_SUB_FLAGS, {
+        cssClass: 'yaml-packages-sub',
+        lockedByGate: !masterOn || !parentOn,
+      });
     }
     // After the enable_mandatory_bps parent row, inject its strict-mode
     // sub-row. This whole group is non-beta, so the only gate is the
     // parent toggle (no master beta involved).
     if (fieldName === 'enable_mandatory_bps') {
       const parentOn = !!f.value;
-      renderMandatoryBpsSubRows(flags, targetBody, parentOn);
+      renderSubFlagRows(flags, targetBody, MANDATORY_BPS_SUB_FLAGS, {
+        cssClass: 'mandatory-bps-sub',
+        lockedByGate: !parentOn,
+      });
     }
     // After the enable_filesystem_tools row, inject the custom-directories
     // editor (issue #1567). Dimmed when either the master beta is off or
@@ -1913,77 +1919,23 @@ function renderFeatureFlags(flags) {
   });
 }
 
-function renderYamlPackagesSubRows(flags, parentEl, masterOn, parentOn) {
-  YAML_PACKAGES_SUB_FLAGS.forEach(fieldName => {
+// Shared renderer for bool sub-flag rows nested under a parent toggle
+// (yaml-packages under enable_yaml_config_editing, strict mode under
+// enable_mandatory_bps). Each row is a checkbox+slider whose change
+// handler syncs _lastFeatureFlags and POSTs via saveFeatureFlag, dimmed
+// + input-disabled when ``lockedByGate`` is true. Callers precompute
+// lockedByGate from whatever gates apply to their group (yaml-packages:
+// master beta AND parent; mandatory-bps: parent only) and pass the CSS
+// class that carries the group's indent/guide-bar depth. The number/text
+// code-mode sub-numerics are NOT rendered here — they save through
+// commitAdvancedEdit and live in renderCodeModeSubRows.
+function renderSubFlagRows(flags, parentEl, subFieldNames, { cssClass, lockedByGate }) {
+  subFieldNames.forEach(fieldName => {
     const f = flags[fieldName];
     if (!f) return;
     const meta = FEATURE_META[fieldName] || { label: fieldName, help: '' };
-    const lockedByGate = !masterOn || !parentOn;
     const row = document.createElement('div');
-    row.className = 'feature-row yaml-packages-sub' + (lockedByGate ? ' dimmed' : '');
-
-    const info = document.createElement('div');
-    info.className = 'feature-info';
-    const lockedNote = !f.editable
-      ? `<div class="feature-locked-note">` +
-        (f.origin === 'env'
-          ? envLockedNoteHtml(f.env_var, fieldName)
-          : escapeHtml(ORIGIN_LOCKED_NOTE[f.origin] || '')) +
-        `</div>`
-      : '';
-    const infoNote = f.editable && ORIGIN_INFO_NOTE[f.origin]
-      ? `<div class="feature-locked-note">` +
-        `${escapeHtml(ORIGIN_INFO_NOTE[f.origin])}</div>`
-      : '';
-    info.innerHTML =
-      `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
-      `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
-      lockedNote + infoNote;
-
-    const control = document.createElement('div');
-    control.className = 'feature-control';
-    const label = document.createElement('label');
-    label.className = 'switch';
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.name = 'feature:' + fieldName;
-    input.checked = !!f.value;
-    input.disabled = !f.editable || lockedByGate;
-    input.addEventListener('change', () => {
-      // Keep the cached flag value in sync (parity with the parent/master
-      // row handlers) so a later parent flip — which re-renders from
-      // _lastFeatureFlags — reflects this sub-row's current state rather
-      // than a stale value.
-      if (_lastFeatureFlags[fieldName]) {
-        _lastFeatureFlags[fieldName] = {
-          ..._lastFeatureFlags[fieldName],
-          value: input.checked,
-        };
-      }
-      saveFeatureFlag(fieldName, input.checked);
-    });
-    const slider = document.createElement('span');
-    slider.className = 'slider';
-    label.appendChild(input);
-    label.appendChild(slider);
-    control.appendChild(label);
-
-    row.appendChild(info);
-    row.appendChild(control);
-    parentEl.appendChild(row);
-  });
-}
-
-function renderMandatoryBpsSubRows(flags, parentEl, parentOn) {
-  MANDATORY_BPS_SUB_FLAGS.forEach(fieldName => {
-    const f = flags[fieldName];
-    if (!f) return;
-    const meta = FEATURE_META[fieldName] || { label: fieldName, help: '' };
-    // Strict mode is a plain child of enable_mandatory_bps — no beta
-    // master in play, so the only gate is the parent toggle.
-    const lockedByGate = !parentOn;
-    const row = document.createElement('div');
-    row.className = 'feature-row mandatory-bps-sub' + (lockedByGate ? ' dimmed' : '');
+    row.className = 'feature-row ' + cssClass + (lockedByGate ? ' dimmed' : '');
 
     const info = document.createElement('div');
     info.className = 'feature-info';
@@ -2014,9 +1966,10 @@ function renderMandatoryBpsSubRows(flags, parentEl, parentOn) {
     input.disabled = !f.editable || lockedByGate;
     input.setAttribute('aria-labelledby', 'label-feature-' + fieldName);
     input.addEventListener('change', () => {
-      // Keep the cached flag value in sync (parity with the parent row
-      // handler) so a later parent flip — which re-renders from
-      // _lastFeatureFlags — reflects this sub-row's current state.
+      // Keep the cached flag value in sync (parity with the parent/master
+      // row handlers) so a later parent flip — which re-renders from
+      // _lastFeatureFlags — reflects this sub-row's current state rather
+      // than a stale value.
       if (_lastFeatureFlags[fieldName]) {
         _lastFeatureFlags[fieldName] = {
           ..._lastFeatureFlags[fieldName],
@@ -2079,7 +2032,7 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
         `<div class="feature-locked-note">${envLockedNoteHtml(f.env_var, f.field)}</div>`;
     }
     info.innerHTML =
-      `<div class="feature-name">${escapeHtml(meta.label)}</div>` +
+      `<div class="feature-name" id="label-feature-${f.field}">${escapeHtml(meta.label)}</div>` +
       `<div class="feature-help">${escapeHtml(meta.help)}</div>` +
       lockedNote;
 
@@ -2102,6 +2055,7 @@ function renderCodeModeSubRows(parentEl, masterOn, codeModeOn) {
     inputEl.disabled = disabled;
     inputEl.dataset.advField = f.field;
     inputEl.name = 'adv:' + f.field;
+    inputEl.setAttribute('aria-labelledby', 'label-feature-' + f.field);
     inputEl.addEventListener('change', () => {
       let v;
       if (f.type === 'int') v = parseInt(inputEl.value, 10);
